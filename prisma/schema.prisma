@@ -1,0 +1,508 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://postgres:123@localhost:5432/spotipr"
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  OWNER
+  ADMIN
+  MANAGER
+  ANALYST
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ATITokenStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  ISSUED
+  REVOKED
+  EXPIRED
+  USED_UP
+}
+
+model Tenant {
+  id        String        @id @default(cuid())
+  name      String
+  atiId     String        @unique
+  status    TenantStatus  @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  users     User[]
+  atiTokens ATIToken[]
+  auditLogs AuditLog[]
+
+  // Metering relations
+  tenantPlans       TenantPlan[]
+  usageReservations UsageReservation[]
+  usageMeters       UsageMeter[]
+  usageLogs         UsageLog[]
+  quotaAlerts       QuotaAlert[]
+
+  @@map("tenants")
+}
+
+model User {
+  id            String               @id @default(cuid())
+  tenantId      String?
+  signupAtiTokenId String?           // Track which ATI token was used for signup
+  email         String               @unique
+  passwordHash  String?
+  name          String?
+  role          UserRole             @default(ANALYST)
+  status        UserStatus           @default(ACTIVE)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  tenant        Tenant?              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupAtiToken ATIToken?           @relation("SignupATIToken", fields: [signupAtiTokenId], references: [id])
+  projects      Project[]
+  collaborations ProjectCollaborator[]
+  patents       Patent[]
+  annexureVersions AnnexureVersion[]
+  auditLogs     AuditLog[]
+  usageLogs     UsageLog[]
+
+  @@map("users")
+}
+
+model ATIToken {
+  id             String        @id @default(cuid())
+  tenantId       String?
+  tokenHash      String
+  rawToken       String?       // Encrypted raw token for revelation (temporary)
+  rawTokenExpiry DateTime?     // When raw token can no longer be revealed
+  fingerprint    String
+  status         ATITokenStatus @default(ISSUED)
+  expiresAt      DateTime?
+  maxUses        Int?
+  usageCount     Int           @default(0)
+  planTier       String?
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant      Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupUsers User[]        @relation("SignupATIToken")
+
+  @@map("ati_tokens")
+}
+
+model AuditLog {
+  id           String     @id @default(cuid())
+  actorUserId  String?
+  tenantId     String?
+  action       String
+  resource     String
+  ip           String?
+  meta         Json?
+  createdAt    DateTime   @default(now())
+
+  actor        User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  tenant       Tenant?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("audit_logs")
+}
+
+model Project {
+  id               String               @id @default(cuid())
+  name             String
+  userId           String
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  applicantProfile ApplicantProfile?
+  collaborators    ProjectCollaborator[]
+  patents          Patent[]
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("projects")
+}
+
+model ApplicantProfile {
+  id                         String            @id @default(cuid())
+  projectId                  String            @unique
+  applicantLegalName         String
+  applicantCategory          ApplicantCategory
+  applicantAddressLine1      String
+  applicantAddressLine2      String?
+  applicantCity              String
+  applicantState             String
+  applicantCountryCode       String
+  applicantPostalCode        String
+  correspondenceName         String
+  correspondenceEmail        String
+  correspondencePhone        String
+  correspondenceAddressLine1 String
+  correspondenceAddressLine2 String?
+  correspondenceCity         String
+  correspondenceState        String
+  correspondenceCountryCode  String
+  correspondencePostalCode   String
+  useAgent                   Boolean           @default(false)
+  agentName                  String?
+  agentRegistrationNo        String?
+  agentEmail                 String?
+  agentPhone                 String?
+  agentAddressLine1          String?
+  agentAddressLine2          String?
+  agentCity                  String?
+  agentState                 String?
+  agentCountryCode           String?
+  agentPostalCode            String?
+  defaultJurisdiction        Jurisdiction
+  defaultRoute               FilingRoute
+  defaultLanguage            String            @default("EN")
+  defaultEntityStatusIn      EntityStatus
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+  project                    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("applicant_profiles")
+}
+
+model ProjectCollaborator {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  role      String   @default("collaborator") // owner, collaborator, viewer
+  addedBy   String   // userId of who added this collaborator
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("project_collaborators")
+}
+
+enum ApplicantCategory {
+  natural_person
+  small_entity
+  startup
+  others
+}
+
+enum Jurisdiction {
+  IN
+  PCT
+  US
+  EP
+}
+
+enum FilingRoute {
+  national
+  pct_international
+  pct_national
+}
+
+enum EntityStatus {
+  startup
+  small_entity
+  university
+  regular
+}
+
+enum PlanStatus {
+  ACTIVE
+  INACTIVE
+  DEPRECATED
+}
+
+enum FeatureCode {
+  PRIOR_ART_SEARCH
+  PATENT_DRAFTING
+  DIAGRAM_GENERATION
+  EMBEDDINGS
+  RERANK
+}
+
+enum TaskCode {
+  LLM1_PRIOR_ART
+  LLM2_DRAFT
+  LLM3_DIAGRAM
+}
+
+enum ModelClass {
+  BASE_S
+  BASE_M
+  PRO_M
+  PRO_L
+  ADVANCED
+}
+
+model Patent {
+  id               String            @id @default(cuid())
+  projectId        String
+  title            String
+  createdBy        String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  annexureVersions AnnexureVersion[]
+  jobs             Job[]
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator          User              @relation(fields: [createdBy], references: [id])
+
+  @@map("patents")
+}
+
+model AnnexureVersion {
+  id         String   @id @default(cuid())
+  patentId   String
+  rev        Int      @default(1)
+  html       String
+  textPlain  String
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  patent     Patent   @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  creator    User     @relation(fields: [createdBy], references: [id])
+
+  @@map("annexure_versions")
+}
+
+enum JobType {
+  DRAFTING
+  PRIOR_ART
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Job {
+  id            String     @id @default(cuid())
+  patentId      String
+  type          JobType
+  status        JobStatus  @default(QUEUED)
+  config        Json?      // JSON configuration for the job
+  resultSummary Json?      // JSON result summary
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  patent        Patent     @relation(fields: [patentId], references: [id], onDelete: Cascade)
+
+  @@map("jobs")
+}
+
+model TokenNotification {
+  id              String   @id @default(cuid())
+  tokenId         String
+  userId          String
+  notificationType String // "7_days", "3_days", "1_day", "expired"
+  sentAt          DateTime @default(now())
+  deliveryMethod  String   // "email"
+  status          String   // "sent", "delivered", "failed"
+  emailSent       Boolean  @default(false)
+
+  @@unique([tokenId, userId, notificationType])
+  @@map("token_notifications")
+}
+
+// === METERING SYSTEM MODELS ===
+
+model Plan {
+  id          String     @id @default(cuid())
+  code        String     @unique
+  name        String
+  cycle       String     // e.g., "MONTHLY"
+  status      PlanStatus @default(ACTIVE)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  tenantPlans     TenantPlan[]
+  planFeatures    PlanFeature[]
+  planLLMAccess   PlanLLMAccess[]
+  policyRules     PolicyRule[]
+
+  @@map("plans")
+}
+
+model TenantPlan {
+  id          String   @id @default(cuid())
+  tenantId    String
+  planId      String
+  effectiveFrom DateTime
+  expiresAt   DateTime?
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  plan        Plan     @relation(fields: [planId], references: [id])
+
+  @@unique([tenantId, planId, effectiveFrom])
+  @@map("tenant_plans")
+}
+
+model Feature {
+  id          String       @id @default(cuid())
+  code        FeatureCode  @unique
+  name        String
+  unit        String       // e.g., "calls", "tokens"
+
+  planFeatures    PlanFeature[]
+  linkedTasks     Task[]
+  usageMeters     UsageMeter[]
+  usageLogs       UsageLog[]
+
+  @@map("features")
+}
+
+model PlanFeature {
+  id            String  @id @default(cuid())
+  planId        String
+  featureId     String
+  monthlyQuota  Int?
+  dailyQuota    Int?
+
+  plan          Plan    @relation(fields: [planId], references: [id])
+  feature       Feature @relation(fields: [featureId], references: [id])
+
+  @@unique([planId, featureId])
+  @@map("plan_features")
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  code        TaskCode  @unique
+  name        String
+  linkedFeatureId String
+
+  linkedFeature   Feature         @relation(fields: [linkedFeatureId], references: [id])
+  planLLMAccess   PlanLLMAccess[]
+  usageLogs       UsageLog[]
+
+  @@map("tasks")
+}
+
+model LLMModelClass {
+  id          String      @id @default(cuid())
+  code        ModelClass  @unique
+  name        String
+
+  planLLMAccess   PlanLLMAccess[]
+
+  @@map("llm_model_classes")
+}
+
+model PlanLLMAccess {
+  id              String     @id @default(cuid())
+  planId          String
+  taskCode        TaskCode
+  allowedClasses  String     // JSON array of ModelClass codes
+  defaultClassId  String     // Reference to LLMModelClass
+
+  plan            Plan           @relation(fields: [planId], references: [id])
+  task            Task           @relation(fields: [taskCode], references: [code])
+  defaultClass    LLMModelClass  @relation(fields: [defaultClassId], references: [id])
+
+  @@unique([planId, taskCode])
+  @@map("plan_llm_access")
+}
+
+model PolicyRule {
+  id          String   @id @default(cuid())
+  scope       String   // "plan" or "tenant"
+  scopeId     String   // plan_id or tenant_id
+  taskCode    TaskCode?
+  key         String   // max_tokens_in, max_tokens_out, etc.
+  value       Int
+
+  plan        Plan?    @relation(fields: [scopeId], references: [id])
+
+  @@unique([scope, scopeId, taskCode, key])
+  @@map("policy_rules")
+}
+
+model UsageReservation {
+  id              String   @id @default(cuid())
+  tenantId        String
+  featureId       String?
+  taskCode        TaskCode?
+  reservedUnits   Int
+  status          String   @default("PENDING") // PENDING, ACTIVE, RELEASED, EXPIRED
+  expiresAt       DateTime
+  idempotencyKey  String   @unique
+  createdAt       DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@map("usage_reservations")
+}
+
+model UsageMeter {
+  id              String   @id @default(cuid())
+  tenantId        String
+  featureId       String?
+  taskCode        TaskCode?
+  periodType      String   // DAILY, MONTHLY
+  periodKey       String   // e.g., "2024-01", "2024-01-15"
+  currentUsage    Int      @default(0)
+  lastUpdated     DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  feature         Feature? @relation(fields: [featureId], references: [id])
+
+  @@unique([tenantId, featureId, taskCode, periodType, periodKey])
+  @@map("usage_meters")
+}
+
+model UsageLog {
+  id              String      @id @default(cuid())
+  tenantId        String
+  userId          String?
+  featureId       String?
+  taskCode        TaskCode?
+  modelClass      String?     // ModelClass code
+  apiCode         String?     // PATENT_OPEN, NPL_OPEN, etc.
+  inputTokens     Int?
+  outputTokens    Int?
+  apiCalls        Int?        @default(1)
+  startedAt       DateTime    @default(now())
+  completedAt     DateTime?
+  status          String      // PENDING, COMPLETED, FAILED
+  error           String?
+  idempotencyKey  String?
+  reservationId   String?
+
+  tenant          Tenant      @relation(fields: [tenantId], references: [id])
+  user            User?       @relation(fields: [userId], references: [id])
+  feature         Feature?    @relation(fields: [featureId], references: [id])
+  task            Task?       @relation(fields: [taskCode], references: [code])
+
+  @@map("usage_logs")
+}
+
+model QuotaAlert {
+  id              String   @id @default(cuid())
+  tenantId        String
+  featureId       String?
+  taskCode        TaskCode?
+  alertType       String   // QUOTA_80, QUOTA_100, CONCURRENCY_LIMIT
+  threshold       Int
+  notifiedAt      DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@map("quota_alerts")
+}
