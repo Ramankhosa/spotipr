@@ -31,19 +31,15 @@ export class LLMProviderRouter {
     const configs = {
       gemini: {
         apiKey: process.env.GOOGLE_AI_API_KEY,
-        model: 'gemini-2.5-pro',
+        model: 'gemini-2.5-pro', // Gemini 2.5 Pro as requested
         baseURL: 'https://generativelanguage.googleapis.com/v1beta'
       },
       openai: {
         apiKey: process.env.OPENAI_API_KEY,
         model: 'gpt-4o',
         baseURL: 'https://api.openai.com/v1'
-      },
-      grok: {
-        apiKey: process.env.GROK_API_KEY,
-        model: 'grok-3',
-        baseURL: 'https://api.x.ai/v1' // Confirm actual endpoint
       }
+      // Grok removed due to invalid API key
     }
 
     // Only initialize providers that have API keys
@@ -116,11 +112,10 @@ export class LLMProviderRouter {
       throw new Error('No healthy providers available')
     }
 
-    // Default priority order: cost-based routing
+    // Default priority order: Gemini primary, OpenAI fallback
     const defaultPriorities: ProviderPriority[] = [
       { provider: 'gemini', priority: 1, fallback: true },
-      { provider: 'openai', priority: 2, fallback: true },
-      { provider: 'grok', priority: 3, fallback: true }
+      { provider: 'openai', priority: 2, fallback: true }
     ]
 
     const activePriorities = priorities || defaultPriorities

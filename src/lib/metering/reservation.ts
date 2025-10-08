@@ -40,11 +40,20 @@ export function createReservationService(config: MeteringConfig): ReservationSer
           }
         }
 
+        // Look up feature ID from feature code
+        const feature = await prisma.feature.findUnique({
+          where: { code: context.featureCode }
+        })
+
+        if (!feature) {
+          throw new MeteringError('FEATURE_NOT_FOUND', `Feature '${context.featureCode}' not found`)
+        }
+
         // Create reservation
         const reservation = await prisma.usageReservation.create({
           data: {
             tenantId: context.tenantId,
-            featureId: context.featureCode,
+            featureId: feature.id,
             taskCode: context.taskCode,
             reservedUnits: units,
             status: 'ACTIVE',

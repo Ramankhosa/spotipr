@@ -10,3 +10,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
   )
 }
 
+// Note: Next.js 13+ automatically provides navigation context
+// No need to manually add NavigationProvider
+

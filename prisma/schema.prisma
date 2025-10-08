@@ -37,12 +37,12 @@ enum ATITokenStatus {
 }
 
 model Tenant {
-  id        String        @id @default(cuid())
+  id        String       @id @default(cuid())
   name      String
-  atiId     String        @unique
-  status    TenantStatus  @default(ACTIVE)
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  atiId     String       @unique
+  status    TenantStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
   users     User[]
   atiTokens ATIToken[]
@@ -59,77 +59,82 @@ model Tenant {
 }
 
 model User {
-  id            String               @id @default(cuid())
-  tenantId      String?
-  signupAtiTokenId String?           // Track which ATI token was used for signup
-  email         String               @unique
-  passwordHash  String?
-  name          String?
-  role          UserRole             @default(ANALYST)
-  status        UserStatus           @default(ACTIVE)
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+  id               String     @id @default(cuid())
+  tenantId         String?
+  signupAtiTokenId String? // Track which ATI token was used for signup
+  email            String     @unique
+  passwordHash     String?
+  name             String?
+  role             UserRole   @default(ANALYST)
+  status           UserStatus @default(ACTIVE)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
-  tenant        Tenant?              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  signupAtiToken ATIToken?           @relation("SignupATIToken", fields: [signupAtiTokenId], references: [id])
-  projects      Project[]
-  collaborations ProjectCollaborator[]
-  patents       Patent[]
-  annexureVersions AnnexureVersion[]
-  auditLogs     AuditLog[]
-  usageLogs     UsageLog[]
+  tenant                  Tenant?                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupAtiToken          ATIToken?               @relation("SignupATIToken", fields: [signupAtiTokenId], references: [id])
+  projects                Project[]
+  collaborations          ProjectCollaborator[]
+  patents                 Patent[]
+  annexureVersions        AnnexureVersion[]
+  auditLogs               AuditLog[]
+  usageLogs               UsageLog[]
+  createdPriorArtBundles  PriorArtSearchBundle[]  @relation("PriorArtBundleCreator")
+  approvedPriorArtBundles PriorArtSearchBundle[]  @relation("PriorArtBundleApprover")
+  priorArtHistory         PriorArtSearchHistory[]
+  priorArtRuns            PriorArtRun[]
+  credits                 UserCredit?
 
   @@map("users")
 }
 
 model ATIToken {
-  id             String        @id @default(cuid())
+  id             String         @id @default(cuid())
   tenantId       String?
   tokenHash      String
-  rawToken       String?       // Encrypted raw token for revelation (temporary)
-  rawTokenExpiry DateTime?     // When raw token can no longer be revealed
+  rawToken       String? // Encrypted raw token for revelation (temporary)
+  rawTokenExpiry DateTime? // When raw token can no longer be revealed
   fingerprint    String
   status         ATITokenStatus @default(ISSUED)
   expiresAt      DateTime?
   maxUses        Int?
-  usageCount     Int           @default(0)
+  usageCount     Int            @default(0)
   planTier       String?
   notes          String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
-  tenant      Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  signupUsers User[]        @relation("SignupATIToken")
+  tenant      Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupUsers User[]  @relation("SignupATIToken")
 
   @@map("ati_tokens")
 }
 
 model AuditLog {
-  id           String     @id @default(cuid())
-  actorUserId  String?
-  tenantId     String?
-  action       String
-  resource     String
-  ip           String?
-  meta         Json?
-  createdAt    DateTime   @default(now())
+  id          String   @id @default(cuid())
+  actorUserId String?
+  tenantId    String?
+  action      String
+  resource    String
+  ip          String?
+  meta        Json?
+  createdAt   DateTime @default(now())
 
-  actor        User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
-  tenant       Tenant?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("audit_logs")
 }
 
 model Project {
-  id               String               @id @default(cuid())
+  id               String                @id @default(cuid())
   name             String
   userId           String
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
   applicantProfile ApplicantProfile?
   collaborators    ProjectCollaborator[]
   patents          Patent[]
-  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("projects")
 }
@@ -181,12 +186,12 @@ model ProjectCollaborator {
   projectId String
   userId    String
   role      String   @default("collaborator") // owner, collaborator, viewer
-  addedBy   String   // userId of who added this collaborator
+  addedBy   String // userId of who added this collaborator
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, userId])
   @@map("project_collaborators")
@@ -248,32 +253,33 @@ enum ModelClass {
 }
 
 model Patent {
-  id               String            @id @default(cuid())
+  id               String                 @id @default(cuid())
   projectId        String
   title            String
   createdBy        String
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
   annexureVersions AnnexureVersion[]
   jobs             Job[]
+  priorArtBundles  PriorArtSearchBundle[]
 
-  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  creator          User              @relation(fields: [createdBy], references: [id])
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator User    @relation(fields: [createdBy], references: [id])
 
   @@map("patents")
 }
 
 model AnnexureVersion {
-  id         String   @id @default(cuid())
-  patentId   String
-  rev        Int      @default(1)
-  html       String
-  textPlain  String
-  createdBy  String
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  patentId  String
+  rev       Int      @default(1)
+  html      String
+  textPlain String
+  createdBy String
+  createdAt DateTime @default(now())
 
-  patent     Patent   @relation(fields: [patentId], references: [id], onDelete: Cascade)
-  creator    User     @relation(fields: [createdBy], references: [id])
+  patent  Patent @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  creator User   @relation(fields: [createdBy], references: [id])
 
   @@map("annexure_versions")
 }
@@ -291,29 +297,29 @@ enum JobStatus {
 }
 
 model Job {
-  id            String     @id @default(cuid())
+  id            String    @id @default(cuid())
   patentId      String
   type          JobType
-  status        JobStatus  @default(QUEUED)
-  config        Json?      // JSON configuration for the job
-  resultSummary Json?      // JSON result summary
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  status        JobStatus @default(QUEUED)
+  config        Json? // JSON configuration for the job
+  resultSummary Json? // JSON result summary
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  patent        Patent     @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  patent Patent @relation(fields: [patentId], references: [id], onDelete: Cascade)
 
   @@map("jobs")
 }
 
 model TokenNotification {
-  id              String   @id @default(cuid())
-  tokenId         String
-  userId          String
+  id               String   @id @default(cuid())
+  tokenId          String
+  userId           String
   notificationType String // "7_days", "3_days", "1_day", "expired"
-  sentAt          DateTime @default(now())
-  deliveryMethod  String   // "email"
-  status          String   // "sent", "delivered", "failed"
-  emailSent       Boolean  @default(false)
+  sentAt           DateTime @default(now())
+  deliveryMethod   String // "email"
+  status           String // "sent", "delivered", "failed"
+  emailSent        Boolean  @default(false)
 
   @@unique([tokenId, userId, notificationType])
   @@map("token_notifications")
@@ -322,187 +328,486 @@ model TokenNotification {
 // === METERING SYSTEM MODELS ===
 
 model Plan {
-  id          String     @id @default(cuid())
-  code        String     @unique
-  name        String
-  cycle       String     // e.g., "MONTHLY"
-  status      PlanStatus @default(ACTIVE)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id        String     @id @default(cuid())
+  code      String     @unique
+  name      String
+  cycle     String // e.g., "MONTHLY"
+  status    PlanStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
-  tenantPlans     TenantPlan[]
-  planFeatures    PlanFeature[]
-  planLLMAccess   PlanLLMAccess[]
-  policyRules     PolicyRule[]
+  tenantPlans   TenantPlan[]
+  planFeatures  PlanFeature[]
+  planLLMAccess PlanLLMAccess[]
+  policyRules   PolicyRule[]
 
   @@map("plans")
 }
 
 model TenantPlan {
-  id          String   @id @default(cuid())
-  tenantId    String
-  planId      String
+  id            String    @id @default(cuid())
+  tenantId      String
+  planId        String
   effectiveFrom DateTime
-  expiresAt   DateTime?
-  status      String   @default("ACTIVE")
-  createdAt   DateTime @default(now())
+  expiresAt     DateTime?
+  status        String    @default("ACTIVE")
+  createdAt     DateTime  @default(now())
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  plan        Plan     @relation(fields: [planId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  plan   Plan   @relation(fields: [planId], references: [id])
 
   @@unique([tenantId, planId, effectiveFrom])
   @@map("tenant_plans")
 }
 
 model Feature {
-  id          String       @id @default(cuid())
-  code        FeatureCode  @unique
-  name        String
-  unit        String       // e.g., "calls", "tokens"
+  id   String      @id @default(cuid())
+  code FeatureCode @unique
+  name String
+  unit String // e.g., "calls", "tokens"
 
-  planFeatures    PlanFeature[]
-  linkedTasks     Task[]
-  usageMeters     UsageMeter[]
-  usageLogs       UsageLog[]
+  planFeatures PlanFeature[]
+  linkedTasks  Task[]
+  usageMeters  UsageMeter[]
+  usageLogs    UsageLog[]
 
   @@map("features")
 }
 
 model PlanFeature {
-  id            String  @id @default(cuid())
-  planId        String
-  featureId     String
-  monthlyQuota  Int?
-  dailyQuota    Int?
+  id           String @id @default(cuid())
+  planId       String
+  featureId    String
+  monthlyQuota Int?
+  dailyQuota   Int?
 
-  plan          Plan    @relation(fields: [planId], references: [id])
-  feature       Feature @relation(fields: [featureId], references: [id])
+  plan    Plan    @relation(fields: [planId], references: [id])
+  feature Feature @relation(fields: [featureId], references: [id])
 
   @@unique([planId, featureId])
   @@map("plan_features")
 }
 
 model Task {
-  id          String    @id @default(cuid())
-  code        TaskCode  @unique
-  name        String
+  id              String   @id @default(cuid())
+  code            TaskCode @unique
+  name            String
   linkedFeatureId String
 
-  linkedFeature   Feature         @relation(fields: [linkedFeatureId], references: [id])
-  planLLMAccess   PlanLLMAccess[]
-  usageLogs       UsageLog[]
+  linkedFeature Feature         @relation(fields: [linkedFeatureId], references: [id])
+  planLLMAccess PlanLLMAccess[]
+  usageLogs     UsageLog[]
 
   @@map("tasks")
 }
 
 model LLMModelClass {
-  id          String      @id @default(cuid())
-  code        ModelClass  @unique
-  name        String
+  id   String     @id @default(cuid())
+  code ModelClass @unique
+  name String
 
-  planLLMAccess   PlanLLMAccess[]
+  planLLMAccess PlanLLMAccess[]
 
   @@map("llm_model_classes")
 }
 
 model PlanLLMAccess {
-  id              String     @id @default(cuid())
-  planId          String
-  taskCode        TaskCode
-  allowedClasses  String     // JSON array of ModelClass codes
-  defaultClassId  String     // Reference to LLMModelClass
+  id             String   @id @default(cuid())
+  planId         String
+  taskCode       TaskCode
+  allowedClasses String // JSON array of ModelClass codes
+  defaultClassId String // Reference to LLMModelClass
 
-  plan            Plan           @relation(fields: [planId], references: [id])
-  task            Task           @relation(fields: [taskCode], references: [code])
-  defaultClass    LLMModelClass  @relation(fields: [defaultClassId], references: [id])
+  plan         Plan          @relation(fields: [planId], references: [id])
+  task         Task          @relation(fields: [taskCode], references: [code])
+  defaultClass LLMModelClass @relation(fields: [defaultClassId], references: [id])
 
   @@unique([planId, taskCode])
   @@map("plan_llm_access")
 }
 
 model PolicyRule {
-  id          String   @id @default(cuid())
-  scope       String   // "plan" or "tenant"
-  scopeId     String   // plan_id or tenant_id
-  taskCode    TaskCode?
-  key         String   // max_tokens_in, max_tokens_out, etc.
-  value       Int
+  id       String    @id @default(cuid())
+  scope    String // "plan" or "tenant"
+  scopeId  String // plan_id or tenant_id
+  taskCode TaskCode?
+  key      String // max_tokens_in, max_tokens_out, etc.
+  value    Int
 
-  plan        Plan?    @relation(fields: [scopeId], references: [id])
+  plan Plan? @relation(fields: [scopeId], references: [id])
 
   @@unique([scope, scopeId, taskCode, key])
   @@map("policy_rules")
 }
 
 model UsageReservation {
-  id              String   @id @default(cuid())
-  tenantId        String
-  featureId       String?
-  taskCode        TaskCode?
-  reservedUnits   Int
-  status          String   @default("PENDING") // PENDING, ACTIVE, RELEASED, EXPIRED
-  expiresAt       DateTime
-  idempotencyKey  String   @unique
-  createdAt       DateTime @default(now())
+  id             String    @id @default(cuid())
+  tenantId       String
+  featureId      String?
+  taskCode       TaskCode?
+  reservedUnits  Int
+  status         String    @default("PENDING") // PENDING, ACTIVE, RELEASED, EXPIRED
+  expiresAt      DateTime
+  idempotencyKey String    @unique
+  createdAt      DateTime  @default(now())
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
 
   @@map("usage_reservations")
 }
 
 model UsageMeter {
-  id              String   @id @default(cuid())
-  tenantId        String
-  featureId       String?
-  taskCode        TaskCode?
-  periodType      String   // DAILY, MONTHLY
-  periodKey       String   // e.g., "2024-01", "2024-01-15"
-  currentUsage    Int      @default(0)
-  lastUpdated     DateTime @default(now())
+  id           String    @id @default(cuid())
+  tenantId     String
+  featureId    String?
+  taskCode     TaskCode?
+  periodType   String // DAILY, MONTHLY
+  periodKey    String // e.g., "2024-01", "2024-01-15"
+  currentUsage Int       @default(0)
+  lastUpdated  DateTime  @default(now())
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
-  feature         Feature? @relation(fields: [featureId], references: [id])
+  tenant  Tenant   @relation(fields: [tenantId], references: [id])
+  feature Feature? @relation(fields: [featureId], references: [id])
 
   @@unique([tenantId, featureId, taskCode, periodType, periodKey])
   @@map("usage_meters")
 }
 
 model UsageLog {
-  id              String      @id @default(cuid())
-  tenantId        String
-  userId          String?
-  featureId       String?
-  taskCode        TaskCode?
-  modelClass      String?     // ModelClass code
-  apiCode         String?     // PATENT_OPEN, NPL_OPEN, etc.
-  inputTokens     Int?
-  outputTokens    Int?
-  apiCalls        Int?        @default(1)
-  startedAt       DateTime    @default(now())
-  completedAt     DateTime?
-  status          String      // PENDING, COMPLETED, FAILED
-  error           String?
-  idempotencyKey  String?
-  reservationId   String?
+  id             String    @id @default(cuid())
+  tenantId       String
+  userId         String?
+  featureId      String?
+  taskCode       TaskCode?
+  modelClass     String? // ModelClass code
+  apiCode        String? // PATENT_OPEN, NPL_OPEN, etc.
+  inputTokens    Int?
+  outputTokens   Int?
+  apiCalls       Int?      @default(1)
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  status         String // PENDING, COMPLETED, FAILED
+  error          String?
+  idempotencyKey String?
+  reservationId  String?
 
-  tenant          Tenant      @relation(fields: [tenantId], references: [id])
-  user            User?       @relation(fields: [userId], references: [id])
-  feature         Feature?    @relation(fields: [featureId], references: [id])
-  task            Task?       @relation(fields: [taskCode], references: [code])
+  tenant  Tenant   @relation(fields: [tenantId], references: [id])
+  user    User?    @relation(fields: [userId], references: [id])
+  feature Feature? @relation(fields: [featureId], references: [id])
+  task    Task?    @relation(fields: [taskCode], references: [code])
 
   @@map("usage_logs")
 }
 
 model QuotaAlert {
-  id              String   @id @default(cuid())
-  tenantId        String
-  featureId       String?
-  taskCode        TaskCode?
-  alertType       String   // QUOTA_80, QUOTA_100, CONCURRENCY_LIMIT
-  threshold       Int
-  notifiedAt      DateTime @default(now())
+  id         String    @id @default(cuid())
+  tenantId   String
+  featureId  String?
+  taskCode   TaskCode?
+  alertType  String // QUOTA_80, QUOTA_100, CONCURRENCY_LIMIT
+  threshold  Int
+  notifiedAt DateTime  @default(now())
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
 
   @@map("quota_alerts")
+}
+
+// === PRIOR ART SEARCH MODELS ===
+
+enum PriorArtSearchMode {
+  LLM
+  MANUAL
+}
+
+enum PriorArtSearchStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  APPROVED
+  ARCHIVED
+}
+
+enum PriorArtQueryLabel {
+  BROAD
+  BASELINE
+  NARROW
+}
+
+model PriorArtSearchBundle {
+  id       String               @id @default(cuid())
+  patentId String
+  mode     PriorArtSearchMode
+  status   PriorArtSearchStatus @default(DRAFT)
+
+  // Input data
+  briefRaw       String? // Raw invention brief (LLM mode)
+  inventionBrief String // Processed brief (max 200 words)
+
+  // Generated/Edited data (JSON schema validated)
+  bundleData Json // Complete JSON bundle per SRS schema
+
+  // Metadata
+  createdBy  String
+  approvedBy String?
+  approvedAt DateTime?
+  version    String    @default("v1.0") // Semantic versioning
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relations
+  patent        Patent                  @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  creator       User                    @relation("PriorArtBundleCreator", fields: [createdBy], references: [id])
+  approver      User?                   @relation("PriorArtBundleApprover", fields: [approvedBy], references: [id])
+  history       PriorArtSearchHistory[]
+  queryVariants PriorArtQueryVariant[]
+  runs          PriorArtRun[]
+
+  @@map("prior_art_search_bundles")
+}
+
+model PriorArtSearchHistory {
+  id           String   @id @default(cuid())
+  bundleId     String
+  action       String // BRIEF_SUBMITTED, LLM_GENERATED, EDITED, VALIDATION_FAILED, etc.
+  userId       String
+  timestamp    DateTime @default(now())
+  previousData Json? // Previous state for diffing
+  newData      Json? // New state for diffing
+  notes        String? // Optional notes about the change
+
+  bundle PriorArtSearchBundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  user   User                 @relation(fields: [userId], references: [id])
+
+  @@map("prior_art_search_history")
+}
+
+model PriorArtQueryVariant {
+  id        String             @id @default(cuid())
+  bundleId  String
+  label     PriorArtQueryLabel
+  query     String // The actual search query
+  num       Int                @default(20) // Results per page
+  page      Int                @default(1) // Starting page
+  notes     String // Strategy notes
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  bundle PriorArtSearchBundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+
+  @@unique([bundleId, label])
+  @@map("prior_art_query_variants")
+}
+
+// === PRIOR ART SEARCH EXECUTION MODELS ===
+
+enum PriorArtRunStatus {
+  RUNNING
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+  CREDIT_EXHAUSTED
+}
+
+model PriorArtRun {
+  id             String            @id @default(cuid())
+  bundleId       String
+  bundleHash     String // Hash of approved bundle for integrity
+  approvedBundle Json // Frozen approved bundle data
+  status         PriorArtRunStatus @default(RUNNING)
+
+  // User and credit tracking
+  userId          String
+  creditsConsumed Int      @default(1) // Always 1 credit per search
+  apiCallsMade    Int      @default(0) // Actual API calls made
+  costEstimate    Decimal? @db.Decimal(10, 4)
+
+  // Timing
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relations
+  bundle                PriorArtSearchBundle            @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  user                  User                            @relation(fields: [userId], references: [id])
+  queryVariants         PriorArtQueryVariantExecution[]
+  rawResults            PriorArtRawResult[]
+  // unifiedResults removed - no longer needed
+  variantHits           PriorArtVariantHit[]
+  PriorArtUnifiedResult PriorArtUnifiedResult[]
+
+  @@map("prior_art_runs")
+}
+
+model PriorArtQueryVariantExecution {
+  id           String             @id @default(cuid())
+  runId        String
+  label        PriorArtQueryLabel
+  query        String // Actual query executed
+  num          Int                @default(20)
+  pageTarget   Int                @default(1)
+  pageExecuted Int                @default(1)
+  apiCalls     Int                @default(0) // API calls for this variant
+  resultsCount Int                @default(0)
+  executedAt   DateTime           @default(now())
+
+  run PriorArtRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, label])
+  @@map("prior_art_query_variant_executions")
+}
+
+model PriorArtRawResult {
+  id         String   @id @default(cuid())
+  runId      String
+  variantId  String // PriorArtQueryVariantExecution.id
+  pageNo     Int      @default(1)
+  payload    Json // Raw SerpAPI response
+  receivedAt DateTime @default(now())
+
+  run PriorArtRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("prior_art_raw_results")
+}
+
+model PriorArtRawDetail {
+  id                String   @id @default(cuid())
+  publicationNumber String // Normalized patent number
+  patentId          String // SerpAPI patent ID (patent/US123/en or scholar/...)
+  payload           Json // Raw SerpAPI details response
+  fetchedAt         DateTime @default(now())
+
+  @@unique([publicationNumber, patentId])
+  @@map("prior_art_raw_details")
+}
+
+model PriorArtPatent {
+  publicationNumber String    @id
+  title             String?
+  abstract          String?
+  language          String?
+  publicationDate   DateTime?
+  priorityDate      DateTime?
+  filingDate        DateTime?
+
+  // Arrays stored as JSONB for flexibility
+  assignees String[] // JSON array in DB
+  inventors String[] // JSON array in DB
+  cpcs      String[] // JSON array in DB
+  ipcs      String[] // JSON array in DB
+
+  link    String?
+  pdfLink String?
+  extras  Json? // Additional fields
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  // Relations
+  variantHits PriorArtVariantHit[]
+  details     PriorArtPatentDetail?
+  // unifiedResults removed - relationship no longer exists
+
+  @@map("prior_art_patents")
+}
+
+model PriorArtVariantHit {
+  id                String   @id @default(cuid())
+  runId             String
+  variantId         String // PriorArtQueryVariantExecution.id
+  publicationNumber String
+  rankInVariant     Int // Position in variant results
+  snippet           String? // Search result snippet
+  foundAt           DateTime @default(now())
+
+  run    PriorArtRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  patent PriorArtPatent @relation(fields: [publicationNumber], references: [publicationNumber])
+
+  @@unique([runId, variantId, publicationNumber])
+  @@map("prior_art_variant_hits")
+}
+
+model PriorArtPatentDetail {
+  publicationNumber     String   @id
+  claims                Json? // Full claims as JSONB
+  description           String?
+  classifications       Json? // Structured classifications
+  worldwideApplications Json? // Filing data
+  events                Json? // Legal events
+  legalEvents           Json? // Additional events
+  citationsPatent       Json? // Patent citations
+  citationsNPL          Json? // Non-patent literature citations
+  pdfLink               String?
+  fetchedAt             DateTime @default(now())
+
+  patent PriorArtPatent @relation(fields: [publicationNumber], references: [publicationNumber])
+
+  @@map("prior_art_patent_details")
+}
+
+enum PriorArtIntersectionType {
+  NONE // Found in only one variant
+  I2 // Found in any 2 variants
+  I3 // Found in all 3 variants
+}
+
+model PriorArtUnifiedResult {
+  id                String              @id @default(cuid())
+  runId             String
+  publicationNumber String // Keep existing field for backward compatibility
+  contentType       PriorArtContentType @default(PATENT) // PATENT or SCHOLAR
+  scholarIdentifier String? // Optional field for scholar content identifiers
+  foundInVariants   String[] // Array of variant labels: ["BROAD", "BASELINE", "NARROW"]
+
+  // Ranks in each variant (null if not found)
+  rankBroad    Int?
+  rankBaseline Int?
+  rankNarrow   Int?
+
+  intersectionType PriorArtIntersectionType
+  score            Decimal                  @db.Decimal(5, 4) // 0.0000 to 1.0000
+  shortlisted      Boolean                  @default(false)
+
+  createdAt DateTime @default(now())
+
+  run PriorArtRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // patent relationship removed - handle in application logic based on contentType
+
+  @@unique([runId, publicationNumber])
+  @@map("prior_art_unified_results")
+}
+
+model PriorArtScholarContent {
+  identifier    String   @id
+  title         String?
+  authors       String[] // Array of author names
+  publication   String? // Journal/conference name
+  year          Int?
+  abstract      String?
+  citationCount Int?
+  link          String? // Link to the article
+  pdfLink       String? // Link to PDF if available
+  doi           String? // Digital Object Identifier
+  source        String? // Google Scholar, IEEE, ACM, etc.
+  fetchedAt     DateTime @default(now())
+
+  @@map("prior_art_scholar_content")
+}
+
+enum PriorArtContentType {
+  PATENT
+  SCHOLAR
+}
+
+model UserCredit {
+  userId       String    @id // References User.id
+  totalCredits Int       @default(100) // Monthly allowance
+  usedCredits  Int       @default(0)
+  monthlyReset DateTime // When credits reset
+  lastSearchAt DateTime?
+  planTier     String    @default("free") // free, basic, pro, enterprise
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_credits")
 }

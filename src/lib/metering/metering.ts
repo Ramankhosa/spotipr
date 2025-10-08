@@ -327,10 +327,18 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
         if (!atiToken?.planTier) return
 
+        // Look up feature code from feature ID
+        const feature = await prisma.feature.findUnique({
+          where: { id: featureId },
+          select: { code: true }
+        })
+
+        if (!feature) return
+
         const planFeature = await prisma.planFeature.findFirst({
           where: {
             plan: { code: atiToken.planTier },
-            feature: { code: featureId as any }
+            feature: { code: feature.code }
           }
         })
 

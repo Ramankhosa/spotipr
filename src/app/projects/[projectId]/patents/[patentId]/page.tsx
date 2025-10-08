@@ -6,6 +6,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import RichTextEditor from '@/components/patents/RichTextEditor'
 import FileUpload from '@/components/patents/FileUpload'
+import PriorArtSearch from '@/components/prior-art/PriorArtSearch'
 
 interface Patent {
   id: string
@@ -460,20 +461,7 @@ export default function PatentDetailPage() {
             {/* Action Sub-tab Content */}
             {activeActionTab === 'prior-art-search' && (
               <div className="bg-white rounded-lg shadow-sm p-6">
-                <div className="text-center py-12">
-                  <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">Prior Art Search</h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Search for existing patents and publications that may be relevant to your invention.
-                  </p>
-                  <div className="mt-6">
-                    <button className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
-                      Start Prior Art Search
-                    </button>
-                  </div>
-                </div>
+                <PriorArtSearch patentId={patentId} projectId={projectId} />
               </div>
             )}
 
