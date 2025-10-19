@@ -7,6 +7,7 @@ import Link from 'next/link'
 import RichTextEditor from '@/components/patents/RichTextEditor'
 import FileUpload from '@/components/patents/FileUpload'
 import PriorArtSearch from '@/components/prior-art/PriorArtSearch'
+import { NoveltyAssessmentManager } from '@/components/novelty-assessment/NoveltyAssessmentManager'
 
 interface Patent {
   id: string
@@ -30,7 +31,7 @@ interface AnnexureVersion {
 
 type TabType = 'annexure' | 'actions'
 type InputMode = 'paste' | 'upload'
-type ActionTabType = 'prior-art-search' | 'ai-patent-drafting'
+type ActionTabType = 'prior-art-search' | 'novelty-assessment' | 'ai-patent-drafting'
 
 export default function PatentDetailPage() {
   const { user, isLoading: authLoading } = useAuth()
@@ -446,6 +447,16 @@ export default function PatentDetailPage() {
                   Prior Art Search
                 </button>
                 <button
+                  onClick={() => setActiveActionTab('novelty-assessment')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeActionTab === 'novelty-assessment'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  Novelty Assessment
+                </button>
+                <button
                   onClick={() => setActiveActionTab('ai-patent-drafting')}
                   className={`py-2 px-1 border-b-2 font-medium text-sm ${
                     activeActionTab === 'ai-patent-drafting'
@@ -462,6 +473,12 @@ export default function PatentDetailPage() {
             {activeActionTab === 'prior-art-search' && (
               <div className="bg-white rounded-lg shadow-sm p-6">
                 <PriorArtSearch patentId={patentId} projectId={projectId} />
+              </div>
+            )}
+
+            {activeActionTab === 'novelty-assessment' && (
+              <div className="bg-white rounded-lg shadow-sm">
+                <NoveltyAssessmentManager patentId={patentId} />
               </div>
             )}
 

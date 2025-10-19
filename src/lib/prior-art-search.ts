@@ -1,6 +1,7 @@
 import { PrismaClient, PriorArtRunStatus, PriorArtIntersectionType } from '@prisma/client';
 import { SerpApiProvider, serpApiProvider, SerpApiSearchResponse } from './serpapi-provider';
 import { normalizePatentFromSearch, normalizePatentFromDetails, upsertPatent, upsertPatentDetails } from './prior-art-normalization';
+import { NoveltyAssessmentService } from './novelty-assessment';
 
 const prisma = new PrismaClient();
 
@@ -57,7 +58,7 @@ export class PriorArtSearchService {
   /**
    * Execute a complete prior art search
    */
-  async executeSearch(bundleId: string, userId: string, includeScholar: boolean = false): Promise<string> {
+  async executeSearch(bundleId: string, userId: string, jwtToken: string, includeScholar: boolean = false): Promise<string> {
     // Create run record
     const run = await prisma.priorArtRun.create({
       data: {
@@ -72,6 +73,28 @@ export class PriorArtSearchService {
     try {
       const bundle = await this.getApprovedBundle(bundleId);
       const runId = run.id;
+
+      // LEVEL 0: Local database first. If local match conclusively determines novelty, short-circuit.
+      try {
+        const level0 = await this.executeLevel0LocalCheck(runId, bundle, jwtToken);
+        if (level0?.shortCircuit) {
+          console.log(`🛑 Level 0 short-circuit: ${level0.determination}`);
+          await prisma.priorArtRun.update({
+            where: { id: runId },
+            data: {
+              status: PriorArtRunStatus.COMPLETED,
+              finishedAt: new Date(),
+              level0Checked: true,
+              level0Determination: level0.determination as any,
+              level0Results: level0.level0Results,
+              level0ReportUrl: level0.reportUrl || null,
+            },
+          });
+          return runId;
+        }
+      } catch (e) {
+        console.warn('Level 0 local check failed, continuing with normal flow:', e);
+      }
 
       // Execute each variant for both patents and scholar
       const allResults: Array<{ variant: string; results: SerpApiSearchResponse; engine: string }> = [];
@@ -108,27 +131,146 @@ export class PriorArtSearchService {
       // Merge, dedupe, and score results
       await this.mergeAndScoreResults(runId, allResults, bundle);
 
-      // Fetch details for shortlisted patents
-      await this.fetchDetailsForShortlist(runId, bundle.fields_for_details);
+      // 🚀 OPTIMIZED NOVELTY ASSESSMENT WORKFLOW
+      console.log('🧠 Starting optimized novelty assessment workflow...');
+
+      try {
+        // Check if novelty assessment tables exist by trying a simple query
+        let tablesExist = false;
+        try {
+          await prisma.noveltyAssessmentRun.findMany({ take: 1 });
+          tablesExist = true;
+        } catch (tableCheckError) {
+          console.log('ℹ️ Novelty assessment tables not available yet (run migrations first)');
+          console.log('⏭️ Skipping novelty assessment integration until tables are created');
+          tablesExist = false;
+        }
+
+        if (tablesExist) {
+          // LEVEL 1 NOVELTY ASSESSMENT: Analyze search results immediately
+          console.log('📊 Running Level 1 Novelty Assessment (using search results only)...');
+
+          // Get intersecting patents first, or fallback to top patents
+          let level1Patents = await this.getIntersectingPatentsForNovelty(runId);
+
+          if (level1Patents.length === 0) {
+            console.log('ℹ️ No intersecting patents found, using top 5 most relevant patents for Level 1 analysis');
+            const allPatents = await this.getLevel1PatentsForNovelty(runId);
+            level1Patents = allPatents.slice(0, 5); // Top 5 most relevant (reduced from 15)
+          } else {
+            // Limit intersecting patents to 5 to avoid token limits
+            if (level1Patents.length > 5) {
+              console.log(`ℹ️ Limiting intersecting patents from ${level1Patents.length} to 5 for token efficiency`);
+              level1Patents = level1Patents.slice(0, 5);
+            }
+          }
+
+          if (level1Patents.length > 0) {
+
+            const level1Result = await NoveltyAssessmentService.performLevel1Assessment({
+              patentId: bundle.patentId,
+              runId: runId,
+              jwtToken: jwtToken,
+              inventionSummary: {
+                title: bundle.source_summary.title,
+                problem: bundle.source_summary.problem_statement,
+                solution: bundle.source_summary.solution_summary,
+              },
+              level1Patents: level1Patents,
+            });
+
+            // Check if we need Level 2 analysis
+            if (level1Result.determination === 'DOUBT') {
+              console.log('🤔 Level 1 assessment inconclusive - proceeding to Level 2 analysis');
+
+              // LEVEL 2: Fetch detailed patent data only for patents that need it
+              const patentsNeedingDetails = level1Result.patentsNeedingDetails || [];
+              if (patentsNeedingDetails.length > 0) {
+                console.log(`📥 Fetching detailed data for ${patentsNeedingDetails.length} patents`);
+                await this.fetchDetailsForSelectedPatents(runId, patentsNeedingDetails, bundle.fields_for_details);
+
+                // LEVEL 2 NOVELTY ASSESSMENT: Detailed analysis
+                console.log('🔬 Running Level 2 Novelty Assessment (detailed analysis)...');
+                const level2Result = await NoveltyAssessmentService.performLevel2Assessment({
+                  patentId: bundle.patentId,
+                  runId: runId,
+                  jwtToken: jwtToken,
+                  inventionSummary: {
+                    title: bundle.source_summary.title,
+                    problem: bundle.source_summary.problem_statement,
+                    solution: bundle.source_summary.solution_summary,
+                  },
+                  level1Result: level1Result,
+                  detailedPatents: patentsNeedingDetails,
+                });
+
+                console.log(`✅ Final determination: ${level2Result.determination}`);
+              }
+            } else {
+              console.log(`✅ Level 1 assessment conclusive: ${level1Result.determination}`);
+              console.log('⏭️ Skipping Level 2 analysis - sufficient data from search results');
+            }
+          } else {
+            console.log('ℹ️ No relevant patents found in search results');
+          }
+        } else {
+          // Fallback to old behavior: fetch all details
+          console.log('📊 Fallback: Fetching all patent details (novelty assessment tables not available)');
+          await this.fetchDetailsForShortlist(runId, bundle.fields_for_details);
+        }
+      } catch (noveltyError) {
+        console.error('❌ Novelty assessment integration error:', noveltyError);
+
+        // Provide detailed error analysis for debugging
+        const errorMessage = noveltyError instanceof Error ? noveltyError.message : String(noveltyError);
+        console.log('📋 Search will complete with basic results only - novelty assessment unavailable');
+        console.log('🔍 Novelty assessment error details:', {
+          error: errorMessage,
+          type: noveltyError?.constructor?.name || 'Unknown',
+          runId: runId,
+          bundleId: bundleId
+        });
+
+        // Fallback: ensure we still fetch details if novelty assessment fails
+        try {
+          console.log('🔄 Proceeding with basic patent search results (no novelty analysis)');
+          await this.fetchDetailsForShortlist(runId, bundle.fields_for_details);
+        } catch (fallbackError) {
+          console.error('❌ Fallback detail fetching also failed:', fallbackError);
+          console.log('⚠️ Search completed with minimal results due to multiple failures');
+        }
+      }
 
       // Mark as completed
-      await prisma.priorArtRun.update({
+      console.log(`✅ Search run ${runId} completed successfully`);
+      const completedRun = await prisma.priorArtRun.update({
         where: { id: runId },
         data: {
           status: PriorArtRunStatus.COMPLETED,
           finishedAt: new Date(),
         },
       });
+      console.log(`📊 Updated run status to COMPLETED:`, {
+        id: completedRun.id,
+        status: completedRun.status,
+        finishedAt: completedRun.finishedAt
+      });
 
       return runId;
     } catch (error) {
       // Mark as failed
-      await prisma.priorArtRun.update({
+      console.error(`❌ Search run ${run.id} failed:`, error);
+      const failedRun = await prisma.priorArtRun.update({
         where: { id: run.id },
         data: {
           status: PriorArtRunStatus.FAILED,
           finishedAt: new Date(),
         },
+      });
+      console.log(`📊 Updated run status to FAILED:`, {
+        id: failedRun.id,
+        status: failedRun.status,
+        finishedAt: failedRun.finishedAt
       });
       throw error;
     }
@@ -167,8 +309,10 @@ export class PriorArtSearchService {
     }
 
     try {
-      // Try local search first (placeholder - implement later)
-      const localResults = await this.searchLocal(variant.q, variant.num);
+      // Try local search first
+      const localResults = engine === 'google_patents'
+        ? await this.searchLocal(variant.q, variant.num)
+        : [];
       let apiResults: SerpApiSearchResponse | null = null;
 
       if (localResults.length < variant.num) {
@@ -240,7 +384,7 @@ export class PriorArtSearchService {
         },
       });
 
-      return apiResults || { organic_results: [] } as any;
+      return apiResults || { organic_results: localResults } as any;
     } catch (error) {
       console.error(`Variant ${variant.label} failed:`, error);
       throw error;
@@ -551,9 +695,12 @@ export class PriorArtSearchService {
 
       // Calculate overall relevance score (average of variant scores)
       const relevanceScores = Object.values(data.relevanceScores);
-      const avgRelevance = relevanceScores.length > 0
+      const avgRelevancePercent = relevanceScores.length > 0
         ? Math.round(relevanceScores.reduce((sum, r) => sum + r.relevancePercent, 0) / relevanceScores.length)
         : 0;
+
+      // Convert percentage to decimal for database storage (85% -> 0.85)
+      const avgRelevance = avgRelevancePercent / 100;
 
       // Store individual relevance scores in rank fields (instead of position ranks)
       const broadRelevance = data.relevanceScores.broad?.relevancePercent || null;
@@ -582,17 +729,17 @@ export class PriorArtSearchService {
         create: {
           runId,
           publicationNumber: pubNum,
-          contentType: 'PATENT',
-          scholarIdentifier: null,
-          foundInVariants: data.foundInVariants,
+            contentType: 'PATENT',
+            scholarIdentifier: null,
+            foundInVariants: data.foundInVariants,
           rankBroad: broadRelevance,
           rankBaseline: baselineRelevance,
           rankNarrow: narrowRelevance,
-          intersectionType,
+            intersectionType,
           score: avgRelevance,
           shortlisted: isShortlisted,
-        },
-      });
+          },
+        });
 
       console.log(`${isShortlisted ? '✅ Shortlisted' : '📄 Listed'} patent: ${pubNum} (relevance: ${avgRelevance}%, intersection: ${intersectionType})`);
     }
@@ -664,12 +811,117 @@ export class PriorArtSearchService {
   }
 
   /**
+   * Fetch detailed patent data for selected patents only (Level 2 optimization)
+   */
+  private async fetchDetailsForSelectedPatents(
+    runId: string,
+    selectedPatents: string[],
+    fields: string[]
+  ): Promise<void> {
+    console.log(`📥 Fetching details for ${selectedPatents.length} selected patents`);
+
+    for (const publicationNumber of selectedPatents) {
+      try {
+        // Check if we already have details
+        const existing = await prisma.priorArtPatentDetail.findUnique({
+          where: { publicationNumber },
+        });
+
+        if (existing && this.isRecent(existing.fetchedAt)) {
+          console.log(`⏭️ Skipping ${publicationNumber} - recent details exist`);
+          continue; // Skip if recent
+        }
+
+        // Try different patent ID formats
+        const patentIds = [
+          `patent/${publicationNumber}/en`,
+          publicationNumber,
+        ];
+
+        let details = null;
+        let successfulPatentId = null;
+
+        for (const patentId of patentIds) {
+          try {
+            console.log(`🔍 Fetching details for ${patentId}...`);
+            details = await serpApiProvider.getPatentDetails({
+              patentId,
+              fields,
+            });
+            successfulPatentId = patentId;
+            console.log(`✅ Successfully fetched details for ${publicationNumber}`);
+            break;
+          } catch (error) {
+            console.warn(`❌ Failed to fetch details for ${patentId}:`, error instanceof Error ? error.message : String(error));
+          }
+        }
+
+        if (details) {
+          // Store raw details
+          await prisma.priorArtRawDetail.create({
+            data: {
+              publicationNumber,
+              patentId: details.search_parameters?.patent_id || successfulPatentId || publicationNumber,
+              payload: details as any,
+            },
+          });
+
+          // Store raw details only (normalization handled by upsertPatentDetails)
+          await upsertPatentDetails(publicationNumber, details);
+        } else {
+          console.error(`❌ Failed to fetch details for ${publicationNumber} with any patent ID format`);
+        }
+
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+      } catch (error) {
+        console.error(`❌ Error fetching details for ${publicationNumber}:`, error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    console.log(`✅ Completed fetching details for selected patents`);
+  }
+
+  /**
    * Local search implementation (basic for now)
    */
   private async searchLocal(query: string, limit: number): Promise<any[]> {
-    // Placeholder - implement full-text search later
-    // For now, return empty to force API calls
-    return [];
+    // Basic local search: simple ILIKE matches over title and abstract
+    // Extract simple keywords by splitting on spaces and removing quotes
+    const q = query.replace(/"/g, ' ').toLowerCase();
+    const tokens = Array.from(new Set(q.split(/\s+/).filter(t => t && t.length > 2))).slice(0, 8);
+
+    if (tokens.length === 0) return [];
+
+    // Fetch a window of candidates, then score in JS similar to calculateContentRelevance
+    const candidates = await prisma.localPatent.findMany({
+      take: Math.max(limit * 10, 100),
+    });
+
+    const scored = candidates.map((p) => {
+      const title = (p.title || '').toLowerCase();
+      const abstract = (p.abstract || p.abstractOriginal || '').toLowerCase();
+      let score = 0;
+      for (const t of tokens) {
+        if (title.includes(t)) score += 3;
+        const occurrences = (abstract.match(new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || []).length;
+        score += occurrences;
+      }
+      return { patent: p, score };
+    }).filter(s => s.score > 0);
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+
+    // Map to SerpAPI-like organic_results entries so downstream processing works
+    return top.map(({ patent }, idx) => ({
+      position: idx + 1,
+      title: patent.title,
+      snippet: (patent.abstract || patent.abstractOriginal || '').slice(0, 500),
+      publication_number: patent.publicationNumber,
+      link: undefined,
+    }));
   }
 
   /**
@@ -723,7 +975,7 @@ export class PriorArtSearchService {
     return require('crypto').createHash('sha256').update(JSON.stringify(bundle)).digest('hex');
   }
 
-  private async getApprovedBundle(bundleId: string): Promise<PriorArtBundle> {
+  private async getApprovedBundle(bundleId: string): Promise<PriorArtBundle & { patentId: string }> {
     const bundle = await prisma.priorArtSearchBundle.findUnique({
       where: { id: bundleId },
     });
@@ -732,13 +984,229 @@ export class PriorArtSearchService {
       throw new Error('Bundle not found or not approved');
     }
 
-    return bundle.bundleData as unknown as PriorArtBundle;
+    const bundleData = bundle.bundleData as unknown as PriorArtBundle;
+    return {
+      ...bundleData,
+      patentId: bundle.patentId,
+    };
+  }
+
+  /**
+   * LEVEL 0: Local DB similarity check using LocalPatent. If conclusive, run novelty LLM and short-circuit.
+   */
+  private async executeLevel0LocalCheck(
+    runId: string,
+    bundle: PriorArtBundle & { patentId: string },
+    jwtToken: string
+  ): Promise<{ shortCircuit: boolean; determination?: string; reportUrl?: string; level0Results?: any } | null> {
+    try {
+      // Build a broad query joining core concepts and phrases
+      const broadQuery = [
+        bundle.source_summary.title,
+        bundle.core_concepts.join(' '),
+        bundle.phrases.join(' '),
+        bundle.technical_features.join(' '),
+      ].filter(Boolean).join(' ');
+
+      const localTop = await this.searchLocal(broadQuery, 5); // Reduced from 15 to avoid token limits
+      if (!localTop || localTop.length === 0) {
+        await prisma.priorArtRun.update({ where: { id: runId }, data: { level0Checked: true } });
+        return { shortCircuit: false };
+      }
+
+      // Convert to Level 1 patent format for novelty screening
+      const level1Candidates = localTop.map((r: any) => ({
+        publicationNumber: r.publication_number,
+        title: r.title,
+        abstract: r.snippet || '',
+        relevance: 70, // heuristic baseline for local hits
+        foundInVariants: ['level0_local'],
+        intersectionType: 'NONE',
+      }));
+
+      try {
+        const level1 = await NoveltyAssessmentService.performLevel1Assessment({
+          patentId: bundle.patentId,
+          runId,
+          jwtToken,
+          inventionSummary: {
+            title: bundle.source_summary.title,
+            problem: bundle.source_summary.problem_statement,
+            solution: bundle.source_summary.solution_summary,
+          },
+          level1Patents: level1Candidates,
+        });
+
+        // Store level 0 results metadata
+        await prisma.priorArtRun.update({
+          where: { id: runId },
+          data: {
+            level0Checked: true,
+            level0Determination: level1.determination,
+            level0Results: level1.level1Results || {},
+          },
+        });
+
+        if (level1.determination && level1.determination !== 'DOUBT') {
+          // NOVEL or NOT_NOVEL: generate report (already triggered inside service; fetch last URL if available)
+          return {
+            shortCircuit: true,
+            determination: level1.determination,
+            level0Results: level1.level1Results,
+          };
+        }
+      } catch (level0Error) {
+        console.warn('⚠️ Level 0 LLM assessment failed, but local patents found will still be shown:', level0Error);
+
+        // Even if LLM fails, store the local search results so they can be displayed
+        const fallbackResults = {
+          patent_assessments: level1Candidates.map(p => ({
+            publication_number: p.publicationNumber,
+            relevance: 'UNKNOWN', // Since LLM failed
+            reasoning: 'Local patent found but novelty assessment failed'
+          })),
+          overall_determination: null,
+          summary_remarks: 'Local search completed but LLM assessment failed'
+        };
+
+        await prisma.priorArtRun.update({
+          where: { id: runId },
+          data: {
+            level0Checked: true,
+            level0Determination: null,
+            level0Results: fallbackResults,
+          },
+        });
+      }
+
+      return { shortCircuit: false };
+    } catch (err) {
+      console.warn('Level 0 local check error:', err);
+      return null;
+    }
   }
 
   private isRecent(date: Date): boolean {
     const ttlDays = parseInt(process.env.DETAILS_TTL_DAYS || '14');
     const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
     return (Date.now() - date.getTime()) < ttlMs;
+  }
+
+  /**
+   * Get Level 1 patents for novelty assessment (from search results only)
+   */
+  private async getLevel1PatentsForNovelty(runId: string): Promise<Array<{
+    publicationNumber: string;
+    title: string;
+    abstract: string;
+    relevance: number;
+    foundInVariants: string[];
+    intersectionType: string;
+  }>> {
+    try {
+      // Get unified results for this run (Level 1 data)
+      const unifiedResults = await prisma.priorArtUnifiedResult.findMany({
+        where: { runId },
+        orderBy: { score: 'desc' },
+        take: 25, // Analyze top 25 most relevant patents
+      });
+
+      const level1Patents: Array<{
+        publicationNumber: string;
+        title: string;
+        abstract: string;
+        relevance: number;
+        foundInVariants: string[];
+        intersectionType: string;
+      }> = [];
+
+      for (const result of unifiedResults) {
+        // Get patent data from search results (Level 1 data)
+        const patentData = await prisma.priorArtPatent.findUnique({
+          where: { publicationNumber: result.publicationNumber },
+          select: {
+            title: true,
+            abstract: true,
+          }
+        });
+
+        if (patentData && patentData.title && patentData.abstract) {
+          level1Patents.push({
+            publicationNumber: result.publicationNumber,
+            title: patentData.title,
+            abstract: patentData.abstract,
+            relevance: result.score ? Math.round(Number(result.score) * 100) : 0,
+            foundInVariants: result.foundInVariants,
+            intersectionType: result.intersectionType,
+          });
+        }
+      }
+
+      console.log(`📊 Collected ${level1Patents.length} Level 1 patents for novelty analysis`);
+      return level1Patents;
+    } catch (error) {
+      console.error('Error getting Level 1 patents for novelty:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get intersecting patents for novelty assessment (returns full metadata)
+   */
+  private async getIntersectingPatentsForNovelty(runId: string): Promise<Array<{
+    publicationNumber: string;
+    title: string;
+    abstract: string;
+    relevance: number;
+    foundInVariants: string[];
+    intersectionType: string;
+  }>> {
+    try {
+      // Get unified results for this run
+      const unifiedResults = await prisma.priorArtUnifiedResult.findMany({
+        where: { runId },
+        orderBy: { score: 'desc' },
+        take: 20, // Limit to top 20 most relevant patents
+      });
+
+      const intersectingPatents: Array<{
+        publicationNumber: string;
+        title: string;
+        abstract: string;
+        relevance: number;
+        foundInVariants: string[];
+        intersectionType: string;
+      }> = [];
+
+      for (const result of unifiedResults) {
+        // Only include patents that were shortlisted or have high intersection
+        if (result.shortlisted || result.intersectionType === 'I2' || result.intersectionType === 'I3') {
+          const patentData = await prisma.priorArtPatent.findUnique({
+            where: { publicationNumber: result.publicationNumber },
+            select: {
+              title: true,
+              abstract: true,
+            }
+          });
+
+          if (patentData && patentData.title && patentData.abstract) {
+            intersectingPatents.push({
+              publicationNumber: result.publicationNumber,
+              title: patentData.title,
+              abstract: patentData.abstract,
+              relevance: result.score ? Math.round(Number(result.score) * 100) : 0,
+              foundInVariants: result.foundInVariants,
+              intersectionType: result.intersectionType,
+            });
+          }
+        }
+      }
+
+      return intersectingPatents;
+    } catch (error) {
+      console.error('Error getting intersecting patents for novelty:', error);
+      return [];
+    }
   }
 
   /**

@@ -30,6 +30,7 @@ export default function ProjectPatentsPage() {
   const [project, setProject] = useState<Project | null>(null)
   const [patents, setPatents] = useState<Patent[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [hasDraftSessions, setHasDraftSessions] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -65,7 +66,29 @@ export default function ProjectPatentsPage() {
 
       if (patentsResponse.ok) {
         const patentsData = await patentsResponse.json()
-        setPatents(patentsData.patents || [])
+        const list: Patent[] = patentsData.patents || []
+        setPatents(list)
+
+        // Probe drafting sessions per patent to toggle Resume button
+        const sessionsMap: Record<string, boolean> = {}
+        await Promise.all(
+          list.map(async (p) => {
+            try {
+              const res = await fetch(`/api/patents/${p.id}/drafting`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+              })
+              if (res.ok) {
+                const data = await res.json()
+                sessionsMap[p.id] = Array.isArray(data.sessions) && data.sessions.length > 0
+              } else {
+                sessionsMap[p.id] = false
+              }
+            } catch {
+              sessionsMap[p.id] = false
+            }
+          })
+        )
+        setHasDraftSessions(sessionsMap)
       }
     } catch (error) {
       console.error('Failed to fetch data:', error)
@@ -173,6 +196,32 @@ export default function ProjectPatentsPage() {
                       >
                         View Details
                       </Link>
+                      <Link
+                        href={`/projects/${projectId}/patents/${patent.id}?tab=actions&action=prior-art-search`}
+                        className="inline-flex items-center px-3 py-2 border border-gpt-gray-300 text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                        title="Open the Prior Art Search tools"
+                      >
+                        Prior Art Search
+                      </Link>
+                      <Link
+                        href={`/patents/${patent.id}/draft`}
+                        className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200"
+                        title="Start a new drafting session (or continue)"
+                      >
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                        Start Draft
+                      </Link>
+                      {hasDraftSessions[patent.id] && (
+                        <Link
+                          href={`/patents/${patent.id}/draft`}
+                          className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200"
+                          title="Resume the latest drafting session"
+                        >
+                          Resume Draft
+                        </Link>
+                      )}
                       <Link
                         href={`/projects/${projectId}/patents/${patent.id}`}
                         className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gpt-blue-600 hover:bg-gpt-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"

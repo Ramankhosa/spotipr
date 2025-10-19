@@ -1,0 +1,118 @@
+[1mdiff --git a/src/lib/prior-art-llm.ts b/src/lib/prior-art-llm.ts[m
+[1mindex a843ba5..a473e2a 100644[m
+[1m--- a/src/lib/prior-art-llm.ts[m
+[1m+++ b/src/lib/prior-art-llm.ts[m
+[36m@@ -3,36 +3,36 @@[m [mimport { llmGateway } from './metering/gateway';[m
+ // LLM Prompt Specification (per SRS §7)[m
+ export const PRIOR_ART_LLM_PROMPT = `You are a patent search strategist specializing in prior art analysis.[m
+ [m
+[31m-Your task is to read the invention brief and generate a structured JSON bundle for patent search queries.[m
+[31m-[m
+[31m-⚠️ IMPORTANT:[m
+[31m-- Output must be **valid JSON only**. Do not include markdown, explanations, or extra text.[m
+[31m-- Start with \`{\` and end with \`}\`.[m
+[31m-- Preserve the exact schema shown below. Do not remove or rename required fields.[m
+[31m-- \`query_variants\` must contain exactly 3 objects with labels: "broad", "baseline", "narrow".[m
+[31m-- Each query string (\`q\`) must be < 300 characters, valid for Google/SerpAPI syntax.[m
+[31m-- Use parentheses \`()\`, quotes \`""\`, AND/OR operators, and minus \`-\` for exclusion.[m
+[31m-- Always generate a **dynamic list of exclude_terms** based on the invention domain:[m
+[31m-  - Suggest terms that would produce irrelevant hits.[m
+[31m-  - Examples: for mechanical inventions → \`["software", "programming", "NLP"]\`;[m
+[31m-    for AI/ML inventions → \`["compiler", "translation"]\`;[m
+[31m-    for biotech inventions → \`["software", "database"]\`.[m
+[31m-  - If none are obvious, return an empty list \`[]\`.[m
+[31m-- Your \`exclude_terms\` will be automatically merged with a default fallback set[m
+[31m-  (\`["programming", "programming language", "compiler", "translation", "NLP", "natural language"]\`).[m
+[31m-- Variants must differ in scope:[m
+[31m-  - **broad** → recall-heavy with synonyms.[m
+[31m-  - **baseline** → balanced with domain-specific terms.[m
+[31m-  - **narrow** → precise, emphasizing unique aspects.[m
+[31m-- Keep \`core_concepts\` and \`technical_features\` concise, high-value terms.[m
+[31m-- \`synonym_groups\` should contain 3–6 groups of OR-able equivalents.[m
+[31m-- Provide \`cpc_candidates\` and \`ipc_candidates\` that are most likely relevant (at least 2–3 each).[m
+[31m-- Keep \`notes\` for each query short but diagnostic.[m
+[31m-[m
+[31m----[m
+[31m-[m
+[31m-## Response JSON Schema (do not change keys, just fill values):[m
+[32m+[m[32mYour task is to read an invention brief and generate a structured JSON bundle for patent search queries.[m
+[32m+[m[32mYou must return ONLY valid JSON with no additional text, markdown, code blocks, or explanations.[m
+ [m
+[32m+[m[32mINVENTION BRIEF:[m
+[32m+[m[32m{invention_brief}[m
+[32m+[m
+[32m+[m[32mCRITICAL OUTPUT REQUIREMENTS:[m
+[32m+[m[32m- Return ONLY valid JSON - no markdown, no code blocks, no explanations, no "Here is the JSON:" text[m
+[32m+[m[32m- Start your response directly with { and end with }[m
+[32m+[m[32m- Generate exactly 3 query variants with labels: "broad", "baseline", "narrow"[m
+[32m+[m[32m- Use Google Boolean syntax: parentheses (), AND, OR, quotes "", minus -[m
+[32m+[m[32m- Keep each query (q field) under 300 characters[m
+[32m+[m[32m- Each query variant must follow these construction rules:[m
+[32m+[m[32m  • Broad: maximize recall using 5–10 synonyms from synonym_groups, focus on general technology + function, avoid niche application terms, must include exclude_terms, target length 250–300 chars.[m
+[32m+[m[32m  • Baseline: balance recall and precision using 2–4 synonyms + 2–3 technical_features, include functional/technical context, must include exclude_terms, target length 200–250 chars.[m
+[32m+[m[32m  • Narrow: emphasize unique differentiators (application environment, special function, or distinguishing feature), use only 2–3 precise concepts, avoid long synonym lists, must include exclude_terms, target length 150–200 chars.[m
+[32m+[m[32m- Always generate a dynamic list of exclude_terms based on the invention's domain:[m
+[32m+[m[32m  • Suggest terms that would cause irrelevant hits (e.g., for mechanical inventions: ["software", "programming"]; for AI/ML inventions: ["compiler", "translation"]; for biotech inventions: ["database", "software"])[m
+[32m+[m[32m  • If none are obvious, return an empty list [][m
+[32m+[m[32m- Your exclude_terms will be merged with a default fallback set ["programming", "programming language", "compiler", "translation", "NLP", "natural language"][m
+[32m+[m[32m- Extract core technical concepts and features from the invention brief[m
+[32m+[m[32m- Generate synonym_groups as arrays of related terms for better search recall (3–6 groups)[m
+[32m+[m[32m- Provide CPC_candidates and IPC_candidates in SerpAPI-compatible format (e.g., "A01B", "B65D1/00")[m
+[32m+[m[32m- CPC codes: Use section/subsection format like "A01B", "G06F"[m
+[32m+[m[32m- IPC codes: Use full classification format like "A01B1/00", "G06F17/30"[m
+[32m+[m[32m- Include meaningful notes for each query variant explaining the strategy[m
+[32m+[m
+[32m+[m[32mRESPONSE FORMAT: Start directly with JSON, no other text:[m
+[32m+[m
+[32m+[m[32mREQUIRED OUTPUT SCHEMA (Patent search intelligence with SerpAPI-compatible formats):[m
+ {[m
+   "source_summary": {[m
+     "title": "Brief descriptive title of the invention",[m
+[36m@@ -42,38 +42,33 @@[m [mYour task is to read the invention brief and generate a structured JSON bundle f[m
+   "core_concepts": ["key technical concept 1", "key technical concept 2"],[m
+   "technical_features": ["important feature 1", "important feature 2"],[m
+   "synonym_groups": [[m
+[31m-    ["term1", "synonymA", "synonymB"],[m
+[31m-    ["term2", "synonymA", "synonymB"][m
+[32m+[m[32m    ["sensor", "detector", "transducer"],[m
+[32m+[m[32m    ["package", "parcel", "container"],[m
+[32m+[m[32m    ["monitoring", "tracking", "surveillance"][m
+   ],[m
+[31m-  "cpc_candidates": ["example CPC code", "another CPC code"],[m
+[31m-  "ipc_candidates": ["example IPC code", "another IPC code"],[m
+[32m+[m[32m  "cpc_candidates": ["A01B", "B65D", "G01S"],[m
+[32m+[m[32m  "ipc_candidates": ["A01B1/00", "B65D1/00", "G01S1/00"],[m
+   "exclude_terms": ["irrelevant term 1", "irrelevant term 2"],[m
+   "query_variants": [[m
+     {[m
+       "label": "broad",[m
+[31m-      "q": "Query string here",[m
+[32m+[m[32m      "q": "Google patent search query using OR operators for broad recall",[m
+       "notes": "Strategy explanation for broad search"[m
+     },[m
+     {[m
+       "label": "baseline",[m
+[31m-      "q": "Query string here",[m
+[32m+[m[32m      "q": "Balanced query with mix of broad and specific terms",[m
+       "notes": "Strategy explanation for baseline search"[m
+     },[m
+     {[m
+       "label": "narrow",[m
+[31m-      "q": "Query string here",[m
+[32m+[m[32m      "q": "Specific query targeting unique aspects of the invention",[m
+       "notes": "Strategy explanation for narrow search"[m
+     }[m
+   ][m
+ }[m
+ [m
+[31m----[m
+[31m-[m
+[31m-### Final Instruction[m
+[31m-Return ONLY valid JSON that conforms to this schema.[m
+[31m-[m
+[31m-INVENTION BRIEF:[m
+[31m-{invention_brief}`;[m
+[32m+[m[32mNOTE: Other fields (phrases, domain_tags, dates, etc.) will be set with sensible defaults or configured by the analyst in advanced settings.`;[m
+ [m
+ export interface PriorArtLLMRequest {[m
+   inventionBrief: string;[m

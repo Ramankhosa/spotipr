@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Start the search (async)
-    const runId = await priorArtSearchService.executeSearch(bundleId, payload.sub, includeScholar);
+    const runId = await priorArtSearchService.executeSearch(bundleId, payload.sub, token, includeScholar);
 
     // Update credits
     await prisma.userCredit.update({

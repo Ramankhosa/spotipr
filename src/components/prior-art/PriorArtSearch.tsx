@@ -296,7 +296,20 @@ export default function PriorArtSearch({ patentId, projectId }: { patentId: stri
         setMode('select')
       } else {
         const error = await response.json()
-        alert(error.error || 'Failed to approve bundle')
+        console.error('Approval failed:', error)
+
+        // Show more specific error messages
+        if (error.error?.includes('already approved')) {
+          alert('This bundle is already approved and ready for search!')
+          await loadBundles()
+          setMode('select')
+        } else if (error.error?.includes('required')) {
+          alert(`Approval failed: ${error.error}`)
+        } else if (error.error?.includes('sensitive tokens')) {
+          alert('Cannot approve bundle with sensitive content. Please remove sensitive tokens first.')
+        } else {
+          alert(error.error || 'Failed to approve bundle')
+        }
       }
     } catch (error) {
       console.error('Failed to approve bundle:', error)

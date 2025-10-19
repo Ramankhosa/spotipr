@@ -87,7 +87,9 @@ export class LLMGateway {
     const taskToFeatureMap: Record<TaskCode, FeatureCode> = {
       LLM1_PRIOR_ART: 'PRIOR_ART_SEARCH',
       LLM2_DRAFT: 'PATENT_DRAFTING',
-      LLM3_DIAGRAM: 'DIAGRAM_GENERATION'
+      LLM3_DIAGRAM: 'DIAGRAM_GENERATION',
+      LLM4_NOVELTY_SCREEN: 'PRIOR_ART_SEARCH',
+      LLM5_NOVELTY_ASSESS: 'PRIOR_ART_SEARCH'
     }
     return taskToFeatureMap[taskCode]
   }

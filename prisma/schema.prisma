@@ -55,6 +55,9 @@ model Tenant {
   usageLogs         UsageLog[]
   quotaAlerts       QuotaAlert[]
 
+  // Drafting relations
+  draftingSessions DraftingSession[]
+
   @@map("tenants")
 }
 
@@ -83,6 +86,9 @@ model User {
   priorArtHistory         PriorArtSearchHistory[]
   priorArtRuns            PriorArtRun[]
   credits                 UserCredit?
+  noveltyAssessments      NoveltyAssessmentRun[]
+  draftingSessions       DraftingSession[]
+  draftingHistory        DraftingHistory[]
 
   @@map("users")
 }
@@ -242,6 +248,8 @@ enum TaskCode {
   LLM1_PRIOR_ART
   LLM2_DRAFT
   LLM3_DIAGRAM
+  LLM4_NOVELTY_SCREEN
+  LLM5_NOVELTY_ASSESS
 }
 
 enum ModelClass {
@@ -262,6 +270,8 @@ model Patent {
   annexureVersions AnnexureVersion[]
   jobs             Job[]
   priorArtBundles  PriorArtSearchBundle[]
+  noveltyAssessments NoveltyAssessmentRun[]
+  draftingSessions DraftingSession[]
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   creator User    @relation(fields: [createdBy], references: [id])
@@ -636,6 +646,12 @@ model PriorArtRun {
   variantHits           PriorArtVariantHit[]
   PriorArtUnifiedResult PriorArtUnifiedResult[]
 
+  // Level 0 local-database screening
+  level0Checked       Boolean              @default(false)
+  level0Determination NoveltyDetermination?
+  level0Results       Json?
+  level0ReportUrl     String?
+
   @@map("prior_art_runs")
 }
 
@@ -794,9 +810,319 @@ model PriorArtScholarContent {
   @@map("prior_art_scholar_content")
 }
 
+// === LOCAL PATENT DATASET (e.g., Indian patents) ===
+model LocalPatent {
+  id                Int      @id @default(autoincrement())
+  publicationNumber String   @unique
+  kind              String?
+  title             String
+  abstract          String?
+  abstractOriginal  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("local_patents")
+}
+
+// === NOVELTY ASSESSMENT MODELS ===
+
+enum NoveltyAssessmentStatus {
+  PENDING
+  STAGE1_SCREENING
+  STAGE1_COMPLETED
+  STAGE2_ASSESSMENT
+  STAGE2_COMPLETED
+  NOVEL
+  NOT_NOVEL
+  DOUBT_RESOLVED
+  FAILED
+}
+
+enum NoveltyDetermination {
+  NOVEL
+  NOT_NOVEL
+  PARTIALLY_NOVEL // Some aspects novel, others not
+  DOUBT // Requires further analysis
+}
+
+enum NoveltyAssessmentStage {
+  STAGE1_SCREENING
+  STAGE2_ASSESSMENT
+}
+
+model NoveltyAssessmentRun {
+  id                String                  @id @default(cuid())
+  patentId          String
+  runId             String? // Link to prior art run that provided intersecting patents
+  userId            String
+  status            NoveltyAssessmentStatus @default(PENDING)
+
+  // Input data
+  inventionSummary  Json // Invention summary (title, problem, solution)
+  intersectingPatents Json // Array of {publicationNumber, title, abstract, relevance?}
+
+  // Stage 1 results (screening)
+  stage1CompletedAt DateTime?
+  stage1Results     Json? // Array of {publicationNumber, relevance, determination, confidence}
+
+  // Stage 2 results (detailed assessment)
+  stage2CompletedAt DateTime?
+  stage2Results     Json? // Array of {publicationNumber, determination, remarks, suggestions}
+
+  // Final determination
+  finalDetermination NoveltyDetermination?
+  finalRemarks       String?
+  finalSuggestions   String?
+
+  // Metadata
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  // Relations
+  patent Patent @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+  llmCalls NoveltyAssessmentLLMCall[]
+
+  @@map("novelty_assessment_runs")
+}
+
+model NoveltyAssessmentLLMCall {
+  id              String                 @id @default(cuid())
+  assessmentId    String
+  stage           NoveltyAssessmentStage
+  taskCode        TaskCode
+  prompt          String
+  response        Json?
+  tokensUsed      Int?
+  modelClass      String?
+  determination   NoveltyDetermination?
+  remarks         String?
+  suggestions     String?
+  calledAt        DateTime               @default(now())
+
+  // Relations
+  assessment NoveltyAssessmentRun @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@map("novelty_assessment_llm_calls")
+}
+
+
 enum PriorArtContentType {
   PATENT
   SCHOLAR
+}
+
+enum DraftingSessionStatus {
+  IDEA_ENTRY
+  COMPONENT_PLANNER
+  FIGURE_PLANNER
+  DIAGRAM_GENERATOR
+  ANNEXURE_DRAFT
+  REVIEW_FIX
+  EXPORT_READY
+  COMPLETED
+}
+
+enum ComponentType {
+  MAIN_CONTROLLER
+  SUBSYSTEM
+  MODULE
+  INTERFACE
+  SENSOR
+  ACTUATOR
+  PROCESSOR
+  MEMORY
+  DISPLAY
+  COMMUNICATION
+  POWER_SUPPLY
+  OTHER
+}
+
+enum NumeralRange {
+  HUNDREDS // 100-199: Main components
+  TWO_HUNDREDS // 200-299: Sub-components
+  THREE_HUNDREDS // 300-399: Modules
+  FOUR_HUNDREDS // 400-499: Interfaces
+  FIVE_HUNDREDS // 500-599: Sensors/Actuators
+  SIX_HUNDREDS // 600-699: Processors
+  SEVEN_HUNDREDS // 700-799: Memory
+  EIGHT_HUNDREDS // 800-899: Displays
+  NINE_HUNDREDS // 900-999: Other
+}
+
+model DraftingSession {
+  id        String                @id @default(cuid())
+  patentId  String
+  userId    String
+  tenantId  String?
+  status    DraftingSessionStatus @default(IDEA_ENTRY)
+
+  // Metadata
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  completedAt  DateTime?
+
+  // Relations
+  patent     Patent         @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  user       User           @relation(fields: [userId], references: [id])
+  tenant     Tenant?        @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  ideaRecord IdeaRecord?
+  referenceMap ReferenceMap?
+  figurePlans FigurePlan[]
+  diagramSources DiagramSource[]
+  annexureDrafts AnnexureDraft[]
+  history    DraftingHistory[]
+
+  @@map("drafting_sessions")
+}
+
+model IdeaRecord {
+  id              String   @id @default(cuid())
+  sessionId       String   @unique
+  title           String
+  rawInput        String // Original user input
+  normalizedData  Json // Structured JSON with all fields
+
+  // Extracted fields for easy querying
+  problem         String?
+  objectives      String?
+  components      Json? // Array of component descriptions
+  logic           String?
+  inputs          String?
+  outputs         String?
+  variants        String?
+  bestMethod      String?
+
+  // LLM metadata
+  llmPromptUsed   String?
+  llmResponse     Json?
+  tokensUsed      Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("idea_records")
+}
+
+model ReferenceMap {
+  id         String   @id @default(cuid())
+  sessionId  String   @unique
+  components Json // Array of {id, name, type, description, numeral, range}
+
+  // Validation
+  isValid     Boolean  @default(false)
+  validationErrors Json? // Array of validation issues
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("reference_maps")
+}
+
+model FigurePlan {
+  id          String   @id @default(cuid())
+  sessionId   String
+  figureNo    Int
+  title       String
+  nodes       Json // Array of component references included in figure
+  edges       Json // Array of {from, to, label} connections
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, figureNo])
+  @@map("figure_plans")
+}
+
+model DiagramSource {
+  id           String   @id @default(cuid())
+  sessionId    String
+  figureNo     Int
+  plantumlCode String
+  checksum     String // For integrity verification
+
+  // Uploaded image metadata
+  imageFilename String?
+  imagePath     String?
+  imageChecksum String?
+  imageUploadedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, figureNo])
+  @@map("diagram_sources")
+}
+
+model AnnexureDraft {
+  id          String   @id @default(cuid())
+  sessionId   String
+  version     Int      @default(1)
+
+  // Draft sections
+  title                    String
+  fieldOfInvention        String?
+  background              String?
+  summary                 String?
+  briefDescriptionOfDrawings String?
+  detailedDescription     String?
+  bestMethod             String?
+  claims                  String?
+  abstract                String?
+  listOfNumerals          String?
+
+  // Metadata
+  fullDraftText String // Complete assembled draft
+  isValid       Boolean @default(false)
+  validationReport Json? // Consistency check results
+
+  // LLM metadata
+  llmPromptUsed String?
+  llmResponse   Json?
+  tokensUsed    Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("annexure_drafts")
+}
+
+model DraftingHistory {
+  id          String   @id @default(cuid())
+  sessionId   String
+  action      String // IDEA_UPDATED, COMPONENTS_ASSIGNED, FIGURE_PLAN_CHANGED, etc.
+  userId      String
+  stage       DraftingSessionStatus
+
+  // Data changes
+  previousData Json?
+  newData      Json?
+  notes        String?
+
+  timestamp DateTime @default(now())
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id])
+
+  @@map("drafting_history")
 }
 
 model UserCredit {

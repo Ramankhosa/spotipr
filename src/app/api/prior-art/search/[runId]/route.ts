@@ -71,6 +71,49 @@ export async function GET(
       })
     );
 
+    // Include Level 0 results if available (regardless of Level 1 results)
+    let level0Results = [];
+    if (run.level0Checked && run.level0Results) {
+      try {
+        const level0Data = run.level0Results as any;
+        if (level0Data && level0Data.patent_assessments) {
+          level0Results = await Promise.all(
+            level0Data.patent_assessments.map(async (assessment: any) => {
+              // Try to fetch patent details from LocalPatent table
+              const localPatent = await prisma.localPatent.findUnique({
+                where: { publicationNumber: assessment.publication_number },
+              });
+
+              return {
+                identifier: assessment.publication_number,
+                contentType: 'PATENT' as const,
+                score: 0, // Level 0 doesn't have relevance scores
+                intersectionType: 'NONE',
+                foundInVariants: ['level0_local'],
+                ranks: { broad: null, baseline: null, narrow: null },
+                shortlisted: false,
+                patent: localPatent ? {
+                  publicationNumber: localPatent.publicationNumber,
+                  title: localPatent.title,
+                  abstract: localPatent.abstract,
+                  publicationDate: null,
+                  assignees: [],
+                  inventors: [],
+                  cpcs: [],
+                  pdfLink: null,
+                } : null,
+                details: null,
+                level0Relevance: assessment.relevance,
+                level0Reasoning: assessment.reasoning,
+              };
+            })
+          );
+        }
+      } catch (error) {
+        console.warn('Failed to load Level 0 results:', error);
+      }
+    }
+
     if (run.userId !== payload.sub) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
@@ -104,6 +147,12 @@ export async function GET(
       finishedAt: run.finishedAt,
       creditsConsumed: run.creditsConsumed,
       apiCallsMade: run.apiCallsMade,
+      level0: {
+        checked: run.level0Checked,
+        determination: run.level0Determination,
+        results: run.level0Results,
+        reportUrl: run.level0ReportUrl,
+      },
 
       bundle: {
         inventionBrief: run.bundle.inventionBrief,
@@ -116,7 +165,7 @@ export async function GET(
         })),
       },
 
-      results: resultsWithDetails.map((result: any) => ({
+      results: [...resultsWithDetails, ...level0Results].map((result: any) => ({
         identifier: result.contentType === 'SCHOLAR' ? result.scholarIdentifier : result.publicationNumber,
         contentType: result.contentType,
         score: result.score,

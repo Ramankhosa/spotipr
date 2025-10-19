@@ -1,74 +1,26 @@
 import { llmGateway } from './metering/gateway';
 
-// LLM Prompt Specification (per SRS §7)
-export const PRIOR_ART_LLM_PROMPT = `You are a patent search strategist specializing in prior art analysis.
+// LLM Prompt Specification - Ultra Concise for Gemini token limits
+export const PRIOR_ART_LLM_PROMPT = `Generate patent search JSON from this brief. Output ONLY valid JSON.
 
-Your task is to read an invention brief and generate a structured JSON bundle for patent search queries.
-You must return ONLY valid JSON with no additional text, markdown, code blocks, or explanations.
-
-INVENTION BRIEF:
+BRIEF:
 {invention_brief}
 
-CRITICAL OUTPUT REQUIREMENTS:
-- Return ONLY valid JSON - no markdown, no code blocks, no explanations, no "Here is the JSON:" text
-- Start your response directly with { and end with }
-- Generate exactly 3 query variants with labels: "broad", "baseline", "narrow"
-- Use Google Boolean syntax: parentheses (), AND, OR, quotes "", minus -
-- Keep each query (q field) under 300 characters
-- Each query variant must follow these construction rules:
-  • Broad: maximize recall using 5–10 synonyms from synonym_groups, focus on general technology + function, avoid niche application terms, must include exclude_terms, target length 250–300 chars.
-  • Baseline: balance recall and precision using 2–4 synonyms + 2–3 technical_features, include functional/technical context, must include exclude_terms, target length 200–250 chars.
-  • Narrow: emphasize unique differentiators (application environment, special function, or distinguishing feature), use only 2–3 precise concepts, avoid long synonym lists, must include exclude_terms, target length 150–200 chars.
-- Always generate a dynamic list of exclude_terms based on the invention's domain:
-  • Suggest terms that would cause irrelevant hits (e.g., for mechanical inventions: ["software", "programming"]; for AI/ML inventions: ["compiler", "translation"]; for biotech inventions: ["database", "software"])
-  • If none are obvious, return an empty list []
-- Your exclude_terms will be merged with a default fallback set ["programming", "programming language", "compiler", "translation", "NLP", "natural language"]
-- Extract core technical concepts and features from the invention brief
-- Generate synonym_groups as arrays of related terms for better search recall (3–6 groups)
-- Provide CPC_candidates and IPC_candidates in SerpAPI-compatible format (e.g., "A01B", "B65D1/00")
-- CPC codes: Use section/subsection format like "A01B", "G06F"
-- IPC codes: Use full classification format like "A01B1/00", "G06F17/30"
-- Include meaningful notes for each query variant explaining the strategy
-
-RESPONSE FORMAT: Start directly with JSON, no other text:
-
-REQUIRED OUTPUT SCHEMA (Patent search intelligence with SerpAPI-compatible formats):
+OUTPUT FORMAT:
 {
-  "source_summary": {
-    "title": "Brief descriptive title of the invention",
-    "problem_statement": "What problem does this solve?",
-    "solution_summary": "How does it solve the problem?"
-  },
-  "core_concepts": ["key technical concept 1", "key technical concept 2"],
-  "technical_features": ["important feature 1", "important feature 2"],
-  "synonym_groups": [
-    ["sensor", "detector", "transducer"],
-    ["package", "parcel", "container"],
-    ["monitoring", "tracking", "surveillance"]
-  ],
-  "cpc_candidates": ["A01B", "B65D", "G01S"],
-  "ipc_candidates": ["A01B1/00", "B65D1/00", "G01S1/00"],
-  "exclude_terms": ["irrelevant term 1", "irrelevant term 2"],
+  "source_summary": {"title": "brief title", "problem": "main problem", "solution": "key solution"},
+  "core_concepts": ["concept1", "concept2"],
+  "technical_features": ["feature1", "feature2"],
+  "synonym_groups": [["term", "synonym1", "synonym2"]],
+  "cpc_candidates": ["C01A", "G06F"],
+  "ipc_candidates": ["G06F001/00", "H04L"],
+  "exclude_terms": ["generic", "obvious"],
   "query_variants": [
-    {
-      "label": "broad",
-      "q": "Google patent search query using OR operators for broad recall",
-      "notes": "Strategy explanation for broad search"
-    },
-    {
-      "label": "baseline",
-      "q": "Balanced query with mix of broad and specific terms",
-      "notes": "Strategy explanation for baseline search"
-    },
-    {
-      "label": "narrow",
-      "q": "Specific query targeting unique aspects of the invention",
-      "notes": "Strategy explanation for narrow search"
-    }
+    {"label": "broad", "q": "boolean query with synonyms", "notes": "strategy"},
+    {"label": "baseline", "q": "boolean query with features", "notes": "strategy"},
+    {"label": "narrow", "q": "boolean query core concepts", "notes": "strategy"}
   ]
-}
-
-NOTE: Other fields (phrases, domain_tags, dates, etc.) will be set with sensible defaults or configured by the analyst in advanced settings.`;
+}`;
 
 export interface PriorArtLLMRequest {
   inventionBrief: string;
@@ -118,6 +70,31 @@ export class PriorArtLLMService {
       let bundle;
       try {
         console.log('🔍 Raw LLM response:', result.response.output);
+        console.log('🔍 Response finish reason:', result.response.metadata?.finishReason);
+
+        // Check if response is empty
+        if (!result.response.output || result.response.output.trim().length === 0) {
+          return {
+            success: false,
+            error: 'LLM returned empty response'
+          };
+        }
+
+        // Check if response was cut off due to token limits
+        if (result.response.metadata?.finishReason === 'MAX_TOKENS') {
+          console.warn('⚠️ LLM response was truncated due to token limits - attempting to process partial response');
+
+          // If we have some output content, try to process it anyway
+          if (result.response.output && result.response.output.trim().length > 100) {
+            console.log('📝 Attempting to process partial response...');
+            // Continue with processing - the JSON parsing might still work
+          } else {
+            return {
+              success: false,
+              error: 'LLM response was truncated due to token limits. Please try with a shorter invention brief.'
+            };
+          }
+        }
 
         let jsonText = result.response.output.trim();
 
@@ -138,6 +115,11 @@ export class PriorArtLLMService {
           jsonText = jsonText.substring(startBrace, lastBrace + 1);
           console.log('✂️ Extracted JSON between braces:', jsonText);
         }
+
+        // Additional cleanup: remove trailing commas and fix common JSON issues
+        jsonText = jsonText.replace(/,(\s*[}\]])/g, '$1'); // Remove trailing commas
+        jsonText = jsonText.replace(/,(\s*),/g, ','); // Remove double commas
+        jsonText = jsonText.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":'); // Quote unquoted keys
 
         bundle = JSON.parse(jsonText);
       } catch (parseError) {

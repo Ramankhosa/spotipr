@@ -146,6 +146,18 @@ export default function ProjectDashboardPage() {
                 </svg>
                 Add Patent
               </Link>
+              {!project.applicantProfile && (
+                <Link
+                  href={`/projects/${projectId}/applicant`}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gpt-blue-600 hover:bg-gpt-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                  title="Set up organization details for patent filings"
+                >
+                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                  Add Profile
+                </Link>
+              )}
             </div>
           </div>
         </div>
@@ -195,8 +207,8 @@ export default function ProjectDashboardPage() {
           </div>
         </div>
 
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Main Content */}
+        <div className="space-y-8">
           {/* Patents Section */}
           <div className="bg-white rounded-lg shadow-sm">
             <div className="px-6 py-4 border-b border-gpt-gray-200">
@@ -212,6 +224,30 @@ export default function ProjectDashboardPage() {
                   New Patent
                 </Link>
               </div>
+              {/* Quick actions for the most recent patent */}
+              {patents.length > 0 && (
+                <div className="mt-3 flex items-center space-x-2 text-sm">
+                  <span className="text-gpt-gray-600">Quick actions:</span>
+                  <Link
+                    href={`/projects/${projectId}/patents/${patents[0].id}?tab=actions&action=prior-art-search`}
+                    className="inline-flex items-center px-2.5 py-1 border border-gpt-gray-300 rounded text-gpt-gray-700 bg-white hover:bg-gpt-gray-50"
+                  >
+                    Prior Art Search
+                  </Link>
+                  <Link
+                    href={`/patents/${patents[0].id}/draft`}
+                    className="inline-flex items-center px-2.5 py-1 border border-transparent rounded text-white bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    Start Draft
+                  </Link>
+                  <Link
+                    href={`/patents/${patents[0].id}/draft`}
+                    className="inline-flex items-center px-2.5 py-1 border border-transparent rounded text-white bg-gpt-blue-600 hover:bg-gpt-blue-700"
+                  >
+                    Resume Draft
+                  </Link>
+                </div>
+              )}
             </div>
 
             <div className="p-6">
@@ -243,12 +279,32 @@ export default function ProjectDashboardPage() {
                           Status: {patent.status} • Created {new Date(patent.createdAt).toLocaleDateString()}
                         </p>
                       </div>
-                      <Link
-                        href={`/projects/${projectId}/patents/${patent.id}`}
-                        className="inline-flex items-center px-3 py-1 border border-gpt-gray-300 text-sm font-medium rounded text-gpt-gray-700 bg-white hover:bg-gpt-gray-50"
-                      >
-                        View
-                      </Link>
+                      <div className="flex items-center space-x-2">
+                        <Link
+                          href={`/projects/${projectId}/patents/${patent.id}`}
+                          className="inline-flex items-center px-3 py-1 border border-gpt-gray-300 text-sm font-medium rounded text-gpt-gray-700 bg-white hover:bg-gpt-gray-50"
+                        >
+                          View
+                        </Link>
+                        <Link
+                          href={`/projects/${projectId}/patents/${patent.id}?tab=actions&action=prior-art-search`}
+                          className="inline-flex items-center px-3 py-1 border border-gpt-gray-300 text-sm font-medium rounded text-gpt-gray-700 bg-white hover:bg-gpt-gray-50"
+                        >
+                          Prior Art
+                        </Link>
+                        <Link
+                          href={`/patents/${patent.id}/draft`}
+                          className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
+                        >
+                          Start Draft
+                        </Link>
+                        <Link
+                          href={`/patents/${patent.id}/draft`}
+                          className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded text-white bg-gpt-blue-600 hover:bg-gpt-blue-700"
+                        >
+                          Resume
+                        </Link>
+                      </div>
                     </div>
                   ))}
                   {patents.length > 5 && (
@@ -261,70 +317,6 @@ export default function ProjectDashboardPage() {
                       </Link>
                     </div>
                   )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Applicant Profile Section */}
-          <div className="bg-white rounded-lg shadow-sm">
-            <div className="px-6 py-4 border-b border-gpt-gray-200">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-gpt-gray-900">Applicant Profile</h2>
-                {project.applicantProfile && (
-                  <Link
-                    href={`/projects/${projectId}/applicant`}
-                    className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded text-gpt-blue-600 hover:text-gpt-blue-800"
-                  >
-                    Edit
-                  </Link>
-                )}
-              </div>
-            </div>
-
-            <div className="p-6">
-              {project.applicantProfile ? (
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-sm font-medium text-gpt-gray-700">Legal Name</label>
-                    <p className="text-sm text-gpt-gray-900">{project.applicantProfile.applicantLegalName}</p>
-                  </div>
-                  {project.applicantProfile.applicantAddress && (
-                    <div>
-                      <label className="text-sm font-medium text-gpt-gray-700">Address</label>
-                      <p className="text-sm text-gpt-gray-900">{project.applicantProfile.applicantAddress}</p>
-                    </div>
-                  )}
-                  {project.applicantProfile.applicantPhone && (
-                    <div>
-                      <label className="text-sm font-medium text-gpt-gray-700">Phone</label>
-                      <p className="text-sm text-gpt-gray-900">{project.applicantProfile.applicantPhone}</p>
-                    </div>
-                  )}
-                  {project.applicantProfile.applicantEmail && (
-                    <div>
-                      <label className="text-sm font-medium text-gpt-gray-700">Email</label>
-                      <p className="text-sm text-gpt-gray-900">{project.applicantProfile.applicantEmail}</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-8">
-                  <div className="text-gpt-gray-400 mb-4">
-                    <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-lg font-medium text-gpt-gray-900 mb-2">No applicant profile set</h3>
-                  <p className="text-gpt-gray-600 mb-4">
-                    Set up your organization details for patent filings.
-                  </p>
-                  <Link
-                    href={`/projects/${projectId}/applicant`}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gpt-blue-600 hover:bg-gpt-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500"
-                  >
-                    Add Profile
-                  </Link>
                 </div>
               )}
             </div>

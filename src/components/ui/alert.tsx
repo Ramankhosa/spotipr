@@ -6,6 +6,11 @@ interface AlertProps {
   className?: string;
 }
 
+interface AlertTitleProps {
+  children: ReactNode;
+  className?: string;
+}
+
 interface AlertDescriptionProps {
   children: ReactNode;
   className?: string;
@@ -23,6 +28,14 @@ export function Alert({ children, variant = 'default', className = '' }: AlertPr
     <div className={`relative w-full rounded-lg border p-4 ${variantClasses} ${className}`}>
       {children}
     </div>
+  );
+}
+
+export function AlertTitle({ children, className = '' }: AlertTitleProps) {
+  return (
+    <h5 className={`mb-1 font-medium leading-none tracking-tight ${className}`}>
+      {children}
+    </h5>
   );
 }
 

@@ -224,12 +224,31 @@ export default function UserDashboard() {
             <h3 className="text-lg leading-6 font-medium text-gray-900 mb-2">
               Welcome, {user?.email?.split('@')[0]}!
             </h3>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-gray-600 mb-4">
               You are logged in with <span className="font-medium">{user?.role}</span> permissions
               {user?.ati_id && (
                 <span> for company <span className="font-medium">{user?.ati_id}</span></span>
               )}.
             </p>
+            {(user?.role === 'OWNER' || user?.role === 'ADMIN' || user?.role === 'MANAGER' || user?.role === 'ANALYST') && (
+              <div className="border-t border-gray-200 pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Ready to draft a patent?</h4>
+                    <p className="text-sm text-gray-600">Start the AI-powered patent drafting workflow</p>
+                  </div>
+                  <Link
+                    href="/patents/draft/new"
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200"
+                  >
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                    </svg>
+                    Start Patent Draft
+                  </Link>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

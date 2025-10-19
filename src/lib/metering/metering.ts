@@ -46,24 +46,33 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         await this.updateUsageMeters(reservation, stats)
 
         // Create usage log
-        await prisma.usageLog.create({
-          data: {
-            tenantId: reservation.tenantId,
-            userId: userId,
-            featureId: reservation.featureId,
-            taskCode: reservation.taskCode,
-            modelClass: stats.modelClass,
-            apiCode: stats.apiCode,
-            inputTokens: stats.inputTokens,
-            outputTokens: stats.outputTokens,
-            apiCalls: stats.apiCalls || 1,
-            startedAt: reservation.createdAt,
-            completedAt: new Date(),
-            status: 'COMPLETED',
-            idempotencyKey: reservation.idempotencyKey,
-            reservationId: reservation.id
+        try {
+          await prisma.usageLog.create({
+            data: {
+              tenantId: reservation.tenantId,
+              userId: userId,
+              featureId: reservation.featureId,
+              taskCode: reservation.taskCode,
+              modelClass: stats.modelClass,
+              apiCode: stats.apiCode,
+              inputTokens: stats.inputTokens,
+              outputTokens: stats.outputTokens,
+              apiCalls: stats.apiCalls || 1,
+              startedAt: reservation.createdAt,
+              completedAt: new Date(),
+              status: 'COMPLETED',
+              idempotencyKey: reservation.idempotencyKey,
+              reservationId: reservation.id
+            }
+          })
+        } catch (logError: any) {
+          // Handle foreign key constraint violations gracefully (e.g., when migrations haven't been run)
+          if (logError.code === 'P2003') {
+            console.warn(`Skipping usage log creation due to missing task code: ${reservation.taskCode}`)
+          } else {
+            console.error('Failed to create usage log:', logError)
           }
-        })
+        }
 
         // Mark reservation as completed
         await prisma.usageReservation.update({
@@ -98,20 +107,29 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           })
 
           if (reservation) {
-            await prisma.usageLog.create({
-              data: {
-                tenantId: reservation.tenantId,
-                userId: undefined, // User ID not stored in reservation
-                featureId: reservation.featureId,
-                taskCode: reservation.taskCode,
-                startedAt: reservation.createdAt,
-                completedAt: new Date(),
-                status: 'FAILED',
-                error: error instanceof Error ? error.message : String(error),
-                idempotencyKey: reservation.idempotencyKey,
-                reservationId: reservation.id
+            try {
+              await prisma.usageLog.create({
+                data: {
+                  tenantId: reservation.tenantId,
+                  userId: undefined, // User ID not stored in reservation
+                  featureId: reservation.featureId,
+                  taskCode: reservation.taskCode,
+                  startedAt: reservation.createdAt,
+                  completedAt: new Date(),
+                  status: 'FAILED',
+                  error: error instanceof Error ? error.message : String(error),
+                  idempotencyKey: reservation.idempotencyKey,
+                  reservationId: reservation.id
+                }
+              })
+            } catch (logError: any) {
+              // Handle foreign key constraint violations gracefully (e.g., when migrations haven't been run)
+              if (logError.code === 'P2003') {
+                console.warn(`Skipping failed usage log creation due to missing task code: ${reservation.taskCode}`)
+              } else {
+                console.error('Failed to create error log:', logError)
               }
-            })
+            }
           }
         } catch (logError) {
           console.error('Failed to create error log:', logError)

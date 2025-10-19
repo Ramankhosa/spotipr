@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { verifyJWT } from '@/lib/auth'
 import mammoth from 'mammoth'
+import path from 'path'
+import fs from 'fs/promises'
+import crypto from 'crypto'
 
 async function getUserFromRequest(request: NextRequest) {
   // Extract token from Authorization header
@@ -73,15 +76,17 @@ export async function POST(
       return NextResponse.json({ error: 'File size exceeds 25MB limit' }, { status: 400 })
     }
 
-    // Validate file type
+    // Validate file type (extend to allow diagram images)
     const allowedTypes = [
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
       'application/pdf', // .pdf
       'text/plain', // .txt
-      'text/markdown', // .md
+      'text/markdown', // .md,
+      'image/png',
+      'image/svg+xml'
     ]
 
-    const allowedExtensions = ['.docx', '.pdf', '.txt', '.md']
+    const allowedExtensions = ['.docx', '.pdf', '.txt', '.md', '.png', '.svg']
     const fileName = file.name.toLowerCase()
     const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext))
 
@@ -99,7 +104,20 @@ export async function POST(
     let textContent = ''
 
     try {
-      if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx')) {
+      if (file.type === 'image/png' || fileName.endsWith('.png') || file.type === 'image/svg+xml' || fileName.endsWith('.svg')) {
+        // Store diagram image to disk
+        const baseDir = path.join(process.cwd(), 'uploads', 'projects', projectId, 'patents', patentId, 'figures')
+        await fs.mkdir(baseDir, { recursive: true })
+        const outPath = path.join(baseDir, file.name)
+        await fs.writeFile(outPath, buffer)
+        const checksum = crypto.createHash('sha256').update(buffer).digest('hex')
+        return NextResponse.json({
+          message: 'Image uploaded',
+          filename: file.name,
+          path: outPath,
+          checksum
+        })
+      } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx')) {
         // Convert DOCX to HTML
         const result = await mammoth.convertToHtml({ buffer })
         html = result.value
@@ -152,6 +170,65 @@ export async function POST(
     }
   } catch (error) {
     console.error('File upload error:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { projectId: string; patentId: string } }
+) {
+  try {
+    const userEmail = await getUserFromRequest(request)
+    if (!userEmail) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { projectId, patentId } = params
+    const url = new URL(request.url)
+    const filename = url.searchParams.get('filename') || ''
+
+    if (!filename) {
+      return NextResponse.json({ error: 'filename is required' }, { status: 400 })
+    }
+
+    // basic traversal guard and allowed formats
+    if (filename.includes('..')) {
+      return NextResponse.json({ error: 'Invalid filename' }, { status: 400 })
+    }
+    const lower = filename.toLowerCase()
+    const isPng = lower.endsWith('.png')
+    const isSvg = lower.endsWith('.svg')
+    if (!isPng && !isSvg) {
+      return NextResponse.json({ error: 'Unsupported format' }, { status: 400 })
+    }
+
+    // access check
+    const projectAccess = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        OR: [
+          { user: { email: userEmail } },
+          { collaborators: { some: { user: { email: userEmail } } } }
+        ]
+      }
+    })
+    if (!projectAccess) {
+      return NextResponse.json({ error: 'Project not found or access denied' }, { status: 404 })
+    }
+
+    const baseDir = path.join(process.cwd(), 'uploads', 'projects', projectId, 'patents', patentId, 'figures')
+    const filePath = path.join(baseDir, filename)
+
+    try {
+      const buf = await fs.readFile(filePath)
+      const contentType = isPng ? 'image/png' : 'image/svg+xml'
+      return new Response(buf, { status: 200, headers: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=0' } })
+    } catch {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 })
+    }
+  } catch (error) {
+    console.error('GET image error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

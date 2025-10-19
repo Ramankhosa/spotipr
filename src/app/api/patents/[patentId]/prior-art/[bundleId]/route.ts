@@ -78,6 +78,48 @@ export async function PUT(
     }
 
     if (action === 'approve') {
+      // Check if bundle is already approved
+      if (bundle.status === 'APPROVED') {
+        return NextResponse.json({
+          error: 'Bundle is already approved',
+          bundle: {
+            id: bundle.id,
+            status: bundle.status,
+            approvedAt: bundle.approvedAt,
+            approvedBy: bundle.approvedBy
+          }
+        }, { status: 400 });
+      }
+
+      // Validate bundle data before approval
+      if (!bundleData) {
+        return NextResponse.json({ error: 'Bundle data is required for approval' }, { status: 400 });
+      }
+
+      // Check required fields
+      if (!bundleData.source_summary?.title) {
+        return NextResponse.json({ error: 'Bundle title is required' }, { status: 400 });
+      }
+
+      if (!bundleData.core_concepts || !Array.isArray(bundleData.core_concepts) || bundleData.core_concepts.length === 0) {
+        return NextResponse.json({ error: 'Core concepts are required' }, { status: 400 });
+      }
+
+      if (!bundleData.query_variants || !Array.isArray(bundleData.query_variants) || bundleData.query_variants.length !== 3) {
+        return NextResponse.json({ error: 'Exactly 3 query variants are required' }, { status: 400 });
+      }
+
+      // Check for required query variant labels
+      const labels = bundleData.query_variants.map((v: any) => v.label);
+      if (!labels.includes('broad') || !labels.includes('baseline') || !labels.includes('narrow')) {
+        return NextResponse.json({ error: 'Bundle must have broad, baseline, and narrow query variants' }, { status: 400 });
+      }
+
+      // Check for sensitive tokens
+      if (bundleData.sensitive_tokens && bundleData.sensitive_tokens.length > 0) {
+        return NextResponse.json({ error: 'Cannot approve bundle with sensitive tokens' }, { status: 400 });
+      }
+
       // Update bundle status to APPROVED
       const updatedBundle = await prisma.priorArtSearchBundle.update({
         where: { id: bundleId },

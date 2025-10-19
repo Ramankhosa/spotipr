@@ -12,7 +12,7 @@ export const defaultConfig: MeteringConfig = {
   maxConcurrentReservations: 50,
   defaultLimits: {
     maxTokensIn: 1000,
-    maxTokensOut: 2000,
+    maxTokensOut: 6000,
     agentMaxSteps: 10,
     retrievalTopK: 5,
     diagramFilesPerReq: 1,
@@ -49,7 +49,7 @@ export function createMeteringConfigFromEnv(): MeteringConfig {
     maxConcurrentReservations: parseInt(process.env.METERING_MAX_CONCURRENT || '50'),
     defaultLimits: {
       maxTokensIn: parseInt(process.env.METERING_DEFAULT_MAX_TOKENS_IN || '1000'),
-      maxTokensOut: parseInt(process.env.METERING_DEFAULT_MAX_TOKENS_OUT || '2000'),
+      maxTokensOut: parseInt(process.env.METERING_DEFAULT_MAX_TOKENS_OUT || '6000'),
       agentMaxSteps: parseInt(process.env.METERING_DEFAULT_MAX_STEPS || '10'),
       retrievalTopK: parseInt(process.env.METERING_DEFAULT_TOP_K || '5'),
       diagramFilesPerReq: parseInt(process.env.METERING_DEFAULT_MAX_FILES || '1'),

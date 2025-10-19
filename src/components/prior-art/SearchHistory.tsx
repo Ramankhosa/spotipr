@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ExternalLink, Clock, CheckCircle, XCircle, AlertTriangle, Eye, FileText, Search } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import { NoveltyAssessmentProgress } from './NoveltyAssessmentProgress';
 
 interface SearchRun {
   id: string;
@@ -20,6 +21,18 @@ interface SearchRun {
   bundle: {
     inventionBrief: string;
     bundleData: any;
+  };
+  noveltyAssessment?: {
+    id: string;
+    status: string;
+    determination?: string;
+    reportUrl?: string;
+  };
+  level0?: {
+    checked: boolean;
+    determination?: string;
+    results?: any;
+    reportUrl?: string;
   };
 }
 
@@ -36,6 +49,9 @@ interface SearchResult {
   };
   shortlisted: boolean;
   manuallyAdded?: boolean;
+  // Level 0 assessment fields
+  level0Relevance?: string;
+  level0Reasoning?: string;
   // Patent-specific fields
   patent?: {
     publicationNumber: string;
@@ -437,6 +453,7 @@ export function SearchHistory() {
   const [resultsLoading, setResultsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('level1');
   const [level1Tab, setLevel1Tab] = useState('broadPatents');
+  const [isPolling, setIsPolling] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -449,13 +466,25 @@ export function SearchHistory() {
   useEffect(() => {
     const hasRunningSearches = runs.some(run => run.status === 'RUNNING');
 
-    if (hasRunningSearches && !pollingIntervalRef.current) {
-      // Start polling every 5 seconds when there are running searches
+    // Always poll if there are any runs (not just running ones) to catch status changes
+    // This ensures we don't miss status updates and stop polling too early
+    const shouldPoll = runs.length > 0;
+
+    if (shouldPoll && !pollingIntervalRef.current) {
+      console.log('🔄 Starting search status polling (3s intervals)');
+      setIsPolling(true);
+      // Start polling every 3 seconds for more responsive updates
       pollingIntervalRef.current = setInterval(() => {
+        console.log('🔍 Polling for search status updates...');
         fetchRuns();
-      }, 5000);
-    } else if (!hasRunningSearches && pollingIntervalRef.current) {
-      // Stop polling when no searches are running
+      }, 3000);
+
+      // Also fetch immediately to get latest status
+      fetchRuns();
+    } else if (!shouldPoll && pollingIntervalRef.current) {
+      console.log('⏹️ Stopping search status polling (no active runs)');
+      setIsPolling(false);
+      // Stop polling when there are no runs at all
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
@@ -463,11 +492,12 @@ export function SearchHistory() {
     // Cleanup on unmount
     return () => {
       if (pollingIntervalRef.current) {
+        console.log('🧹 Cleaning up search polling interval');
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
     };
-  }, [runs.some(run => run.status === 'RUNNING')]); // Only depend on whether there are running searches
+  }, [runs.length]); // Depend on runs array length instead of just running status
 
   const fetchRuns = async () => {
     try {
@@ -479,10 +509,37 @@ export function SearchHistory() {
 
       if (response.ok) {
         const data = await response.json();
-        setRuns(data.runs);
+        const newRuns = data.runs;
+
+        // Log status changes for debugging
+        const statusChanges = newRuns.filter((newRun: any, index: number) => {
+          const oldRun = runs[index];
+          return oldRun && oldRun.status !== newRun.status;
+        });
+
+        if (statusChanges.length > 0) {
+          console.log('📊 Status changes detected:', statusChanges.map((run: any) =>
+            `${run.id}: ${run.status}`
+          ));
+        }
+
+        setRuns(newRuns);
+
+        // Check if any runs completed and show notification
+        const justCompleted = newRuns.filter((newRun: any) =>
+          runs.find((oldRun: any) => oldRun.id === newRun.id && oldRun.status === 'RUNNING' && newRun.status === 'COMPLETED')
+        );
+
+        if (justCompleted.length > 0) {
+          console.log('✅ Search completed:', justCompleted.length, 'run(s)');
+          // Could add toast notification here
+        }
+      } else {
+        console.error('Failed to fetch runs - HTTP', response.status);
       }
     } catch (error) {
-      console.error('Failed to fetch runs:', error);
+      console.error('Failed to fetch runs - Network error:', error);
+      // Continue polling even on network errors (don't stop the interval)
     } finally {
       setLoading(false);
     }
@@ -500,6 +557,9 @@ export function SearchHistory() {
       if (response.ok) {
         const data = await response.json();
         const results = data.results || [];
+
+        // Enrich selected run with Level 0 info from details API
+        setSelectedRun(prev => prev ? ({ ...prev, level0: data.level0 }) as any : prev);
 
         // Organize results by variants and content type
         const organizedResults: VariantResults = {
@@ -548,6 +608,11 @@ export function SearchHistory() {
             if (isScholar) organizedResults.narrowScholars.push(result);
           }
 
+          // Check for Level 0 local results
+          if (result.foundInVariants.some(variant => variant === 'level0_local')) {
+            if (isPatent) organizedResults.broadPatents.push(result); // Show in broad tab for now
+          }
+
           // Intersection results are those that appear in multiple variants or are manually added
           if (result.foundInVariants.length >= 2 || result.manuallyAdded) {
             organizedResults.intersection.push(result);
@@ -560,6 +625,71 @@ export function SearchHistory() {
       console.error('Failed to fetch search results:', error);
     } finally {
       setResultsLoading(false);
+    }
+  };
+
+  const handleManualAssessment = async () => {
+    if (!selectedRun) return;
+
+    try {
+      console.log('🚀 Starting manual novelty assessment...');
+
+      const response = await fetch(`/api/prior-art/search/${selectedRun.id}/novelty-assessment`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Manual assessment started:', data);
+        alert(`Novelty assessment started successfully!\n\nDetermination: ${data.determination}\nConfidence: ${data.confidence}%`);
+
+        // Refresh the runs data to show the new assessment
+        fetchRuns();
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Manual assessment failed:', errorData);
+        alert(`Assessment failed: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error('❌ Manual assessment error:', error);
+      alert('Failed to start novelty assessment. Please try again.');
+    }
+  };
+
+  const downloadNoveltyReport = async (reportUrl: string) => {
+    try {
+      console.log('📄 Downloading novelty report:', reportUrl);
+
+      const response = await fetch(reportUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        },
+      });
+
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `novelty_assessment_report.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        console.log('✅ Report downloaded successfully');
+      } else {
+        const errorData = await response.json();
+        console.error('❌ Report download failed:', errorData);
+        alert(`Failed to download report: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error('❌ Report download error:', error);
+      alert('Failed to download report. Please try again.');
     }
   };
 
@@ -789,6 +919,26 @@ export function SearchHistory() {
             </div>
           </div>
 
+          {/* Level 0 Assessment Info */}
+          {result.level0Relevance && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-medium text-blue-700">Level 0 Local Assessment</span>
+                <Badge variant={
+                  result.level0Relevance === 'HIGH' ? 'destructive' :
+                  result.level0Relevance === 'MEDIUM' ? 'secondary' : 'default'
+                } className="text-xs">
+                  {result.level0Relevance}
+                </Badge>
+              </div>
+              {result.level0Reasoning && (
+                <div className="text-xs text-blue-600">
+                  {result.level0Reasoning}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Content based on type */}
           {result.contentType === 'PATENT' && result.patent && (
             <div className="border-t pt-3">
@@ -882,7 +1032,11 @@ export function SearchHistory() {
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="level0" className="flex items-center gap-2">
+              <span className="text-sm">🧭</span>
+              Level 0: Local Check
+            </TabsTrigger>
             <TabsTrigger value="level1" className="flex items-center gap-2">
               <Search className="h-4 w-4" />
               Level 1: Search Results ({variantResults.broadPatents.length + variantResults.baselinePatents.length + variantResults.narrowPatents.length + variantResults.broadScholars.length + variantResults.baselineScholars.length + variantResults.narrowScholars.length})
@@ -891,7 +1045,77 @@ export function SearchHistory() {
               <FileText className="h-4 w-4" />
               Level 2: Detailed Analysis ({variantResults.intersection.length})
             </TabsTrigger>
+            <TabsTrigger value="novelty" className="flex items-center gap-2">
+              🧠 Novelty Assessment
+              {selectedRun.noveltyAssessment && (
+                <Badge
+                  variant={
+                    selectedRun.noveltyAssessment.status === 'NOVEL' ? 'default' :
+                    selectedRun.noveltyAssessment.status === 'NOT_NOVEL' ? 'destructive' :
+                    selectedRun.noveltyAssessment.status === 'DOUBT_RESOLVED' ? 'secondary' :
+                    ['STAGE1_SCREENING', 'STAGE1_COMPLETED', 'STAGE2_ASSESSMENT'].includes(selectedRun.noveltyAssessment.status) ? 'outline' :
+                    'secondary'
+                  }
+                  className="text-xs ml-1"
+                >
+                  {selectedRun.noveltyAssessment.determination || selectedRun.noveltyAssessment.status.replace(/_/g, ' ')}
+                </Badge>
+              )}
+            </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="level0" className="space-y-4">
+            {resultsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-gray-50 border rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-semibold">Local Database Screening</h4>
+                      <p className="text-sm text-gray-600">Checks Indian patent dataset first. If conclusive, skips web search.</p>
+                    </div>
+                    <div className="text-sm">
+                      {selectedRun.level0?.checked ? (
+                        <span className="px-2 py-1 rounded bg-green-100 text-green-800">Checked</span>
+                      ) : (
+                        <span className="px-2 py-1 rounded bg-yellow-100 text-yellow-800">Pending</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {selectedRun.level0?.checked && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Determination:</span>
+                      <Badge variant={
+                        selectedRun.level0?.determination === 'NOVEL' ? 'default' :
+                        selectedRun.level0?.determination === 'NOT_NOVEL' ? 'destructive' : 'secondary'
+                      }>
+                        {selectedRun.level0?.determination || 'UNKNOWN'}
+                      </Badge>
+                    </div>
+                    {selectedRun.level0?.reportUrl && (
+                      <Button
+                        size="sm"
+                        onClick={() => downloadNoveltyReport(selectedRun.level0!.reportUrl!)}
+                      >
+                        <FileText className="h-4 w-4 mr-1" /> Level 0 Report
+                      </Button>
+                    )}
+                    {selectedRun.level0?.results && (
+                      <pre className="text-xs bg-gray-50 border rounded p-3 overflow-auto max-h-64">
+{JSON.stringify(selectedRun.level0.results, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </TabsContent>
 
           <TabsContent value="level1" className="space-y-4">
             {resultsLoading ? (
@@ -1156,6 +1380,22 @@ export function SearchHistory() {
               </div>
             )}
           </TabsContent>
+
+          <TabsContent value="novelty" className="space-y-4">
+            <NoveltyAssessmentProgress
+              runId={selectedRun.id}
+              onAssessmentComplete={(result) => {
+                console.log('Novelty assessment completed:', result);
+                // Refresh the runs data to show updated status
+                fetchRuns();
+              }}
+              onRefresh={() => {
+                console.log('Refreshing assessment data...');
+                // The component handles its own refresh via polling
+              }}
+              onManualTrigger={handleManualAssessment}
+            />
+          </TabsContent>
         </Tabs>
       </DialogContent>
     );
@@ -1165,9 +1405,18 @@ export function SearchHistory() {
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Search History</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            Search History
+            {isPolling && (
+              <div className="flex items-center gap-1 text-xs text-blue-600">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                Live monitoring active
+              </div>
+            )}
+          </CardTitle>
           <CardDescription>
             View your past prior art search executions and detailed results
+            {isPolling && <span className="text-blue-600"> • Status updates every 3 seconds</span>}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1189,6 +1438,20 @@ export function SearchHistory() {
                           {getStatusIcon(run.status)}
                           <h4 className="font-medium">Search {run.id.slice(-8)}</h4>
                           {getStatusBadge(run.status)}
+                          {run.noveltyAssessment && (
+                            <Badge
+                              variant={
+                                run.noveltyAssessment.status === 'NOVEL' ? 'default' :
+                                run.noveltyAssessment.status === 'NOT_NOVEL' ? 'destructive' :
+                                run.noveltyAssessment.status === 'DOUBT_RESOLVED' ? 'secondary' :
+                                run.noveltyAssessment.status === 'STAGE1_COMPLETED' || run.noveltyAssessment.status === 'STAGE2_ASSESSMENT' ? 'outline' :
+                                'secondary'
+                              }
+                              className="text-xs"
+                            >
+                              Assessment: {run.noveltyAssessment.determination || run.noveltyAssessment.status.replace(/_/g, ' ')}
+                            </Badge>
+                          )}
                         </div>
                         <p className="text-sm text-gray-600 mb-2">
                           {run.bundle.inventionBrief.slice(0, 100)}...
@@ -1201,20 +1464,32 @@ export function SearchHistory() {
                           <div>Results: {run.resultsCount} • Credits: {run.creditsConsumed} • API Calls: {run.apiCallsMade}</div>
                         </div>
                       </div>
-                      <Dialog>
-                        <DialogTrigger asChild>
+                      <div className="flex flex-col gap-2">
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleViewResults(run)}
+                              disabled={run.status !== 'COMPLETED'}
+                            >
+                              <Eye className="h-4 w-4 mr-1" />
+                              View Results
+                            </Button>
+                          </DialogTrigger>
+                          {renderSearchResults()}
+                        </Dialog>
+                        {run.noveltyAssessment?.reportUrl && (
                           <Button
-                            variant="outline"
+                            variant="default"
                             size="sm"
-                            onClick={() => handleViewResults(run)}
-                            disabled={run.status !== 'COMPLETED'}
+                            onClick={() => downloadNoveltyReport(run.noveltyAssessment!.reportUrl!)}
                           >
-                            <Eye className="h-4 w-4 mr-1" />
-                        View Results
-                      </Button>
-                        </DialogTrigger>
-                        {renderSearchResults()}
-                      </Dialog>
+                            <FileText className="h-4 w-4 mr-1" />
+                            Novelty Report
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

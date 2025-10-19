@@ -91,7 +91,7 @@ export default function PriorArtPage() {
 
       if (response.ok) {
         const data = await response.json();
-        alert(`Search started successfully! Run ID: ${data.runId}`);
+        alert(`Search started successfully! Run ID: ${data.runId}\n\nThe search will run in the background. Status will update automatically in the Search History tab.`);
         // Refresh bundles to show updated run count
         fetchBundles();
         setSearchDialogOpen(false);

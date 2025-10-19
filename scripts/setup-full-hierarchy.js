@@ -190,7 +190,7 @@ async function setupFullHierarchy() {
         rawTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
         fingerprint: tenantFingerprint,
         status: 'ISSUED',
-        planTier: proPlan?.code || 'FREE',
+        planTier: proPlan?.code || 'FREE_PLAN',
         notes: 'Tenant Admin Onboarding Token',
         maxUses: 5
       }
@@ -246,7 +246,7 @@ async function setupFullHierarchy() {
         rawTokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
         fingerprint: analystFingerprint,
         status: 'ISSUED',
-        planTier: proPlan?.code || 'FREE',
+        planTier: proPlan?.code || 'FREE_PLAN',
         notes: 'Analyst Onboarding Token',
         maxUses: 10
       }
