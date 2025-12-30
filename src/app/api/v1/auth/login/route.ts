@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
       })
 
       if (signupToken) {
-        // Check if signup token is still valid
+        // Check if signup token is still valid - enforce all inactive statuses
         if (signupToken.status === 'REVOKED') {
           return NextResponse.json(
             { code: 'SIGNUP_TOKEN_REVOKED', message: 'Your signup ATI token has been revoked. Please contact your administrator.' },
@@ -93,9 +93,31 @@ export async function POST(request: NextRequest) {
           )
         }
 
+        if (signupToken.status === 'SUSPENDED') {
+          return NextResponse.json(
+            { code: 'SIGNUP_TOKEN_SUSPENDED', message: 'Your signup ATI token has been suspended. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+
+        if (signupToken.status === 'INACTIVE') {
+          return NextResponse.json(
+            { code: 'SIGNUP_TOKEN_INACTIVE', message: 'Your signup ATI token is inactive. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+
         if (signupToken.status === 'EXPIRED' || (signupToken.expiresAt && new Date() > signupToken.expiresAt)) {
           return NextResponse.json(
             { code: 'SIGNUP_TOKEN_EXPIRED', message: 'Your signup ATI token has expired. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+
+        // Check if token is used up (quota exceeded)
+        if (signupToken.status === 'USED_UP') {
+          return NextResponse.json(
+            { code: 'SIGNUP_TOKEN_QUOTA_EXCEEDED', message: 'Your signup ATI token quota has been exceeded. Please contact your administrator.' },
             { status: 401 }
           )
         }

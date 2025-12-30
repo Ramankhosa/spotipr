@@ -1,6 +1,5 @@
-import { llmGateway, executePatentDrafting } from './metering/gateway';
+import { llmGateway } from './metering/gateway';
 import { prisma } from './prisma';
-import { MeteringError } from './metering/errors';
 import { verifyJWT } from './auth';
 import {
   getCountryProfile,
@@ -17,7 +16,6 @@ import {
 } from '@/lib/writing-sample-service';
 import {
   getSectionContextRequirements,
-  getFiguresForJurisdiction,
   isNonApplicableHeading,
   type SectionContextRequirements
 } from '@/lib/multi-jurisdiction-service';
@@ -51,17 +49,17 @@ export interface IdeaNormalizationResult {
     outputs?: string;
     variants?: string;
     inventionType?: string[];
-      bestMethod?: string;
-      fieldOfRelevance?: string;
-      subfield?: string;
-      recommendedFocus?: string;
-      complianceNotes?: string;
-      drawingsFocus?: string;
-      claimStrategy?: string;
-      riskFlags?: string;
-      abstract?: string;
-      cpcCodes?: string[];
-      ipcCodes?: string[];
+    bestMethod?: string;
+    fieldOfRelevance?: string;
+    subfield?: string;
+    recommendedFocus?: string;
+    complianceNotes?: string;
+    drawingsFocus?: string;
+    claimStrategy?: string;
+    riskFlags?: string;
+    abstract?: string;
+    cpcCodes?: string[];
+    ipcCodes?: string[];
   };
   llmPrompt?: string;
   llmResponse?: any;
@@ -1139,7 +1137,7 @@ Respond in this exact JSON shape:
           }
         })
         if (!result.success || !result.response) {
-          // Use user-friendly error message for MeteringError, fallback to generic message
+          // Use user-friendly error message if available, fallback to generic message
           const errorMessage = result.error?.getUserMessage
             ? result.error.getUserMessage()
             : result.error?.message || `LLM failed for ${s}`

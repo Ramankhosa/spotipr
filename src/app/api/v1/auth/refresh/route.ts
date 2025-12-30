@@ -9,6 +9,7 @@ import {
   storeRefreshToken
 } from '@/lib/auth'
 import { cookies } from 'next/headers'
+import { prisma } from '@/lib/prisma'
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,6 +65,82 @@ export async function POST(request: NextRequest) {
       )
       response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
       return response
+    }
+
+    // Step 3.5: Validate ATI token status for enterprise users (non-OAuth users)
+    if (!user.oauthProvider && user.signupAtiTokenId) {
+      const signupToken = await prisma.aTIToken.findUnique({
+        where: { id: user.signupAtiTokenId }
+      })
+
+      if (signupToken) {
+        // Check for revoked status
+        if (signupToken.status === 'REVOKED') {
+          const response = NextResponse.json(
+            { code: 'ATI_TOKEN_REVOKED', message: 'Your ATI token has been revoked. Please contact your administrator.' },
+            { status: 401 }
+          )
+          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+          return response
+        }
+
+        // Check for suspended status
+        if (signupToken.status === 'SUSPENDED') {
+          const response = NextResponse.json(
+            { code: 'ATI_TOKEN_SUSPENDED', message: 'Your ATI token has been suspended. Please contact your administrator.' },
+            { status: 401 }
+          )
+          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+          return response
+        }
+
+        // Check for inactive status
+        if (signupToken.status === 'INACTIVE') {
+          const response = NextResponse.json(
+            { code: 'ATI_TOKEN_INACTIVE', message: 'Your ATI token is inactive. Please contact your administrator.' },
+            { status: 401 }
+          )
+          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+          return response
+        }
+
+        // Check for expired status
+        if (signupToken.status === 'EXPIRED' || (signupToken.expiresAt && new Date() > signupToken.expiresAt)) {
+          // Update status to EXPIRED if detected via expiration date
+          if (signupToken.status !== 'EXPIRED' && signupToken.expiresAt && new Date() > signupToken.expiresAt) {
+            await prisma.aTIToken.update({
+              where: { id: signupToken.id },
+              data: { status: 'EXPIRED' }
+            })
+          }
+          const response = NextResponse.json(
+            { code: 'ATI_TOKEN_EXPIRED', message: 'Your ATI token has expired. Please contact your administrator.' },
+            { status: 401 }
+          )
+          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+          return response
+        }
+
+        // Check for used up status (quota exceeded)
+        if (signupToken.status === 'USED_UP') {
+          const response = NextResponse.json(
+            { code: 'ATI_TOKEN_QUOTA_EXCEEDED', message: 'Your ATI token quota has been exceeded. Please contact your administrator.' },
+            { status: 401 }
+          )
+          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+          return response
+        }
+
+        // Only allow ACTIVE or ISSUED tokens
+        if (signupToken.status !== 'ACTIVE' && signupToken.status !== 'ISSUED') {
+          const response = NextResponse.json(
+            { code: 'ATI_TOKEN_INVALID', message: 'Your ATI token is not active. Please contact your administrator.' },
+            { status: 401 }
+          )
+          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
+          return response
+        }
+      }
     }
 
     // Step 4: Determine user scope

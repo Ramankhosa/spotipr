@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyJWT, JWTPayload } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
 
 export interface AuthenticatedRequest extends NextRequest {
   user?: JWTPayload
@@ -44,6 +45,127 @@ export async function authenticateRequest(request: NextRequest): Promise<{
         { code: 'EXPIRED_TOKEN', message: 'Token has expired' },
         { status: 401 }
       )
+    }
+  }
+
+  // Validate user status and ATI token
+  const user = await prisma.user.findUnique({
+    where: { id: payload.sub },
+    select: {
+      id: true,
+      status: true,
+      oauthProvider: true,
+      signupAtiTokenId: true,
+      tenant: {
+        select: { status: true }
+      }
+    }
+  })
+
+  if (!user) {
+    return {
+      user: null,
+      error: NextResponse.json(
+        { code: 'USER_NOT_FOUND', message: 'User not found' },
+        { status: 401 }
+      )
+    }
+  }
+
+  // Check user status
+  if (user.status !== 'ACTIVE') {
+    return {
+      user: null,
+      error: NextResponse.json(
+        { code: 'USER_SUSPENDED', message: 'User account is suspended' },
+        { status: 401 }
+      )
+    }
+  }
+
+  // Check tenant status
+  if (user.tenant && user.tenant.status !== 'ACTIVE') {
+    return {
+      user: null,
+      error: NextResponse.json(
+        { code: 'TENANT_INACTIVE', message: 'Tenant is not active' },
+        { status: 401 }
+      )
+    }
+  }
+
+  // For non-social login users, validate ATI token status
+  if (!user.oauthProvider && user.signupAtiTokenId) {
+    const signupToken = await prisma.aTIToken.findUnique({
+      where: { id: user.signupAtiTokenId }
+    })
+
+    if (signupToken) {
+      // Check for revoked status
+      if (signupToken.status === 'REVOKED') {
+        return {
+          user: null,
+          error: NextResponse.json(
+            { code: 'ATI_TOKEN_REVOKED', message: 'Your ATI token has been revoked. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+      }
+
+      // Check for suspended status
+      if (signupToken.status === 'SUSPENDED') {
+        return {
+          user: null,
+          error: NextResponse.json(
+            { code: 'ATI_TOKEN_SUSPENDED', message: 'Your ATI token has been suspended. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+      }
+
+      // Check for inactive status
+      if (signupToken.status === 'INACTIVE') {
+        return {
+          user: null,
+          error: NextResponse.json(
+            { code: 'ATI_TOKEN_INACTIVE', message: 'Your ATI token is inactive. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+      }
+
+      // Check for expired status
+      if (signupToken.status === 'EXPIRED' || (signupToken.expiresAt && new Date() > signupToken.expiresAt)) {
+        return {
+          user: null,
+          error: NextResponse.json(
+            { code: 'ATI_TOKEN_EXPIRED', message: 'Your ATI token has expired. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+      }
+
+      // Check for used up status
+      if (signupToken.status === 'USED_UP') {
+        return {
+          user: null,
+          error: NextResponse.json(
+            { code: 'ATI_TOKEN_QUOTA_EXCEEDED', message: 'Your ATI token quota has been exceeded. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+      }
+
+      // Only allow ACTIVE or ISSUED tokens
+      if (signupToken.status !== 'ACTIVE' && signupToken.status !== 'ISSUED') {
+        return {
+          user: null,
+          error: NextResponse.json(
+            { code: 'ATI_TOKEN_INVALID', message: 'Your ATI token is not active. Please contact your administrator.' },
+            { status: 401 }
+          )
+        }
+      }
     }
   }
 
