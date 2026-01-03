@@ -48,6 +48,49 @@ export async function POST(request: NextRequest) {
       }
     })
 
+    // CRITICAL: Create TenantPlan record to enable service access
+    // Without this, tenant resolution fails with "Unable to resolve tenant context"
+    let assignedPlan: { tenantPlan: any; planCode: string } | null = null
+    const requestedPlanCode = initialTokenConfig?.plan_tier || 'FREE_PLAN'
+    
+    const plan = await prisma.plan.findUnique({
+      where: { code: requestedPlanCode }
+    })
+    
+    if (plan) {
+      const tenantPlan = await prisma.tenantPlan.create({
+        data: {
+          tenantId: tenant.id,
+          planId: plan.id,
+          effectiveFrom: new Date(),
+          status: 'ACTIVE'
+        }
+      })
+      assignedPlan = { tenantPlan, planCode: plan.code }
+      console.log(`[Tenant] Assigned plan ${plan.code} to tenant ${tenant.name}`)
+    } else {
+      // Fall back to any available plan
+      const fallbackPlan = await prisma.plan.findFirst({
+        where: { status: 'ACTIVE' },
+        orderBy: { createdAt: 'asc' }
+      })
+      
+      if (fallbackPlan) {
+        const tenantPlan = await prisma.tenantPlan.create({
+          data: {
+            tenantId: tenant.id,
+            planId: fallbackPlan.id,
+            effectiveFrom: new Date(),
+            status: 'ACTIVE'
+          }
+        })
+        assignedPlan = { tenantPlan, planCode: fallbackPlan.code }
+        console.log(`[Tenant] Assigned fallback plan ${fallbackPlan.code} to tenant ${tenant.name} (requested: ${requestedPlanCode})`)
+      } else {
+        console.warn(`[Tenant] WARNING: No plan found to assign to tenant ${tenant.name}. Service access will fail.`)
+      }
+    }
+
     let initialToken = null
 
     let rawTokenForDisplay = null
@@ -115,7 +158,14 @@ export async function POST(request: NextRequest) {
       name: tenant.name,
       ati_id: tenant.atiId,
       status: tenant.status,
-      created_at: tenant.createdAt.toISOString()
+      created_at: tenant.createdAt.toISOString(),
+      // Include assigned plan info - critical for service access
+      assigned_plan: assignedPlan ? {
+        plan_id: assignedPlan.tenantPlan.planId,
+        plan_code: assignedPlan.planCode,
+        effective_from: assignedPlan.tenantPlan.effectiveFrom.toISOString(),
+        status: assignedPlan.tenantPlan.status
+      } : null
     }
 
     // Include initial token info if generated

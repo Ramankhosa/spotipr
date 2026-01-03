@@ -2,6 +2,7 @@ import { PrismaClient, PriorArtRunStatus, PriorArtIntersectionType } from '@pris
 import { SerpApiProvider, serpApiProvider, SerpApiSearchResponse } from './serpapi-provider';
 import { normalizePatentFromSearch, normalizePatentFromDetails, upsertPatent, upsertPatentDetails } from './prior-art-normalization';
 import { NoveltyAssessmentService } from './novelty-assessment';
+import { checkServiceQuota, trackServiceUsage } from './service-usage-tracker';
 
 const prisma = new PrismaClient();
 
@@ -59,6 +60,25 @@ export class PriorArtSearchService {
    * Execute a complete prior art search
    */
   async executeSearch(bundleId: string, userId: string, jwtToken: string, includeScholar: boolean = false): Promise<string> {
+    // Get user's tenant for quota checking
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { tenantId: true }
+    });
+
+    if (!user?.tenantId) {
+      throw new Error('User tenant not found - cannot execute search without tenant context');
+    }
+
+    const tenantId = user.tenantId;
+
+    // QUOTA CHECK: Verify user has available search quota before proceeding
+    const quotaCheck = await checkServiceQuota(tenantId, 'PRIOR_ART_SEARCH');
+    if (!quotaCheck.allowed) {
+      console.log(`[PriorArtSearch] Quota exceeded for tenant ${tenantId}: ${quotaCheck.reason}`);
+      throw new Error(quotaCheck.reason || 'Prior art search quota exceeded');
+    }
+
     // Create run record
     const run = await prisma.priorArtRun.create({
       data: {
@@ -90,6 +110,28 @@ export class PriorArtSearchService {
               level0ReportUrl: level0.reportUrl || null,
             },
           });
+
+          // USAGE TRACKING: Record short-circuit completion toward quota
+          try {
+            await trackServiceUsage({
+              tenantId,
+              userId,
+              serviceType: 'PRIOR_ART_SEARCH',
+              operationId: runId,
+              operationType: 'prior_art_search_level0',
+              isCompleted: true,
+              metadata: {
+                bundleId,
+                shortCircuit: true,
+                determination: level0.determination,
+                completedAt: new Date().toISOString()
+              }
+            });
+            console.log(`📈 [PriorArtSearch] Level 0 usage tracked for run ${runId}`);
+          } catch (trackingError) {
+            console.error(`⚠️ [PriorArtSearch] Failed to track level 0 usage for run ${runId}:`, trackingError);
+          }
+
           return runId;
         }
       } catch (e) {
@@ -255,6 +297,27 @@ export class PriorArtSearchService {
         status: completedRun.status,
         finishedAt: completedRun.finishedAt
       });
+
+      // USAGE TRACKING: Record completed search toward quota
+      try {
+        await trackServiceUsage({
+          tenantId,
+          userId,
+          serviceType: 'PRIOR_ART_SEARCH',
+          operationId: runId,
+          operationType: 'prior_art_search',
+          isCompleted: true,
+          metadata: {
+            bundleId,
+            includeScholar,
+            completedAt: new Date().toISOString()
+          }
+        });
+        console.log(`📈 [PriorArtSearch] Usage tracked for run ${runId}`);
+      } catch (trackingError) {
+        // Don't fail the search if tracking fails, but log it
+        console.error(`⚠️ [PriorArtSearch] Failed to track usage for run ${runId}:`, trackingError);
+      }
 
       return runId;
     } catch (error) {

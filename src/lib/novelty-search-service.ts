@@ -4,6 +4,7 @@ import { prisma } from './prisma';
 import { TaskCode, NoveltySearchStatus, NoveltySearchStage } from '@prisma/client';
 import { IdeaBankService } from './idea-bank-service';
 import { ideaBankFunnel, type IdeaFunnelInput, type PriorArtAnalysisItem } from './idea-bank-funnel';
+import { checkServiceQuota, trackServiceUsage } from './service-usage-tracker';
 import crypto from 'crypto';
 
 // LLM Prompt Specification for Novelty Search (enhanced versions)
@@ -853,6 +854,18 @@ export class NoveltySearchService extends BasePatentService {
     try {
       // Validate user
       const user = await this.validateUser(request.jwtToken);
+
+      // QUOTA CHECK: Verify user has available search quota before proceeding
+      if (user.tenantId) {
+        const quotaCheck = await checkServiceQuota(user.tenantId, 'NOVELTY_SEARCH');
+        if (!quotaCheck.allowed) {
+          console.log(`[NoveltySearch] Quota exceeded for tenant ${user.tenantId}: ${quotaCheck.reason}`);
+          return {
+            success: false,
+            error: quotaCheck.reason || 'Novelty search quota exceeded. Please contact your administrator.'
+          };
+        }
+      }
 
       // Merge config with defaults
       const config = { ...this.defaultConfig, ...request.config };
@@ -1903,6 +1916,35 @@ export class NoveltySearchService extends BasePatentService {
           }
         }
       });
+
+      // USAGE TRACKING: Record completed search toward quota
+      // Get user's tenantId for tracking
+      const userForTracking = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { tenantId: true }
+      });
+
+      if (userForTracking?.tenantId) {
+        try {
+          await trackServiceUsage({
+            tenantId: userForTracking.tenantId,
+            userId,
+            serviceType: 'NOVELTY_SEARCH',
+            operationId: searchId,
+            operationType: 'novelty_search_complete',
+            isCompleted: true,
+            metadata: {
+              patentId: searchRun.patentId,
+              projectId: searchRun.projectId,
+              completedAt: new Date().toISOString()
+            }
+          });
+          console.log(`📈 [NoveltySearch] Usage tracked for search ${searchId}`);
+        } catch (trackingError) {
+          // Don't fail the search if tracking fails, but log it
+          console.error(`⚠️ [NoveltySearch] Failed to track usage for search ${searchId}:`, trackingError);
+        }
+      }
 
       return {
         success: true,
