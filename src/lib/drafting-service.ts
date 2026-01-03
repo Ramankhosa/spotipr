@@ -1227,23 +1227,9 @@ Respond in this exact JSON shape:
             }
           }
         }
-        if (val && sectionResources[s]?.checks) {
-          for (const check of sectionResources[s].checks) {
-            if (check?.type === 'maxWords' && typeof check.limit === 'number') {
-              const words = val.split(/\s+/)
-              if (words.length > check.limit) {
-                val = words.slice(0, check.limit).join(' ')
-                debugSteps.push({ step: `clip_words_${s}`, status: 'ok', meta: { limit: check.limit } })
-              }
-            }
-            if (check?.type === 'maxChars' && typeof check.limit === 'number') {
-              if (val.length > check.limit) {
-                val = val.slice(0, check.limit)
-                debugSteps.push({ step: `clip_chars_${s}`, status: 'ok', meta: { limit: check.limit } })
-              }
-            }
-          }
-        }
+        // NOTE: Word/char limit enforcement DISABLED
+        // LLM output is passed through as-is - patent attorney will make adjustments
+        // Limits are communicated to LLM via prompts, not enforced post-generation
         if (s === 'background' && val) {
           // Normalize any D-labels to incremental order of first use and show identifier only on first mention
           const normalizeDLabels = (text: string) => {
@@ -1332,52 +1318,24 @@ Respond in this exact JSON shape:
               debugSteps.push({ step: `fixer_${s}`, status: 'ok', meta: { applied: true, fixedTo: val.substring(0, 100) + '...' } })
               generated[s] = val
               debugSteps.push({ step: `guard_${s}`, status: 'ok' })
-              // Enforce section hard word limits post-guard
-              try {
-                const enforced = this.enforceMaxWords(s, generated[s], sectionResources[s]?.checks, sectionResources[s]?.rules)
-                if (enforced.clipped) {
-                  generated[s] = enforced.text
-                  debugSteps.push({ step: `limit_enforce_${s}`, status: 'ok', meta: { before: enforced.before, after: enforced.after, maxEnforced: true } })
-                }
-              } catch {}
+              // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
             } else {
               debugSteps.push({ step: `fixer_${s}`, status: 'fail', meta: { reason: recheck.reason, fixedTo: val.substring(0, 100) + '...' } })
               // Allow content to pass through - guardrail issues will be caught during AI review
               debugSteps.push({ step: `guard_${s}`, status: 'warning', meta: { note: `Allowing content despite guardrail issue: ${recheck.reason}`, forReview: true } })
               generated[s] = val
-              // Enforce section hard word limits post-guard
-              try {
-                const enforced = this.enforceMaxWords(s, generated[s], sectionResources[s]?.checks, sectionResources[s]?.rules)
-                if (enforced.clipped) {
-                  generated[s] = enforced.text
-                  debugSteps.push({ step: `limit_enforce_${s}`, status: 'ok', meta: { before: enforced.before, after: enforced.after, maxEnforced: true } })
-                }
-              } catch {}
+              // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
             }
           } else {
             // Allow content to pass through - guardrail issues will be caught during AI review
             debugSteps.push({ step: `guard_${s}`, status: 'warning', meta: { note: `Allowing content despite guardrail issue: ${check.reason}`, forReview: true } })
             generated[s] = val
-            // Enforce section hard word limits post-guard
-            try {
-              const enforced = this.enforceMaxWords(s, generated[s], sectionResources[s]?.checks, sectionResources[s]?.rules)
-              if (enforced.clipped) {
-                generated[s] = enforced.text
-                debugSteps.push({ step: `limit_enforce_${s}`, status: 'ok', meta: { before: enforced.before, after: enforced.after, maxEnforced: true } })
-              }
-            } catch {}
+            // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
           }
         } else {
           generated[s] = val
           debugSteps.push({ step: `guard_${s}`, status: 'ok' })
-          // Enforce section hard word limits post-guard
-          try {
-            const enforced = this.enforceMaxWords(s, generated[s], sectionResources[s]?.checks, sectionResources[s]?.rules)
-            if (enforced.clipped) {
-              generated[s] = enforced.text
-              debugSteps.push({ step: `limit_enforce_${s}`, status: 'ok', meta: { before: enforced.before, after: enforced.after, maxEnforced: true } })
-            }
-          } catch {}
+          // NOTE: Word limit enforcement DISABLED - LLM output passed through as-is
         }
 
         // Save last llmMeta
@@ -2186,77 +2144,91 @@ Use the Super Admin panel to add the missing prompt.
       return { text: out, clipped: after < before, before, after }
     }
 
-    // Abstract: Special handling to preserve complete sentences
-    // Indian Patent Act Section 10(4)(d) specifies max 150 words, but we allow
-    // a small grace buffer to complete sentences rather than cutting mid-thought
+    // Abstract: Pass through without trimming - let the LLM output be preserved
+    // Word limits are enforced via the prompt, not post-processing
     if (section === 'abstract') {
-      const sentences = smartSentenceSplit(String(text))
-      const graceBuffer = 15 // Allow up to 15 extra words to complete a sentence
-      const hardMax = max + graceBuffer
+      return { text, clipped: false, before, after: before }
+    }
+
+    // Sections that may have multi-paragraph structure - preserve it while enforcing word limit
+    const multiParagraphSections = [
+      'detailedDescription',
+      'background',
+      'summary',
+      'modeOfCarryingOut',
+      'bestMethod',
+      'technicalSolution',
+      'technicalProblem',
+      'advantageousEffects',
+      'objectsOfInvention',
+      'industrialApplicability'
+    ]
+    
+    if (multiParagraphSections.includes(section)) {
+      // Split into paragraphs first to preserve structure
+      const paragraphs = String(text).split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
       
-      // First try: fit within exact limit using complete sentences
-      let accumulated: string[] = []
-      let accumulatedWords = 0
-      for (const sentence of sentences) {
-        const sentenceWords = wc(sentence)
-        if (accumulatedWords + sentenceWords <= max) {
-          accumulated.push(sentence)
-          accumulatedWords += sentenceWords
-        } else if (accumulated.length === 0 && accumulatedWords + sentenceWords <= hardMax) {
-          // First sentence exceeds limit but within grace buffer - include it
-          accumulated.push(sentence)
-          accumulatedWords += sentenceWords
-          break
-        } else {
-          // Adding this sentence would exceed limit - stop here
-          break
-        }
-      }
-      
-      // If we have accumulated sentences, use them
-      if (accumulated.length > 0) {
-        const out = accumulated.join(' ')
-        const after = wc(out)
-        return { text: out, clipped: after < before, before, after }
-      }
-      
-      // Fallback: if even first sentence is too long, try to find a natural break point
-      // Look for semicolons, colons, or em-dashes as secondary break points
-      const firstSentence = sentences[0] || text
-      const subParts = firstSentence.split(/(?<=[;:\u2014])\s+/).filter(Boolean)
-      if (subParts.length > 1) {
-        let subAccum: string[] = []
-        let subWords = 0
-        for (const part of subParts) {
-          const partWords = wc(part)
-          if (subWords + partWords <= max) {
-            subAccum.push(part)
-            subWords += partWords
+      // If no paragraph breaks exist, return text as-is (single paragraph)
+      if (paragraphs.length <= 1) {
+        if (before <= max) return { text, clipped: false, before, after: before }
+        // Single paragraph over limit - use sentence-aware trimming
+        const sentences = smartSentenceSplit(String(text))
+        const outSentences: string[] = []
+        let totalWords = 0
+        for (const s of sentences) {
+          const sWords = wc(s)
+          if (totalWords + sWords <= max) {
+            outSentences.push(s)
+            totalWords += sWords
           } else {
             break
           }
         }
-        if (subAccum.length > 0) {
-          const out = subAccum.join(' ')
-          const after = wc(out)
-          return { text: out, clipped: after < before, before, after }
+        const out = outSentences.length > 0 ? outSentences.join(' ') : wordTrim(text, max)
+        const after = wc(out)
+        return { text: out, clipped: after < before, before, after }
+      }
+      
+      // Multiple paragraphs - preserve structure
+      const outParagraphs: string[] = []
+      let totalWords = 0
+      
+      for (const para of paragraphs) {
+        const paraWords = wc(para)
+        if (totalWords + paraWords <= max) {
+          outParagraphs.push(para)
+          totalWords += paraWords
+        } else {
+          // This paragraph would exceed limit - try to include partial
+          const remaining = max - totalWords
+          if (remaining > 20) { // Only include if we can fit a meaningful chunk
+            const sentences = smartSentenceSplit(para)
+            const partialSentences: string[] = []
+            let partialWords = 0
+            for (const s of sentences) {
+              const sWords = wc(s)
+              if (partialWords + sWords <= remaining) {
+                partialSentences.push(s)
+                partialWords += sWords
+              } else {
+                break
+              }
+            }
+            if (partialSentences.length > 0) {
+              outParagraphs.push(partialSentences.join(' '))
+            }
+          }
+          break
         }
       }
       
-      // Last resort: hard word trim but try to end at a word boundary gracefully
-      const words = String(text).split(/\s+/)
-      const trimmed = words.slice(0, max)
-      // Try to end at a reasonable point (not mid-hyphenated-word)
-      let endIdx = trimmed.length - 1
-      while (endIdx > max - 10 && trimmed[endIdx]?.endsWith('-')) {
-        endIdx--
-      }
-      const out = trimmed.slice(0, endIdx + 1).join(' ')
+      // Join paragraphs with double newlines to preserve structure
+      const out = outParagraphs.join('\n\n')
       const after = wc(out)
       return { text: out, clipped: after < before, before, after }
     }
 
-    // Default: drop trailing sentences until within cap; fallback to word trim
+    // Default for other sections: drop trailing sentences until within cap; fallback to word trim
     let sentences = smartSentenceSplit(String(text))
     while (wc(sentences.join(' ')) > max && sentences.length > 1) {
       sentences.pop()
@@ -2312,38 +2284,19 @@ Use the Super Admin panel to add the missing prompt.
       return limits
     }
     const limits = extractLimits(ctx?.sectionChecks)
+    // NOTE: Word/char limit checks DISABLED - LLM output passed through as-is
+    // Limits are communicated to LLM via prompts, patent attorney will adjust if needed
     if (section === 'title') {
-      const maxWords = typeof limits.maxWords === 'number' ? limits.maxWords : fallbackMax.title
-      const maxChars = typeof limits.maxChars === 'number' ? limits.maxChars : undefined
-      if (maxWords && text.trim().split(/\s+/).length > maxWords) {
-        return { ok: false, reason: `Title exceeds ${maxWords} words` }
-      }
-      if (maxChars && text.length > maxChars) {
-        return { ok: false, reason: `Title exceeds ${maxChars} characters` }
-      }
+      // No length enforcement - pass through
     }
     if (section === 'abstract') {
-      const maxWords = typeof limits.maxWords === 'number' ? limits.maxWords : fallbackMax.abstract
-      const maxChars = typeof limits.maxChars === 'number' ? limits.maxChars : undefined
-      const wordCount = text.split(/\s+/).length
-      // Allow a grace buffer of 15 words for complete sentences - enforceMaxWords will handle the final trim
-      // This prevents aggressive pre-trimming that cuts content mid-sentence
-      const graceBuffer = 15
-      const hardMaxWords = maxWords + graceBuffer
-      if (maxWords && wordCount > hardMaxWords) {
-        return { ok: false, reason: `Abstract significantly exceeds ${maxWords} words (found ${wordCount})` }
-      }
-      if (maxChars && text.length > maxChars + 100) { // 100 char grace for sentence completion
-        return { ok: false, reason: `Abstract significantly exceeds ${maxChars} characters` }
-      }
-      // Note: numerals/figure refs check relaxed for partial generation - will be enforced in full draft
+      // Only check for prohibited terms, not length
       if (/(novel|inventive|best|unique|claim|claims)/i.test(text)) return { ok: false, reason: 'Improper tone in abstract' }
     }
     // claims-specific normalization should not be performed here; handled in minimalFix
     if (section === 'briefDescriptionOfDrawings') {
-      // Figure reference validation removed - now handled through separate LLM review
-      const lines = text.split(/\n+/)
-      if (lines.some(l=>l.split(/\s+/).filter(Boolean).length>40)) return { ok: false, reason: 'BDOD line exceeds 40 words' }
+      // NOTE: Line length checks DISABLED - LLM output passed through as-is
+      // Only check for prohibited terms
       if (/(advantage|benefit|claim)/i.test(text)) return { ok: false, reason: 'BDOD contains claims/advantages language' }
     }
     if (section === 'claims') {
@@ -2372,9 +2325,7 @@ Use the Super Admin panel to add the missing prompt.
         }
         expected++
       }
-      if (typeof limits.maxCount === 'number' && blocks.length > limits.maxCount) {
-        return { ok: false, reason: `Claims exceed ${limits.maxCount} count limit` }
-      }
+      // NOTE: Claims count limit check DISABLED - LLM output passed through as-is
     }
     if (section === 'listOfNumerals') {
       // Only check numerals if components have been declared
@@ -2400,14 +2351,7 @@ Use the Super Admin panel to add the missing prompt.
       }
     }
     if (section === 'industrialApplicability') {
-      const maxWords = typeof limits.maxWords === 'number' ? limits.maxWords : fallbackMax.industrialApplicability
-      const maxChars = typeof limits.maxChars === 'number' ? limits.maxChars : undefined
-      if (maxWords && text.split(/\s+/).length > maxWords) {
-        return { ok: false, reason: `Industrial applicability exceeds ${maxWords} words` }
-      }
-      if (maxChars && text.length > maxChars) {
-        return { ok: false, reason: `Industrial applicability exceeds ${maxChars} characters` }
-      }
+      // NOTE: Word/char limit checks DISABLED - LLM output passed through as-is
     }
     return { ok: true }
   }
@@ -2426,47 +2370,18 @@ Use the Super Admin panel to add the missing prompt.
     if (section === 'abstract') {
       // Remove prohibited tone words and claims language
       out = out.replace(/\b(novel|inventive|best|unique|claim|claims)\b/gi, '')
-      // Note: numerals/figure refs allowed for partial generation
-      // Collapse extra spaces and clean up
-      out = out.replace(/\s{2,}/g, ' ').trim()
+      // Clean up any double spaces created by word removal, but preserve newlines
+      out = out.replace(/[ \t]{2,}/g, ' ').trim()
       // Enforce starts with title if available
       if (ctx.approvedTitle && ctx.reason && ctx.reason.toLowerCase().includes('title') && !out.startsWith(ctx.approvedTitle)) {
         out = `${ctx.approvedTitle} ${out}`.trim()
       }
-      // Enforce max words using sentence-aware trimming (not hard word cut)
-      // The final trimming is handled by enforceMaxWords which has proper sentence preservation
-      // Here we only do minimal fixes for tone issues, not aggressive length trimming
-      const maxWords = extractLimit(ctx.sectionChecks, 'maxWords') || 150
-      const words = out.split(/\s+/).filter(w=>w.length>0)
-      // Only do hard trim if significantly over limit (> 20 words) - otherwise let enforceMaxWords handle it gracefully
-      if (maxWords && words.length > maxWords + 20) {
-        // Sentence-aware trimming: find sentence boundaries
-        const sentences = out.split(/(?<=[\.!?])\s+/).filter(Boolean)
-        let accumulated: string[] = []
-        let accWords = 0
-        for (const s of sentences) {
-          const sWords = s.split(/\s+/).length
-          if (accWords + sWords <= maxWords) {
-            accumulated.push(s)
-            accWords += sWords
-          } else {
-            break
-          }
-        }
-        if (accumulated.length > 0) {
-          out = accumulated.join(' ')
-        } else {
-          // Fallback: hard trim if no sentence fits
-          out = words.slice(0, maxWords).join(' ')
-        }
-      }
-      if (words.length < 5) out = ctx.approvedTitle || 'Patent invention description.' // Fallback if too short
+      // NOTE: Word limit enforcement removed - let the LLM output be preserved as-is
+      // The LLM is instructed with proper word limits in the prompt
       return out
     }
     if (section === 'industrialApplicability') {
-      const maxWords = extractLimit(ctx.sectionChecks, 'maxWords')
-      const words = out.split(/\s+/).filter(w=>w.length>0)
-      if (maxWords && words.length > maxWords) out = words.slice(0, maxWords).join(' ')
+      // NOTE: Word limit enforcement removed - LLM output passed through as-is
       return out
     }
     if (section === 'briefDescriptionOfDrawings') {
@@ -3100,34 +3015,10 @@ Use the Super Admin panel to add the missing prompt.
   }
 
   private static async applySectionChecks(draft: any, jurisdiction: string) {
-    const profile = await getCountryProfile(jurisdiction)
-    const checks = profile?.profileData?.validation?.sectionChecks || {}
-    if (!checks) return
-    const enforce = (key: string, rules: any[]) => {
-      const val = draft[key]
-      if (!val || typeof val !== 'string') return
-      for (const rule of rules) {
-        if (rule.type === 'maxWords' && typeof rule.limit === 'number') {
-          const words = val.trim().split(/\s+/)
-          if (words.length > rule.limit) {
-            draft[key] = words.slice(0, rule.limit).join(' ')
-          }
-        }
-        if (rule.type === 'maxChars' && typeof rule.limit === 'number') {
-          if (val.length > rule.limit) draft[key] = val.slice(0, rule.limit)
-        }
-        if (rule.type === 'maxCount' && typeof rule.limit === 'number' && key === 'claims') {
-          const blocks = val.split(/\n\s*(?=\d+\.)/).map(s => s.trim()).filter(Boolean)
-          if (blocks.length > rule.limit) {
-            draft[key] = blocks.slice(0, rule.limit).join('\n')
-          }
-        }
-      }
-    }
-    for (const [sectionId, ruleList] of Object.entries(checks) as Array<[string, any[]]>) {
-      const mapped = this.mapToInternalKey(sectionId) || sectionId
-      if (Array.isArray(ruleList)) enforce(mapped, ruleList)
-    }
+    // NOTE: Word/char limit enforcement DISABLED
+    // LLM output is passed through as-is - patent attorney will make adjustments
+    // Limits are communicated to LLM via prompts, not enforced post-generation
+    return
   }
 
   /**
