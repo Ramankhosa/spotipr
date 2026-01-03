@@ -51,7 +51,31 @@ export async function POST(request: NextRequest) {
     // CRITICAL: Create TenantPlan record to enable service access
     // Without this, tenant resolution fails with "Unable to resolve tenant context"
     let assignedPlan: { tenantPlan: any; planCode: string } | null = null
-    const requestedPlanCode = initialTokenConfig?.plan_tier || 'FREE_PLAN'
+    const rawPlanTier = initialTokenConfig?.plan_tier || 'FREE_PLAN'
+    
+    // Normalize plan code - handle various inputs like "enterprise", "Enterprise Plan", "ENTERPRISE_PLAN"
+    const normalizePlanCode = (input: string): string => {
+      const normalized = input.toUpperCase().replace(/[\s-]+/g, '_')
+      // Map common aliases to actual plan codes
+      const aliases: Record<string, string> = {
+        'ENTERPRISE': 'ENTERPRISE_PLAN',
+        'ENTERPRISE_PLAN': 'ENTERPRISE_PLAN',
+        'PRO': 'PRO_PLAN',
+        'PRO_PLAN': 'PRO_PLAN',
+        'PROFESSIONAL': 'PRO_PLAN',
+        'PROFESSIONAL_PLAN': 'PRO_PLAN',
+        'FREE': 'FREE_PLAN',
+        'FREE_PLAN': 'FREE_PLAN',
+        'BASIC': 'FREE_PLAN',
+        'BASIC_PLAN': 'FREE_PLAN',
+        'TRIAL': 'TRIAL',
+        'TRIAL_PLAN': 'TRIAL'
+      }
+      return aliases[normalized] || normalized
+    }
+    
+    const requestedPlanCode = normalizePlanCode(rawPlanTier)
+    console.log(`[Tenant] Plan tier requested: "${rawPlanTier}" -> normalized to: "${requestedPlanCode}"`)
     
     const plan = await prisma.plan.findUnique({
       where: { code: requestedPlanCode }

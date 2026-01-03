@@ -100,6 +100,71 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // CRITICAL: Ensure tenant has an active TenantPlan - without this, service access fails
+    const existingTenantPlan = await prisma.tenantPlan.findFirst({
+      where: {
+        tenantId: tenant.id,
+        status: 'ACTIVE'
+      }
+    })
+
+    if (!existingTenantPlan) {
+      console.log(`[Signup] Tenant ${tenant.name} has no TenantPlan - creating one now`)
+      
+      // Determine plan based on ATI token's planTier
+      const planTier = fullToken?.planTier || 'FREE_PLAN'
+      
+      // Normalize plan code
+      const normalizePlanCode = (input: string): string => {
+        const normalized = input.toUpperCase().replace(/[\s-]+/g, '_')
+        const aliases: Record<string, string> = {
+          'ENTERPRISE': 'ENTERPRISE_PLAN',
+          'ENTERPRISE_PLAN': 'ENTERPRISE_PLAN',
+          'PRO': 'PRO_PLAN',
+          'PRO_PLAN': 'PRO_PLAN',
+          'PROFESSIONAL': 'PRO_PLAN',
+          'FREE': 'FREE_PLAN',
+          'FREE_PLAN': 'FREE_PLAN',
+          'BASIC': 'FREE_PLAN',
+          'TRIAL': 'TRIAL',
+          'TRIAL_PLAN': 'TRIAL'
+        }
+        return aliases[normalized] || normalized
+      }
+      
+      const targetPlanCode = normalizePlanCode(planTier)
+      console.log(`[Signup] ATI planTier: "${planTier}" -> normalized: "${targetPlanCode}"`)
+      
+      let targetPlan = await prisma.plan.findUnique({
+        where: { code: targetPlanCode }
+      })
+      
+      // Fallback to any active plan
+      if (!targetPlan) {
+        targetPlan = await prisma.plan.findFirst({
+          where: { status: 'ACTIVE' },
+          orderBy: { createdAt: 'asc' }
+        })
+        console.log(`[Signup] Plan "${targetPlanCode}" not found, falling back to: ${targetPlan?.code}`)
+      }
+      
+      if (targetPlan) {
+        await prisma.tenantPlan.create({
+          data: {
+            tenantId: tenant.id,
+            planId: targetPlan.id,
+            status: 'ACTIVE',
+            effectiveFrom: new Date()
+          }
+        })
+        console.log(`[Signup] Created TenantPlan: ${targetPlan.code} for tenant ${tenant.name}`)
+      } else {
+        console.warn(`[Signup] WARNING: No plan available to assign to tenant ${tenant.name}`)
+      }
+    } else {
+      console.log(`[Signup] Tenant ${tenant.name} already has plan: ${existingTenantPlan.planId}`)
+    }
+
     // Check if this is the first user for this tenant
     const existingUsersCount = await prisma.user.count({
       where: { tenantId: tenant.id }
