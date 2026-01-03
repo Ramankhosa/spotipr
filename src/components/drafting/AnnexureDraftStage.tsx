@@ -2301,13 +2301,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   }, [session?.id, patent?.id])
 
   // Compute default DD user data toggles based on drafting type
+  // DEFAULT: All toggles OFF - user must explicitly enable after providing data
   const getDefaultDdToggles = useCallback(() => {
     if (isMultiJurisdiction) {
-      // Multi-jurisdiction: Default to REFERENCE enabled
-      return { REFERENCE: true }
+      // Multi-jurisdiction: Default all to OFF (including REFERENCE)
+      return { REFERENCE: false }
     } else if (availableJurisdictions.length === 1) {
-      // Single jurisdiction: Default to that jurisdiction enabled
-      return { [availableJurisdictions[0]]: true }
+      // Single jurisdiction: Default to OFF
+      return { [availableJurisdictions[0]]: false }
     }
     return {}
   }, [isMultiJurisdiction, availableJurisdictions])
@@ -4012,16 +4013,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        {/* 
-                          Show "Enabled" if:
-                          - Multi-jurisdiction: REFERENCE toggle is enabled OR current jurisdiction toggle is enabled
-                          - Single-jurisdiction: That jurisdiction's toggle is enabled
-                        */}
-                        {(isMultiJurisdiction 
-                          ? (ddUserDataToggles['REFERENCE'] || ddUserDataToggles[activeJurisdiction])
-                          : ddUserDataToggles[availableJurisdictions[0]]
-                        ) ? (
-                          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">Enabled</span>
+                        {/* Show "Enabled" if ANY jurisdiction toggle is on */}
+                        {Object.values(ddUserDataToggles).some(v => v === true) ? (
+                          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                            Enabled
+                          </span>
                         ) : (
                           <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Disabled</span>
                         )}
@@ -4047,38 +4044,124 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           disabled={ddUserDataLoading || ddUserDataSaving}
                         />
                         
-                        <div className="mt-3 flex flex-wrap items-center gap-3">
-                          <span className="text-xs text-gray-600">Include in:</span>
-                          {/* 
-                            Multi-jurisdiction: Show REFERENCE toggle (shared reference draft)
-                            Single-jurisdiction: Show only that jurisdiction's toggle
-                          */}
-                          {isMultiJurisdiction ? (
-                            // Multi-jurisdiction mode: Show REFERENCE first, then individual jurisdictions
-                            ['REFERENCE', ...availableJurisdictions].map(code => (
-                              <label key={code} className="flex items-center gap-1.5 text-xs">
-                                <input
-                                  type="checkbox"
-                                  checked={ddUserDataToggles[code] || false}
-                                  onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
-                                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
-                                />
-                                <span className={code === 'REFERENCE' ? 'font-medium text-amber-700' : 'text-gray-700'}>{code}</span>
-                              </label>
-                            ))
-                          ) : (
-                            // Single-jurisdiction mode: Show only that jurisdiction
-                            availableJurisdictions.map(code => (
-                              <label key={code} className="flex items-center gap-1.5 text-xs">
-                                <input
-                                  type="checkbox"
-                                  checked={ddUserDataToggles[code] || false}
-                                  onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
-                                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
-                                />
-                                <span className="font-medium text-amber-700">{code}</span>
-                              </label>
-                            ))
+                        {/* Master Enable/Disable Slider Toggle */}
+                        <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-700">Enable Data Injection</span>
+                              <span className="text-xs text-gray-500">(inject into generation prompt)</span>
+                            </div>
+                            {/* Slider Toggle */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // Determine current state - is ANY jurisdiction enabled?
+                                const isCurrentlyEnabled = Object.values(ddUserDataToggles).some(v => v === true)
+                                
+                                if (isCurrentlyEnabled) {
+                                  // Disable all
+                                  const allOff: Record<string, boolean> = {}
+                                  if (isMultiJurisdiction) {
+                                    allOff['REFERENCE'] = false
+                                    availableJurisdictions.forEach(code => { allOff[code] = false })
+                                  } else {
+                                    availableJurisdictions.forEach(code => { allOff[code] = false })
+                                  }
+                                  setDdUserDataToggles(allOff)
+                                } else {
+                                  // Enable - auto-select based on active jurisdiction
+                                  const autoSelect: Record<string, boolean> = {}
+                                  if (isMultiJurisdiction) {
+                                    // Multi-jurisdiction: Enable REFERENCE by default
+                                    autoSelect['REFERENCE'] = true
+                                    availableJurisdictions.forEach(code => { autoSelect[code] = false })
+                                  } else {
+                                    // Single-jurisdiction: Enable the active/only jurisdiction
+                                    availableJurisdictions.forEach(code => { 
+                                      autoSelect[code] = (code === activeJurisdiction)
+                                    })
+                                  }
+                                  setDdUserDataToggles(autoSelect)
+                                }
+                              }}
+                              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 ${
+                                Object.values(ddUserDataToggles).some(v => v === true)
+                                  ? 'bg-amber-600'
+                                  : 'bg-gray-300'
+                              }`}
+                              disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
+                              title={!ddUserData.trim() ? 'Enter data first before enabling' : ''}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                  Object.values(ddUserDataToggles).some(v => v === true)
+                                    ? 'translate-x-5'
+                                    : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                          
+                          {/* Jurisdiction Selection - Only show when enabled */}
+                          {Object.values(ddUserDataToggles).some(v => v === true) && (
+                            <div className="mt-3 pt-3 border-t border-gray-200">
+                              <span className="text-xs text-gray-600 block mb-2">Select jurisdictions to include:</span>
+                              <div className="flex flex-wrap gap-2">
+                                {isMultiJurisdiction ? (
+                                  // Multi-jurisdiction mode: Show REFERENCE first, then individual jurisdictions
+                                  ['REFERENCE', ...availableJurisdictions].map(code => (
+                                    <label 
+                                      key={code} 
+                                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
+                                        ddUserDataToggles[code]
+                                          ? code === 'REFERENCE' 
+                                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                            : 'bg-blue-100 text-blue-800 border border-blue-300'
+                                          : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200'
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={ddUserDataToggles[code] || false}
+                                        onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
+                                        className="sr-only"
+                                      />
+                                      {ddUserDataToggles[code] && (
+                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                        </svg>
+                                      )}
+                                      <span className={code === 'REFERENCE' ? 'font-medium' : ''}>{code}</span>
+                                    </label>
+                                  ))
+                                ) : (
+                                  // Single-jurisdiction mode: Show only that jurisdiction
+                                  availableJurisdictions.map(code => (
+                                    <label 
+                                      key={code} 
+                                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
+                                        ddUserDataToggles[code]
+                                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                          : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200'
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={ddUserDataToggles[code] || false}
+                                        onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
+                                        className="sr-only"
+                                      />
+                                      {ddUserDataToggles[code] && (
+                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                        </svg>
+                                      )}
+                                      <span className="font-medium">{code}</span>
+                                    </label>
+                                  ))
+                                )}
+                              </div>
+                            </div>
                           )}
                         </div>
                         
@@ -4158,22 +4241,169 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                  className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
                                  title={copiedKey === keyName ? "Copied" : "Copy to clipboard"}
                                >
-                                  {copiedKey === keyName ? <svg className="w-4 h-4 text-green-600" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg> : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>}
+                                  {copiedKey === keyName ? (
+                                    <svg className="w-4 h-4 text-green-600" viewBox="0 0 20 20" fill="currentColor">
+                                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                    </svg>
+                                  ) : (
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      {/* Standard copy icon - two overlapping rectangles */}
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                  )}
                                </button>
-                               <button
-                                 onClick={() => !sectionLoading[keyName] && setRegenOpen(prev => ({ ...prev, [keyName]: !prev[keyName] }))}
-                                 className="p-1.5 rounded text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                                 title="Regenerate"
-                                 disabled={sectionLoading[keyName]}
-                               >
-                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                               </button>
+                               <div className="relative">
+                                 <button
+                                   onClick={() => !sectionLoading[keyName] && setRegenOpen(prev => ({ ...prev, [keyName]: !prev[keyName] }))}
+                                   className={`p-1.5 rounded transition-colors ${
+                                     regenOpen[keyName] 
+                                       ? 'text-indigo-600 bg-indigo-100' 
+                                       : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
+                                   }`}
+                                   title="Regenerate / Refine"
+                                   disabled={sectionLoading[keyName]}
+                                 >
+                                   {/* Regeneration icon - circular arrows for iteration/refinement */}
+                                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                 </button>
+                                 
+                                 {/* Chat Bubble Popup - appears below regenerate button */}
+                                 {regenOpen[keyName] && (
+                                   <div className="absolute right-0 top-full mt-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                                     {/* Speech bubble pointer */}
+                                     <div className="absolute -top-2 right-3 w-4 h-4 bg-white border-l border-t border-gray-200 transform rotate-45"></div>
+                                     
+                                     <div className="w-80 bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                                       {/* Header */}
+                                       <div className="bg-gradient-to-r from-indigo-500 to-purple-600 px-4 py-3 flex items-center gap-2">
+                                         <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+                                           <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                           </svg>
+                                         </div>
+                                         <span className="text-white text-sm font-medium">Ask PatentNest</span>
+                                         <button 
+                                           onClick={() => setRegenOpen(prev => ({ ...prev, [keyName]: false }))}
+                                           className="ml-auto text-white/70 hover:text-white transition-colors"
+                                         >
+                                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                           </svg>
+                                         </button>
+                                       </div>
+                                       
+                                       {/* Body */}
+                                      <div className="p-4">
+                                        <textarea
+                                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400 bg-gray-50 resize-none placeholder-gray-400"
+                                          value={regenRemarks[keyName] || ''}
+                                          onChange={(e) => setRegenRemarks(prev => ({ ...prev, [keyName]: e.target.value }))}
+                                          placeholder="How should I improve this section? (optional)"
+                                          rows={2}
+                                          autoFocus
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                              e.preventDefault()
+                                              handleRegenerateSection(keyName)
+                                              setRegenOpen(prev => ({ ...prev, [keyName]: false }))
+                                            }
+                                            if (e.key === 'Escape') {
+                                              setRegenOpen(prev => ({ ...prev, [keyName]: false }))
+                                            }
+                                          }}
+                                        />
+                                        
+                                        {/* Quick suggestions */}
+                                        <div className="mt-3 flex flex-wrap gap-1.5">
+                                          {/* Regenerate button - primary action */}
+                                          <button
+                                            onClick={() => {
+                                              setRegenRemarks(prev => ({ ...prev, [keyName]: '' }))
+                                              handleRegenerateSection(keyName)
+                                              setRegenOpen(prev => ({ ...prev, [keyName]: false }))
+                                            }}
+                                            className="text-[11px] px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors font-medium flex items-center gap-1"
+                                          >
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                            </svg>
+                                            Regenerate
+                                          </button>
+                                          {['More concise', 'More detail', 'Simpler language', 'Add technical depth', 'Fix grammar'].map(suggestion => (
+                                            <button
+                                              key={suggestion}
+                                              onClick={() => setRegenRemarks(prev => ({ ...prev, [keyName]: suggestion }))}
+                                              className="text-[11px] px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
+                                            >
+                                              {suggestion}
+                                            </button>
+                                          ))}
+                                        </div>
+                                        
+                                        {/* Send button */}
+                                        <div className="mt-3 flex justify-end">
+                                          <button 
+                                            onClick={() => {
+                                              handleRegenerateSection(keyName)
+                                              setRegenOpen(prev => ({ ...prev, [keyName]: false }))
+                                            }} 
+                                            disabled={sectionLoading[keyName]}
+                                            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${
+                                              !sectionLoading[keyName]
+                                                ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
+                                                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                            }`}
+                                          >
+                                            {sectionLoading[keyName] ? (
+                                              <>
+                                                <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
+                                                Refining...
+                                              </>
+                                            ) : (
+                                              <>
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                                </svg>
+                                                {regenRemarks[keyName]?.trim() ? 'Send' : 'Regenerate'}
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </div>
+                                     </div>
+                                   </div>
+                                 )}
+                               </div>
                                <button
                                  onClick={() => { setEditingKey(editingKey === keyName ? null : keyName); setEditDrafts(prev => ({ ...prev, [keyName]: generated?.[keyName] || '' })) }}
                                  className={`p-1.5 rounded transition-colors ${editingKey === keyName ? 'text-indigo-600 bg-indigo-50' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'}`}
                                  title="Edit"
                                >
                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                               </button>
+                               {/* Delete section button */}
+                               <button
+                                 onClick={() => {
+                                   if (confirm(`Delete "${displayName[keyName] || keyName}" section content?\n\nThis will clear the generated content. You can regenerate it later.`)) {
+                                     setGenerated(prev => {
+                                       const next = { ...prev }
+                                       delete next[keyName]
+                                       return next
+                                     })
+                                     // Also save the deletion to the backend
+                                     onComplete({ 
+                                       action: 'autosave_sections', 
+                                       sessionId: session?.id, 
+                                       patch: { [keyName]: null } 
+                                     })
+                                   }
+                                 }}
+                                 className="p-1.5 rounded text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                 title="Delete section"
+                               >
+                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                 </svg>
                                </button>
                              </div>
                           )}
@@ -4208,36 +4438,6 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                 {generated[keyName] || (isWorking ? <span className="text-gray-300 animate-pulse">Drafting content...</span> : '')}
                               </div>
 
-                              {/* Inline Regeneration Dialog */}
-                              {regenOpen[keyName] && (
-                                <div className="mt-4 p-4 border border-indigo-100 rounded-lg bg-indigo-50/50 animate-in fade-in slide-in-from-top-2 duration-200 shadow-sm">
-                                  <div className="flex items-center gap-2 mb-2">
-                                    <div className="p-1 bg-indigo-100 rounded-md">
-                                       <svg className="w-3 h-3 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                    </div>
-                                    <label className="block text-xs font-semibold text-indigo-900">Refinement Instructions</label>
-                                  </div>
-                                  <textarea
-                                    className="w-full border-indigo-200 rounded-md p-3 text-sm focus:border-indigo-500 focus:ring-indigo-500 bg-white"
-                                    value={regenRemarks[keyName] || ''}
-                                    onChange={(e) => setRegenRemarks(prev => ({ ...prev, [keyName]: e.target.value }))}
-                                    placeholder="Tell the AI what to improve (e.g. 'Make it more concise', 'Expand on the benefits', 'Fix the claim dependencies')..."
-                                    rows={3}
-                                    autoFocus
-                                  />
-                                  <div className="flex justify-end gap-2 mt-3">
-                                    <button onClick={() => setRegenOpen(prev => ({ ...prev, [keyName]: false }))} className="px-3 py-1.5 text-xs text-gray-600 hover:bg-white rounded transition-colors border border-transparent hover:border-gray-200">Cancel</button>
-                                    <button 
-                                      onClick={() => handleRegenerateSection(keyName)} 
-                                      disabled={sectionLoading[keyName]}
-                                      className="px-4 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded shadow-sm disabled:opacity-50 flex items-center gap-2"
-                                    >
-                                      {sectionLoading[keyName] && <span className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full"></span>}
-                                      {sectionLoading[keyName] ? 'Refining...' : 'Regenerate Section'}
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
 
                               {/* REMOVED: InlineSectionValidator - validation now handled by AI Review only */}
                               {/* Deterministic validation was causing delays and excessive refreshes */}

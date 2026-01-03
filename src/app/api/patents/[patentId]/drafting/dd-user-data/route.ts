@@ -122,7 +122,7 @@ ILLUSTRATIVE DATA:
  * - sessionId: Required drafting session ID
  * - sectionKey: Required - must be 'detailedDescription' (access control)
  * - userData: Required - plain text user data (max 50KB)
- * - jurisdictionToggles: Optional - { "REFERENCE": true, "US": false, ... }
+ * - jurisdictionToggles: Optional - { "REFERENCE": false, "US": false, ... } - defaults to all OFF
  */
 export async function POST(
   request: NextRequest,
@@ -195,11 +195,9 @@ export async function POST(
       )
     }
 
-    // Default toggles: REFERENCE = true, all others = false
-    const defaultToggles = { REFERENCE: true }
-    const resolvedToggles = jurisdictionToggles 
-      ? { ...defaultToggles, ...jurisdictionToggles }
-      : defaultToggles
+    // Use toggles as provided by frontend - NO defaults to true
+    // User must explicitly enable injection after providing data
+    const resolvedToggles = jurisdictionToggles || {}
 
     // Upsert DD user data (use trimmed data)
     const ddUserData = await prisma.dDUserData.upsert({
