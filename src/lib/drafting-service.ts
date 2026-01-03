@@ -30,6 +30,53 @@ import crypto from 'crypto';
 // Base prompts are stored in SupersetSection table
 // Country-specific top-up prompts are stored in CountrySectionPrompt table
 
+// ============================================================================
+// DD User Data Legal Wrapper (Fixed Global Text - DO NOT MODIFY WITHOUT LEGAL REVIEW)
+// ============================================================================
+const DD_USER_DATA_LEGAL_WRAPPER = `
+────────────────────────────────────────
+INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
+────────────────────────────────────────
+
+DATA PRIORITY NOTICE (CRITICAL):
+Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
+This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
+
+ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
+- Use ONLY the exact data values, measurements, and observations provided below.
+- Do NOT invent, fabricate, or extrapolate any numerical values, ranges, or test results.
+- Do NOT create hypothetical examples or sample data.
+- If the data is incomplete, describe only what is provided; do NOT fill gaps with assumptions.
+- Reproduce the data faithfully; paraphrasing is permitted but fabrication is STRICTLY PROHIBITED.
+
+NON-GENERALIZATION RULE (CRITICAL):
+- Do NOT generalize inventor-provided data to all embodiments.
+- Do NOT state or imply that observed values, behaviors, or conditions apply universally.
+- All references to data MUST be explicitly limited to example configurations and stated test conditions.
+
+PERMITTED USE OF ILLUSTRATIVE DATA (INSTRUCTIONAL):
+When inventor-provided data is present, you MUST use it only in the following manner:
+1) Place all discussion of the data within a clearly separated illustrative example or observational
+   discussion in the Detailed Description (i.e., an "Illustrative Examples" portion).
+2) Use the data ONLY to illustrate operability or representative observed behavior under stated conditions.
+3) Introduce data using cautious, example-limiting phrases such as:
+   - "in one example configuration"
+   - "representative observations include"
+   - "under selected test conditions"
+   - "example measurements indicate"
+4) Describe WHAT was observed without interpreting WHY it occurs or HOW it improves the system.
+5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.
+6) After presenting the data, explicitly clarify that the data is illustrative only and does not limit the invention.
+
+SECTION SCOPE LIMITATION (CRITICAL):
+- Do NOT integrate inventor-provided data into core system definitions, element descriptions,
+  or functional requirements.
+- Do NOT convert numeric values into thresholds, ranges, or mandatory operating conditions,
+  unless such limits are explicitly required by Claim 1 (rare).
+
+ILLUSTRATIVE DATA (VERBATIM):
+`.trim()
+
 export interface IdeaNormalizationRequest {
   rawIdea: string;
   title: string;
@@ -121,6 +168,8 @@ interface SectionPromptContext {
   usePersonaStyle?: boolean;
   // Database-driven context injection requirements
   contextRequirements?: SectionContextRequirements | null;
+  // DD User Data (Detailed Description only - sidecar injection)
+  ddUserData?: { userData: string; isEnabled: boolean } | null;
 }
 
 export interface SectionGenerationResult {
@@ -958,6 +1007,41 @@ Respond in this exact JSON shape:
       // Build payload available across sections
       const payload = { idea, referenceMap, figures, approved: session.annexureDrafts?.[0] || {}, instructions: instructions || {}, manualPriorArt, selectedPriorArtPatents, inventionBasics }
 
+      // ══════════════════════════════════════════════════════════════════════════════
+      // DD USER DATA - Load sidecar data for detailedDescription section
+      // ══════════════════════════════════════════════════════════════════════════════
+      let ddUserDataContext: { userData: string; isEnabled: boolean } | null = null
+      if (sections.includes('detailedDescription')) {
+        try {
+          const ddUserData = await prisma.dDUserData.findUnique({
+            where: { sessionId }
+          })
+          if (ddUserData?.userData) {
+            const toggles = (ddUserData.jurisdictionToggles as Record<string, boolean>) || {}
+            // Check if enabled for this jurisdiction (REFERENCE defaults to true)
+            const isEnabled = jurisdictionCode === 'REFERENCE' 
+              ? toggles['REFERENCE'] !== false 
+              : toggles[jurisdictionCode] === true
+            
+            ddUserDataContext = {
+              userData: ddUserData.userData,
+              isEnabled
+            }
+            debugSteps.push({
+              step: 'dd_user_data',
+              status: 'ok',
+              meta: {
+                dataSize: ddUserData.userData.length,
+                isEnabled,
+                jurisdiction: jurisdictionCode
+              }
+            })
+          }
+        } catch (ddErr) {
+          console.warn('[DraftingService] Failed to load DD user data:', ddErr)
+        }
+      }
+
       // Step: call LLM per section with single-section schema
       const request = { headers: requestHeaders || {} }
       const generated: Record<string, string> = {}
@@ -1069,7 +1153,8 @@ Respond in this exact JSON shape:
           writingSample,
           userId: session?.userId,
           usePersonaStyle,
-          contextRequirements // Pass database-driven context requirements
+          contextRequirements, // Pass database-driven context requirements
+          ddUserData: s === 'detailedDescription' ? ddUserDataContext : null // DD user data injection
         })
         // Add debug info about prompt injection (B+T+U)
         const promptDebug = sectionResources[s]?.prompt?.debug
@@ -1967,6 +2052,47 @@ ${userPrompt}`)
 ADDITIONAL CONTEXT
 ────────────────────────────────────────
 ${additionalContext}`)
+      }
+
+      // ══════════════════════════════════════════════════════════════════════════════
+      // DD USER DATA INJECTION (Only for detailedDescription section)
+      // ══════════════════════════════════════════════════════════════════════════════
+      if (section === 'detailedDescription') {
+        if (ctx?.ddUserData?.isEnabled && ctx?.ddUserData?.userData) {
+          // User data IS provided - inject with legal wrapper and anti-hallucination directive
+          promptParts.push(`
+${DD_USER_DATA_LEGAL_WRAPPER}
+
+${ctx.ddUserData.userData}
+
+────────────────────────────────────────
+END OF ILLUSTRATIVE DATA
+────────────────────────────────────────`)
+          console.log(`[buildSectionPrompt] Injected DD user data (${ctx.ddUserData.userData.length} chars) for ${jurisdiction}`)
+        } else {
+          // NO user data provided - add explicit anti-hallucination instruction
+          promptParts.push(`
+────────────────────────────────────────
+DATA FABRICATION PROHIBITION (CRITICAL)
+────────────────────────────────────────
+NO inventor-provided illustrative data, experimental results, test measurements,
+or numerical examples have been provided for this section.
+
+STRICT PROHIBITION:
+- Do NOT invent, fabricate, or create ANY numerical values, measurements, test results, or experimental data.
+- Do NOT generate hypothetical examples with specific numbers, percentages, ranges, or quantities.
+- Do NOT include phrases like "for example, 50%" or "such as 10–20 units" unless explicitly present
+  in the normalized invention context or injected authoritative inputs.
+- If describing variable parameters, use ONLY abstract placeholders
+  (e.g., "a predetermined threshold", "a configurable value") without specifying actual numbers.
+
+PERMITTED QUALITATIVE DISCLOSURE:
+- Qualitative discussion of configurable parameters is permitted,
+  provided no specific numerical values, ranges, or quantities are introduced.
+- Focus on structural and functional disclosure sufficient to support Claim 1.
+────────────────────────────────────────`)
+          console.log(`[buildSectionPrompt] No DD user data provided - added data fabrication prohibition for ${jurisdiction}`)
+        }
       }
 
       // Anti-hallucination guards

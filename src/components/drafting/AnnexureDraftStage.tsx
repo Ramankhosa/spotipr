@@ -1682,6 +1682,16 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   // Help panel state
   const [showHelpPanel, setShowHelpPanel] = useState(false)
 
+  // DD User Data (Detailed Description section only - sidecar storage)
+  const [ddUserData, setDdUserData] = useState<string>('')
+  // Toggle defaults are set dynamically based on drafting type (see useEffect below)
+  const [ddUserDataToggles, setDdUserDataToggles] = useState<Record<string, boolean>>({})
+  const [ddUserDataLoading, setDdUserDataLoading] = useState(false)
+  const [ddUserDataSaving, setDdUserDataSaving] = useState(false)
+  const [ddUserDataSaved, setDdUserDataSaved] = useState(false) // For save confirmation feedback
+  const [ddUserDataExpanded, setDdUserDataExpanded] = useState(false)
+  const DD_USER_DATA_MAX_SIZE = 50 * 1024 // 50KB
+
   // Confirmation modal state for clear/delete actions
   const [confirmationModal, setConfirmationModal] = useState<{
     isOpen: boolean
@@ -2288,6 +2298,142 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       }
     }
     loadUserInstructions()
+  }, [session?.id, patent?.id])
+
+  // Compute default DD user data toggles based on drafting type
+  const getDefaultDdToggles = useCallback(() => {
+    if (isMultiJurisdiction) {
+      // Multi-jurisdiction: Default to REFERENCE enabled
+      return { REFERENCE: true }
+    } else if (availableJurisdictions.length === 1) {
+      // Single jurisdiction: Default to that jurisdiction enabled
+      return { [availableJurisdictions[0]]: true }
+    }
+    return {}
+  }, [isMultiJurisdiction, availableJurisdictions])
+
+  // Set default toggles when jurisdictions change (if no saved data exists)
+  useEffect(() => {
+    // Only set defaults if toggles are empty (no saved data loaded yet)
+    if (Object.keys(ddUserDataToggles).length === 0 && availableJurisdictions.length > 0) {
+      setDdUserDataToggles(getDefaultDdToggles())
+    }
+  }, [availableJurisdictions, getDefaultDdToggles, ddUserDataToggles])
+
+  // Load DD User Data (sidecar for detailedDescription sections)
+  useEffect(() => {
+    const loadDDUserData = async () => {
+      if (!session?.id || !patent?.id) return
+      setDdUserDataLoading(true)
+      try {
+        const res = await fetch(
+          `/api/patents/${patent.id}/drafting/dd-user-data?sessionId=${session.id}&sectionKey=detailedDescription`,
+          { headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}` } }
+        )
+        if (res.ok) {
+          const data = await res.json()
+          if (data.data) {
+            setDdUserData(data.data.userData || '')
+            // Use saved toggles if they exist, otherwise use defaults based on drafting type
+            const savedToggles = data.data.jurisdictionToggles
+            if (savedToggles && Object.keys(savedToggles).length > 0) {
+              setDdUserDataToggles(savedToggles)
+            } else {
+              setDdUserDataToggles(getDefaultDdToggles())
+            }
+          } else {
+            // No saved data - set defaults
+            setDdUserDataToggles(getDefaultDdToggles())
+          }
+        } else {
+          // Error loading - set defaults
+          setDdUserDataToggles(getDefaultDdToggles())
+        }
+      } catch (err) {
+        console.error('Failed to load DD user data:', err)
+        setDdUserDataToggles(getDefaultDdToggles())
+      } finally {
+        setDdUserDataLoading(false)
+      }
+    }
+    loadDDUserData()
+  }, [session?.id, patent?.id, getDefaultDdToggles])
+
+  // Save DD User Data handler
+  const handleSaveDDUserData = useCallback(async () => {
+    if (!session?.id || !patent?.id) return
+    
+    // Validate non-empty data
+    const trimmedData = ddUserData.trim()
+    if (!trimmedData) {
+      alert('User data cannot be empty. Please enter some data or delete the existing record.')
+      return
+    }
+    
+    // Check size limit
+    const dataSize = new TextEncoder().encode(trimmedData).length
+    if (dataSize > DD_USER_DATA_MAX_SIZE) {
+      alert(`User data exceeds maximum size of ${DD_USER_DATA_MAX_SIZE / 1024}KB (current: ${Math.round(dataSize / 1024)}KB)`)
+      return
+    }
+    
+    setDdUserDataSaving(true)
+    try {
+      const res = await fetch(`/api/patents/${patent.id}/drafting/dd-user-data`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({
+          sessionId: session.id,
+          sectionKey: 'detailedDescription',
+          userData: trimmedData,
+          jurisdictionToggles: ddUserDataToggles
+        })
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        alert(err.error || 'Failed to save user data')
+      } else {
+        // Update local state with trimmed data
+        setDdUserData(trimmedData)
+        // Show save confirmation
+        setDdUserDataSaved(true)
+        setTimeout(() => setDdUserDataSaved(false), 3000) // Hide after 3 seconds
+        console.log('[DD User Data] Saved successfully')
+      }
+    } catch (err) {
+      console.error('Failed to save DD user data:', err)
+      alert('Failed to save user data')
+    } finally {
+      setDdUserDataSaving(false)
+    }
+  }, [session?.id, patent?.id, ddUserData, ddUserDataToggles, DD_USER_DATA_MAX_SIZE])
+
+  // Delete DD User Data handler
+  const handleDeleteDDUserData = useCallback(async () => {
+    if (!session?.id || !patent?.id) return
+    if (!confirm('Are you sure you want to delete the user data? This cannot be undone.')) return
+    
+    setDdUserDataSaving(true)
+    try {
+      const res = await fetch(
+        `/api/patents/${patent.id}/drafting/dd-user-data?sessionId=${session.id}&sectionKey=detailedDescription`,
+        {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}` }
+        }
+      )
+      if (res.ok) {
+        setDdUserData('')
+        setDdUserDataToggles(getDefaultDdToggles())
+      }
+    } catch (err) {
+      console.error('Failed to delete DD user data:', err)
+    } finally {
+      setDdUserDataSaving(false)
+    }
   }, [session?.id, patent?.id])
 
   // Keep add-jurisdiction dropdown updated
@@ -3846,6 +3992,133 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                       </div>
                   )}
                 </div>
+
+                {/* DD User Data Panel - Only for detailedDescription sections */}
+                {section.keys.includes('detailedDescription') && (
+                  <div className="mb-4 border border-amber-200 rounded-lg bg-amber-50/50 overflow-hidden">
+                    <button
+                      onClick={() => setDdUserDataExpanded(!ddUserDataExpanded)}
+                      className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-amber-100/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <svg className={`w-4 h-4 text-amber-600 transform transition-transform ${ddUserDataExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                        <span className="text-sm font-medium text-amber-800">User Data (Illustrative Only)</span>
+                        {ddUserData && (
+                          <span className="text-xs px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full">
+                            {Math.round(new TextEncoder().encode(ddUserData).length / 1024)}KB
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {/* 
+                          Show "Enabled" if:
+                          - Multi-jurisdiction: REFERENCE toggle is enabled OR current jurisdiction toggle is enabled
+                          - Single-jurisdiction: That jurisdiction's toggle is enabled
+                        */}
+                        {(isMultiJurisdiction 
+                          ? (ddUserDataToggles['REFERENCE'] || ddUserDataToggles[activeJurisdiction])
+                          : ddUserDataToggles[availableJurisdictions[0]]
+                        ) ? (
+                          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">Enabled</span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Disabled</span>
+                        )}
+                      </div>
+                    </button>
+                    
+                    {ddUserDataExpanded && (
+                      <div className="px-4 pb-4 border-t border-amber-200">
+                        <div className="mt-3 mb-2 p-3 bg-amber-100/50 rounded-md border border-amber-200">
+                          <p className="text-xs text-amber-800">
+                            <strong>Legal Notice:</strong> Data entered here is for illustrative purposes only. 
+                            It is NON-LIMITING and will not establish thresholds, ranges, or requirements. 
+                            It will be injected with a legal wrapper when generating the Detailed Description.
+                          </p>
+                        </div>
+                        
+                        <textarea
+                          className="w-full border border-amber-300 rounded-md p-3 text-sm focus:ring-amber-500 focus:border-amber-500 bg-white resize-none"
+                          rows={6}
+                          placeholder="Paste experimental data, measurements, or test observations here (max 50KB)..."
+                          value={ddUserData}
+                          onChange={(e) => setDdUserData(e.target.value)}
+                          disabled={ddUserDataLoading || ddUserDataSaving}
+                        />
+                        
+                        <div className="mt-3 flex flex-wrap items-center gap-3">
+                          <span className="text-xs text-gray-600">Include in:</span>
+                          {/* 
+                            Multi-jurisdiction: Show REFERENCE toggle (shared reference draft)
+                            Single-jurisdiction: Show only that jurisdiction's toggle
+                          */}
+                          {isMultiJurisdiction ? (
+                            // Multi-jurisdiction mode: Show REFERENCE first, then individual jurisdictions
+                            ['REFERENCE', ...availableJurisdictions].map(code => (
+                              <label key={code} className="flex items-center gap-1.5 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={ddUserDataToggles[code] || false}
+                                  onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
+                                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                                />
+                                <span className={code === 'REFERENCE' ? 'font-medium text-amber-700' : 'text-gray-700'}>{code}</span>
+                              </label>
+                            ))
+                          ) : (
+                            // Single-jurisdiction mode: Show only that jurisdiction
+                            availableJurisdictions.map(code => (
+                              <label key={code} className="flex items-center gap-1.5 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={ddUserDataToggles[code] || false}
+                                  onChange={(e) => setDdUserDataToggles(prev => ({ ...prev, [code]: e.target.checked }))}
+                                  className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                                />
+                                <span className="font-medium text-amber-700">{code}</span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                        
+                        <div className="mt-3 flex items-center justify-between">
+                          {/* Save confirmation indicator */}
+                          <div className="flex items-center gap-2">
+                            {ddUserDataSaved && (
+                              <span className="flex items-center gap-1.5 text-xs text-emerald-600 animate-in fade-in duration-300">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                                Saved successfully
+                              </span>
+                            )}
+                          </div>
+                          
+                          <div className="flex gap-2">
+                            {ddUserData && (
+                              <button
+                                onClick={handleDeleteDDUserData}
+                                disabled={ddUserDataSaving}
+                                className="px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 rounded border border-rose-200 disabled:opacity-50"
+                              >
+                                Delete
+                              </button>
+                            )}
+                            <button
+                              onClick={handleSaveDDUserData}
+                              disabled={ddUserDataSaving || ddUserDataLoading}
+                              className="px-4 py-1.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded shadow-sm disabled:opacity-50 flex items-center gap-2"
+                            >
+                              {ddUserDataSaving && <span className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full"></span>}
+                              {ddUserDataSaving ? 'Saving...' : 'Save User Data'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Content Area */}
                 <div className="text-gray-800 text-justify">

@@ -390,6 +390,26 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         </Alert>
       )}
 
+      {/* Experimental Data Notice */}
+      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0 p-1.5 bg-amber-100 rounded-full">
+            <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <h4 className="text-sm font-semibold text-amber-800 mb-1">
+              About Experimental Data & Test Results
+            </h4>
+            <p className="text-xs text-amber-700 leading-relaxed">
+              This stage extracts the <strong>invention structure</strong> (problem, solution, components, claims) from your input. 
+              Experimental data, test measurements, observations, or illustrative examples are <strong>not processed here</strong> — they will be handled separately in the <strong>Drafting Stage</strong> where you can add them to the Detailed Description section with appropriate legal safeguards.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {(!showNormalized || !normalizedData) && (
         <KishoNormalizationLoader mode={allowRefine ? 'enhance' : 'preserve'} />
       )}
@@ -517,6 +537,16 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                     </div>
 
                     <div className="p-6 space-y-6 max-h-[600px] overflow-y-auto">
+                      {/* Experimental Data Reminder */}
+                      <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md text-xs text-blue-700">
+                        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>
+                          <strong>Tip:</strong> Experimental data, measurements, or test results can be added in the Drafting Stage → Detailed Description section.
+                        </span>
+                      </div>
+
                       {/* Classification Codes */}
                       <div className="grid grid-cols-2 gap-4">
                         <div>

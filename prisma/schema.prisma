@@ -1706,6 +1706,7 @@ model DraftingSession {
   user                    User                     @relation(fields: [userId], references: [id])
   tenant                  Tenant?                  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   ideaRecord              IdeaRecord?
+  ddUserData              DDUserData?              // Sidecar for DD section user data
   referenceMap            ReferenceMap?
   figurePlans             FigurePlan[]
   diagramSources          DiagramSource[]
@@ -1770,6 +1771,31 @@ model IdeaRecord {
   session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@map("idea_records")
+}
+
+// Sidecar storage for user-provided illustrative data (Detailed Description sections only)
+// This data is NEVER merged into normalizedData and is scoped ONLY to DD-superset sections
+model DDUserData {
+  id        String @id @default(cuid())
+  sessionId String @unique @map("session_id")
+
+  // User-provided data (plain text, opaque - no parsing/normalization)
+  userData String @db.Text @map("user_data") // Max 50KB enforced at application level
+
+  // Per-jurisdiction injection toggles (default: only REFERENCE gets injection)
+  // JSON object: { "REFERENCE": true, "US": false, "EP": false, ... }
+  jurisdictionToggles Json @default("{}") @map("jurisdiction_toggles")
+
+  // Audit fields
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdBy String?  @map("created_by")
+  updatedBy String?  @map("updated_by")
+
+  // Relations
+  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("dd_user_data")
 }
 
 model ReferenceMap {

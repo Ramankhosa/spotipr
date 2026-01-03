@@ -23,8 +23,21 @@ interface SketchRecordDelegate {
   upsert: (args: { where: any; update: any; create: any }) => Promise<any>
 }
 
+// Extended type for DDUserData model (Detailed Description user data sidecar)
+interface DDUserDataDelegate {
+  create: (args: { data: any }) => Promise<any>
+  findUnique: (args: { where: any }) => Promise<any>
+  findFirst: (args: { where: any }) => Promise<any>
+  findMany: (args: { where?: any }) => Promise<any[]>
+  update: (args: { where: any; data: any }) => Promise<any>
+  delete: (args: { where: any }) => Promise<any>
+  deleteMany: (args: { where?: any }) => Promise<{ count: number }>
+  upsert: (args: { where: any; update: any; create: any }) => Promise<any>
+}
+
 // Export prisma with extended types
 export const prisma = prismaBase as PrismaClient & {
   sketchRecord: SketchRecordDelegate
+  dDUserData: DDUserDataDelegate
 }
 

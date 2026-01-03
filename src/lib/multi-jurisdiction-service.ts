@@ -10,6 +10,53 @@
 
 import { prisma } from '@/lib/prisma'
 import { llmGateway } from '@/lib/metering'
+
+// ============================================================================
+// DD User Data Legal Wrapper (Fixed Global Text - DO NOT MODIFY WITHOUT LEGAL REVIEW)
+// ============================================================================
+const DD_USER_DATA_LEGAL_WRAPPER = `
+────────────────────────────────────────
+INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
+────────────────────────────────────────
+
+DATA PRIORITY NOTICE (CRITICAL):
+Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
+This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
+
+ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
+- Use ONLY the exact data values, measurements, and observations provided below.
+- Do NOT invent, fabricate, or extrapolate any numerical values, ranges, or test results.
+- Do NOT create hypothetical examples or sample data.
+- If the data is incomplete, describe only what is provided; do NOT fill gaps with assumptions.
+- Reproduce the data faithfully; paraphrasing is permitted but fabrication is STRICTLY PROHIBITED.
+
+NON-GENERALIZATION RULE (CRITICAL):
+- Do NOT generalize inventor-provided data to all embodiments.
+- Do NOT state or imply that observed values, behaviors, or conditions apply universally.
+- All references to data MUST be explicitly limited to example configurations and stated test conditions.
+
+PERMITTED USE OF ILLUSTRATIVE DATA (INSTRUCTIONAL):
+When inventor-provided data is present, you MUST use it only in the following manner:
+1) Place all discussion of the data within a clearly separated illustrative example or observational
+   discussion in the Detailed Description (i.e., an "Illustrative Examples" portion).
+2) Use the data ONLY to illustrate operability or representative observed behavior under stated conditions.
+3) Introduce data using cautious, example-limiting phrases such as:
+   - "in one example configuration"
+   - "representative observations include"
+   - "under selected test conditions"
+   - "example measurements indicate"
+4) Describe WHAT was observed without interpreting WHY it occurs or HOW it improves the system.
+5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.
+6) After presenting the data, explicitly clarify that the data is illustrative only and does not limit the invention.
+
+SECTION SCOPE LIMITATION (CRITICAL):
+- Do NOT integrate inventor-provided data into core system definitions, element descriptions,
+  or functional requirements.
+- Do NOT convert numeric values into thresholds, ranges, or mandatory operating conditions,
+  unless such limits are explicitly required by Claim 1 (rare).
+
+ILLUSTRATIVE DATA (VERBATIM):
+`.trim()
 import type { LLMRequest } from '@/lib/metering'
 import { getCountryProfile } from '@/lib/country-profile-service'
 import { getSectionStageCode } from '@/lib/metering/section-stage-mapping'
@@ -1743,6 +1790,70 @@ The reference draft serves as the master source from which jurisdiction-specific
     if (claimsContext) additionalContextParts.push(claimsContext)
     if (priorArtContext) additionalContextParts.push(priorArtContext)
     
+    // ══════════════════════════════════════════════════════════════════════════════
+    // DD USER DATA INJECTION (Only if detailedDescription is in the sections list)
+    // ══════════════════════════════════════════════════════════════════════════════
+    if (dynamicSections.includes('detailedDescription')) {
+      let ddDataInjected = false
+      try {
+        const ddUserData = await prisma.dDUserData.findUnique({
+          where: { sessionId: session.id }
+        })
+        
+        if (ddUserData?.userData) {
+          const toggles = (ddUserData.jurisdictionToggles as Record<string, boolean>) || {}
+          // For REFERENCE draft, always check REFERENCE toggle (default true for REFERENCE)
+          const isReferenceEnabled = toggles['REFERENCE'] !== false
+          
+          if (isReferenceEnabled) {
+            const ddUserDataContext = `
+────────────────────────────────────────
+${DD_USER_DATA_LEGAL_WRAPPER}
+
+${ddUserData.userData}
+
+────────────────────────────────────────
+END OF ILLUSTRATIVE DATA
+────────────────────────────────────────
+
+IMPORTANT: The above illustrative data should ONLY be incorporated into the "detailedDescription" section.
+Do NOT use this data in any other section.`
+            additionalContextParts.push(ddUserDataContext)
+            ddDataInjected = true
+            console.log(`[generateReferenceDraft] Injected DD user data (${ddUserData.userData.length} chars) for detailedDescription`)
+          }
+        }
+      } catch (ddErr) {
+        console.warn('[generateReferenceDraft] Failed to load DD user data:', ddErr)
+        // Non-blocking - continue without user data
+      }
+      
+      // If no DD user data was injected, add explicit anti-hallucination for data fabrication
+      if (!ddDataInjected) {
+        additionalContextParts.push(`
+────────────────────────────────────────
+DATA FABRICATION PROHIBITION FOR DETAILED DESCRIPTION (CRITICAL)
+────────────────────────────────────────
+NO inventor-provided illustrative data, experimental results, test measurements,
+or numerical examples have been provided for the detailedDescription section.
+
+STRICT PROHIBITION:
+- Do NOT invent, fabricate, or create ANY numerical values, measurements, test results, or experimental data.
+- Do NOT generate hypothetical examples with specific numbers, percentages, ranges, or quantities.
+- Do NOT include phrases like "for example, 50%" or "such as 10–20 units" unless explicitly present
+  in the normalized invention context or injected authoritative inputs.
+- If describing variable parameters, use ONLY abstract placeholders
+  (e.g., "a predetermined threshold", "a configurable value") without specifying actual numbers.
+
+PERMITTED QUALITATIVE DISCLOSURE:
+- Qualitative discussion of configurable parameters is permitted,
+  provided no specific numerical values, ranges, or quantities are introduced.
+- Focus on structural and functional disclosure sufficient to support Claim 1.
+────────────────────────────────────────`)
+        console.log(`[generateReferenceDraft] No DD user data provided - added data fabrication prohibition`)
+      }
+    }
+    
     if (additionalContextParts.length > 0) {
       promptParts.push(`
 ==============================================================================
@@ -2239,6 +2350,67 @@ COMPONENTS REQUIREMENTS:
     if (figuresContext) additionalContextParts.push(figuresContext)
     if (priorArtContext) additionalContextParts.push(priorArtContext)
     if (existingSectionsContext) additionalContextParts.push(existingSectionsContext)
+    
+    // ══════════════════════════════════════════════════════════════════════════════
+    // DD USER DATA INJECTION (Only for detailedDescription section)
+    // ══════════════════════════════════════════════════════════════════════════════
+    if (sectionKey === 'detailedDescription') {
+      let ddDataInjected = false
+      try {
+        const ddUserData = await prisma.dDUserData.findUnique({
+          where: { sessionId: session.id }
+        })
+        
+        if (ddUserData?.userData) {
+          const toggles = (ddUserData.jurisdictionToggles as Record<string, boolean>) || {}
+          // For REFERENCE draft, always check REFERENCE toggle (default true for REFERENCE)
+          const isReferenceEnabled = toggles['REFERENCE'] !== false
+          
+          if (isReferenceEnabled) {
+            const ddUserDataContext = `
+────────────────────────────────────────
+${DD_USER_DATA_LEGAL_WRAPPER}
+
+${ddUserData.userData}
+
+────────────────────────────────────────
+END OF ILLUSTRATIVE DATA
+────────────────────────────────────────`
+            additionalContextParts.push(ddUserDataContext)
+            ddDataInjected = true
+            console.log(`[generateReferenceDraftSection] Injected DD user data (${ddUserData.userData.length} chars) for detailedDescription`)
+          }
+        }
+      } catch (ddErr) {
+        console.warn('[generateReferenceDraftSection] Failed to load DD user data:', ddErr)
+        // Non-blocking - continue without user data
+      }
+      
+      // If no DD user data was injected, add explicit anti-hallucination for data fabrication
+      if (!ddDataInjected) {
+        additionalContextParts.push(`
+────────────────────────────────────────
+DATA FABRICATION PROHIBITION (CRITICAL)
+────────────────────────────────────────
+NO inventor-provided illustrative data, experimental results, test measurements,
+or numerical examples have been provided for this section.
+
+STRICT PROHIBITION:
+- Do NOT invent, fabricate, or create ANY numerical values, measurements, test results, or experimental data.
+- Do NOT generate hypothetical examples with specific numbers, percentages, ranges, or quantities.
+- Do NOT include phrases like "for example, 50%" or "such as 10–20 units" unless explicitly present
+  in the normalized invention context or injected authoritative inputs.
+- If describing variable parameters, use ONLY abstract placeholders
+  (e.g., "a predetermined threshold", "a configurable value") without specifying actual numbers.
+
+PERMITTED QUALITATIVE DISCLOSURE:
+- Qualitative discussion of configurable parameters is permitted,
+  provided no specific numerical values, ranges, or quantities are introduced.
+- Focus on structural and functional disclosure sufficient to support Claim 1.
+────────────────────────────────────────`)
+        console.log(`[generateReferenceDraftSection] No DD user data provided - added data fabrication prohibition`)
+      }
+    }
     
     if (additionalContextParts.length > 0) {
       promptParts.push(`
