@@ -17,6 +17,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { 
   ChevronRight, 
   ChevronDown,
+  ChevronLeft,
   Check, 
   Circle, 
   Loader2,
@@ -24,7 +25,9 @@ import {
   Sun,
   Moon,
   FileText,
-  AlertCircle
+  AlertCircle,
+  PanelLeftClose,
+  PanelLeft
 } from 'lucide-react'
 import {
   getVisibleStages,
@@ -45,6 +48,7 @@ interface VerticalStageNavProps {
   currentStage: string
   patentId: string
   onNavigateToStage: (stage: string) => Promise<void>
+  onCollapsedChange?: (collapsed: boolean) => void
 }
 
 interface JurisdictionConfig {
@@ -67,7 +71,8 @@ type NavTheme = 'dark' | 'light'
 const STORAGE_KEYS = {
   THEME: 'patent_nav_theme',
   EXPANDED_STAGES: 'patent_nav_expanded_stages',
-  EXPANDED_JURISDICTIONS: 'patent_nav_expanded_jurisdictions'
+  EXPANDED_JURISDICTIONS: 'patent_nav_expanded_jurisdictions',
+  SIDEBAR_COLLAPSED: 'patent_nav_sidebar_collapsed'
 }
 
 // ============================================================================
@@ -181,10 +186,14 @@ export default function VerticalStageNav({
   session,
   currentStage,
   patentId,
-  onNavigateToStage
+  onNavigateToStage,
+  onCollapsedChange
 }: VerticalStageNavProps) {
   // Theme state - default to light theme
   const [theme, setTheme] = useState<NavTheme>('light')
+  
+  // Sidebar collapsed state
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(false)
   
   // Expansion states
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
@@ -210,6 +219,12 @@ export default function VerticalStageNav({
       // No saved theme or invalid value - default to light and save it
       setTheme('light')
       localStorage.setItem(STORAGE_KEYS.THEME, 'light')
+    }
+
+    // Load collapsed state
+    const savedCollapsed = localStorage.getItem(STORAGE_KEYS.SIDEBAR_COLLAPSED)
+    if (savedCollapsed === 'true') {
+      setIsCollapsed(true)
     }
 
     // Load expanded stages
@@ -245,6 +260,14 @@ export default function VerticalStageNav({
     })
   }, [currentStage])
 
+  // Notify parent of initial collapsed state after mount
+  useEffect(() => {
+    const savedCollapsed = localStorage.getItem(STORAGE_KEYS.SIDEBAR_COLLAPSED) === 'true'
+    if (savedCollapsed) {
+      onCollapsedChange?.(true)
+    }
+  }, [onCollapsedChange])
+
   // ============================================================================
   // Persist to localStorage
   // ============================================================================
@@ -260,6 +283,19 @@ export default function VerticalStageNav({
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.EXPANDED_JURISDICTIONS, JSON.stringify(Array.from(expandedJurisdictions)))
   }, [expandedJurisdictions])
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.SIDEBAR_COLLAPSED, String(isCollapsed))
+  }, [isCollapsed])
+
+  // Toggle collapsed state
+  const toggleCollapsed = useCallback(() => {
+    setIsCollapsed(prev => {
+      const newValue = !prev
+      onCollapsedChange?.(newValue)
+      return newValue
+    })
+  }, [onCollapsedChange])
 
   // ============================================================================
   // Fetch jurisdiction section configs from database
@@ -483,61 +519,110 @@ export default function VerticalStageNav({
   return (
     <aside
       className={`
-        fixed left-0 top-0 h-screen w-72 z-40 flex flex-col
-        backdrop-blur-xl border-r transition-colors duration-300
+        fixed left-0 top-0 h-screen z-40 flex flex-col
+        backdrop-blur-xl border-r transition-all duration-300
+        ${isCollapsed ? 'w-16' : 'w-72'}
         ${themeClasses.container}
       `}
     >
       {/* Header */}
       <div className={`p-4 border-b ${themeClasses.border}`}>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`
-              w-9 h-9 rounded-xl flex items-center justify-center
-              ${theme === 'dark' 
-                ? 'bg-gradient-to-br from-teal-400 to-cyan-500' 
-                : 'bg-gradient-to-br from-indigo-500 to-blue-500'
-              }
-            `}>
-              <FileText className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <div className={`text-sm font-semibold ${themeClasses.text}`}>
-                Patent Draft
+          {!isCollapsed ? (
+            <>
+              <div className="flex items-center gap-3">
+                <div className={`
+                  w-9 h-9 rounded-xl flex items-center justify-center
+                  ${theme === 'dark' 
+                    ? 'bg-gradient-to-br from-teal-400 to-cyan-500' 
+                    : 'bg-gradient-to-br from-indigo-500 to-blue-500'
+                  }
+                `}>
+                  <FileText className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className={`text-sm font-semibold ${themeClasses.text}`}>
+                    Patent Draft
+                  </div>
+                  <div className={`text-xs ${themeClasses.textMuted}`}>
+                    {overallProgress}% complete
+                  </div>
+                </div>
               </div>
-              <div className={`text-xs ${themeClasses.textMuted}`}>
-                {overallProgress}% complete
+              
+              {/* Theme Toggle & Collapse Button */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={toggleTheme}
+                  className={`
+                    p-2 rounded-lg transition-colors
+                    ${themeClasses.hover}
+                  `}
+                  title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+                >
+                  {theme === 'dark' 
+                    ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
+                    : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
+                  }
+                </button>
+                <button
+                  onClick={toggleCollapsed}
+                  className={`
+                    p-2 rounded-lg transition-colors
+                    ${themeClasses.hover}
+                  `}
+                  title="Collapse sidebar"
+                >
+                  <PanelLeftClose className={`w-4 h-4 ${themeClasses.textMuted}`} />
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="w-full flex flex-col items-center gap-2">
+              <button
+                onClick={toggleCollapsed}
+                className={`
+                  p-2 rounded-lg transition-colors
+                  ${themeClasses.hover}
+                `}
+                title="Expand sidebar"
+              >
+                <PanelLeft className={`w-5 h-5 ${themeClasses.textMuted}`} />
+              </button>
+              <div className={`
+                w-8 h-8 rounded-lg flex items-center justify-center
+                ${theme === 'dark' 
+                  ? 'bg-gradient-to-br from-teal-400 to-cyan-500' 
+                  : 'bg-gradient-to-br from-indigo-500 to-blue-500'
+                }
+              `}>
+                <FileText className="w-4 h-4 text-white" />
               </div>
             </div>
-          </div>
-          
-          {/* Theme Toggle */}
-          <button
-            onClick={toggleTheme}
-            className={`
-              p-2 rounded-lg transition-colors
-              ${themeClasses.hover}
-            `}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            {theme === 'dark' 
-              ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
-              : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
-            }
-          </button>
+          )}
         </div>
 
         {/* Progress Bar */}
-        <div className={`mt-3 h-1.5 rounded-full ${themeClasses.progressBg}`}>
-          <div
-            className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
-            style={{ width: `${overallProgress}%` }}
-          />
-        </div>
+        {!isCollapsed && (
+          <div className={`mt-3 h-1.5 rounded-full ${themeClasses.progressBg}`}>
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
+              style={{ width: `${overallProgress}%` }}
+            />
+          </div>
+        )}
+        {isCollapsed && (
+          <div className={`mt-2 mx-auto w-8 h-1 rounded-full ${themeClasses.progressBg}`}>
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
+              style={{ width: `${overallProgress}%` }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Stage List */}
-      <nav className={`flex-1 overflow-y-auto py-2 px-2 ${theme === 'dark' ? 'dark-scrollbar' : 'light-scrollbar'}`}>
+      <nav className={`flex-1 overflow-y-auto py-2 ${isCollapsed ? 'px-1' : 'px-2'} ${theme === 'dark' ? 'dark-scrollbar' : 'light-scrollbar'}`}>
         {visibleStages.map((stage, stageIndex) => {
           const StageIcon = stage.icon
           const isExpanded = expandedStages.has(stage.key)
@@ -547,6 +632,53 @@ export default function VerticalStageNav({
           const isCurrent = stage.key === currentStage
           const isPast = stageIndex < visibleStages.findIndex(s => s.key === currentStage)
           const isCompleted = isPast && isFullyComplete
+
+          // Collapsed view - show only icons
+          if (isCollapsed) {
+            return (
+              <div key={stage.key} className="mb-1 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => handleStageClick(stage.key)}
+                  className={`
+                    relative w-10 h-10 rounded-xl flex items-center justify-center
+                    transition-all duration-200 border
+                    ${isCurrent ? themeClasses.activeStage : themeClasses.hover + ' border-transparent'}
+                  `}
+                  title={stage.label}
+                >
+                  <svg className="w-10 h-10 absolute transform -rotate-90">
+                    <circle
+                      cx="20" cy="20" r="17"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className={themeClasses.progressBg}
+                    />
+                    <circle
+                      cx="20" cy="20" r="17"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeDasharray={`${completion.percentage * 1.07} 107`}
+                      strokeLinecap="round"
+                      className={`
+                        transition-all duration-500
+                        ${isCompleted ? 'text-emerald-400' : isCurrent ? themeClasses.activeText : themeClasses.textSubtle}
+                      `}
+                    />
+                  </svg>
+                  <div className="relative z-10">
+                    {isCompleted ? <Check className="w-4 h-4 text-emerald-400" /> : null}
+                    {!isCompleted && isPast && !isFullyComplete ? <AlertCircle className="w-4 h-4 text-amber-400" /> : null}
+                    {!isCompleted && !(isPast && !isFullyComplete) ? (
+                      <StageIcon className={`w-4 h-4 ${isCurrent ? themeClasses.activeText : themeClasses.textMuted}`} />
+                    ) : null}
+                  </div>
+                </button>
+              </div>
+            )
+          }
 
           return (
             <div key={stage.key} className="mb-1">

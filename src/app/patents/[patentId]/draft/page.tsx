@@ -114,6 +114,9 @@ const normalizeStage = (status?: string): keyof typeof STAGE_COMPONENTS => {
 
 export default function PatentDraftingPage() {
   const { user, isLoading: authLoading, refreshUser, logout } = useAuth() as any
+  
+  // Sidebar collapsed state for responsive layout
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const router = useRouter()
   const params = useParams()
   const patentId = params?.patentId as string
@@ -354,7 +357,15 @@ export default function PatentDraftingPage() {
           return null;
         }
 
-        throw new Error(message)
+        // Handle stage transition errors gracefully - show in UI instead of crashing
+        if (message.includes('Stage transition not allowed') || message.includes('transition')) {
+          setNavNotice('Please follow the stages in order. Use the navigation arrows or sidebar to proceed through each step sequentially.');
+          return null;
+        }
+
+        // For other errors, set error state instead of throwing to prevent runtime crash
+        setError(message);
+        return null;
       }
 
       // CRITICAL: Parse successful response data BEFORE refreshing session
@@ -547,6 +558,7 @@ export default function PatentDraftingPage() {
           currentStage={currentStage}
           patentId={patentId}
           onNavigateToStage={handleNavigateToStage}
+          onCollapsedChange={setSidebarCollapsed}
         />
       )}
 
@@ -561,7 +573,7 @@ export default function PatentDraftingPage() {
       )}
 
       {/* Main Content Area - Shifted right for sidebar */}
-      <div className={`${session ? 'pl-72' : ''} transition-all duration-300`}>
+      <div className={`${session ? (sidebarCollapsed ? 'pl-16' : 'pl-72') : ''} transition-all duration-300`}>
         {/* Quota Error Banner */}
         {quotaError && (
           <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">

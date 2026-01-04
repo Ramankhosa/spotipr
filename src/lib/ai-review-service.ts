@@ -179,7 +179,7 @@ export async function runAIReview(
           errors: 0,
           warnings: 0,
           suggestions: 0,
-          overallScore: 75, // Minimum baseline even on failure
+          overallScore: 85, // Minimum baseline even on failure
           recommendation: 'Review failed - please try again'
         },
         reviewedAt: new Date().toISOString(),
@@ -207,7 +207,7 @@ export async function runAIReview(
         errors: 0,
         warnings: 0,
         suggestions: 0,
-        overallScore: 75, // Minimum baseline even on failure
+        overallScore: 85, // Minimum baseline even on failure
         recommendation: 'Review failed due to an error'
       },
       reviewedAt: new Date().toISOString(),
@@ -469,18 +469,19 @@ FIELD DEFINITIONS:
 - "t": Type - MUST be exactly one of: "E" (error), "W" (warning), "S" (suggestion)
 - "title": Brief issue title (max 10 words)
 - "fix": Complete fix instruction that a smaller LLM can follow WITHOUT any other context
-- "score": Number from 75-100 (minimum 75, perfect is 100)
+- "score": Number from 85-100 (minimum 85, perfect is 100)
 - "summary": One sentence overall assessment
 
 ═══════════════════════════════════════════════════════════════════════════════
-SCORING (75-100 range)
+SCORING (85-100 range)
 ═══════════════════════════════════════════════════════════════════════════════
-- 75 = Has issues needing attention
-- 85 = Good draft, minor fixes
-- 95 = Excellent, polish only
+- 85 = Has significant issues needing attention
+- 88 = Good draft with some fixes needed
+- 90 = Very good draft, minor polish
+- 95 = Excellent, optional polish only
 - 100 = Perfect, no issues
 
-Score formula: Start at 100, subtract ~4 per error, ~1.5 per warning, ~0.5 per suggestion. Minimum 75.
+Score formula: Start at 90, subtract ~1 per error, ~0.5 per warning, ~0.2 per suggestion. Minimum 85.
 
 ═══════════════════════════════════════════════════════════════════════════════
 FIX FIELD RULES (CRITICAL)
@@ -806,7 +807,7 @@ function parseReviewResponse(output: string): {
             errors,
             warnings,
             suggestions,
-            overallScore: 75, // Minimum baseline score for partial review
+            overallScore: 85, // Minimum baseline score for partial review
             recommendation: 'Review partially completed (output was truncated). Some issues were identified.'
           }
         }
@@ -892,9 +893,9 @@ function parseReviewResponse(output: string): {
       errors,
       warnings,
       suggestions,
-      // Enforce minimum score of 75, use AI score if valid otherwise calculate
+      // Enforce minimum score of 85, use AI score if valid otherwise calculate
       overallScore: typeof rawScore === 'number'
-        ? Math.min(100, Math.max(75, rawScore)) // Min 75, max 100
+        ? Math.min(100, Math.max(85, rawScore)) // Min 85, max 100
         : calculateScore(errors, warnings, suggestions),
       recommendation: recommendation || getDefaultRecommendation(errors, warnings)
     }
@@ -911,7 +912,7 @@ function parseReviewResponse(output: string): {
         errors: 0,
         warnings: 0,
         suggestions: 0,
-        overallScore: 75, // Minimum baseline score
+        overallScore: 85, // Minimum baseline score
         recommendation: 'Review completed but response parsing failed. Manual review recommended.'
       }
     }
@@ -919,39 +920,39 @@ function parseReviewResponse(output: string): {
 }
 
 /**
- * Calculate score with minimum 75, max 100
- * Remaining 25 points distributed:
- * - Errors: 70% (17.5 points max deduction)
- * - Warnings: 20% (5 points max deduction)
- * - Suggestions: 10% (2.5 points max deduction)
+ * Calculate score for initial AI review
+ * Score range: 85-90 when issues exist, 100 when perfect
  * 
- * As user fixes issues, score increases toward 100
+ * The score varies within 85-90 based on issue severity:
+ * - More/severe issues = closer to 85
+ * - Fewer/lighter issues = closer to 90
+ * - No issues = 100
+ * 
+ * As user fixes issues, score scales adaptively toward 100
  */
 function calculateScore(errorCount: number, warningCount: number, suggestionCount: number): number {
-  const BASE_SCORE = 75
-  const REMAINING_POINTS = 25
+  const FLOOR_SCORE = 85
+  const CEILING_WITH_ISSUES = 90
+  const PERFECT_SCORE = 100
   
   // No issues = perfect score
   if (errorCount === 0 && warningCount === 0 && suggestionCount === 0) {
-    return 100
+    return PERFECT_SCORE
   }
   
-  // Point allocations (from remaining 25)
-  const ERROR_POOL = REMAINING_POINTS * 0.70     // 17.5 points
-  const WARNING_POOL = REMAINING_POINTS * 0.20   // 5 points
-  const SUGGESTION_POOL = REMAINING_POINTS * 0.10 // 2.5 points
+  // Calculate severity-based score within 85-90 range
+  // Severity weight: errors are most severe (3x), warnings moderate (2x), suggestions light (1x)
+  const severityWeight = errorCount * 3 + warningCount * 2 + suggestionCount * 1
+  const maxSeverityWeight = 15 // Approximate cap for scaling
   
-  // Points per issue (diminishing returns for many issues)
-  // First few issues have more impact, then it tapers off
-  const errorDeduction = Math.min(ERROR_POOL, errorCount * 4)           // ~4 pts per error, max 17.5
-  const warningDeduction = Math.min(WARNING_POOL, warningCount * 1.25)   // ~1.25 pts per warning, max 5
-  const suggestionDeduction = Math.min(SUGGESTION_POOL, suggestionCount * 0.5) // ~0.5 pts per suggestion, max 2.5
+  // Quality factor: 0 = severe issues, 1 = light issues
+  const qualityFactor = Math.max(0, 1 - (severityWeight / maxSeverityWeight))
   
-  const totalDeduction = errorDeduction + warningDeduction + suggestionDeduction
-  const score = BASE_SCORE + (REMAINING_POINTS - totalDeduction)
+  // Map to 85-90 range based on severity
+  const score = FLOOR_SCORE + (qualityFactor * (CEILING_WITH_ISSUES - FLOOR_SCORE))
   
-  // Ensure score is between 75 and 100
-  return Math.round(Math.min(100, Math.max(BASE_SCORE, score)))
+  // Ensure score is between 85 and 90 when issues exist
+  return Math.round(Math.min(CEILING_WITH_ISSUES, Math.max(FLOOR_SCORE, score)))
 }
 
 function getDefaultRecommendation(errors: number, warnings: number): string {

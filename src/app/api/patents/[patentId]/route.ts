@@ -141,54 +141,13 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: { patentId: string } }
 ) {
-  try {
-    const authResult = await authenticateUser(request)
-    if (!authResult.user) {
-      return NextResponse.json(
-        { error: authResult.error?.message },
-        { status: authResult.error?.status || 401 }
-      )
-    }
-
-    const { patentId } = params
-
-    // Check patent access
-    const patent = await prisma.patent.findFirst({
-      where: {
-        id: patentId,
-        OR: [
-          { createdBy: authResult.user.id },
-          {
-            project: {
-              OR: [
-                { userId: authResult.user.id },
-                { collaborators: { some: { userId: authResult.user.id } } }
-              ]
-            }
-          }
-        ]
-      }
-    })
-
-    if (!patent) {
-      return NextResponse.json(
-        { error: 'Patent not found or access denied' },
-        { status: 404 }
-      )
-    }
-
-    // Delete patent (cascade will handle related records)
-    await prisma.patent.delete({
-      where: { id: patentId }
-    })
-
-    return NextResponse.json({ message: 'Patent deleted successfully' })
-
-  } catch (error) {
-    console.error('DELETE /api/patents/[patentId] error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
-  }
+  // Patent deletion is disabled to prevent abuse
+  // Users must contact support to delete patents
+  return NextResponse.json(
+    { 
+      error: 'Patent deletion is disabled. Please contact support if you need to remove a patent.',
+      code: 'DELETION_DISABLED'
+    }, 
+    { status: 403 }
+  )
 }

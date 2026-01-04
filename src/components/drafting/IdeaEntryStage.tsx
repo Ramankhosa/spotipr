@@ -390,7 +390,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         </Alert>
       )}
 
-      {/* Experimental Data Notice */}
+      {/* Combined Notice: Sequential Steps + Experimental Data */}
       <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
         <div className="flex items-start gap-3">
           <div className="flex-shrink-0 p-1.5 bg-amber-100 rounded-full">
@@ -398,13 +398,15 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <div className="flex-1">
-            <h4 className="text-sm font-semibold text-amber-800 mb-1">
-              About Experimental Data & Test Results
-            </h4>
+          <div className="flex-1 space-y-2">
+            {/* Sequential Steps Notice */}
+            <p className="text-xs text-amber-800 leading-relaxed">
+              <span className="inline-flex items-center gap-1 bg-yellow-200 text-yellow-900 px-1.5 py-0.5 rounded text-[10px] font-bold mr-1">⚠️ FOLLOW STEPS IN ORDER</span>
+              Complete each stage sequentially for best results: <span className="font-medium">Idea → Prior Art → Claims → Components → Figures → Draft</span>
+            </p>
+            {/* Experimental Data Notice */}
             <p className="text-xs text-amber-700 leading-relaxed">
-              This stage extracts the <strong>invention structure</strong> (problem, solution, components, claims) from your input. 
-              Experimental data, test measurements, observations, or illustrative examples are <strong>not processed here</strong> — they will be handled separately in the <strong>Drafting Stage</strong> where you can add them to the Detailed Description section with appropriate legal safeguards.
+              <strong>About Experimental Data:</strong> This stage extracts the invention structure. Experimental data and test results will be handled in the <strong>Drafting Stage</strong>.
             </p>
           </div>
         </div>

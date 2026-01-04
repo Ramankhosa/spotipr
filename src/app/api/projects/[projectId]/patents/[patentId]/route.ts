@@ -74,65 +74,13 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: { projectId: string; patentId: string } }
 ) {
-  try {
-    const userEmail = await getUserFromRequest(request)
-
-    if (!userEmail) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const { projectId, patentId } = params
-
-    // Check if user has access to the project (owner or collaborator)
-    const projectAccess = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        OR: [
-          { user: { email: userEmail } },
-          { collaborators: { some: { user: { email: userEmail } } } }
-        ]
-      }
-    })
-
-    if (!projectAccess) {
-      return NextResponse.json({ error: 'Project not found or access denied' }, { status: 404 })
-    }
-
-    // Check if patent exists and belongs to the project
-    const patent = await prisma.patent.findFirst({
-      where: {
-        id: patentId,
-        projectId
-      },
-      include: {
-        draftingSessions: true
-      }
-    })
-
-    if (!patent) {
-      return NextResponse.json({ error: 'Patent not found' }, { status: 404 })
-    }
-
-    // Delete associated data in the correct order to maintain referential integrity
-    // Delete drafting sessions and related data first
-    for (const session of patent.draftingSessions) {
-      // Delete related records in order
-      await prisma.annexureDraft.deleteMany({ where: { sessionId: session.id } })
-      await prisma.diagramSource.deleteMany({ where: { sessionId: session.id } })
-      await prisma.figurePlan.deleteMany({ where: { sessionId: session.id } })
-      await prisma.referenceMap.deleteMany({ where: { sessionId: session.id } })
-      await prisma.ideaRecord.deleteMany({ where: { sessionId: session.id } })
-      await prisma.draftingSession.delete({ where: { id: session.id } })
-    }
-
-    // Finally delete the patent
-    await prisma.patent.delete({
-      where: { id: patentId }
-    })
-
-    return NextResponse.json({ message: 'Patent deleted successfully' })
-  } catch (error) {
-    console.error('Failed to delete patent:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-  }
+  // Patent deletion is disabled to prevent abuse
+  // Users must contact support to delete patents
+  return NextResponse.json(
+    { 
+      error: 'Patent deletion is disabled. Please contact support if you need to remove a patent.',
+      code: 'DELETION_DISABLED'
+    }, 
+    { status: 403 }
+  )
 }

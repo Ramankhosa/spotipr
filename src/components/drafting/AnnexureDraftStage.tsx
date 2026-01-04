@@ -414,7 +414,7 @@ function ValidationPanel({
         // Pro feature - show upgrade message
         setAiReviewUpgradeRequired(true)
         setAiSummary({
-          overallScore: 75, // Minimum baseline score
+          overallScore: 85, // Minimum baseline score
           totalIssues: 0,
           errors: 0,
           warnings: 0,
@@ -502,22 +502,34 @@ function ValidationPanel({
     // Note: onAIIssuesChange is called via useEffect below to avoid render-phase setState
     setAiIssues(prev => {
       const remaining = prev.filter(i => i.id !== issue.id)
+      const totalBeforeFix = prev.length
       
-      // Recalculate score based on remaining issues
-      // Score formula: Base 75 + (25 points distributed by issue reduction)
-      const BASE_SCORE = 75
-      const REMAINING_POINTS = 25
+      // Count remaining issues by type
       const errors = remaining.filter(i => i.type === 'error').length
       const warnings = remaining.filter(i => i.type === 'warning').length  
       const suggestions = remaining.filter(i => i.type === 'suggestion').length
       
-      let newScore = 100
-      if (errors > 0 || warnings > 0 || suggestions > 0) {
-        const errorDeduction = Math.min(REMAINING_POINTS * 0.70, errors * 4)
-        const warningDeduction = Math.min(REMAINING_POINTS * 0.20, warnings * 1.25)
-        const suggestionDeduction = Math.min(REMAINING_POINTS * 0.10, suggestions * 0.5)
-        newScore = Math.round(BASE_SCORE + (REMAINING_POINTS - errorDeduction - warningDeduction - suggestionDeduction))
-        newScore = Math.max(BASE_SCORE, Math.min(100, newScore))
+      // Adaptive scoring: 85-90 with issues, scales to 100 as issues are fixed
+      const FLOOR_SCORE = 85
+      const CEILING_WITH_ISSUES = 90
+      const PERFECT_SCORE = 100
+      
+      let newScore: number
+      if (remaining.length === 0) {
+        // All issues resolved - perfect score
+        newScore = PERFECT_SCORE
+      } else {
+        // Calculate severity-based base score (85-90)
+        const severityWeight = errors * 3 + warnings * 2 + suggestions * 1
+        const maxSeverityWeight = 15
+        const qualityFactor = Math.max(0, 1 - (severityWeight / maxSeverityWeight))
+        const baseScore = FLOOR_SCORE + (qualityFactor * (CEILING_WITH_ISSUES - FLOOR_SCORE))
+        
+        // Scale towards 100 based on resolution progress
+        const resolvedCount = totalBeforeFix - remaining.length
+        const resolvedRatio = totalBeforeFix > 0 ? resolvedCount / totalBeforeFix : 0
+        newScore = Math.round(baseScore + ((PERFECT_SCORE - baseScore) * resolvedRatio))
+        newScore = Math.max(FLOOR_SCORE, Math.min(PERFECT_SCORE - 1, newScore)) // Cap at 99 if issues remain
       }
       
       // Update summary with new counts and score

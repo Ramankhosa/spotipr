@@ -11639,10 +11639,60 @@ async function handleApplyAIFix(
       i.id === issue.id ? { ...i, status: 'fixed', resolvedAt: new Date().toISOString(), resolvedBy: 'fix' } : i
     )
     
+    // Recalculate score based on remaining active issues (not fixed, not ignored)
+    const activeIssues = updatedIssues.filter((i: any) => i.status !== 'fixed' && i.status !== 'ignored')
+    const totalIssuesCount = updatedIssues.length
+    const resolvedCount = totalIssuesCount - activeIssues.length
+    const errors = activeIssues.filter((i: any) => i.type === 'error' || i.t === 'E').length
+    const warnings = activeIssues.filter((i: any) => i.type === 'warning' || i.t === 'W').length
+    const suggestions = activeIssues.filter((i: any) => i.type === 'suggestion' || i.t === 'S').length
+    
+    // Adaptive scoring: 85-90 with issues, scales to 100 as issues are fixed
+    // Base score varies by severity (85-90 range), then scales to 100 based on resolution progress
+    const FLOOR_SCORE = 85
+    const CEILING_WITH_ISSUES = 90
+    const PERFECT_SCORE = 100
+    
+    let newScore: number
+    if (activeIssues.length === 0) {
+      // All issues resolved - perfect score
+      newScore = PERFECT_SCORE
+    } else {
+      // Calculate severity-based base score (85-90)
+      const severityWeight = errors * 3 + warnings * 2 + suggestions * 1
+      const maxSeverityWeight = 15
+      const qualityFactor = Math.max(0, 1 - (severityWeight / maxSeverityWeight))
+      const baseScore = FLOOR_SCORE + (qualityFactor * (CEILING_WITH_ISSUES - FLOOR_SCORE))
+      
+      // Scale towards 100 based on resolution progress
+      const resolvedRatio = totalIssuesCount > 0 ? resolvedCount / totalIssuesCount : 0
+      newScore = Math.round(baseScore + ((PERFECT_SCORE - baseScore) * resolvedRatio))
+      newScore = Math.max(FLOOR_SCORE, Math.min(PERFECT_SCORE - 1, newScore)) // Cap at 99 if issues remain
+    }
+    
+    // Build updated summary with recalculated score
+    const existingSummary = (latestReview.summary as any) || {}
+    const updatedSummary = {
+      ...existingSummary,
+      totalIssues: activeIssues.length,
+      errors,
+      warnings,
+      suggestions,
+      overallScore: newScore,
+      recommendation: activeIssues.length === 0 
+        ? 'All issues resolved! Draft is ready for export.'
+        : errors > 0 
+          ? `Found ${errors} error(s) that should be fixed before filing.`
+          : warnings > 0
+            ? `Found ${warnings} warning(s). Review recommended before export.`
+            : 'Draft looks good! Ready for export.'
+    }
+    
     await prisma.aIReviewResult.update({
       where: { id: latestReview.id },
       data: {
         issues: updatedIssues,
+        summary: updatedSummary,
         appliedFixes: [
           ...existingFixes,
           fixHistoryEntry
@@ -11907,10 +11957,55 @@ async function handleIgnoreAIIssue(user: any, patentId: string, data: any) {
       : i
   )
   
+  // Recalculate score based on remaining active issues (not fixed, not ignored)
+  const activeIssues = updatedIssues.filter((i: any) => i.status !== 'fixed' && i.status !== 'ignored')
+  const totalIssuesCount = updatedIssues.length
+  const resolvedCount = totalIssuesCount - activeIssues.length
+  const errors = activeIssues.filter((i: any) => i.type === 'error' || i.t === 'E').length
+  const warnings = activeIssues.filter((i: any) => i.type === 'warning' || i.t === 'W').length
+  const suggestions = activeIssues.filter((i: any) => i.type === 'suggestion' || i.t === 'S').length
+  
+  // Adaptive scoring: 85-90 with issues, scales to 100 as issues are fixed
+  const FLOOR_SCORE = 85
+  const CEILING_WITH_ISSUES = 90
+  const PERFECT_SCORE = 100
+  
+  let newScore: number
+  if (activeIssues.length === 0) {
+    newScore = PERFECT_SCORE
+  } else {
+    const severityWeight = errors * 3 + warnings * 2 + suggestions * 1
+    const maxSeverityWeight = 15
+    const qualityFactor = Math.max(0, 1 - (severityWeight / maxSeverityWeight))
+    const baseScore = FLOOR_SCORE + (qualityFactor * (CEILING_WITH_ISSUES - FLOOR_SCORE))
+    const resolvedRatio = totalIssuesCount > 0 ? resolvedCount / totalIssuesCount : 0
+    newScore = Math.round(baseScore + ((PERFECT_SCORE - baseScore) * resolvedRatio))
+    newScore = Math.max(FLOOR_SCORE, Math.min(PERFECT_SCORE - 1, newScore))
+  }
+  
+  // Build updated summary with recalculated score
+  const existingSummary = (review.summary as any) || {}
+  const updatedSummary = {
+    ...existingSummary,
+    totalIssues: activeIssues.length,
+    errors,
+    warnings,
+    suggestions,
+    overallScore: newScore,
+    recommendation: activeIssues.length === 0 
+      ? 'All issues resolved! Draft is ready for export.'
+      : errors > 0 
+        ? `Found ${errors} error(s) that should be fixed before filing.`
+        : warnings > 0
+          ? `Found ${warnings} warning(s). Review recommended before export.`
+          : 'Draft looks good! Ready for export.'
+  }
+  
   await prisma.aIReviewResult.update({
     where: { id: review.id },
     data: {
       issues: updatedIssues,
+      summary: updatedSummary,
       ignoredIssues: existingIgnored.includes(issueId) 
         ? existingIgnored 
         : [...existingIgnored, issueId]
@@ -11921,7 +12016,8 @@ async function handleIgnoreAIIssue(user: any, patentId: string, data: any) {
     success: true,
     reviewId: review.id,
     ignoredIssues: existingIgnored.includes(issueId) ? existingIgnored : [...existingIgnored, issueId],
-    updatedIssueStatus: 'ignored'
+    updatedIssueStatus: 'ignored',
+    updatedSummary
   })
 }
 
@@ -12008,10 +12104,55 @@ async function handleRevertAIFix(user: any, patentId: string, data: any) {
       : f
   )
 
+  // Recalculate score based on remaining active issues (not fixed, not ignored)
+  const activeIssues = updatedIssues.filter((i: any) => i.status !== 'fixed' && i.status !== 'ignored')
+  const totalIssuesCount = updatedIssues.length
+  const resolvedCount = totalIssuesCount - activeIssues.length
+  const errors = activeIssues.filter((i: any) => i.type === 'error' || i.t === 'E').length
+  const warnings = activeIssues.filter((i: any) => i.type === 'warning' || i.t === 'W').length
+  const suggestions = activeIssues.filter((i: any) => i.type === 'suggestion' || i.t === 'S').length
+  
+  // Adaptive scoring: 85-90 with issues, scales to 100 as issues are fixed
+  const FLOOR_SCORE = 85
+  const CEILING_WITH_ISSUES = 90
+  const PERFECT_SCORE = 100
+  
+  let newScore: number
+  if (activeIssues.length === 0) {
+    newScore = PERFECT_SCORE
+  } else {
+    const severityWeight = errors * 3 + warnings * 2 + suggestions * 1
+    const maxSeverityWeight = 15
+    const qualityFactor = Math.max(0, 1 - (severityWeight / maxSeverityWeight))
+    const baseScore = FLOOR_SCORE + (qualityFactor * (CEILING_WITH_ISSUES - FLOOR_SCORE))
+    const resolvedRatio = totalIssuesCount > 0 ? resolvedCount / totalIssuesCount : 0
+    newScore = Math.round(baseScore + ((PERFECT_SCORE - baseScore) * resolvedRatio))
+    newScore = Math.max(FLOOR_SCORE, Math.min(PERFECT_SCORE - 1, newScore))
+  }
+  
+  // Build updated summary with recalculated score
+  const existingSummary = (review.summary as any) || {}
+  const updatedSummary = {
+    ...existingSummary,
+    totalIssues: activeIssues.length,
+    errors,
+    warnings,
+    suggestions,
+    overallScore: newScore,
+    recommendation: activeIssues.length === 0 
+      ? 'All issues resolved! Draft is ready for export.'
+      : errors > 0 
+        ? `Found ${errors} error(s) that should be fixed before filing.`
+        : warnings > 0
+          ? `Found ${warnings} warning(s). Review recommended before export.`
+          : 'Draft looks good! Ready for export.'
+  }
+
   await prisma.aIReviewResult.update({
     where: { id: review.id },
     data: {
       issues: updatedIssues,
+      summary: updatedSummary,
       appliedFixes: updatedFixes as any
     }
   })
@@ -12022,6 +12163,7 @@ async function handleRevertAIFix(user: any, patentId: string, data: any) {
     revertedContent,
     fixHistoryId,
     issueId: fixEntry.issueId,
+    updatedSummary,
     message: 'Fix reverted successfully. Issue is now pending again.'
   })
 }

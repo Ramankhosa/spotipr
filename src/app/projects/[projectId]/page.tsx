@@ -399,14 +399,11 @@ export default function ProjectDashboardPage() {
                             <PenTool className="w-3.5 h-3.5" />
                             Resume
                           </Link>
+                          {/* Delete button disabled - contact support to delete patents */}
                           <button
-                            onClick={() => setDeleteDialog({
-                              patentId: patent.id,
-                              patentTitle: patent.title,
-                              hasDrafts: hasDraftSessions[patent.id] || false
-                            })}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all"
-                            title="Delete this patent"
+                            disabled
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-400 bg-slate-50 border border-slate-200 rounded-lg cursor-not-allowed opacity-50"
+                            title="Patent deletion is disabled. Contact support if you need to remove a patent."
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
