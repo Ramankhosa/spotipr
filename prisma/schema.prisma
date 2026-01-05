@@ -497,6 +497,7 @@ enum PlanStatus {
 
 enum FeatureCode {
   PRIOR_ART_SEARCH
+  NOVELTY_SEARCH // Standalone novelty search (separate from prior art in patent pipeline)
   PATENT_DRAFTING
   DIAGRAM_GENERATION
   IDEA_BANK

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { unstable_noStore as noStore } from 'next/cache'
 import { useAuth } from '@/lib/auth-context'
 
-type FeatureCode = 'PRIOR_ART_SEARCH' | 'PATENT_DRAFTING' | 'IDEA_BANK' | 'DIAGRAM_GENERATION' | 'PERSONA_SYNC' | 'PATENT_REVIEW' | 'IDEATION'
+type FeatureCode = 'PRIOR_ART_SEARCH' | 'PATENT_DRAFTING' | 'IDEA_BANK' | 'DIAGRAM_GENERATION' | 'PERSONA_SYNC' | 'PATENT_REVIEW' | 'IDEATION' | 'NOVELTY_SEARCH'
 type PlanCode = 'FREE_PLAN' | 'PRO_PLAN' | 'ENTERPRISE_PLAN'
 
 interface FeatureQuota {
@@ -29,7 +29,8 @@ interface ApiResponse {
 }
 
 const FEATURE_LABELS: Record<FeatureCode, string> = {
-  PRIOR_ART_SEARCH: 'Novelty searches',
+  PRIOR_ART_SEARCH: 'Prior art searches',
+  NOVELTY_SEARCH: 'Novelty searches',
   PATENT_DRAFTING: 'Patent drafts',
   IDEA_BANK: 'Ideas reserved',
   DIAGRAM_GENERATION: 'Diagrams generated',
@@ -208,7 +209,8 @@ export default function QuotaControllerPage() {
           </p>
           <p className="text-sm text-gray-600">
             - <strong>Patent drafts</strong> map to the <code>PATENT_DRAFTING</code> feature.<br />
-            - <strong>Novelty searches</strong> map to the <code>PRIOR_ART_SEARCH</code> feature (novelty stages and reports).<br />
+            - <strong>Prior art searches</strong> map to the <code>PRIOR_ART_SEARCH</code> feature (patent filing pipeline).<br />
+            - <strong>Novelty searches</strong> map to the <code>NOVELTY_SEARCH</code> feature (standalone searches - separate quota).<br />
             - <strong>Ideas reserved</strong> map to the <code>IDEA_BANK</code> feature.
           </p>
         </div>

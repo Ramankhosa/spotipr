@@ -18,14 +18,19 @@ async function ensureModelClasses() {
 
 async function ensureFeaturesAndTasks() {
   const priorArt = await prisma.feature.upsert({ where: { code: 'PRIOR_ART_SEARCH' }, update: {}, create: { code: 'PRIOR_ART_SEARCH', name: 'Prior Art Search', unit: 'calls' } })
+  const noveltySearch = await prisma.feature.upsert({ where: { code: 'NOVELTY_SEARCH' }, update: {}, create: { code: 'NOVELTY_SEARCH', name: 'Novelty Search', unit: 'calls' } })
   const drafting = await prisma.feature.upsert({ where: { code: 'PATENT_DRAFTING' }, update: {}, create: { code: 'PATENT_DRAFTING', name: 'Patent Drafting', unit: 'tokens' } })
   const diagrams = await prisma.feature.upsert({ where: { code: 'DIAGRAM_GENERATION' }, update: {}, create: { code: 'DIAGRAM_GENERATION', name: 'Diagram Generation', unit: 'calls' } })
 
   await prisma.task.upsert({ where: { code: 'LLM1_PRIOR_ART' }, update: {}, create: { code: 'LLM1_PRIOR_ART', name: 'Prior Art Analysis', linkedFeatureId: priorArt.id } })
   await prisma.task.upsert({ where: { code: 'LLM2_DRAFT' }, update: {}, create: { code: 'LLM2_DRAFT', name: 'Patent Drafting', linkedFeatureId: drafting.id } })
   await prisma.task.upsert({ where: { code: 'LLM3_DIAGRAM' }, update: {}, create: { code: 'LLM3_DIAGRAM', name: 'Diagram Generation', linkedFeatureId: diagrams.id } })
+  // Novelty search tasks link to NOVELTY_SEARCH feature (separate quota from PRIOR_ART_SEARCH)
+  await prisma.task.upsert({ where: { code: 'LLM4_NOVELTY_SCREEN' }, update: { linkedFeatureId: noveltySearch.id }, create: { code: 'LLM4_NOVELTY_SCREEN', name: 'Novelty Screening', linkedFeatureId: noveltySearch.id } })
+  await prisma.task.upsert({ where: { code: 'LLM5_NOVELTY_ASSESS' }, update: { linkedFeatureId: noveltySearch.id }, create: { code: 'LLM5_NOVELTY_ASSESS', name: 'Novelty Assessment', linkedFeatureId: noveltySearch.id } })
+  await prisma.task.upsert({ where: { code: 'LLM6_REPORT_GENERATION' }, update: { linkedFeatureId: noveltySearch.id }, create: { code: 'LLM6_REPORT_GENERATION', name: 'Report Generation', linkedFeatureId: noveltySearch.id } })
 
-  return { priorArt, drafting, diagrams }
+  return { priorArt, noveltySearch, drafting, diagrams }
 }
 
 async function ensurePlans() {
@@ -37,12 +42,14 @@ async function ensurePlans() {
 
 async function linkPlanFeatures(plan, features) {
   // Reasonable defaults; adjust quotas as needed
+  // NOTE: NOVELTY_SEARCH has very low quotas to conserve PQAI API
   const quotas = {
     PRIOR_ART_SEARCH: { monthly: 1000, daily: 100 },
+    NOVELTY_SEARCH: { monthly: 5, daily: 2 }, // Very limited to conserve PQAI API
     PATENT_DRAFTING: { monthly: 600000, daily: 20000 }, // tokens
     DIAGRAM_GENERATION: { monthly: 1000, daily: 100 }
   }
-  for (const f of [features.priorArt, features.drafting, features.diagrams]) {
+  for (const f of [features.priorArt, features.noveltySearch, features.drafting, features.diagrams]) {
     const q = quotas[f.code]
     await prisma.planFeature.upsert({
       where: { planId_featureId: { planId: plan.id, featureId: f.id } },
@@ -70,19 +77,26 @@ async function main() {
     const features = await ensureFeaturesAndTasks()
     const { free, pro, ent } = await ensurePlans()
 
-    // FREE: minimal access (prior art only)
+    // FREE: minimal access (prior art only, no novelty search)
     await prisma.planFeature.upsert({
       where: { planId_featureId: { planId: free.id, featureId: features.priorArt.id } },
       update: { monthlyQuota: 100, dailyQuota: 10 },
       create: { planId: free.id, featureId: features.priorArt.id, monthlyQuota: 100, dailyQuota: 10 }
+    })
+    // NOVELTY_SEARCH disabled for FREE plan (quota = 0)
+    await prisma.planFeature.upsert({
+      where: { planId_featureId: { planId: free.id, featureId: features.noveltySearch.id } },
+      update: { monthlyQuota: 0, dailyQuota: 0 },
+      create: { planId: free.id, featureId: features.noveltySearch.id, monthlyQuota: 0, dailyQuota: 0 }
     })
 
     // PRO: all three
     await linkPlanFeatures(pro, features)
     await linkPlanLLMAccess(pro, classes)
 
-    // ENTERPRISE: all three with higher quotas
+    // ENTERPRISE: all features with higher quotas (but limited novelty search to conserve PQAI API)
     await prisma.planFeature.upsert({ where: { planId_featureId: { planId: ent.id, featureId: features.priorArt.id } }, update: { monthlyQuota: 10000, dailyQuota: 1000 }, create: { planId: ent.id, featureId: features.priorArt.id, monthlyQuota: 10000, dailyQuota: 1000 } })
+    await prisma.planFeature.upsert({ where: { planId_featureId: { planId: ent.id, featureId: features.noveltySearch.id } }, update: { monthlyQuota: 20, dailyQuota: 5 }, create: { planId: ent.id, featureId: features.noveltySearch.id, monthlyQuota: 20, dailyQuota: 5 } }) // Limited PQAI API usage
     await prisma.planFeature.upsert({ where: { planId_featureId: { planId: ent.id, featureId: features.drafting.id } }, update: { monthlyQuota: 5000000, dailyQuota: 200000 }, create: { planId: ent.id, featureId: features.drafting.id, monthlyQuota: 5000000, dailyQuota: 200000 } })
     await prisma.planFeature.upsert({ where: { planId_featureId: { planId: ent.id, featureId: features.diagrams.id } }, update: { monthlyQuota: 10000, dailyQuota: 1000 }, create: { planId: ent.id, featureId: features.diagrams.id, monthlyQuota: 10000, dailyQuota: 1000 } })
     await linkPlanLLMAccess(ent, classes)

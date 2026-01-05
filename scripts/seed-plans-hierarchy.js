@@ -10,6 +10,7 @@ async function seedPlansAndHierarchy() {
     console.log('\n📋 Step 1: Creating Features...');
     const features = [
       { code: 'PRIOR_ART_SEARCH', name: 'Patent and Literature Search', unit: 'queries' },
+      { code: 'NOVELTY_SEARCH', name: 'Standalone Novelty Search', unit: 'searches' }, // Separate from PRIOR_ART_SEARCH
       { code: 'PATENT_DRAFTING', name: 'AI-Assisted Patent Drafting', unit: 'tokens' },
       { code: 'DIAGRAM_GENERATION', name: 'Technical Diagram Generation', unit: 'diagrams' },
       { code: 'IDEA_BANK', name: 'Idea Bank Access', unit: 'reservations' },
@@ -39,9 +40,9 @@ async function seedPlansAndHierarchy() {
       { code: 'LLM1_PRIOR_ART', name: 'Prior Art Search', linkedFeature: 'PRIOR_ART_SEARCH' },
       { code: 'LLM2_DRAFT', name: 'Patent Drafting', linkedFeature: 'PATENT_DRAFTING' },
       { code: 'LLM3_DIAGRAM', name: 'Diagram Generation', linkedFeature: 'DIAGRAM_GENERATION' },
-      { code: 'LLM4_NOVELTY_SCREEN', name: 'Novelty Screening', linkedFeature: 'PRIOR_ART_SEARCH' },
-      { code: 'LLM5_NOVELTY_ASSESS', name: 'Novelty Assessment', linkedFeature: 'PRIOR_ART_SEARCH' },
-      { code: 'LLM6_REPORT_GENERATION', name: 'Report Generation', linkedFeature: 'PRIOR_ART_SEARCH' },
+      { code: 'LLM4_NOVELTY_SCREEN', name: 'Novelty Screening', linkedFeature: 'NOVELTY_SEARCH' }, // Uses separate NOVELTY_SEARCH quota
+      { code: 'LLM5_NOVELTY_ASSESS', name: 'Novelty Assessment', linkedFeature: 'NOVELTY_SEARCH' }, // Uses separate NOVELTY_SEARCH quota
+      { code: 'LLM6_REPORT_GENERATION', name: 'Report Generation', linkedFeature: 'NOVELTY_SEARCH' }, // Uses separate NOVELTY_SEARCH quota
       { code: 'IDEA_BANK_ACCESS', name: 'Idea Bank Access', linkedFeature: 'IDEA_BANK' },
       { code: 'IDEA_BANK_RESERVE', name: 'Idea Reservation', linkedFeature: 'IDEA_BANK' },
       { code: 'IDEA_BANK_EDIT', name: 'Idea Editing', linkedFeature: 'IDEA_BANK' },
@@ -145,20 +146,24 @@ async function seedPlansAndHierarchy() {
     }
 
     // 5. Set up plan features
+    // NOTE: PRIOR_ART_SEARCH is for patent filing pipeline, NOVELTY_SEARCH is standalone (separate quotas)
     console.log('\n🔗 Step 5: Setting up Plan Features...');
     const planFeatures = [
-      // BASIC PLAN (FREE_PLAN) - Patent drafting + novelty search
+      // BASIC PLAN (FREE_PLAN) - Patent drafting + prior art (no standalone novelty search)
       { planCode: 'FREE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 50, dailyQuota: 10 },
+      { planCode: 'FREE_PLAN', featureCode: 'NOVELTY_SEARCH', monthlyQuota: 0, dailyQuota: 0 }, // Disabled for FREE plan
       { planCode: 'FREE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 1000, dailyQuota: 100 },
 
-      // PRO PLAN - Basic services + Idea Bank + Diagram generation
+      // PRO PLAN - Basic services + Idea Bank + Diagram generation + limited Novelty Search
       { planCode: 'PRO_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 1000, dailyQuota: 100 },
+      { planCode: 'PRO_PLAN', featureCode: 'NOVELTY_SEARCH', monthlyQuota: 5, dailyQuota: 2 }, // Very limited to conserve PQAI API
       { planCode: 'PRO_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 10000, dailyQuota: 1000 },
       { planCode: 'PRO_PLAN', featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 200, dailyQuota: 40 },
       { planCode: 'PRO_PLAN', featureCode: 'IDEA_BANK', monthlyQuota: 50, dailyQuota: 10 },
 
-      // ENTERPRISE PLAN - Everything (all features)
+      // ENTERPRISE PLAN - Everything (all features) + more Novelty Search quota
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 5000, dailyQuota: 500 },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'NOVELTY_SEARCH', monthlyQuota: 20, dailyQuota: 5 }, // Limited to conserve PQAI API
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 50000, dailyQuota: 5000 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 500, dailyQuota: 100 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'IDEA_BANK', monthlyQuota: 200, dailyQuota: 50 },

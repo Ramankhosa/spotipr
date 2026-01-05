@@ -93,7 +93,7 @@ const TEAM_MANAGEMENT_ROLES: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER']
 // Service to FeatureCode mapping
 const SERVICE_TO_FEATURE: Record<ServiceType, string> = {
   PATENT_DRAFTING: 'PATENT_DRAFTING',
-  NOVELTY_SEARCH: 'PRIOR_ART_SEARCH', // Maps to same feature
+  NOVELTY_SEARCH: 'NOVELTY_SEARCH', // Separate quota from PRIOR_ART_SEARCH
   PRIOR_ART_SEARCH: 'PRIOR_ART_SEARCH',
   IDEA_BANK: 'IDEA_BANK',
   PERSONA_SYNC: 'PERSONA_SYNC',

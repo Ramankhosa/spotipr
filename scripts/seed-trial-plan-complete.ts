@@ -149,10 +149,12 @@ async function main() {
   console.log(`   ✅ TRIAL plan: ${plan.id} (status: ${plan.status})\n`)
 
   // Step 2: Create PlanFeature entries
+  // NOTE: PRIOR_ART_SEARCH is for patent filing pipeline, NOVELTY_SEARCH is standalone (separate quotas)
   console.log('2️⃣  Creating PlanFeature entries...')
   const featureConfigs = [
     { code: 'PATENT_DRAFTING' as const, monthlyQuota: DEFAULT_TRIAL_LIMITS.patentDraftLimit },
     { code: 'PRIOR_ART_SEARCH' as const, monthlyQuota: DEFAULT_TRIAL_LIMITS.priorArtSearchLimit },
+    { code: 'NOVELTY_SEARCH' as const, monthlyQuota: 3 }, // Very limited to conserve PQAI API for trial users
     { code: 'IDEATION' as const, monthlyQuota: DEFAULT_TRIAL_LIMITS.ideationRunLimit },
     { code: 'DIAGRAM_GENERATION' as const, monthlyQuota: DEFAULT_TRIAL_LIMITS.diagramLimit },
     { code: 'IDEA_BANK' as const, monthlyQuota: 5 }

@@ -141,7 +141,7 @@ async function getPlanQuotaLimits(tenantId: string, serviceType: ServiceType): P
 }> {
   const featureCodeMap: Record<ServiceType, string> = {
     PATENT_DRAFTING: 'PATENT_DRAFTING',
-    NOVELTY_SEARCH: 'PRIOR_ART_SEARCH',
+    NOVELTY_SEARCH: 'NOVELTY_SEARCH', // Separate quota from PRIOR_ART_SEARCH
     PRIOR_ART_SEARCH: 'PRIOR_ART_SEARCH',
     IDEA_BANK: 'IDEA_BANK',
     PERSONA_SYNC: 'PERSONA_SYNC',
@@ -335,6 +335,22 @@ export async function checkServiceQuota(
     if (existing) {
       // Allow continuing an existing operation
       return { allowed: true, quotaStatus }
+    }
+  }
+  
+  // Safety check: If no limits are configured for this service, it means the feature
+  // is not available for this plan. Block access to prevent unauthorized usage.
+  // This handles cases where a plan doesn't have a PlanFeature entry for the service.
+  const hasAnyLimit = quotaStatus.dailyCompletionLimit !== null || 
+                      quotaStatus.monthlyCompletionLimit !== null ||
+                      quotaStatus.dailyTokenLimit !== null ||
+                      quotaStatus.monthlyTokenLimit !== null
+  
+  if (!hasAnyLimit) {
+    return {
+      allowed: false,
+      reason: `${serviceType} is not available for your plan`,
+      quotaStatus
     }
   }
   

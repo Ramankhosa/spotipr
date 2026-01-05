@@ -544,9 +544,9 @@ export class LLMGateway {
       LLM1_PRIOR_ART: 'PRIOR_ART_SEARCH',
       LLM2_DRAFT: 'PATENT_DRAFTING',
       LLM3_DIAGRAM: 'DIAGRAM_GENERATION',
-      LLM4_NOVELTY_SCREEN: 'PRIOR_ART_SEARCH',
-      LLM5_NOVELTY_ASSESS: 'PRIOR_ART_SEARCH',
-      LLM6_REPORT_GENERATION: 'PRIOR_ART_SEARCH',
+      LLM4_NOVELTY_SCREEN: 'NOVELTY_SEARCH', // Standalone novelty search (separate quota)
+      LLM5_NOVELTY_ASSESS: 'NOVELTY_SEARCH', // Standalone novelty search (separate quota)
+      LLM6_REPORT_GENERATION: 'NOVELTY_SEARCH', // Standalone novelty search (separate quota)
       LLM1_CLAIM_REFINEMENT: 'PATENT_DRAFTING',
       IDEA_BANK_ACCESS: 'IDEA_BANK',
       IDEA_BANK_RESERVE: 'IDEA_BANK',

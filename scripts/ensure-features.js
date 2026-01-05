@@ -12,7 +12,7 @@ async function ensureFeatures() {
   console.log('This script will create missing features required for the application.\n')
 
   try {
-    // Check and create PRIOR_ART_SEARCH feature
+    // Check and create PRIOR_ART_SEARCH feature (patent filing pipeline)
     const priorArtFeature = await prisma.feature.upsert({
       where: { code: 'PRIOR_ART_SEARCH' },
       update: {},
@@ -23,6 +23,18 @@ async function ensureFeatures() {
       }
     })
     console.log('✅ PRIOR_ART_SEARCH feature:', priorArtFeature.id)
+
+    // Check and create NOVELTY_SEARCH feature (standalone, separate quota)
+    const noveltySearchFeature = await prisma.feature.upsert({
+      where: { code: 'NOVELTY_SEARCH' },
+      update: {},
+      create: {
+        code: 'NOVELTY_SEARCH',
+        name: 'Novelty Search',
+        unit: 'calls'
+      }
+    })
+    console.log('✅ NOVELTY_SEARCH feature:', noveltySearchFeature.id)
 
     // Check and create PATENT_DRAFTING feature
     const draftingFeature = await prisma.feature.upsert({
@@ -70,11 +82,11 @@ async function ensureFeatures() {
 
     const noveltyAssessTask = await prisma.task.upsert({
       where: { code: 'LLM5_NOVELTY_ASSESS' },
-      update: {},
+      update: { linkedFeatureId: noveltySearchFeature.id }, // Update to use separate NOVELTY_SEARCH feature
       create: {
         code: 'LLM5_NOVELTY_ASSESS',
         name: 'Novelty Assessment',
-        linkedFeatureId: priorArtFeature.id
+        linkedFeatureId: noveltySearchFeature.id // Links to NOVELTY_SEARCH, not PRIOR_ART_SEARCH
       }
     })
 

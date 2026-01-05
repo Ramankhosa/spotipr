@@ -654,13 +654,13 @@ async function main() {
     { code: 'DRAFT_ANNEXURE_CROSS_REFERENCE', displayName: 'Cross-Reference to Related Applications', featureCode: 'PATENT_DRAFTING', sortOrder: 24, description: 'Draft cross-reference section (superset: crossReference)' },
     { code: 'DRAFT_REVIEW', displayName: 'AI Review & Fix', featureCode: 'PATENT_DRAFTING', sortOrder: 25, description: 'AI-powered patent review' },
 
-    // === NOVELTY SEARCH STAGES ===
-    { code: 'NOVELTY_QUERY_GENERATION', displayName: 'Query Generation', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 1, description: 'Generate search queries from idea' },
-    { code: 'NOVELTY_PATENT_SEARCH', displayName: 'Patent Search', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 2, description: 'Search patent databases' },
-    { code: 'NOVELTY_RELEVANCE_SCORING', displayName: 'Relevance Scoring', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 3, description: 'Score patent relevance' },
-    { code: 'NOVELTY_FEATURE_ANALYSIS', displayName: 'Feature Analysis', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 4, description: 'Analyze feature overlap' },
-    { code: 'NOVELTY_COMPARISON', displayName: 'Detailed Comparison', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 5, description: 'Compare with prior art' },
-    { code: 'NOVELTY_REPORT_GENERATION', displayName: 'Report Generation', featureCode: 'PRIOR_ART_SEARCH', sortOrder: 6, description: 'Generate novelty report' },
+    // === NOVELTY SEARCH STAGES (uses separate NOVELTY_SEARCH quota, not PRIOR_ART_SEARCH) ===
+    { code: 'NOVELTY_QUERY_GENERATION', displayName: 'Query Generation', featureCode: 'NOVELTY_SEARCH', sortOrder: 1, description: 'Generate search queries from idea' },
+    { code: 'NOVELTY_PATENT_SEARCH', displayName: 'Patent Search', featureCode: 'NOVELTY_SEARCH', sortOrder: 2, description: 'Search patent databases' },
+    { code: 'NOVELTY_RELEVANCE_SCORING', displayName: 'Relevance Scoring', featureCode: 'NOVELTY_SEARCH', sortOrder: 3, description: 'Score patent relevance' },
+    { code: 'NOVELTY_FEATURE_ANALYSIS', displayName: 'Feature Analysis', featureCode: 'NOVELTY_SEARCH', sortOrder: 4, description: 'Analyze feature overlap' },
+    { code: 'NOVELTY_COMPARISON', displayName: 'Detailed Comparison', featureCode: 'NOVELTY_SEARCH', sortOrder: 5, description: 'Compare with prior art' },
+    { code: 'NOVELTY_REPORT_GENERATION', displayName: 'Report Generation', featureCode: 'NOVELTY_SEARCH', sortOrder: 6, description: 'Generate novelty report' },
 
     // === IDEA BANK STAGES ===
     { code: 'IDEA_BANK_GENERATION', displayName: 'Idea Generation', featureCode: 'IDEA_BANK', sortOrder: 1, description: 'Generate white-space patent ideas from prior art analysis' },

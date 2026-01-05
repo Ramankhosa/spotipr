@@ -147,8 +147,13 @@ export function calculateRate(tokens: number, durationMs: number): number {
 export function isValidFeatureCode(code: string): code is import('./types').FeatureCode {
   const validCodes = [
     'PRIOR_ART_SEARCH',
+    'NOVELTY_SEARCH',
     'PATENT_DRAFTING',
     'DIAGRAM_GENERATION',
+    'IDEA_BANK',
+    'PERSONA_SYNC',
+    'PATENT_REVIEW',
+    'IDEATION',
   ]
   return validCodes.includes(code)
 }

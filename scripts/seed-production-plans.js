@@ -153,21 +153,25 @@ async function seedProductionPlans() {
     console.log('   �o. Plans ready:', Object.keys(plansByCode))
 
     // 5. Plan features (quotas per feature per plan)
+    // NOTE: PRIOR_ART_SEARCH is for patent filing pipeline, NOVELTY_SEARCH is standalone feature (separate quotas)
     console.log('\n5. Ensuring plan feature quotas...')
     const planFeatureDefs = [
-      // BASIC PLAN (FREE_PLAN) - Patent drafting + novelty search (no Idea Bank, no Ideation)
+      // BASIC PLAN (FREE_PLAN) - Patent drafting + prior art (no standalone novelty, no Idea Bank, no Ideation)
       { planCode: 'FREE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 50, dailyQuota: 10 },
+      { planCode: 'FREE_PLAN', featureCode: 'NOVELTY_SEARCH', monthlyQuota: 0, dailyQuota: 0 }, // Disabled for FREE plan
       { planCode: 'FREE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 1000, dailyQuota: 100 },
 
-      // PRO PLAN - Basic services + Idea Bank + Diagram generation + Ideation
+      // PRO PLAN - Basic services + Idea Bank + Diagram generation + Ideation + limited Novelty Search
       { planCode: 'PRO_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 1000, dailyQuota: 100 },
+      { planCode: 'PRO_PLAN', featureCode: 'NOVELTY_SEARCH', monthlyQuota: 5, dailyQuota: 2 }, // Very limited to conserve PQAI API
       { planCode: 'PRO_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 10000, dailyQuota: 1000 },
       { planCode: 'PRO_PLAN', featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 200, dailyQuota: 40 },
       { planCode: 'PRO_PLAN', featureCode: 'IDEA_BANK', monthlyQuota: 50, dailyQuota: 10 },
       { planCode: 'PRO_PLAN', featureCode: 'IDEATION', monthlyQuota: 500, dailyQuota: 50, monthlyTokenLimit: 5000000, dailyTokenLimit: 500000 },
 
-      // ENTERPRISE PLAN - Everything (all features)
+      // ENTERPRISE PLAN - Everything (all features) + more Novelty Search quota
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 5000, dailyQuota: 500 },
+      { planCode: 'ENTERPRISE_PLAN', featureCode: 'NOVELTY_SEARCH', monthlyQuota: 20, dailyQuota: 5 }, // Limited to conserve PQAI API
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'PATENT_DRAFTING', monthlyQuota: 50000, dailyQuota: 5000 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 500, dailyQuota: 100 },
       { planCode: 'ENTERPRISE_PLAN', featureCode: 'IDEA_BANK', monthlyQuota: 200, dailyQuota: 50 },

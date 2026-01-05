@@ -71,7 +71,8 @@ const PROVIDER_COLORS: Record<string, string> = {
 
 const FEATURE_LABELS: Record<string, string> = {
   PATENT_DRAFTING: 'Patent Drafting',
-  PRIOR_ART_SEARCH: 'Novelty Search',
+  PRIOR_ART_SEARCH: 'Prior Art Search',
+  NOVELTY_SEARCH: 'Novelty Search',
   DIAGRAM_GENERATION: 'Diagram Generation',
   IDEA_BANK: 'Idea Bank',
   IDEATION: 'Ideation Engine'

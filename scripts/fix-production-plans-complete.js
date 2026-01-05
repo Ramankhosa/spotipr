@@ -40,13 +40,16 @@ const PLANS = [
 ]
 
 // Feature quotas per plan
+// NOTE: PRIOR_ART_SEARCH is for patent filing pipeline, NOVELTY_SEARCH is standalone feature (separate quotas)
 const PLAN_FEATURES = {
   'FREE_PLAN': [
     { featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 50, dailyQuota: 10 },
+    { featureCode: 'NOVELTY_SEARCH', monthlyQuota: 0, dailyQuota: 0 }, // Disabled for FREE plan
     { featureCode: 'PATENT_DRAFTING', monthlyQuota: 1000, dailyQuota: 100 }
   ],
   'PRO_PLAN': [
     { featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 1000, dailyQuota: 100 },
+    { featureCode: 'NOVELTY_SEARCH', monthlyQuota: 5, dailyQuota: 2 }, // Very limited to conserve PQAI API
     { featureCode: 'PATENT_DRAFTING', monthlyQuota: 10000, dailyQuota: 1000 },
     { featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 200, dailyQuota: 40 },
     { featureCode: 'IDEA_BANK', monthlyQuota: 50, dailyQuota: 10 },
@@ -54,6 +57,7 @@ const PLAN_FEATURES = {
   ],
   'ENTERPRISE_PLAN': [
     { featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 5000, dailyQuota: 500 },
+    { featureCode: 'NOVELTY_SEARCH', monthlyQuota: 20, dailyQuota: 5 }, // Limited to conserve PQAI API
     { featureCode: 'PATENT_DRAFTING', monthlyQuota: 50000, dailyQuota: 5000 },
     { featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 500, dailyQuota: 100 },
     { featureCode: 'IDEA_BANK', monthlyQuota: 200, dailyQuota: 50 },
@@ -62,6 +66,7 @@ const PLAN_FEATURES = {
   ],
   'TRIAL': [
     { featureCode: 'PRIOR_ART_SEARCH', monthlyQuota: 100, dailyQuota: 20 },
+    { featureCode: 'NOVELTY_SEARCH', monthlyQuota: 3, dailyQuota: 1 }, // Very limited for trial
     { featureCode: 'PATENT_DRAFTING', monthlyQuota: 5000, dailyQuota: 500 },
     { featureCode: 'DIAGRAM_GENERATION', monthlyQuota: 50, dailyQuota: 10 },
     { featureCode: 'IDEA_BANK', monthlyQuota: 20, dailyQuota: 5 },

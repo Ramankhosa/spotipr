@@ -16,7 +16,8 @@ const ROUTE_CONFIGS: Record<string, RouteMeteringConfig> = {
   '/api/patents': { featureCode: 'PATENT_DRAFTING', taskCode: 'LLM2_DRAFT' },
   '/api/search': { featureCode: 'PRIOR_ART_SEARCH' },
   '/api/diagrams': { featureCode: 'DIAGRAM_GENERATION', taskCode: 'LLM3_DIAGRAM' },
-  '/api/patents/': { featureCode: 'PRIOR_ART_SEARCH', taskCode: 'LLM4_NOVELTY_SCREEN' }, // Novelty assessment
+  '/api/novelty-search': { featureCode: 'NOVELTY_SEARCH', taskCode: 'LLM4_NOVELTY_SCREEN' }, // Standalone novelty search (separate quota)
+  '/api/patents/': { featureCode: 'NOVELTY_SEARCH', taskCode: 'LLM4_NOVELTY_SCREEN' }, // Novelty assessment in patent context
   // Add more routes as needed
 }
 
