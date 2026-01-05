@@ -84,6 +84,7 @@ const SERVICE_LABELS: Record<string, string> = {
 const FEATURE_CODES = [
   'PATENT_DRAFTING',
   'PRIOR_ART_SEARCH',
+  'NOVELTY_SEARCH',
   'DIAGRAM_GENERATION',
   'IDEA_BANK',
   'PERSONA_SYNC',
