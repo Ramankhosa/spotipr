@@ -4,7 +4,7 @@ import { requireRole } from '@/lib/middleware'
 
 export const dynamic = 'force-dynamic'
 
-const FEATURE_CODES = ['PRIOR_ART_SEARCH', 'PATENT_DRAFTING', 'IDEA_BANK', 'DIAGRAM_GENERATION', 'PERSONA_SYNC', 'PATENT_REVIEW', 'IDEATION'] as const
+const FEATURE_CODES = ['PRIOR_ART_SEARCH', 'NOVELTY_SEARCH', 'PATENT_DRAFTING', 'IDEA_BANK', 'DIAGRAM_GENERATION', 'PERSONA_SYNC', 'PATENT_REVIEW', 'IDEATION'] as const
 const PLAN_CODES = ['FREE_PLAN', 'PRO_PLAN', 'ENTERPRISE_PLAN'] as const
 
 type FeatureCode = (typeof FEATURE_CODES)[number]
