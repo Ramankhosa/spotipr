@@ -6297,7 +6297,11 @@ If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
     // After generating diagrams, also generate sketch suggestions for the Sketch tab
     let sketchSuggestions: any[] = []
     try {
-      const sketchSuggestPrompt = buildSketchSuggestionsPrompt(session)
+      // Build list of existing diagrams to avoid duplicating as sketches
+      const existingDiagramTitles = saved.map((s: any) => 
+        `Figure ${s.figureNo}: ${s.title}${s.purpose ? ` - ${s.purpose}` : ''}`
+      )
+      const sketchSuggestPrompt = buildSketchSuggestionsPrompt(session, existingDiagramTitles)
       
       const sketchResult = await llmGateway.executeLLMOperation(request, {
         taskCode: 'LLM3_DIAGRAM',
@@ -6373,59 +6377,200 @@ If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
 /**
  * Builds prompt for generating sketch suggestions based on invention context.
  * These suggestions will be shown in the Sketch tab for user to generate.
+ * 
+ * STRICT PATENT-DRAFTING MODE:
+ * - PlantUML diagrams are the controlling source of truth
+ * - No invention of new components, functions, or relationships
+ * - All suggestions must be internally consistent with existing figures
+ * - No creative "filling in" of missing details
  */
-function buildSketchSuggestionsPrompt(session: any): string {
+function buildSketchSuggestionsPrompt(session: any, existingDiagrams?: string[], referenceFigures?: { title: string; description?: string }[], existingSketches?: string[]): string {
   const idea = session.ideaRecord?.normalizedData as any
   const components = session.referenceMap?.components || []
+  
+  // Extract invention type for intelligent decision making
+  const inventionTypes = Array.isArray(idea?.inventionType) 
+    ? idea.inventionType 
+    : (idea?.inventionType ? [idea.inventionType] : [])
+  const inventionTypeStr = inventionTypes.join(', ') || 'GENERAL'
   
   const inventionSummary = [
     idea?.title && `Title: ${idea.title}`,
     idea?.problem && `Problem: ${idea.problem}`,
     idea?.objectives && `Objectives: ${idea.objectives}`,
-    idea?.logic && `Core Logic: ${idea.logic}`
+    idea?.logic && `Core Logic: ${idea.logic}`,
+    idea?.inputs && `Inputs: ${idea.inputs}`,
+    idea?.outputs && `Outputs: ${idea.outputs}`
   ].filter(Boolean).join('\n')
 
-  const componentList = components.map((c: any) => `${c.numeral || '?'}: ${c.name}`).join('\n')
+  // Build detailed component list with descriptions
+  const componentList = components.map((c: any) => {
+    const parts = [`${c.numeral || '?'}: ${c.name}`]
+    if (c.description) parts.push(`   Description: ${c.description}`)
+    if (c.parent) parts.push(`   Parent: ${c.parent}`)
+    return parts.join('\n')
+  }).join('\n')
 
-  return `You are a patent illustration expert. Based on the following invention, suggest 2-3 patent-style sketches that would be valuable for the patent application.
+  // Build reference figures section if provided
+  let referenceFiguresSection = ''
+  if (referenceFigures && referenceFigures.length > 0) {
+    referenceFiguresSection = `
+═══════════════════════════════════════════════════════════════════════════════
+USER-SELECTED REFERENCE FIGURES (Maintain consistency with these)
+═══════════════════════════════════════════════════════════════════════════════
+${referenceFigures.map((f, i) => `${i + 1}. ${f.title}${f.description ? `: ${f.description}` : ''}`).join('\n')}
+
+New sketches MUST:
+- Show different perspectives/views NOT already covered
+- Use IDENTICAL component names, numerals, and relationships as shown in these figures
+- Maintain visual and logical consistency across all figures
+`
+  }
+
+  // Build existing diagrams section - this is the SOURCE OF TRUTH
+  let existingDiagramsSection = ''
+  if (existingDiagrams && existingDiagrams.length > 0) {
+    existingDiagramsSection = `
+═══════════════════════════════════════════════════════════════════════════════
+CONTROLLING SOURCE OF TRUTH: EXISTING PLANTUML DIAGRAMS
+═══════════════════════════════════════════════════════════════════════════════
+${existingDiagrams.join('\n')}
+
+CRITICAL: These diagrams define the AUTHORITATIVE structure of the invention.
+- Every entity, label, hierarchy, connection, and interaction shown here is CANON
+- Sketches must NOT contradict, extend, or reinterpret any relationship shown
+- Do NOT suggest flowcharts/sequence diagrams (already handled by PlantUML)
+`
+  }
+
+  // Build existing sketches section - AVOID DUPLICATES
+  let existingSketchesSection = ''
+  if (existingSketches && existingSketches.length > 0) {
+    existingSketchesSection = `
+═══════════════════════════════════════════════════════════════════════════════
+ALREADY GENERATED SKETCHES (DO NOT DUPLICATE)
+═══════════════════════════════════════════════════════════════════════════════
+${existingSketches.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+
+CRITICAL: Do NOT suggest sketches that are already covered above.
+- Suggest DIFFERENT views, perspectives, or aspects of the invention
+- Focus on what is MISSING, not what already exists
+- If all meaningful sketch types are covered, return an empty array []
+`
+  }
+
+  return `You are a patent illustration expert operating under STRICT patent-drafting conventions.
 
 ═══════════════════════════════════════════════════════════════════════════════
-INVENTION CONTEXT
+STRICT PATENT-DRAFTING CONSTRAINTS (NO EXCEPTIONS)
+═══════════════════════════════════════════════════════════════════════════════
+1. DO NOT INVENT: Never add components, functions, sub-systems, or relationships
+   that are not explicitly described in the invention facts below.
+
+2. SOURCE OF TRUTH: The PlantUML diagrams (if any) are the controlling authority.
+   Preserve EXACTLY: every entity, label, hierarchy, connection, directionality,
+   and interaction as specified. Do not reinterpret or extend.
+
+3. NO CREATIVE FILL-IN: If details are missing or ambiguous, do NOT guess or
+   extrapolate. Simply omit that aspect from the sketch suggestion.
+
+4. INTERNAL CONSISTENCY: All suggested sketches must be fully consistent with
+   existing figures and the described embodiment(s). No contradictions allowed.
+
+5. PATENT NORMS: Output must adhere to USPTO/EPO/WIPO drawing conventions.
+   Physical representations only - no flowcharts, process diagrams, or UML.
+
+═══════════════════════════════════════════════════════════════════════════════
+SKETCHES vs DIAGRAMS - CRITICAL DISTINCTION
+═══════════════════════════════════════════════════════════════════════════════
+ALREADY HANDLED BY PLANTUML (DO NOT SUGGEST):
+❌ Process flows, flowcharts, activity diagrams
+❌ Sequence diagrams, state machines
+❌ System architecture block diagrams
+❌ Data flow diagrams
+❌ Any UML diagram type
+
+VALID SKETCH TYPES (Physical/Visual only):
+✓ Device/apparatus physical appearance (exterior views)
+✓ Component assembly views, exploded views
+✓ Cross-sections, cutaway views (internal physical arrangement)
+✓ Spatial arrangements, physical layouts
+✓ User interface mockups (for software with UI - screens only)
+✓ Hardware/circuit board physical layouts
+✓ Mechanical part detail views
+✓ Physical connection views (how parts physically attach)
+✓ Perspective drawings, isometric views
+✓ Installation/deployment physical arrangements
+
+═══════════════════════════════════════════════════════════════════════════════
+INVENTION FACTS (Authoritative - Do not extend or modify)
 ═══════════════════════════════════════════════════════════════════════════════
 ${inventionSummary}
 
-COMPONENTS:
+INVENTION TYPE: ${inventionTypeStr}
+
+OFFICIAL COMPONENT REGISTRY (Use ONLY these - no additions):
 ${componentList || 'No components defined yet'}
+${existingDiagramsSection}${existingSketchesSection}${referenceFiguresSection}
+═══════════════════════════════════════════════════════════════════════════════
+YOUR TASK
+═══════════════════════════════════════════════════════════════════════════════
+Analyze the invention type and facts. Then:
+
+1. IF the invention has PHYSICAL/VISUAL aspects that can be meaningfully sketched
+   using ONLY the provided components and relationships:
+   → Suggest 1-3 patent-style SKETCHES with detailed specifications
+
+2. IF the invention is PURELY ABSTRACT (algorithm, method, business process,
+   pure software logic with no UI):
+   → Return an empty array: []
+   → These are best represented by PlantUML diagrams, not sketches.
+
+INVENTION TYPE GUIDANCE:
+- MECHANICAL/HARDWARE: High potential - device views, assemblies, cross-sections
+- ELECTRICAL/ELECTRONICS: Medium-high - board layouts, housings, physical wiring
+- SOFTWARE WITH UI: Medium - interface mockups, screen layouts (UI components only)
+- SOFTWARE (backend/logic): Very low - return [] unless physical deployment relevant
+- ALGORITHM/METHOD: Return [] - no meaningful physical sketch possible
+- BUSINESS METHOD: Return [] - no meaningful physical sketch possible
+- BIO/CHEMICAL: Medium - apparatus views, equipment layouts, vessels
 
 ═══════════════════════════════════════════════════════════════════════════════
-TASK
+OUTPUT FORMAT - COMPREHENSIVE SKETCH SUGGESTIONS
 ═══════════════════════════════════════════════════════════════════════════════
-Suggest 2-3 patent-style sketches that would complement the UML diagrams. Each sketch should:
-1. Show a different view or aspect of the invention
-2. Be suitable for black-and-white line art rendering
-3. Include reference to key components with their numerals
-4. Be distinct from typical UML/flowchart diagrams
+Return a JSON array with 0-3 sketch suggestions.
 
-═══════════════════════════════════════════════════════════════════════════════
-OUTPUT FORMAT
-═══════════════════════════════════════════════════════════════════════════════
-Return a JSON array with 2-3 sketch suggestions:
+CRITICAL: The "description" field must be COMPREHENSIVE and include ALL drawing
+instructions. This description is passed directly to the image generator.
+
+FORMAT:
 [
   {
-    "title": "System Block Diagram with Physical Layout",
-    "description": "A high-level view showing the physical arrangement of components 100, 200, and 300, illustrating how they connect and interact in the actual implementation."
-  },
-  {
-    "title": "Data Flow Illustration",
-    "description": "Shows the flow of data between the input module (100), processing unit (200), and output interface (300), with arrows indicating data direction."
+    "title": "Concise title with view type (e.g., 'Device Assembly - Front Isometric View')",
+    "description": "COMPREHENSIVE drawing instructions including: VIEW TYPE AND ANGLE (e.g., front-right isometric at 30° elevation), COMPONENTS TO SHOW (list all numerals), PRIMARY FOCUS (main component), PHYSICAL RELATIONSHIPS (only from invention facts), SECONDARY VIEW (if applicable), DETAIL LEVEL (schematic/simplified/medium). All in one detailed paragraph."
   }
 ]
 
-IMPORTANT:
-- Each title should be concise and descriptive
-- Each description should be 2-3 sentences explaining what the sketch will show
-- Reference specific component numerals from the invention
-- Focus on views that would be difficult to represent in UML but valuable in a patent
+EXAMPLE OF GOOD SUGGESTION:
+{
+  "title": "Housing Assembly - Front-Right Isometric View",
+  "description": "VIEW: Front-right isometric view at approximately 30° elevation showing the complete assembled device. COMPONENTS: Show housing (100), controller unit (200), sensor array (300), and power module (400). PRIMARY FOCUS: Housing assembly (100) as the main structural element containing all other components. PHYSICAL RELATIONSHIPS: Controller (200) mounted on internal bracket within housing (100); sensor array (300) attached to front panel of housing; power module (400) connected to controller via internal wiring channel. SECONDARY VIEW: Include partial cutaway revealing controller (200) position inside housing. DETAIL LEVEL: Medium - show external features clearly, use dashed lines for internal components visible through cutaway. Use ONLY the listed components, no additional sub-parts or invented details."
+}
+
+IF no meaningful sketch is possible (abstract invention):
+[]
+
+═══════════════════════════════════════════════════════════════════════════════
+VALIDATION RULES (Self-check before output)
+═══════════════════════════════════════════════════════════════════════════════
+✓ Every component numeral referenced exists in the OFFICIAL COMPONENT REGISTRY
+✓ Every physical relationship is explicitly stated in invention facts or PlantUML
+✓ No new components, sub-components, or connections invented
+✓ View type is a valid physical representation (NOT a flowchart/diagram)
+✓ Suggestion is fully consistent with all existing PlantUML diagrams
+✓ No speculation or creative interpretation of missing details
+✓ Description is comprehensive enough for image generation
+✓ Return [] if invention is purely abstract with no physical aspects
 
 Return ONLY the JSON array, no other text.`
 }
@@ -7707,7 +7852,7 @@ async function checkSketchAccess(user: any): Promise<NextResponse | null> {
  * Generate sketch in AUTO mode - uses invention context only
  */
 async function handleGenerateSketch(user: any, patentId: string, data: any) {
-  const { sessionId, title, viewsRequested, contextFlags } = data
+  const { sessionId, title, viewsRequested, contextFlags, referenceSketchIds } = data
 
   // Check DIAGRAM_GENERATION feature access (plan tier control)
   const accessDenied = await checkSketchAccess(user)
@@ -7732,7 +7877,8 @@ async function handleGenerateSketch(user: any, patentId: string, data: any) {
       mode: 'AUTO',
       title: title || 'Auto-generated Sketch',
       contextFlags: contextFlags as SketchContextFlags,
-      viewsRequested: viewsRequested as SketchViewConfig
+      viewsRequested: viewsRequested as SketchViewConfig,
+      referenceSketchIds: Array.isArray(referenceSketchIds) ? referenceSketchIds : undefined
     }, user.id, (session as any).tenantId)
 
     if (result.success) {
@@ -7761,7 +7907,7 @@ async function handleGenerateSketch(user: any, patentId: string, data: any) {
  * Generate sketch in GUIDED mode - uses context + user instructions
  */
 async function handleGenerateSketchGuided(user: any, patentId: string, data: any) {
-  const { sessionId, title, userPrompt, viewsRequested, contextFlags } = data
+  const { sessionId, title, userPrompt, viewsRequested, contextFlags, referenceSketchIds } = data
 
   // Check DIAGRAM_GENERATION feature access (plan tier control)
   const accessDenied = await checkSketchAccess(user)
@@ -7791,7 +7937,8 @@ async function handleGenerateSketchGuided(user: any, patentId: string, data: any
       title: title || 'Guided Sketch',
       userPrompt,
       contextFlags: contextFlags as SketchContextFlags,
-      viewsRequested: viewsRequested as SketchViewConfig
+      viewsRequested: viewsRequested as SketchViewConfig,
+      referenceSketchIds: Array.isArray(referenceSketchIds) ? referenceSketchIds : undefined
     }, user.id, (session as any).tenantId)
 
     if (result.success) {
@@ -8247,7 +8394,7 @@ async function handleGenerateFromSuggestion(user: any, patentId: string, data: a
  * Uses the DRAFT_FIGURE_PLANNER LLM tag for proper routing.
  */
 async function handleGenerateSketchSuggestions(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId } = data
+  const { sessionId, referenceFigureIds } = data
 
   if (!sessionId) {
     return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
@@ -8258,7 +8405,12 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
       where: { id: sessionId, patentId, userId: user.id },
       include: {
         ideaRecord: true,
-        referenceMap: true
+        referenceMap: true,
+        figurePlans: true,
+        diagramSources: true,
+        sketchRecords: {
+          where: { isDeleted: false, status: 'SUCCESS' }
+        }
       }
     })
 
@@ -8266,8 +8418,44 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
       return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
     }
 
-    // Build the sketch suggestions prompt
-    const prompt = buildSketchSuggestionsPrompt(session)
+    // Build list of existing PlantUML diagram titles (to avoid duplicating as sketches)
+    const existingDiagrams = (session.figurePlans || []).map((fp: any) => 
+      `Figure ${fp.figureNo}: ${fp.title}${fp.description ? ` - ${fp.description}` : ''}`
+    )
+
+    // Build list of existing sketches (to avoid duplicating suggestions)
+    const existingSketches = (session.sketchRecords || [])
+      .filter((sk: any) => sk.status === 'SUCCESS' && !sk.isDeleted)
+      .map((sk: any) => 
+        `${sk.title || 'Untitled Sketch'}${sk.description ? `: ${sk.description}` : ''}`
+      )
+
+    // Build reference figures if user selected any
+    let referenceFigures: { title: string; description?: string }[] = []
+    if (referenceFigureIds && Array.isArray(referenceFigureIds) && referenceFigureIds.length > 0) {
+      // Fetch selected diagrams
+      const selectedDiagrams = (session.figurePlans || []).filter((fp: any) => 
+        referenceFigureIds.includes(fp.id) || referenceFigureIds.includes(fp.figureNo?.toString())
+      )
+      // Fetch selected sketches
+      const selectedSketches = (session.sketchRecords || []).filter((sk: any) =>
+        referenceFigureIds.includes(sk.id)
+      )
+      
+      referenceFigures = [
+        ...selectedDiagrams.map((fp: any) => ({ 
+          title: fp.title, 
+          description: fp.description 
+        })),
+        ...selectedSketches.map((sk: any) => ({ 
+          title: sk.title, 
+          description: sk.description 
+        }))
+      ]
+    }
+
+    // Build the sketch suggestions prompt with context (including existing sketches)
+    const prompt = buildSketchSuggestionsPrompt(session, existingDiagrams, referenceFigures, existingSketches)
 
     // Use LLM gateway with the correct tag for Figure Planning
     const { llmGateway } = await import('@/lib/metering/gateway')

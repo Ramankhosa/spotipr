@@ -37,7 +37,8 @@ import {
   HelpCircle,
   Paintbrush,
   Languages,
-  Lightbulb
+  Lightbulb,
+  Link2
 } from 'lucide-react'
 
 // DnD Kit imports
@@ -216,6 +217,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [modifyingSketchId, setModifyingSketchId] = useState<string | null>(null)
   const [modifySketchPrompt, setModifySketchPrompt] = useState('')
   const sketchFileInputRef = useRef<HTMLInputElement>(null)
+  // Reference figure selection for sketch suggestions
+  const [showReferenceSelector, setShowReferenceSelector] = useState(false)
+  const [selectedReferenceFigures, setSelectedReferenceFigures] = useState<string[]>([])
+  // Reference sketch selection for visual style consistency (passes actual images to AI)
+  const [selectedReferenceSketchIds, setSelectedReferenceSketchIds] = useState<string[]>([])
 
   // === IMAGE EDITOR STATE ===
   const [imageEditorOpen, setImageEditorOpen] = useState(false)
@@ -1091,7 +1097,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           useClaims: true,
           useDiagrams: true,
           useComponents: true
-        }
+        },
+        // Pass selected reference sketch IDs for visual style consistency
+        referenceSketchIds: selectedReferenceSketchIds.length > 0 ? selectedReferenceSketchIds : undefined
       }
       
       if (sketchMode === 'guided') {
@@ -1163,7 +1171,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         },
         body: JSON.stringify({
           action: 'generate_sketch_suggestions',
-          sessionId: session.id
+          sessionId: session.id,
+          // Pass selected reference figures (optional)
+          referenceFigureIds: selectedReferenceFigures.length > 0 ? selectedReferenceFigures : undefined
         })
       })
 
@@ -1172,6 +1182,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       const data = await res.json()
       if (data.suggestions && Array.isArray(data.suggestions)) {
         setSketchSuggestions(data.suggestions)
+        // Close reference selector after generating
+        setShowReferenceSelector(false)
       }
     } catch (err) {
       setSuggestionsError(err instanceof Error ? err.message : 'Failed to generate sketch suggestions')
@@ -1299,7 +1311,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     }
   }
 
-  // Handle generating image from a SUGGESTED sketch
+  // Handle generating image from a SUGGESTED sketch (DB-stored)
   const [generatingSuggestionId, setGeneratingSuggestionId] = useState<string | null>(null)
   
   const handleGenerateFromSuggestion = async (sketchId: string) => {
@@ -1330,6 +1342,56 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setSketchError(err instanceof Error ? err.message : 'Failed to generate sketch from suggestion')
     } finally {
       setGeneratingSuggestionId(null)
+    }
+  }
+
+  // Handle generating image from a MANUAL suggestion (from sketchSuggestions state)
+  const [generatingManualSuggestionIdx, setGeneratingManualSuggestionIdx] = useState<number | null>(null)
+  
+  const handleGenerateFromManualSuggestion = async (suggestion: { title: string; description: string }, index: number) => {
+    if (!session?.id) return
+    
+    try {
+      setGeneratingManualSuggestionIdx(index)
+      setSketchError(null)
+      
+      // Use guided mode with the suggestion description as the prompt
+      const res = await fetch(`/api/patents/${patent.id}/drafting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({
+          action: 'generate_sketch_guided',
+          sessionId: session.id,
+          title: suggestion.title,
+          userPrompt: suggestion.description,
+          contextFlags: {
+            useIdeaSummary: true,
+            useClaims: true,
+            useDiagrams: true,
+            useComponents: true
+          },
+          referenceSketchIds: selectedReferenceSketchIds.length > 0 ? selectedReferenceSketchIds : undefined
+        })
+      })
+      
+      const data = await res.json()
+      
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to generate sketch')
+      }
+      
+      // Remove the generated suggestion from the list
+      setSketchSuggestions(prev => prev.filter((_, i) => i !== index))
+      
+      // Refresh sketches list
+      await loadSketches()
+    } catch (err) {
+      setSketchError(err instanceof Error ? err.message : 'Failed to generate sketch from suggestion')
+    } finally {
+      setGeneratingManualSuggestionIdx(null)
     }
   }
 
@@ -2934,28 +2996,136 @@ Now output the JSON array.`
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Generate Suggestions Button */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Button
-                    onClick={handleGenerateSketchSuggestions}
-                    disabled={suggestionsLoading}
-                    variant="outline"
-                    className="gap-2"
-                  >
-                    {suggestionsLoading ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-4 h-4" />
+              {/* Generate Suggestions Section */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={handleGenerateSketchSuggestions}
+                      disabled={suggestionsLoading}
+                      variant="outline"
+                      className="gap-2"
+                    >
+                      {suggestionsLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-4 h-4" />
+                      )}
+                      Generate Suggestions
+                    </Button>
+                    <Button
+                      onClick={() => setShowReferenceSelector(!showReferenceSelector)}
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 text-xs"
+                      title="Add context from existing figures to generate complementary sketch ideas"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      {selectedReferenceFigures.length > 0 
+                        ? `${selectedReferenceFigures.length} context refs` 
+                        : 'Add Context'}
+                    </Button>
+                    {sketchSuggestions.length > 0 && (
+                      <Badge variant="secondary" className="ml-2">
+                        {sketchSuggestions.length} suggestions
+                      </Badge>
                     )}
-                    Generate Suggestions
-                  </Button>
-                  {sketchSuggestions.length > 0 && (
-                    <Badge variant="secondary" className="ml-2">
-                      {sketchSuggestions.length} suggestions
-                    </Badge>
-                  )}
+                  </div>
                 </div>
+
+                {/* Optional Reference Figure Selector - for AI suggestions context (text only) */}
+                {showReferenceSelector && (
+                  <div className="p-3 border rounded-lg bg-slate-50 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-medium text-gray-600">
+                        Context for Suggestions (optional)
+                      </Label>
+                      {selectedReferenceFigures.length > 0 && (
+                        <button 
+                          onClick={() => setSelectedReferenceFigures([])}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Select existing figures to help AI understand what views already exist. This helps generate complementary sketch <em>ideas</em>.
+                    </p>
+                    <div className="max-h-40 overflow-y-auto space-y-1">
+                      {/* Show existing diagrams */}
+                      {Object.keys(diagramsByFigure).map((figNoStr) => {
+                        const figNo = Number(figNoStr)
+                        const sources = diagramsByFigure[figNo] || []
+                        const source = sources[0]
+                        const figurePlan = session?.figurePlans?.find((fp: any) => fp.figureNo === figNo)
+                        const title = figurePlan?.title || source?.figurePlan?.title || `Figure ${figNo}`
+                        const figId = `diagram-${figNo}`
+                        const isSelected = selectedReferenceFigures.includes(figId)
+                        
+                        return (
+                          <label 
+                            key={figId} 
+                            className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
+                              isSelected ? 'bg-indigo-100 border-indigo-200' : 'hover:bg-gray-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedReferenceFigures([...selectedReferenceFigures, figId])
+                                } else {
+                                  setSelectedReferenceFigures(selectedReferenceFigures.filter(id => id !== figId))
+                                }
+                              }}
+                              className="rounded border-gray-300"
+                            />
+                            <span className="text-xs">
+                              <span className="font-medium">Fig {figNo}:</span> {title}
+                              <Badge variant="outline" className="ml-1 text-[10px]">Diagram</Badge>
+                            </span>
+                          </label>
+                        )
+                      })}
+                      {/* Show existing sketches */}
+                      {sketches.filter(s => s.status === 'SUCCESS').map((sketch) => {
+                        const sketchId = sketch.id
+                        const isSelected = selectedReferenceFigures.includes(sketchId)
+                        
+                        return (
+                          <label 
+                            key={sketchId} 
+                            className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
+                              isSelected ? 'bg-amber-100 border-amber-200' : 'hover:bg-gray-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedReferenceFigures([...selectedReferenceFigures, sketchId])
+                                } else {
+                                  setSelectedReferenceFigures(selectedReferenceFigures.filter(id => id !== sketchId))
+                                }
+                              }}
+                              className="rounded border-gray-300"
+                            />
+                            <span className="text-xs">
+                              <span className="font-medium">{sketch.title}</span>
+                              <Badge variant="outline" className="ml-1 text-[10px] bg-amber-50">Sketch</Badge>
+                            </span>
+                          </label>
+                        )
+                      })}
+                      {Object.keys(diagramsByFigure).length === 0 && sketches.filter(s => s.status === 'SUCCESS').length === 0 && (
+                        <p className="text-xs text-gray-400 italic p-2">No existing figures to reference</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Mode Selector */}
@@ -3003,16 +3173,28 @@ Now output the JSON array.`
                 </Alert>
               )}
 
-              {/* Sketch Suggestions */}
+              {/* Sketch Suggestions - with Generate Image buttons */}
               {sketchSuggestions.length > 0 && (
                 <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Lightbulb className="w-4 h-4 text-amber-600" />
-                    <Label className="text-sm font-medium text-gray-700">Sketch Suggestions</Label>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Lightbulb className="w-4 h-4 text-amber-600" />
+                      <Label className="text-sm font-medium text-gray-700">Sketch Suggestions</Label>
+                      <Badge variant="secondary" className="text-xs">{sketchSuggestions.length}</Badge>
+                    </div>
+                    <button
+                      onClick={() => setSketchSuggestions([])}
+                      className="text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      Clear all
+                    </button>
                   </div>
+                  <p className="text-xs text-gray-500">
+                    Click &quot;Generate Image&quot; to create an actual sketch from each suggestion.
+                  </p>
                   <div className="grid gap-3">
                     {sketchSuggestions.map((suggestion, index) => (
-                      <Card key={index} className="border-amber-200 bg-amber-50/50">
+                      <Card key={index} className="border-amber-200 bg-amber-50/50 overflow-hidden">
                         <CardContent className="p-4">
                           <div className="flex items-start gap-3">
                             <div className="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -3020,7 +3202,53 @@ Now output the JSON array.`
                             </div>
                             <div className="flex-1">
                               <h4 className="font-medium text-gray-900 mb-1">{suggestion.title}</h4>
-                              <p className="text-sm text-gray-600 leading-relaxed">{suggestion.description}</p>
+                              <p className="text-sm text-gray-600 leading-relaxed mb-3">{suggestion.description}</p>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  className="bg-amber-600 hover:bg-amber-700 text-white gap-1"
+                                  onClick={() => handleGenerateFromManualSuggestion(suggestion, index)}
+                                  disabled={generatingManualSuggestionIdx !== null || sketchGenerating}
+                                >
+                                  {generatingManualSuggestionIdx === index ? (
+                                    <>
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      Generating...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Wand2 className="w-3 h-3" />
+                                      Generate Image
+                                    </>
+                                  )}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-gray-500 hover:text-gray-700"
+                                  onClick={() => {
+                                    // Pre-fill the form with suggestion data for customization
+                                    setSketchTitle(suggestion.title)
+                                    setSketchPrompt(suggestion.description)
+                                    setSketchMode('guided')
+                                    // Remove from suggestions
+                                    setSketchSuggestions(prev => prev.filter((_, i) => i !== index))
+                                  }}
+                                  disabled={generatingManualSuggestionIdx !== null}
+                                >
+                                  <Edit2 className="w-3 h-3 mr-1" />
+                                  Customize
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-gray-400 hover:text-red-500"
+                                  onClick={() => setSketchSuggestions(prev => prev.filter((_, i) => i !== index))}
+                                  disabled={generatingManualSuggestionIdx !== null}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         </CardContent>
@@ -3108,6 +3336,84 @@ Now output the JSON array.`
                           <p className="text-xs text-gray-400">PNG, JPEG, WebP up to 10MB</p>
                         </div>
                       )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Reference Sketch Selection - for visual style consistency */}
+                {sketches.filter(s => s.status === 'SUCCESS').length > 0 && (
+                  <div className="border border-amber-200 bg-amber-50/30 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Link2 className="w-4 h-4 text-amber-600" />
+                        <Label className="text-sm font-medium text-gray-700">
+                          Style Reference (Optional)
+                        </Label>
+                        {selectedReferenceSketchIds.length > 0 && (
+                          <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-xs">
+                            {selectedReferenceSketchIds.length} selected
+                          </Badge>
+                        )}
+                      </div>
+                      {selectedReferenceSketchIds.length > 0 && (
+                        <button 
+                          onClick={() => setSelectedReferenceSketchIds([])}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-600">
+                      Select existing sketches to maintain <strong>visual consistency</strong> (line style, shading, layout). 
+                      Selected images are passed to the AI to match the same drawing style.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {sketches.filter(s => s.status === 'SUCCESS').map((sketch) => {
+                        const isSelected = selectedReferenceSketchIds.includes(sketch.id)
+                        return (
+                          <div
+                            key={sketch.id}
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedReferenceSketchIds(selectedReferenceSketchIds.filter(id => id !== sketch.id))
+                              } else {
+                                setSelectedReferenceSketchIds([...selectedReferenceSketchIds, sketch.id])
+                              }
+                            }}
+                            className={`relative cursor-pointer rounded-lg border-2 overflow-hidden transition-all ${
+                              isSelected 
+                                ? 'border-amber-500 ring-2 ring-amber-200 scale-105' 
+                                : 'border-gray-200 hover:border-amber-300'
+                            }`}
+                            title={sketch.title || 'Untitled Sketch'}
+                          >
+                            <div className="w-16 h-16 bg-gray-100 flex items-center justify-center">
+                              {sketch.imagePath ? (
+                                <img
+                                  src={sketch.imagePath}
+                                  alt={sketch.title || 'Sketch'}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <Wand2 className="w-6 h-6 text-gray-400" />
+                              )}
+                            </div>
+                            {isSelected && (
+                              <div className="absolute inset-0 bg-amber-500/20 flex items-center justify-center">
+                                <div className="w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
+                                  <Check className="w-3 h-3 text-white" />
+                                </div>
+                              </div>
+                            )}
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                              <p className="text-[9px] text-white truncate text-center">
+                                {sketch.title?.slice(0, 12) || 'Sketch'}
+                              </p>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}

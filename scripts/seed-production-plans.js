@@ -30,6 +30,7 @@ async function seedProductionPlans() {
     console.log('1. Ensuring features...')
     const featureDefs = [
       { code: 'PRIOR_ART_SEARCH', name: 'Patent and Literature Search', unit: 'queries' },
+      { code: 'NOVELTY_SEARCH', name: 'Standalone Novelty Search', unit: 'searches' }, // Separate from PRIOR_ART_SEARCH
       { code: 'PATENT_DRAFTING', name: 'AI-Assisted Patent Drafting', unit: 'tokens' },
       { code: 'DIAGRAM_GENERATION', name: 'Technical Diagram Generation', unit: 'diagrams' },
       { code: 'IDEA_BANK', name: 'Idea Bank Access', unit: 'reservations' },

@@ -425,7 +425,8 @@ export function areClaimsFrozen(normalizedData: Record<string, any> | null | und
  */
 export function buildNormalizedDataBlock(
   normalizedData: Record<string, any> | null | undefined,
-  idea: Record<string, any> | null | undefined
+  idea: Record<string, any> | null | undefined,
+  existingSections?: Record<string, string> | null | undefined
 ): string {
   if (!normalizedData && !idea) return ''
 
@@ -434,8 +435,10 @@ export function buildNormalizedDataBlock(
 
   const parts: string[] = []
 
-  // Title
-  const title = ideaData.title || nd.title
+  // Title - IMPORTANT: Use AI-generated title from existingSections if available,
+  // as this is the drafting-stage refined title that should be used for consistency
+  const aiGeneratedTitle = existingSections?.title?.trim()
+  const title = aiGeneratedTitle || ideaData.title || nd.title
   if (title && typeof title === 'string' && title.trim()) {
     parts.push(`Title: ${title.trim()}`)
   }
@@ -573,7 +576,8 @@ ${modeInstruction}
 export function buildUniversalDraftingBundle(
   sectionKey: string,
   normalizedData: Record<string, any> | null | undefined,
-  idea: Record<string, any> | null | undefined
+  idea: Record<string, any> | null | undefined,
+  existingSections?: Record<string, string> | null | undefined
 ): { block: string; gated: boolean; gateReason?: string } {
   // Validate inputs
   if (!sectionKey) {
@@ -596,8 +600,9 @@ export function buildUniversalDraftingBundle(
   const parts: string[] = []
 
   // Add Normalized Data block if enabled
+  // Pass existingSections to use AI-generated title if available
   if (config.injectNormalizedData) {
-    const ndBlock = buildNormalizedDataBlock(normalizedData, idea)
+    const ndBlock = buildNormalizedDataBlock(normalizedData, idea, existingSections)
     if (ndBlock && ndBlock.trim()) {
       parts.push(ndBlock)
     }

@@ -2158,8 +2158,16 @@ async function seedCountrySectionMappings() {
 async function seedSectionPrompts() {
   printHeader('📝 STEP 4: Seeding Country Section Prompts (Top-ups)');
 
+  // Only include actual country profile JSON files (2-letter or 3-letter country codes)
+  // Exclude db-*, backup, sample, template, and exported files
   const files = fs.readdirSync(COUNTRIES_DIR)
-    .filter(f => f.endsWith('.json') && !f.startsWith('TEMPLATE') && !f.includes('backup') && !f.includes('sample'));
+    .filter(f => f.endsWith('.json') && 
+      !f.startsWith('TEMPLATE') && 
+      !f.startsWith('db-') && 
+      !f.startsWith('exported-') &&
+      !f.includes('backup') && 
+      !f.includes('sample') &&
+      !f.includes('seed'));
 
   let created = 0, updated = 0, skipped = 0;
 
@@ -2250,9 +2258,16 @@ async function seedSectionPrompts() {
 async function seedCountryProfiles(systemUserId) {
   printHeader('📋 STEP 5: Seeding Country Profiles');
 
-  // Only seed profiles from dedicated JSON files (AU, CA, IN, JP, PCT, US)
+  // Only seed profiles from dedicated country JSON files (AU, CA, IN, JP, PCT, US)
+  // Exclude db-*, backup, sample, template, exported, and seed files
   const files = fs.readdirSync(COUNTRIES_DIR)
-    .filter(f => f.endsWith('.json') && !f.startsWith('TEMPLATE') && !f.includes('backup') && !f.includes('sample') && !f.startsWith('db-'));
+    .filter(f => f.endsWith('.json') && 
+      !f.startsWith('TEMPLATE') && 
+      !f.startsWith('db-') && 
+      !f.startsWith('exported-') &&
+      !f.includes('backup') && 
+      !f.includes('sample') &&
+      !f.includes('seed'));
 
   let created = 0, updated = 0, skipped = 0;
 
@@ -2333,8 +2348,16 @@ async function seedJurisdictionStyles() {
     return { created: 0, updated: 0, skipped: 0 };
   }
 
+  // Only include actual country profile JSON files
+  // Exclude db-*, backup, sample, template, and exported files
   const files = fs.readdirSync(COUNTRIES_DIR)
-    .filter(f => f.endsWith('.json') && !f.startsWith('TEMPLATE') && !f.includes('backup') && !f.includes('sample'));
+    .filter(f => f.endsWith('.json') && 
+      !f.startsWith('TEMPLATE') && 
+      !f.startsWith('db-') && 
+      !f.startsWith('exported-') &&
+      !f.includes('backup') && 
+      !f.includes('sample') &&
+      !f.includes('seed'));
 
   let totalCreated = 0, totalUpdated = 0, totalSkipped = 0;
 

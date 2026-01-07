@@ -2175,7 +2175,8 @@ ${contextParts.join('\n\n')}
     // UNIVERSAL DRAFTING BUNDLE (UDB) - Normalized Data + Claim 1
     // ══════════════════════════════════════════════════════════════════════════════
     const normalizedData = idea.normalizedData || {}
-    const udbResult = buildUniversalDraftingBundle(sectionKey, normalizedData, idea)
+    // Pass existingSections so the AI-generated title (if available) is used
+    const udbResult = buildUniversalDraftingBundle(sectionKey, normalizedData, idea, existingSections)
     
     // Check gating: if section requires Claim 1 but it's missing, return error
     if (udbResult.gated) {
@@ -2189,7 +2190,8 @@ ${contextParts.join('\n\n')}
     console.log(`[generateReferenceDraftSection] UDB injection for "${sectionKey}":`, {
       hasUDBBlock: !!udbResult.block,
       blockLength: udbResult.block?.length || 0,
-      claim1Available: isClaim1Available(normalizedData)
+      claim1Available: isClaim1Available(normalizedData),
+      usingAIGeneratedTitle: !!(existingSections?.title)
     })
 
     // ======================================================================

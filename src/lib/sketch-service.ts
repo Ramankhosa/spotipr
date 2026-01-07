@@ -55,6 +55,7 @@ export interface SketchGenerationRequest {
   uploadedImageBase64?: string // For REFINE mode
   uploadedImageMimeType?: string
   language?: string // Primary language for labels/annotations (from Stage 0)
+  referenceSketchIds?: string[] // Already-generated sketch IDs to use as visual style references
 }
 
 export interface SketchContextBundle {
@@ -778,13 +779,15 @@ async function recordSketchUsage(
  * @param modelCandidates - Ordered list of models to try (from model resolver)
  * @param inputImage - Optional input image for REFINE/MODIFY modes
  * @param gatewayContext - Tenant and user IDs for gateway enforcement
+ * @param referenceImages - Optional array of reference sketch images for visual style consistency
  */
 export async function generateSketchWithGemini(
   systemPrompt: string,
   userPrompt: string,
   modelCandidates: string[],
   inputImage?: { base64: string; mimeType: string },
-  gatewayContext?: { tenantId?: string; userId?: string }
+  gatewayContext?: { tenantId?: string; userId?: string },
+  referenceImages?: Array<{ base64: string; mimeType: string; title?: string }>
 ): Promise<SketchGenerationResponse> {
   // 1. Enforce access through LLM Gateway
   const accessCheck = await enforceSketchAccess(
@@ -837,6 +840,19 @@ export async function generateSketchWithGemini(
           { text: fullPrompt }
         ]
 
+        // Add reference sketch images for visual style consistency
+        if (referenceImages && referenceImages.length > 0) {
+          console.log(`[SketchService] Including ${referenceImages.length} reference sketch(es) for style consistency`)
+          for (const refImg of referenceImages) {
+            parts.push({
+              inlineData: {
+                mimeType: refImg.mimeType,
+                data: refImg.base64
+              }
+            })
+          }
+        }
+
         // Add input image for REFINE/MODIFY modes
         if (inputImage) {
           console.log(`[SketchService] Including source image for modification (${inputImage.mimeType})`)
@@ -848,7 +864,8 @@ export async function generateSketchWithGemini(
           })
         }
 
-        console.log(`[SketchService] Calling ${modelCode} (attempt ${attempt}/${maxRetries})${inputImage ? ' with source image' : ''}...`)
+        const refCount = referenceImages?.length || 0
+        console.log(`[SketchService] Calling ${modelCode} (attempt ${attempt}/${maxRetries})${inputImage ? ' with source image' : ''}${refCount > 0 ? ` with ${refCount} reference(s)` : ''}...`)
         
         const result = await model.generateContent(parts)
         const response = result.response
@@ -962,7 +979,7 @@ export async function generateSketch(
   userId: string,
   tenantId?: string
 ): Promise<SketchGenerationResult> {
-  const { patentId, sessionId, mode, title, userPrompt, contextFlags, viewsRequested, sourceSketchId, uploadedImageBase64, uploadedImageMimeType } = request
+  const { patentId, sessionId, mode, title, userPrompt, contextFlags, viewsRequested, sourceSketchId, uploadedImageBase64, uploadedImageMimeType, referenceSketchIds } = request
 
   // 1. Validate inputs based on mode
   if (mode === 'REFINE' && !uploadedImageBase64) {
@@ -1091,6 +1108,48 @@ export async function generateSketch(
       data: { aiPromptUsed: userPromptFinal }
     })
 
+    // 7.5. Load reference sketch images for visual style consistency
+    let referenceImages: Array<{ base64: string; mimeType: string; title?: string }> = []
+    if (referenceSketchIds && referenceSketchIds.length > 0) {
+      console.log(`[SketchService] Loading ${referenceSketchIds.length} reference sketches for style consistency...`)
+      const referenceSketches = await prisma.sketchRecord.findMany({
+        where: {
+          id: { in: referenceSketchIds },
+          status: 'SUCCESS',
+          isDeleted: false
+        },
+        select: { id: true, imagePath: true, title: true }
+      })
+      
+      for (const refSketch of referenceSketches) {
+        if (refSketch.imagePath) {
+          const imagePath = path.join('public', refSketch.imagePath)
+          try {
+            const imageBuffer = await fs.readFile(imagePath)
+            referenceImages.push({
+              base64: imageBuffer.toString('base64'),
+              mimeType: 'image/png',
+              title: refSketch.title || undefined
+            })
+            console.log(`[SketchService] Loaded reference sketch: ${refSketch.title || refSketch.id}`)
+          } catch (e) {
+            console.warn(`[SketchService] Could not load reference sketch ${refSketch.id}:`, e)
+          }
+        }
+      }
+
+      // Add reference style instructions to prompt if we have reference images
+      if (referenceImages.length > 0) {
+        const refTitles = referenceImages.map(r => r.title).filter(Boolean).join(', ')
+        userPromptFinal = `${userPromptFinal}
+
+VISUAL STYLE REFERENCES:
+The following ${referenceImages.length} image(s) are provided as VISUAL STYLE REFERENCES.
+Maintain CONSISTENT visual style, line weight, shading technique, and overall aesthetic with these reference sketches${refTitles ? ` (${refTitles})` : ''}.
+The new sketch should look like it belongs to the same set of figures as these references.`
+      }
+    }
+
     // 8. Generate sketch with gateway enforcement for policy/quota/metering
     // Title and description are already set from suggestion or user input
     const result = await generateSketchWithGemini(
@@ -1098,7 +1157,8 @@ export async function generateSketch(
       userPromptFinal, 
       modelCandidates, 
       inputImage,
-      { tenantId, userId } // Gateway context for DIAGRAM_GENERATION feature access
+      { tenantId, userId }, // Gateway context for DIAGRAM_GENERATION feature access
+      referenceImages // Pass reference images for visual style consistency
     )
 
     // 9. Update record based on result
@@ -1545,13 +1605,34 @@ export async function generateFromSuggestion(
 /**
  * Builds a focused prompt from a sketch suggestion.
  * Uses the pre-defined title and description along with full invention context.
+ * 
+ * STRICT PATENT-DRAFTING MODE:
+ * - No invention of new components beyond the official registry
+ * - Existing diagrams are the source of truth for relationships
+ * - No creative fill-in of missing details
  */
 function buildPromptFromSuggestion(
   context: SketchContextBundle,
   title: string,
   description: string
 ): string {
-  let prompt = `Generate a USPTO/EPO/WIPO-compliant patent line drawing.
+  let prompt = `Generate a USPTO/EPO/WIPO-compliant patent line drawing under STRICT patent-drafting conventions.
+
+═══════════════════════════════════════════════════════════════════════════════
+STRICT PATENT-DRAFTING CONSTRAINTS (MANDATORY)
+═══════════════════════════════════════════════════════════════════════════════
+1. DO NOT INVENT: Never add components, sub-components, features, or relationships
+   not explicitly listed in the OFFICIAL COMPONENT REGISTRY below.
+
+2. NO CREATIVE FILL-IN: If physical details are missing or ambiguous, use
+   simplified block/schematic representation. Do NOT guess or extrapolate.
+
+3. INTERNAL CONSISTENCY: This sketch must be fully consistent with any existing
+   PlantUML diagrams. Do not contradict, extend, or reinterpret any defined
+   entity, hierarchy, connection, or interaction.
+
+4. PRESERVE EXACTLY: Every component name, numeral, and relationship must match
+   the authoritative invention facts. No renaming, no re-numbering.
 
 ${buildLanguageRequirementSection(context)}
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1561,59 +1642,93 @@ Title: ${title}
 Description: ${description}
 
 ═══════════════════════════════════════════════════════════════════════════════
-INVENTION CONTEXT
+AUTHORITATIVE INVENTION CONTEXT (Source of Truth)
 ═══════════════════════════════════════════════════════════════════════════════
 ${context.ideaSummary}
+
+INVENTION TYPE: ${context.inventionType}
 
 `
 
   if (context.keyComponents.length > 0) {
-    prompt += `KEY COMPONENTS (use ONLY these):
-${context.keyComponents.map(c => `- ${c}`).join('\n')}
+    prompt += `═══════════════════════════════════════════════════════════════════════════════
+OFFICIAL COMPONENT REGISTRY (Use ONLY these - NO additions allowed)
+═══════════════════════════════════════════════════════════════════════════════
+${context.keyComponents.map(c => `• ${c}`).join('\n')}
+
+CRITICAL: Every component in your drawing MUST exist in this registry.
+Do NOT add sub-components, internal parts, or details not listed above.
 
 `
   }
 
   if (Object.keys(context.referenceNumerals).length > 0) {
-    prompt += `REFERENCE NUMERALS (use ONLY these numbers as labels):
+    prompt += `═══════════════════════════════════════════════════════════════════════════════
+OFFICIAL REFERENCE NUMERALS (Use EXACTLY these labels)
+═══════════════════════════════════════════════════════════════════════════════
 ${Object.entries(context.referenceNumerals).map(([num, name]) => `${num} → ${name}`).join('\n')}
 
-IMPORTANT: In the drawing, use ONLY the numeric labels (#100, #200, etc.), NOT the component names.
+LABELING RULES:
+• Use ONLY the numeric labels shown above (e.g., 100, 200, 300)
+• NO text labels, part names, or descriptions in the drawing
+• NO invented numerals for unlisted components
+• Each label must point to exactly the component it represents
+
 `
   }
 
   if (context.claims.length > 0) {
-    prompt += `KEY CLAIMS (for structural reference only):
+    prompt += `═══════════════════════════════════════════════════════════════════════════════
+KEY CLAIMS (Structural reference - do not add elements beyond these)
+═══════════════════════════════════════════════════════════════════════════════
 ${context.claims.join('\n')}
 
 `
   }
 
   if (context.diagramSummaries.length > 0) {
-    prompt += `EXISTING DIAGRAMS (maintain visual consistency):
+    prompt += `═══════════════════════════════════════════════════════════════════════════════
+CONTROLLING PLANTUML DIAGRAMS (Maintain exact consistency)
+═══════════════════════════════════════════════════════════════════════════════
 ${context.diagramSummaries.join('\n')}
+
+These diagrams define the authoritative relationships between components.
+Your sketch MUST be consistent with these - same components, same connections,
+same hierarchies. Do NOT contradict or extend what is shown.
 
 `
   }
 
-  prompt += `INVENTION TYPE: ${context.inventionType}
-
-═══════════════════════════════════════════════════════════════════════════════
+  prompt += `═══════════════════════════════════════════════════════════════════════════════
 DRAWING REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════════════
 Generate the sketch as described in the title and description above.
-The drawing should clearly show the relevant components and their relationships.
+
+VIEW REQUIREMENTS:
+1. MAIN VIEW: Primary view as specified in the description
+2. SECONDARY VIEW: Cross-section, alternate angle, or detail view if appropriate
+   (Only if it reveals components/relationships from the official registry)
+
+REPRESENTATION RULES:
+• Show ONLY components from the Official Component Registry
+• Show ONLY relationships explicitly defined in invention context or diagrams
+• Use simplified/schematic representation for any ambiguous physical details
+• When in doubt between detailed and simple → choose SIMPLE + ACCURATE
 
 ═══════════════════════════════════════════════════════════════════════════════
-COMPLIANCE CHECKLIST (Self-verify before output)
+VALIDATION CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
-✔ Only listed components shown (no extras)
-✔ Numeric labels only (#100, #200, etc.)
-✔ Main view + secondary view provided
-✔ Dashed lines used correctly (internal/hidden only)
-✔ No forbidden elements present
+✔ Every component shown exists in Official Component Registry
+✔ Every relationship shown is explicitly defined in invention facts
+✔ Numeric labels match exactly the Official Reference Numerals
+✔ No invented components, sub-parts, or internal details added
+✔ Consistent with all existing PlantUML diagrams
+✔ Solid lines for visible features, dashed for internal/hidden only
+✔ No text labels, shading, gradients, or decorative elements
+✔ No flowchart or process diagram elements
 
-If ANY rule would be violated, simplify the drawing until compliant.`
+If ANY validation fails → simplify until fully compliant.
+If a requested view cannot be drawn without inventing details → use simplified block representation.`
 
   return prompt
 }
