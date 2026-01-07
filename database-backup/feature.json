@@ -1,32 +1,38 @@
 [
   {
-    "id": "cmiis24rv000elkp3hrd97vbr",
-    "code": "PRIOR_ART_SEARCH",
-    "name": "Patent and Literature Search",
-    "unit": "queries"
-  },
-  {
-    "id": "cmiis24s3000flkp3umrrdqf9",
+    "id": "cmk0zynwq000116sg3wbhv64i",
     "code": "PATENT_DRAFTING",
-    "name": "AI-Assisted Patent Drafting",
-    "unit": "tokens"
+    "name": "PATENT DRAFTING",
+    "unit": "operations"
   },
   {
-    "id": "cmiis24s6000glkp3wdouvci8",
+    "id": "cmk0zynwz000416sgnsksk0xj",
+    "code": "PRIOR_ART_SEARCH",
+    "name": "PRIOR ART SEARCH",
+    "unit": "operations"
+  },
+  {
+    "id": "cmk0zynx3000716sg13vg0n6p",
+    "code": "NOVELTY_SEARCH",
+    "name": "NOVELTY SEARCH",
+    "unit": "operations"
+  },
+  {
+    "id": "cmk0zynx6000a16sgibr7gg5g",
+    "code": "IDEATION",
+    "name": "IDEATION",
+    "unit": "operations"
+  },
+  {
+    "id": "cmk0zynxa000d16sg1lm1auqb",
     "code": "DIAGRAM_GENERATION",
-    "name": "Technical Diagram Generation",
-    "unit": "diagrams"
+    "name": "DIAGRAM GENERATION",
+    "unit": "operations"
   },
   {
-    "id": "cmiis24sa000hlkp3vqlodlpw",
+    "id": "cmk0zynxd000g16sgwt0la9et",
     "code": "IDEA_BANK",
-    "name": "Idea Bank Access",
-    "unit": "reservations"
-  },
-  {
-    "id": "cmiis24sd000ilkp38pzhu71i",
-    "code": "PERSONA_SYNC",
-    "name": "PersonaSync Style Learning",
-    "unit": "trainings"
+    "name": "IDEA BANK",
+    "unit": "operations"
   }
 ]

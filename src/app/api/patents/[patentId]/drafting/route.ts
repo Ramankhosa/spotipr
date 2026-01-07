@@ -7040,28 +7040,93 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
+  // Get existing diagram source for modification context
+  const existingSource = session.diagramSources?.find((d: any) => d.figureNo === figureNo)
+  const existingDiagramCode = existingSource?.plantumlCode || ''
+
   // Determine diagram type - use requested type, or detect from existing code, or default to block
   let diagramType: DiagramType = 'block'
   if (requestedType && ['block', 'activity', 'sequence', 'state'].includes(requestedType)) {
     diagramType = requestedType as DiagramType
-  } else {
-    // Try to detect from existing diagram source
-    const existingSource = session.diagramSources?.find((d: any) => d.figureNo === figureNo)
-    if (existingSource?.plantumlCode) {
-      const code = existingSource.plantumlCode
-      if (/^\s*(start|stop|:.*;\s*$)/m.test(code)) {
-        diagramType = 'activity'
-      } else if (/^\s*(participant|actor)\b/mi.test(code)) {
-        diagramType = 'sequence'
-      } else if (/^\s*(\[\*\]|state\s+")/mi.test(code)) {
-        diagramType = 'state'
-      }
+  } else if (existingDiagramCode) {
+    // Detect from existing diagram source
+    if (/^\s*(start|stop|:.*;\s*$)/m.test(existingDiagramCode)) {
+      diagramType = 'activity'
+    } else if (/^\s*(participant|actor)\b/mi.test(existingDiagramCode)) {
+      diagramType = 'sequence'
+    } else if (/^\s*(\[\*\]|state\s+")/mi.test(existingDiagramCode)) {
+      diagramType = 'state'
     }
   }
 
   const diagramInfo = DIAGRAM_TYPES[diagramType]
 
-  const prompt = `You are refining a ${diagramInfo.name.toLowerCase()} for a patent figure.
+  // Build prompt - if existing diagram exists, emphasize MODIFICATION; otherwise generate fresh
+  const hasExistingDiagram = existingDiagramCode && existingDiagramCode.includes('@startuml')
+  
+  const prompt = hasExistingDiagram 
+    ? `You are MODIFYING an existing ${diagramInfo.name.toLowerCase()} for a patent figure.
+
+═══════════════════════════════════════════════════════════════════════════════
+USER'S MODIFICATION REQUEST (HIGHEST PRIORITY)
+═══════════════════════════════════════════════════════════════════════════════
+${instructions || 'No specific instructions provided'}
+
+THE USER'S REQUEST ABOVE TAKES ABSOLUTE PRIORITY. Follow it exactly.
+
+═══════════════════════════════════════════════════════════════════════════════
+MODIFICATION GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+1. USER INSTRUCTIONS COME FIRST: Always prioritize what the user explicitly asks for.
+
+2. WHAT USERS CAN REQUEST (honor all of these):
+   - LAYOUT CHANGES: "make it vertical", "horizontal", "rearrange", "reorder" → Change structure
+   - SMALL CORRECTIONS: "fix typo", "rename X to Y", "change label" → Preserve structure, fix targeted item
+   - ADD/REMOVE: "add component", "remove X", "add arrow" → Apply change, preserve rest
+   - SIMPLIFY: "simplify", "remove clutter", "show only main flow" → Reduce complexity as requested
+   - EXPAND: "add more detail", "show sub-steps", "elaborate" → Add detail as requested
+   - DIAGRAM TYPE CONVERSION: "convert to sequence diagram", "make it an activity diagram" → Convert type
+   - RESTRUCTURE: "reorganize", "change the flow", "flip direction" → Restructure as requested
+   
+   NOTE: Do NOT add colors, custom styling, or skinparam changes. Patent diagrams must remain monochrome.
+
+3. DEFAULT BEHAVIOR (when user intent is unclear):
+   - Lean toward preserving existing structure while applying the specific change
+   - Keep components, connections, and flow intact unless explicitly asked to change them
+
+═══════════════════════════════════════════════════════════════════════════════
+EXISTING DIAGRAM TO MODIFY
+═══════════════════════════════════════════════════════════════════════════════
+${existingDiagramCode}
+
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE COMPONENTS/NUMERALS
+═══════════════════════════════════════════════════════════════════════════════
+${numeralsPreview}
+CRITICAL: All reference numerals MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
+
+═══════════════════════════════════════════════════════════════════════════════
+DIAGRAM TYPE: ${diagramInfo.name}
+═══════════════════════════════════════════════════════════════════════════════
+${diagramInfo.syntaxGuide}
+
+═══════════════════════════════════════════════════════════════════════════════
+JURISDICTION-SPECIFIC REQUIREMENTS (${activeJurisdiction})
+═══════════════════════════════════════════════════════════════════════════════
+${jurisdictionInstructions}
+
+═══════════════════════════════════════════════════════════════════════════════
+TECHNICAL REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
+1. ARROW DIRECTIONS: Use "-down->", "-up->", "-left->", "-right->" for layout control.
+2. CONNECTIONS: Always specify both endpoints.
+3. BLOCKS: Close all blocks properly (endif for if, end for start).
+4. STRUCTURE: Exactly ONE @startuml and ONE @enduml per diagram. NO notes.
+5. CONTENT: Use ONLY provided components/numerals. Do not invent new components.
+
+Figure title: ${title}
+Output ONLY the modified diagram code (@startuml..@enduml).`
+    : `You are creating a ${diagramInfo.name.toLowerCase()} for a patent figure.
 Keep the diagram simple and valid. Use only these components/numerals: ${numeralsPreview}.
 CRITICAL: All reference numerals MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 Invention Type: ${archetype}

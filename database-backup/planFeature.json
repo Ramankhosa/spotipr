@@ -1,79 +1,56 @@
 [
   {
-    "id": "cmiis24ux001clkp370u09lik",
-    "planId": "cmiis24ug0018lkp3l60xbutm",
-    "featureId": "cmiis24rv000elkp3hrd97vbr",
-    "monthlyQuota": 50,
-    "dailyQuota": 10
+    "id": "cmk0zynwx000316sgqk2rdznj",
+    "planId": "cmk0zynwl000016sgirkmxio9",
+    "featureId": "cmk0zynwq000116sg3wbhv64i",
+    "monthlyQuota": 3,
+    "dailyQuota": null,
+    "monthlyTokenLimit": 70000,
+    "dailyTokenLimit": null
   },
   {
-    "id": "cmiis24v3001elkp3cdezvywy",
-    "planId": "cmiis24ug0018lkp3l60xbutm",
-    "featureId": "cmiis24s3000flkp3umrrdqf9",
-    "monthlyQuota": 1000,
-    "dailyQuota": 100
+    "id": "cmk0zynx2000616sgh29oi6cs",
+    "planId": "cmk0zynwl000016sgirkmxio9",
+    "featureId": "cmk0zynwz000416sgnsksk0xj",
+    "monthlyQuota": 10,
+    "dailyQuota": null,
+    "monthlyTokenLimit": 70000,
+    "dailyTokenLimit": null
   },
   {
-    "id": "cmiis24v9001glkp3i8crm3tw",
-    "planId": "cmiis24um0019lkp34x7ufolb",
-    "featureId": "cmiis24rv000elkp3hrd97vbr",
-    "monthlyQuota": 1000,
-    "dailyQuota": 100
+    "id": "cmk0zynx5000916sgu25zwfsh",
+    "planId": "cmk0zynwl000016sgirkmxio9",
+    "featureId": "cmk0zynx3000716sg13vg0n6p",
+    "monthlyQuota": 3,
+    "dailyQuota": null,
+    "monthlyTokenLimit": 70000,
+    "dailyTokenLimit": null
   },
   {
-    "id": "cmiis24vf001ilkp39kk5cuuj",
-    "planId": "cmiis24um0019lkp34x7ufolb",
-    "featureId": "cmiis24s3000flkp3umrrdqf9",
-    "monthlyQuota": 10000,
-    "dailyQuota": 1000
+    "id": "cmk0zynx9000c16sgogi4itj5",
+    "planId": "cmk0zynwl000016sgirkmxio9",
+    "featureId": "cmk0zynx6000a16sgibr7gg5g",
+    "monthlyQuota": 5,
+    "dailyQuota": null,
+    "monthlyTokenLimit": 70000,
+    "dailyTokenLimit": null
   },
   {
-    "id": "cmiis24vi001klkp3bika85kc",
-    "planId": "cmiis24um0019lkp34x7ufolb",
-    "featureId": "cmiis24s6000glkp3wdouvci8",
-    "monthlyQuota": 200,
-    "dailyQuota": 40
+    "id": "cmk0zynxc000f16sgi7uimd6a",
+    "planId": "cmk0zynwl000016sgirkmxio9",
+    "featureId": "cmk0zynxa000d16sg1lm1auqb",
+    "monthlyQuota": 20,
+    "dailyQuota": null,
+    "monthlyTokenLimit": 70000,
+    "dailyTokenLimit": null
   },
   {
-    "id": "cmiis24vl001mlkp3514swi12",
-    "planId": "cmiis24um0019lkp34x7ufolb",
-    "featureId": "cmiis24sa000hlkp3vqlodlpw",
-    "monthlyQuota": 50,
-    "dailyQuota": 10
-  },
-  {
-    "id": "cmiis24vp001olkp31uucjbur",
-    "planId": "cmiis24ur001alkp34jedx95q",
-    "featureId": "cmiis24rv000elkp3hrd97vbr",
-    "monthlyQuota": 5000,
-    "dailyQuota": 500
-  },
-  {
-    "id": "cmiis24vs001qlkp3il8jv6cd",
-    "planId": "cmiis24ur001alkp34jedx95q",
-    "featureId": "cmiis24s3000flkp3umrrdqf9",
-    "monthlyQuota": 50000,
-    "dailyQuota": 5000
-  },
-  {
-    "id": "cmiis24vy001slkp3d3u92lno",
-    "planId": "cmiis24ur001alkp34jedx95q",
-    "featureId": "cmiis24s6000glkp3wdouvci8",
-    "monthlyQuota": 500,
-    "dailyQuota": 100
-  },
-  {
-    "id": "cmiis24w3001ulkp3yknh1pz9",
-    "planId": "cmiis24ur001alkp34jedx95q",
-    "featureId": "cmiis24sa000hlkp3vqlodlpw",
-    "monthlyQuota": 200,
-    "dailyQuota": 50
-  },
-  {
-    "id": "cmiis24w7001wlkp3wt10pzp3",
-    "planId": "cmiis24ur001alkp34jedx95q",
-    "featureId": "cmiis24sd000ilkp38pzhu71i",
-    "monthlyQuota": 50,
-    "dailyQuota": 10
+    "id": "cmk0zynxf000i16sgdqflkstw",
+    "planId": "cmk0zynwl000016sgirkmxio9",
+    "featureId": "cmk0zynxd000g16sgwt0la9et",
+    "monthlyQuota": 5,
+    "dailyQuota": null,
+    "monthlyTokenLimit": 70000,
+    "dailyTokenLimit": null
   }
 ]

@@ -1,29 +1,11 @@
 [
   {
-    "id": "cmiis24ug0018lkp3l60xbutm",
-    "code": "FREE_PLAN",
-    "name": "Basic Plan",
-    "cycle": "MONTHLY",
+    "id": "cmk0zynwl000016sgirkmxio9",
+    "code": "TRIAL",
+    "name": "Trial Plan",
+    "cycle": "ONE_TIME",
     "status": "ACTIVE",
-    "createdAt": "2025-11-28T11:26:52.168Z",
-    "updatedAt": "2025-11-28T11:26:52.168Z"
-  },
-  {
-    "id": "cmiis24um0019lkp34x7ufolb",
-    "code": "PRO_PLAN",
-    "name": "Professional Plan",
-    "cycle": "MONTHLY",
-    "status": "ACTIVE",
-    "createdAt": "2025-11-28T11:26:52.174Z",
-    "updatedAt": "2025-11-28T11:26:52.174Z"
-  },
-  {
-    "id": "cmiis24ur001alkp34jedx95q",
-    "code": "ENTERPRISE_PLAN",
-    "name": "Enterprise Plan",
-    "cycle": "MONTHLY",
-    "status": "ACTIVE",
-    "createdAt": "2025-11-28T11:26:52.180Z",
-    "updatedAt": "2025-11-28T11:26:52.180Z"
+    "createdAt": "2026-01-05T10:07:40.677Z",
+    "updatedAt": "2026-01-05T10:07:40.677Z"
   }
 ]
