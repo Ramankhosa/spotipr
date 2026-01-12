@@ -6641,7 +6641,7 @@ async function handlePlanAndGenerateDiagramsLLM(
     { 
       sessionId, 
       usePlan: true,  // Use the plan from Stage 1
-      replaceExisting: replaceExisting !== false
+      replaceExisting: replaceExisting === true
     }, 
     requestHeaders
   )
@@ -7107,7 +7107,7 @@ If in doubt, OMIT rather than add.
     return NextResponse.json({ error: 'Invalid LLM response format' }, { status: 400 })
   }
 
-  const shouldReplace = replaceExisting !== false
+  const shouldReplace = replaceExisting === true
 
   // Optionally clear existing figures before generating new ones
   if (shouldReplace) {

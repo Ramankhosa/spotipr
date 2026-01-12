@@ -152,6 +152,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     ...plan,
     title: sanitizeFigureLabel(plan.title) || `Figure ${plan.figureNo}`
   }))
+  const hasExistingFigures = (session?.figurePlans?.length || 0) > 0 || diagramSources.length > 0
 
   const [isUploading, setIsUploading] = useState(false)
   const [uploaded, setUploaded] = useState<Record<string, boolean>>({})
@@ -175,6 +176,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // UI Mode state
   const [mode, setMode] = useState<'ai' | 'manual'>('ai')
   const [includeExistingFigures, setIncludeExistingFigures] = useState(true)
+  const [replaceExistingDiagrams, setReplaceExistingDiagrams] = useState(false)
 
   // Map legacy state to new mode
   const [aiDecides, setAiDecides] = useState(true)
@@ -1717,8 +1719,8 @@ Now output the JSON array.`
         sessionId: session?.id,
         // Pass figureCount only if user specified one (null means AI decides)
         ...(diagramCount ? { figureCount: diagramCount } : {}),
-        // In autopilot mode, we intentionally replace the existing figure set
-        replaceExisting: true
+        // Replace only when explicitly requested by the user
+        replaceExisting: replaceExistingDiagrams
       })
 
       if (!res || !res.success) {
@@ -2111,6 +2113,24 @@ Now output the JSON array.`
                 </span>
               </div>
             </div>
+            {hasExistingFigures && (
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="replace-existing-diagrams"
+                  checked={replaceExistingDiagrams}
+                  onCheckedChange={(checked) => setReplaceExistingDiagrams(checked === true)}
+                  disabled={isGenerating}
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="replace-existing-diagrams" className="text-sm text-gray-700">
+                    Replace existing diagrams
+                  </Label>
+                  <p className="text-xs text-gray-500">
+                    If unchecked, new diagrams will be appended after existing figures.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-3">
               <Button 
                 size="lg"
