@@ -694,8 +694,16 @@ export async function POST(
       case 'delete_annexure_draft':
         return await handleDeleteAnnexureDraft(authResult.user, patentId, data);
 
+      case 'plan_figures_llm':
+        return await handlePlanFiguresLLM(authResult.user, patentId, data, requestHeaders);
+
       case 'generate_diagrams_llm':
         return await handleGenerateDiagramsLLM(authResult.user, patentId, data, requestHeaders);
+
+      case 'plan_and_generate_diagrams_llm':
+        // Combined action: Plan figures first, then generate code based on plan
+        // This is the recommended approach for auto mode
+        return await handlePlanAndGenerateDiagramsLLM(authResult.user, patentId, data, requestHeaders);
 
       case 'save_plantuml':
         return await handleSavePlantUML(authResult.user, patentId, data);
@@ -3022,23 +3030,300 @@ async function handleGetExportPreview(user: any, patentId: string, data: any) {
 }
 
 // Whitelist of allowed single-line skinparam keys
-const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype)\b/i
+// Extended to support canonical patent diagram styles (nodesep, ranksep, thickness, padding, etc.)
+// EXPLICITLY BANNED: FontColor, Style (except PackageTitleFontStyle), class/component/node skinparams
+const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
 
-// Allowed skinparam block types (sequence, activity)
-const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity)\s*\{/i
+// Explicitly banned skinparam patterns (these are stripped even if they match other patterns)
+const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
 
-// Cleans PlantUML code for rendering while preserving allowed skinparams
-// This is a lighter version of sanitizePlantUML for pre-render cleaning
-function cleanForRendering(code: string): string {
-  const lines = code.split(/\r?\n/)
-  const result: string[] = []
+// ═══════════════════════════════════════════════════════════════════════════════
+// SKINPARAM BLOCK HANDLING - ATOMIC BLOCK PROCESSING
+// ═══════════════════════════════════════════════════════════════════════════════
+// CRITICAL: Skinparam blocks MUST be processed atomically.
+// If a block header is removed, the ENTIRE block body must be removed.
+// Partial block survival (orphan BorderStyle/BorderThickness lines) is a hard error.
+//
+// ONLY THREE BLOCK TYPES ARE EVER ALLOWED:
+//   1. skinparam rectangle<<optional>> { ... }  (REQUIRES stereotype)
+//   2. skinparam sequence { ... }
+//   3. skinparam activity { ... }
+//
+// All other skinparam XXX { ... } blocks are FORBIDDEN and removed atomically.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Allowed skinparam block types (STRICT):
+// - rectangle REQUIRES <<optional>> or other stereotype (plain rectangle NOT allowed)
+// - sequence and activity are allowed standalone
+const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity)\s*\{|^skinparam\s+rectangle\s*<<\w+>>\s*\{/i
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PRODUCTION-SAFE DIAGRAM GENERATION CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+// These constants enforce the "renderer, not explainer" philosophy.
+// If it's not in the planner's include[], it doesn't exist.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// C3: FORBIDDEN KEYWORD GATE (Critical - triggers regeneration if ANY match)
+// If any of these appear in generated PlantUML, the diagram is rejected and regenerated.
+// This single gate eliminates most PlantUML failures.
+const FORBIDDEN_PLANTUML_KEYWORDS = /\b(if|else|endif|alt|loop|fork|repeat|while|switch|note|box|title|caption)\b/i
+
+// C2: HARD ELEMENT CAPS PER DIAGRAM TYPE (Programmatic enforcement)
+// If exceeded: truncate silently. Do NOT repair. Do NOT explain.
+const DIAGRAM_HARD_CAPS: Record<string, { maxElements: number; elementType: string }> = {
+  BLOCK: { maxElements: 10, elementType: 'rectangles' },
+  FLOW: { maxElements: 8, elementType: 'steps' },
+  ACTIVITY: { maxElements: 8, elementType: 'actions' },
+  SEQUENCE: { maxElements: 5, elementType: 'participants' }
+}
+
+// Additional cap for sequence diagram messages
+const SEQUENCE_MAX_MESSAGES = 12
+
+// F: FIXED SKINPARAM BLOCK (Pre-injected, LLM never generates skinparams)
+// This removes an entire failure class where LLM generates invalid skinparams.
+const FIXED_SKINPARAM_BLOCK = `skinparam backgroundColor white
+skinparam rectangleBackgroundColor white
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam defaultFontName Arial
+skinparam defaultFontSize 14
+skinparam ArrowColor black
+skinparam BorderColor black
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 45
+skinparam BorderThickness 1.3
+skinparam PackageBorderThickness 1.3
+skinparam PackageTitleFontStyle bold`
+
+// E: PLANTUML SAFE SUBSET - Only these constructs are allowed
+// Allowed: @startuml, @enduml, skinparam, rectangle, package, participant, -->, ..>, start, stop, :action;
+// Forbidden: note, box, alt, loop, fork, if, else, endif, repeat, while, switch, title, caption
+
+/**
+ * C3: Check if PlantUML contains forbidden keywords
+ * This is the critical post-generation gate that triggers regeneration.
+ */
+function containsForbiddenKeywords(plantuml: string): { hasForbidden: boolean; matches: string[] } {
+  const matches: string[] = []
+  const lines = plantuml.split(/\r?\n/)
   
-  let inAllowedBlock = false
-  let inForbiddenBlock = false
+  for (const line of lines) {
+    const trimmed = line.trim()
+    // Skip comments and strings (inside quotes)
+    if (trimmed.startsWith("'") || trimmed.startsWith('//')) continue
+    
+    // Check for forbidden keywords
+    const match = trimmed.match(FORBIDDEN_PLANTUML_KEYWORDS)
+    if (match) {
+      matches.push(match[0])
+    }
+  }
+  
+  return { hasForbidden: matches.length > 0, matches: Array.from(new Set(matches)) }
+}
+
+/**
+ * C2: Enforce diagram element caps by truncating
+ * Returns truncated PlantUML if over cap, original otherwise.
+ */
+function enforceDiagramCaps(plantuml: string, diagramType: string): string {
+  const caps = DIAGRAM_HARD_CAPS[diagramType.toUpperCase()]
+  if (!caps) return plantuml
+  
+  const lines = plantuml.split(/\r?\n/)
+  const result: string[] = []
+  let elementCount = 0
+  let messageCount = 0
+  let participantCount = 0
+  
+  for (const line of lines) {
+    const trimmed = line.trim()
+    
+    // Count and potentially skip elements based on type
+    if (diagramType.toUpperCase() === 'BLOCK' || diagramType.toUpperCase() === 'FLOW') {
+      // Count rectangles
+      if (/^\s*rectangle\b/i.test(trimmed)) {
+        elementCount++
+        if (elementCount > caps.maxElements) continue // Skip excess
+      }
+    } else if (diagramType.toUpperCase() === 'ACTIVITY') {
+      // Count actions (lines like :Something;)
+      if (/^\s*:.*;\s*$/.test(trimmed)) {
+        elementCount++
+        if (elementCount > caps.maxElements) continue // Skip excess
+      }
+    } else if (diagramType.toUpperCase() === 'SEQUENCE') {
+      // Count participants
+      if (/^\s*(participant|actor)\b/i.test(trimmed)) {
+        participantCount++
+        if (participantCount > caps.maxElements) continue // Skip excess
+      }
+      // Count messages
+      if (/->|-->|<-|<--/.test(trimmed) && !/^\s*(participant|actor)\b/i.test(trimmed)) {
+        messageCount++
+        if (messageCount > SEQUENCE_MAX_MESSAGES) continue // Skip excess
+      }
+    }
+    
+    result.push(line)
+  }
+  
+  return result.join('\n')
+}
+
+/**
+ * F: Inject fixed skinparam block into PlantUML code
+ * Removes any existing skinparam lines and injects the fixed block.
+ */
+function injectFixedSkinparams(plantuml: string): string {
+  const lines = plantuml.split(/\r?\n/)
+  const result: string[] = []
+  let skinparamInjected = false
+  
+  for (const line of lines) {
+    const trimmed = line.trim()
+    
+    // Skip any existing skinparam lines
+    if (/^\s*skinparam\b/i.test(trimmed)) continue
+    
+    // Inject fixed skinparams right after @startuml
+    if (trimmed.toLowerCase() === '@startuml' && !skinparamInjected) {
+      result.push(line)
+      result.push(FIXED_SKINPARAM_BLOCK)
+      result.push('')
+      skinparamInjected = true
+      continue
+    }
+    
+    result.push(line)
+  }
+  
+  return result.join('\n')
+}
+
+// Detection pattern for ANY skinparam block start
+const SKINPARAM_BLOCK_START = /^skinparam\s+\w+\s*(<<\w+>>)?\s*\{/i
+
+// Helper to count brace depth change for a line
+function countBraceDepthChange(line: string): number {
+  let delta = 0
+  for (const char of line) {
+    if (char === '{') delta++
+    else if (char === '}') delta--
+  }
+  return delta
+}
+
+// ORPHAN LINE PATTERNS - These lines MUST NOT appear outside a valid skinparam block
+// If found after sanitization, it indicates block parsing failure
+const ORPHAN_SKINPARAM_BODY_PATTERNS = /^\s*(BorderStyle|BorderThickness|BorderColor|BackgroundColor|FontColor|FontSize|FontStyle|FontName|RoundCorner|Shadowing)\b/i
+
+// Final safety validator - catches any orphan skinparam body lines that leaked through
+function validateNoOrphanSkinparamLines(code: string): { valid: boolean; orphanLines: string[] } {
+  const lines = code.split(/\r?\n/)
+  const orphans: string[] = []
+  
+  let inValidBlock = false
   let braceDepth = 0
   
   for (const line of lines) {
     const trimmed = line.trim()
+    
+    // Check for valid skinparam block start
+    if (ALLOWED_SKINPARAM_BLOCKS.test(trimmed)) {
+      inValidBlock = true
+      braceDepth = countBraceDepthChange(trimmed)
+      continue
+    }
+    
+    // Track block depth
+    if (inValidBlock) {
+      braceDepth += countBraceDepthChange(trimmed)
+      if (braceDepth <= 0) {
+        inValidBlock = false
+        braceDepth = 0
+      }
+      continue
+    }
+    
+    // OUTSIDE any valid block - check for orphan lines
+    if (ORPHAN_SKINPARAM_BODY_PATTERNS.test(trimmed)) {
+      orphans.push(trimmed)
+    }
+    
+    // Also catch stray closing braces that might indicate block parse failure
+    if (/^\s*\}\s*$/.test(trimmed) && !inValidBlock) {
+      // Stray closing brace outside any block context - suspicious but not always an error
+      // (could be from rectangle definitions, etc.)
+    }
+  }
+  
+  return { valid: orphans.length === 0, orphanLines: orphans }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// cleanForRendering - Pre-render cleaning with ATOMIC block processing
+// ═══════════════════════════════════════════════════════════════════════════════
+// CRITICAL: Uses block-level skipping with depth tracking.
+// Once a forbidden skinparam block is detected:
+//   1. Enter skipBlock mode
+//   2. Track { / } depth
+//   3. DROP EVERY LINE until matching closing } is consumed
+//   4. Do NOT run whitelist logic on inner lines
+//   5. Do NOT allow orphan lines like BorderStyle or BorderThickness
+// ═══════════════════════════════════════════════════════════════════════════════
+function cleanForRendering(code: string): string {
+  const lines = code.split(/\r?\n/)
+  const result: string[] = []
+  
+  // Block tracking state
+  let inAllowedBlock = false      // Inside an allowed skinparam block
+  let skipBlock = false           // SKIP MODE: Inside a forbidden block - drop ALL lines
+  let braceDepth = 0              // Current brace nesting depth
+  
+  for (const line of lines) {
+    const trimmed = line.trim()
+    
+    // ───────────────────────────────────────────────────────────────────────────
+    // PRIORITY 1: If we're in SKIP MODE, drop everything until block closes
+    // This MUST be checked FIRST to prevent any inner lines from leaking through
+    // ───────────────────────────────────────────────────────────────────────────
+    if (skipBlock) {
+      braceDepth += countBraceDepthChange(trimmed)
+      if (braceDepth <= 0) {
+        // Block is closed - exit skip mode
+        skipBlock = false
+        braceDepth = 0
+      }
+      continue // DROP this line - do not process further, do not add to result
+    }
+    
+    // ───────────────────────────────────────────────────────────────────────────
+    // PRIORITY 2: Handle allowed block content
+    // ───────────────────────────────────────────────────────────────────────────
+    if (inAllowedBlock) {
+      braceDepth += countBraceDepthChange(trimmed)
+      
+      // Filter banned properties even inside allowed blocks
+      if (!BANNED_SKINPARAM_PATTERNS.test(trimmed) && 
+          !/^\s*FontColor\b/i.test(trimmed)) {
+        result.push(line)
+      }
+      
+      if (braceDepth <= 0) {
+        inAllowedBlock = false
+        braceDepth = 0
+      }
+      continue
+    }
+    
+    // ───────────────────────────────────────────────────────────────────────────
+    // Not inside any block - process line normally
+    // ───────────────────────────────────────────────────────────────────────────
     
     // Remove title/caption
     if (/^\s*(title|caption)\b/i.test(trimmed)) continue
@@ -3046,40 +3331,46 @@ function cleanForRendering(code: string): string {
     // Remove forbidden directives
     if (/^\s*!\s*(theme|include|import|pragma)\b/i.test(trimmed)) continue
     
-    // Handle skinparam blocks
-    if (/^\s*skinparam\s+\w+\s*\{/.test(trimmed)) {
+    // ───────────────────────────────────────────────────────────────────────────
+    // Handle skinparam block START - ATOMIC processing decision point
+    // ───────────────────────────────────────────────────────────────────────────
+    if (SKINPARAM_BLOCK_START.test(trimmed)) {
+      // Count braces on this header line (not just assume 1)
+      const headerBraceChange = countBraceDepthChange(trimmed)
+      
+      // Check if it's an ALLOWED block type
       if (ALLOWED_SKINPARAM_BLOCKS.test(trimmed)) {
         inAllowedBlock = true
-        braceDepth = 1
+        braceDepth = headerBraceChange
         result.push(line)
+        
+        // Handle edge case: block opens and closes on same line
+        if (braceDepth <= 0) {
+          inAllowedBlock = false
+          braceDepth = 0
+        }
       } else {
-        inForbiddenBlock = true
-        braceDepth = 1
+        // NOT ALLOWED = FORBIDDEN - enter skip mode and drop ENTIRE block atomically
+        skipBlock = true
+        braceDepth = headerBraceChange
+        
+        // Handle edge case: block opens and closes on same line
+        if (braceDepth <= 0) {
+          skipBlock = false
+          braceDepth = 0
+        }
+        // Do NOT push the header line - it's forbidden
       }
       continue
     }
     
-    // Handle block content
-    if (inAllowedBlock || inForbiddenBlock) {
-      for (const char of trimmed) {
-        if (char === '{') braceDepth++
-        else if (char === '}') braceDepth--
-      }
-      
-      if (inAllowedBlock) {
-        result.push(line)
-      }
-      
-      if (braceDepth <= 0) {
-        inAllowedBlock = false
-        inForbiddenBlock = false
-        braceDepth = 0
-      }
-      continue
-    }
-    
-    // Handle single-line skinparam - keep only allowed ones
+    // Handle single-line skinparam - keep only allowed ones, reject banned ones
     if (/^\s*skinparam\b/i.test(trimmed)) {
+      // First check if it's explicitly banned
+      if (BANNED_SKINPARAM_PATTERNS.test(trimmed)) {
+        continue // Strip banned skinparams
+      }
+      // Then check if it's in the allowed whitelist
       if (ALLOWED_SKINPARAM_KEYS.test(trimmed)) {
         result.push(line)
       }
@@ -3090,83 +3381,124 @@ function cleanForRendering(code: string): string {
     result.push(line)
   }
   
-  return result.join('\n')
+  // ───────────────────────────────────────────────────────────────────────────
+  // FINAL SAFETY CHECK: Verify no orphan skinparam body lines leaked through
+  // ───────────────────────────────────────────────────────────────────────────
+  const sanitizedOutput = result.join('\n')
+  const validation = validateNoOrphanSkinparamLines(sanitizedOutput)
+  
+  if (!validation.valid) {
+    console.error('[cleanForRendering] CRITICAL: Orphan skinparam body lines detected after sanitization:', validation.orphanLines)
+    // Filter out orphan lines as emergency fallback
+    return result.filter(line => !ORPHAN_SKINPARAM_BODY_PATTERNS.test(line.trim())).join('\n')
+  }
+  
+  return sanitizedOutput
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// sanitizePlantUML - PRODUCTION-SAFE Sanitization
+// ═══════════════════════════════════════════════════════════════════════════════
+// CRITICAL CHANGE (Rule F): LLM NEVER generates skinparams anymore.
+// We STRIP ALL skinparams here, then inject fixed skinparams via injectFixedSkinparams().
+// This eliminates an entire failure class where LLM-generated skinparams cause issues.
+//
+// Also strips:
+// - Forbidden directives: !theme, !include, !import, !pragma
+// - title/caption (forbidden per Rule B)
+// - note/box (forbidden per Rule B)
+// - Incomplete connection lines
+// ═══════════════════════════════════════════════════════════════════════════════
 function sanitizePlantUML(input: string): string {
   const match = input.match(/@startuml[\s\S]*?@enduml/)
   const block = match ? match[0] : input
   const lines = block.split(/\r?\n/)
   const result: string[] = []
   
-  let inAllowedBlock = false      // Inside skinparam sequence { } or skinparam activity { }
-  let inForbiddenBlock = false    // Inside a skinparam { } block that is NOT sequence/activity
-  let braceDepth = 0
+  // Block tracking state for skinparam blocks
+  let skipBlock = false           // SKIP MODE: Inside a skinparam block - drop ALL lines
+  let braceDepth = 0              // Current brace nesting depth
   
   for (const line of lines) {
     const trimmed = line.trim()
     
+    // ───────────────────────────────────────────────────────────────────────────
+    // PRIORITY 1: If we're inside a skinparam block, drop everything until block closes
+    // ───────────────────────────────────────────────────────────────────────────
+    if (skipBlock) {
+      braceDepth += countBraceDepthChange(trimmed)
+      if (braceDepth <= 0) {
+        // Block is closed - exit skip mode
+        skipBlock = false
+        braceDepth = 0
+      }
+      continue // DROP this line - do not process further, do not add to result
+    }
+    
+    // ───────────────────────────────────────────────────────────────────────────
+    // FORBIDDEN DIRECTIVES (Rule B) - Drop these lines
+    // ───────────────────────────────────────────────────────────────────────────
+    
+    // Skip all skinparam lines (we inject fixed skinparams via injectFixedSkinparams)
+    if (/^\s*skinparam\b/i.test(trimmed)) {
+      // Check if it's a block start
+      if (SKINPARAM_BLOCK_START.test(trimmed)) {
+        skipBlock = true
+        braceDepth = countBraceDepthChange(trimmed)
+        if (braceDepth <= 0) {
+          skipBlock = false
+          braceDepth = 0
+        }
+      }
+      continue // Drop all skinparam lines
+    }
+    
     // Skip forbidden directives
     if (/^\s*!\s*(theme|include|import|pragma)\b/i.test(trimmed)) continue
     
-    // Skip title/caption
+    // Skip title/caption (Rule B)
     if (/^\s*(title|caption)\b/i.test(trimmed)) continue
+    
+    // Skip note/box (Rule B - forbidden constructs)
+    if (/^\s*(note|box)\b/i.test(trimmed)) continue
     
     // Skip obviously incomplete connection lines like "500 --"
     if (/^\s*\d+\s*--\s*$/.test(trimmed)) continue
     
-    // Check for skinparam block start
-    if (/^\s*skinparam\s+\w+\s*\{/.test(trimmed)) {
-      if (ALLOWED_SKINPARAM_BLOCKS.test(trimmed)) {
-        // This is an allowed block (sequence or activity)
-        inAllowedBlock = true
-        braceDepth = 1
-        result.push(line)
-      } else {
-        // This is a forbidden skinparam block
-        inForbiddenBlock = true
-        braceDepth = 1
-      }
-      continue
-    }
-    
-    // Handle block content and closing braces
-    if (inAllowedBlock || inForbiddenBlock) {
-      // Count braces
-      for (const char of trimmed) {
-        if (char === '{') braceDepth++
-        else if (char === '}') braceDepth--
-      }
+    // ───────────────────────────────────────────────────────────────────────────
+    // Handle skinparam block START - ALL skinparam blocks are now stripped
+    // ───────────────────────────────────────────────────────────────────────────
+    if (SKINPARAM_BLOCK_START.test(trimmed)) {
+      // Enter skip mode and drop ENTIRE block atomically
+      skipBlock = true
+      const headerBraceChange = countBraceDepthChange(trimmed)
+      braceDepth = headerBraceChange
       
-      if (inAllowedBlock) {
-        result.push(line)
-      }
-      // Skip forbidden block content
-      
-      // Check if block is closed
+      // Handle edge case: block opens and closes on same line
       if (braceDepth <= 0) {
-        inAllowedBlock = false
-        inForbiddenBlock = false
+        skipBlock = false
         braceDepth = 0
       }
-      continue
+      continue // Don't add this line - it's a skinparam block start
     }
     
-    // Handle single-line skinparam
-    if (/^\s*skinparam\b/i.test(trimmed)) {
-      // Keep only whitelisted skinparam keys
-      if (ALLOWED_SKINPARAM_KEYS.test(trimmed)) {
-        result.push(line)
-      }
-      // Skip non-whitelisted skinparams
-      continue
-    }
-    
-    // Keep all other lines
+    // Keep all other lines (non-skinparam, non-forbidden)
     result.push(line)
   }
   
-  return result.join('\n')
+  // ───────────────────────────────────────────────────────────────────────────
+  // FINAL SAFETY CHECK: Verify no orphan skinparam body lines leaked through
+  // ───────────────────────────────────────────────────────────────────────────
+  const sanitizedOutput = result.join('\n')
+  const validation = validateNoOrphanSkinparamLines(sanitizedOutput)
+  
+  if (!validation.valid) {
+    console.error('[sanitizePlantUML] CRITICAL: Orphan skinparam body lines detected after sanitization:', validation.orphanLines)
+    // Filter out orphan lines as emergency fallback
+    return result.filter(line => !ORPHAN_SKINPARAM_BODY_PATTERNS.test(line.trim())).join('\n')
+  }
+  
+  return sanitizedOutput
 }
 
 type PlantUmlValidationError = { type: string; message: string; line?: number }
@@ -5496,23 +5828,39 @@ async function handleGeneratePlantUML(user: any, patentId: string, data: any) {
     );
   }
 
-  // Sanitize and validate PlantUML, auto-repair if possible
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION-SAFE DIAGRAM PROCESSING PIPELINE
+  // PHILOSOPHY: Regenerate, don't repair. If validation fails, reject and ask for regeneration.
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Step 1: Sanitize (removes all skinparams, forbidden constructs)
   let workingCode = sanitizePlantUML(result.plantumlCode || '')
-  let validation = validatePlantUmlStructure(workingCode)
-  if (!validation.ok) {
-    const repair = await attemptRepairPlantUml(workingCode, validation.errors, {
-      figureTitle: session!.figurePlans[0]?.title,
-      description: session!.figurePlans[0]?.description ?? undefined
-    })
-    if (repair.ok && repair.code) {
-      workingCode = repair.code
-      validation = validatePlantUmlStructure(workingCode)
-    }
+  
+  // Step 2: C3 FORBIDDEN KEYWORD GATE
+  const forbiddenCheck = containsForbiddenKeywords(workingCode)
+  if (forbiddenCheck.hasForbidden) {
+    return NextResponse.json(
+      { 
+        error: 'Diagram contains forbidden constructs', 
+        details: `Detected: ${forbiddenCheck.matches.join(', ')}. These are not allowed in patent diagrams.`,
+        action: 'Please regenerate this diagram without if/else, loops, or decision logic.'
+      },
+      { status: 400 }
+    )
   }
-
+  
+  // Step 3: F - INJECT FIXED SKINPARAMS
+  workingCode = injectFixedSkinparams(workingCode)
+  
+  // Step 4: Validate structure (no repair - just validate)
+  const validation = validatePlantUmlStructure(workingCode)
   if (!validation.ok) {
     return NextResponse.json(
-      { error: 'Diagram code validation failed', details: validation.errors },
+      { 
+        error: 'Diagram structure validation failed', 
+        details: validation.errors,
+        action: 'Please regenerate this diagram. The current code has structural issues.'
+      },
       { status: 400 }
     )
   }
@@ -5539,61 +5887,35 @@ async function handleGeneratePlantUML(user: any, patentId: string, data: any) {
   });
 
   // Generate and save image from PlantUML code
-  // NOTE: Repair flow is streamlined - only 1 LLM repair attempt on render failure (validation repair already done above)
+  // NOTE: REGENERATE-NOT-REPAIR philosophy - if render fails, reject and ask for regeneration
   if (workingCode) {
     try {
-      // Clean the PlantUML code for rendering (preserves allowed skinparams)
+      // Clean the PlantUML code for rendering
       let cleaned = cleanForRendering(workingCode)
 
       const encoded = plantumlEncoder.encode(cleaned)
       const base = process.env.PLANTUML_BASE_URL || 'https://www.plantuml.com/plantuml'
 
-      let resp = await fetch(`${base}/png/${encoded}`, {
+      const resp = await fetch(`${base}/png/${encoded}`, {
         cache: 'no-store',
         method: 'GET',
         headers: { 'Accept': 'image/png' }
       })
 
-      // One-time retry with LLM repair if render fails
+      // REGENERATE-NOT-REPAIR: If render fails, reject and ask for regeneration
       if (!resp.ok) {
         const failureText = await resp.text().catch(() => '')
         const txtError = await fetchPlantUmlErrorText(base, encoded)
-        const retryRepair = await attemptRepairPlantUml(workingCode, validation.errors, {
-          figureTitle: session!.figurePlans[0]?.title,
-          description: session!.figurePlans[0]?.description ?? undefined,
-          plantumlErrorText: txtError || failureText || undefined
-        })
-        if (retryRepair.ok && retryRepair.code) {
-          workingCode = retryRepair.code
-          cleaned = cleanForRendering(workingCode)
-          await prisma.diagramSource.update({
-            where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } },
-            data: {
-              plantumlCode: workingCode,
-              checksum: crypto.createHash('sha256').update(workingCode).digest('hex')
-            }
-          })
-          const retryEncoded = plantumlEncoder.encode(cleaned)
-          resp = await fetch(`${base}/png/${retryEncoded}`, {
-            cache: 'no-store',
-            method: 'GET',
-            headers: { 'Accept': 'image/png' }
-          })
-        }
-        if (!resp.ok) {
-          const retryFailure = await resp.text().catch(() => '')
-          return NextResponse.json(
-            {
-              error: 'Diagram render failed after auto-repair attempt',
-              details: retryFailure || failureText || `HTTP ${resp.status}`,
-              autoRepairAttempted: true,
-              action: 'Please submit a manual regenerate request for this diagram.',
-              figureTitle: session!.figurePlans[0]?.title || `Figure ${figureNo}`,
-              figureDescription: session!.figurePlans[0]?.description || 'No description available'
-            },
-            { status: 502 }
-          )
-        }
+        return NextResponse.json(
+          {
+            error: 'Diagram render failed',
+            details: txtError || failureText || `HTTP ${resp.status}`,
+            action: 'Please regenerate this diagram. The PlantUML code has syntax issues that prevent rendering.',
+            figureTitle: session!.figurePlans[0]?.title || `Figure ${figureNo}`,
+            figureDescription: session!.figurePlans[0]?.description || 'No description available'
+          },
+          { status: 502 }
+        )
       }
 
       const buf = Buffer.from(await resp.arrayBuffer())
@@ -5949,10 +6271,415 @@ async function buildJurisdictionDiagramInstructions(
   return lines.join('\n')
 }
 
-async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, prompt, replaceExisting } = data
+// ═══════════════════════════════════════════════════════════════════════════════
+// STAGE 1: FIGURE PLANNING LLM
+// ═══════════════════════════════════════════════════════════════════════════════
+// This function analyzes the invention and creates a structured plan for figures.
+// It decides: How many figures, what type each should be, and what content/perspective.
+// The plan is then passed to Stage 2 (Generation) for PlantUML code creation.
 
-  if (!sessionId || !prompt) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIGURE PLANNING TYPES (Production-safe, zero diagram logic)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Allowed diagram types for planning (whitelist - uppercase)
+// Note: These map to generator DiagramType (lowercase) during code generation
+type PlanDiagramType = 'BLOCK' | 'FLOW' | 'SEQUENCE' | 'ACTIVITY'
+
+// Single diagram plan item
+interface FigurePlanItem {
+  figure: string         // "FIG. 1", "FIG. 2", etc.
+  type: PlanDiagramType  // One of the whitelisted types
+  title: string          // Short, patent-style, non-logical
+  include: string[]      // Components (for BLOCK/SEQUENCE) or steps (for FLOW/ACTIVITY)
+}
+
+// Complete figure plan result
+interface FigurePlanResult {
+  diagrams: FigurePlanItem[]
+  count: number
+}
+
+// Sketch suggestion (for separate sketch generation)
+interface SketchSuggestion {
+  title: string
+  description: string
+  sketchType: 'physical_device' | 'user_interaction' | 'exploded_view' | 'cross_section' | 'environment_context' | 'comparative'
+}
+
+/**
+ * Parses and validates the LLM response into a FigurePlanResult.
+ * Returns null if the response is invalid.
+ */
+function parseFigurePlan(rawPlan: any): FigurePlanResult | null {
+  if (!rawPlan || !Array.isArray(rawPlan.diagrams) || rawPlan.diagrams.length === 0) {
+    return null
+  }
+
+  const validTypes: PlanDiagramType[] = ['BLOCK', 'FLOW', 'SEQUENCE', 'ACTIVITY']
+
+  const diagrams: FigurePlanItem[] = rawPlan.diagrams.map((d: any, idx: number) => {
+    const rawType = (d.type || 'BLOCK').toUpperCase() as PlanDiagramType
+    const type: PlanDiagramType = validTypes.includes(rawType) ? rawType : 'BLOCK'
+    
+    return {
+      figure: d.figure || `FIG. ${idx + 1}`,
+      type,
+      title: d.title || 'Untitled',
+      include: Array.isArray(d.include) ? d.include : []
+    }
+  })
+
+  return {
+    diagrams,
+    count: rawPlan.count || diagrams.length
+  }
+}
+
+async function handlePlanFiguresLLM(
+  user: any, 
+  patentId: string, 
+  data: any, 
+  requestHeaders: Record<string, string>
+): Promise<NextResponse> {
+  const { sessionId, figureCount } = data
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  // Optional: User can override the AI's figure count decision
+  // If figureCount is provided and valid (1-10), AI will plan exactly that many figures
+  const userRequestedCount = typeof figureCount === 'number' && figureCount >= 1 && figureCount <= 10 
+    ? figureCount 
+    : null
+
+  // Verify session
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { referenceMap: true, ideaRecord: true }
+  })
+  if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+
+  // Get active jurisdiction
+  const activeJurisdiction = (session as any).activeJurisdiction || 
+    ((session as any).draftingJurisdictions?.[0]) || 'US'
+
+  // Extract invention context
+  const idea = session.ideaRecord?.normalizedData as any
+  const components = (session.referenceMap as any)?.components || []
+  const claims = idea?.claimsStructured || []
+  const claimsText = idea?.claims || ''
+  
+  // Determine invention archetype
+  const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
+  const archetype = types.length > 0 ? types.join(' + ') : 'GENERAL'
+
+  // Build components context
+  const componentsContext = components.length > 0
+    ? components.map((c: any) => `- ${c.name} (${c.numeral || '?'})${c.description ? ': ' + c.description : ''}`).join('\n')
+    : 'No components defined yet.'
+
+  // Build claims context
+  let claimsContext = ''
+  if (claims.length > 0) {
+    claimsContext = claims.slice(0, 10).map((c: any) => 
+      `Claim ${c.number} (${c.type || 'unknown'}): ${(c.text || '').substring(0, 300)}...`
+    ).join('\n')
+  } else if (claimsText) {
+    claimsContext = claimsText.substring(0, 2000) + '...'
+  } else {
+    claimsContext = 'No claims available yet.'
+  }
+
+  // Build the planning prompt (PlantUML diagrams only - sketch suggestions are separate)
+  // OPTIMIZED: Zero diagram logic, minimum entropy, maximum downstream reliability
+  const planningPrompt = `═══════════════════════════════════════════════════════════════════════════════
+PATENT FIGURE PLANNER
+═══════════════════════════════════════════════════════════════════════════════
+
+You are a PATENT FIGURE PLANNER, not a designer or illustrator.
+Your job is to decide WHICH simple, patent-orthodox figures should exist,
+NOT to design them, NOT to specify connections, and NOT to express logic.
+
+The planner specifies WHAT appears together in a figure, not HOW they are connected.
+Connections are the generator's job, not yours.
+
+═══════════════════════════════════════════════════════════════════════════════
+INVENTION CONTEXT
+═══════════════════════════════════════════════════════════════════════════════
+TITLE: ${idea?.title || 'Untitled Invention'}
+ARCHETYPE: ${archetype}
+JURISDICTION: ${activeJurisdiction}
+
+PROBLEM SOLVED:
+${idea?.problem || 'Not specified'}
+
+TECHNICAL SOLUTION:
+${idea?.logic || idea?.objectives || 'Not specified'}
+
+COMPONENTS (with reference numerals):
+${componentsContext}
+
+PATENT CLAIMS:
+${claimsContext}
+
+═══════════════════════════════════════════════════════════════════════════════
+ALLOWED DIAGRAM TYPES (WHITELIST - Use ONLY these)
+═══════════════════════════════════════════════════════════════════════════════
+
+You may plan ONLY the following diagram types:
+
+1. BLOCK — System-level architecture (components + subsystems)
+2. FLOW — Method overview using rectangles + arrows only
+3. SEQUENCE — Flat interaction between major subsystems
+4. ACTIVITY — Linear activity steps (no decisions)
+
+YOU MUST NOT PLAN:
+- State diagrams
+- Decision trees
+- Error/fault diagrams
+- Power-mode diagrams
+- Any diagram requiring branching, looping, or concurrency
+
+═══════════════════════════════════════════════════════════════════════════════
+NO-COMPLEX-LOGIC RULE (MANDATORY - ABSOLUTE CONSTRAINT)
+═══════════════════════════════════════════════════════════════════════════════
+
+Planned diagrams must NOT include or imply:
+- if / else logic
+- decision points
+- alternative paths
+- loops, retries, or iterations
+- concurrency or parallelism
+- error, fault, or exception handling
+- power or battery conditions
+
+If an aspect of the invention requires such logic, it must be described in the
+written specification, NOT in figures.
+
+═══════════════════════════════════════════════════════════════════════════════
+PLANNING RULES (DETERMINISTIC)
+═══════════════════════════════════════════════════════════════════════════════
+
+${userRequestedCount 
+  ? `The user has requested EXACTLY ${userRequestedCount} diagrams. Plan exactly ${userRequestedCount} diagrams.` 
+  : `1. Always plan FIG. 1 as a BLOCK diagram.
+2. Default to exactly 4 diagrams:
+   - FIG. 1 — BLOCK (system architecture)
+   - FIG. 2 — FLOW (method overview)
+   - FIG. 3 — SEQUENCE (subsystem interaction)
+   - FIG. 4 — ACTIVITY (linear steps)
+3. If the invention is very simple, reduce to 3 diagrams by omitting ACTIVITY.
+4. Never plan more than 4 diagrams unless user explicitly requests more.`}
+
+KEEP DIAGRAMS SMALL:
+- BLOCK: 6–10 major components max
+- SEQUENCE: 3–5 participants max
+- FLOW / ACTIVITY: 5–8 steps max
+
+═══════════════════════════════════════════════════════════════════════════════
+COMPONENT SELECTION DISCIPLINE
+═══════════════════════════════════════════════════════════════════════════════
+
+When selecting items for "include", choose ONLY top-level functional components.
+OMIT: diagnostics, logging, calibration, error handling, and optional features.
+
+If unsure whether an element belongs in a diagram, OMIT IT.
+Simpler diagrams are preferred over completeness.
+
+═══════════════════════════════════════════════════════════════════════════════
+OUTPUT FORMAT (MANDATORY - Return valid JSON only)
+═══════════════════════════════════════════════════════════════════════════════
+
+{
+  "diagrams": [
+    {
+      "figure": "FIG. 1",
+      "type": "BLOCK",
+      "title": "System Architecture",
+      "include": ["Component A (100)", "Component B (200)"]
+    },
+    {
+      "figure": "FIG. 2",
+      "type": "FLOW",
+      "title": "Method Overview",
+      "include": ["Step 1", "Step 2", "Step 3"]
+    }
+  ],
+  "count": 2
+}
+
+SCHEMA RULES:
+- figure → sequential, starting at FIG. 1
+- type → one of: BLOCK, FLOW, SEQUENCE, ACTIVITY (no other types allowed)
+- title → short, patent-style, non-logical
+- include → list of components (for BLOCK/SEQUENCE) or steps (for FLOW/ACTIVITY)
+- count → total number of diagrams
+
+NO OTHER KEYS. NO NESTING. NO EXPLANATIONS.
+
+Return ONLY the JSON object. No markdown, no commentary.`
+
+  // Call LLM for planning
+  // Uses same stage code as generation so only ONE admin config is needed
+  const request = { headers: requestHeaders || {} }
+  const result = await llmGateway.executeLLMOperation(request, {
+    taskCode: 'LLM3_DIAGRAM',
+    stageCode: 'DRAFT_DIAGRAM_GENERATION', // Same stage as generation - single admin config
+    prompt: planningPrompt,
+    idempotencyKey: crypto.randomUUID(),
+    inputTokens: 8000, // Increased for complex prompts with components/claims
+    parameters: {
+      maxOutputTokens: 12000 // Large output for detailed figure plans
+    },
+    metadata: {
+      patentId,
+      sessionId,
+      purpose: 'plan_figures_llm'
+    }
+  })
+
+  if (!result.success || !result.response) {
+    return NextResponse.json({ error: result.error?.message || 'LLM planning failed' }, { status: 400 })
+  }
+
+  // Parse the planning response
+  let plan: FigurePlanResult | null = null
+  try {
+    const text = (result.response.output || '').trim()
+    // Try to extract JSON
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start !== -1 && end !== -1) {
+      const json = text.substring(start, end + 1)
+      const rawPlan = JSON.parse(json)
+      // Parse and validate the plan
+      plan = parseFigurePlan(rawPlan)
+    }
+  } catch (e) {
+    console.error('Failed to parse figure plan:', e)
+    return NextResponse.json({ error: 'Invalid planning response format' }, { status: 400 })
+  }
+
+  if (!plan || !Array.isArray(plan.diagrams) || plan.diagrams.length === 0) {
+    return NextResponse.json({ error: 'Planning did not produce valid figure plan' }, { status: 400 })
+  }
+
+  // Store the plan in session for use by generation stage
+  // We use aiAnalysisData field to store the plan temporarily (it's a Json field)
+  // Note: Sketch suggestions are generated separately via 'generate_sketch_suggestions' action
+  const existingAiData = (session as any).aiAnalysisData || {}
+  await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: {
+      aiAnalysisData: {
+        ...existingAiData,
+        figurePlan: plan
+      }
+    }
+  })
+
+  // Log diagram types for debugging
+  const diagramTypes = plan.diagrams.map((d: FigurePlanItem) => d.type)
+  const uniqueTypes = Array.from(new Set(diagramTypes))
+  console.log(`[FigurePlanning] Planned ${plan.count} diagrams with types: ${uniqueTypes.join(', ')}`)
+
+  return NextResponse.json({
+    success: true,
+    plan,
+    message: `Planned ${plan.count} diagrams (${uniqueTypes.join(', ')})`
+  })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMBINED: PLAN + GENERATE (Recommended for Auto Mode)
+// ═══════════════════════════════════════════════════════════════════════════════
+// This function combines Stage 1 (Planning) and Stage 2 (Generation) into one call.
+// It first plans the figures, then immediately generates the PlantUML code.
+// This is the recommended approach for automatic figure generation.
+
+async function handlePlanAndGenerateDiagramsLLM(
+  user: any,
+  patentId: string,
+  data: any,
+  requestHeaders: Record<string, string>
+): Promise<NextResponse> {
+  const { sessionId, replaceExisting, figureCount } = data
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  console.log('[PlanAndGenerate] Starting two-stage figure generation for session:', sessionId)
+  if (figureCount) {
+    console.log('[PlanAndGenerate] User requested figure count:', figureCount)
+  }
+
+  // Stage 1: Plan the figures
+  // Pass figureCount if user wants to override AI's decision
+  const planResponse = await handlePlanFiguresLLM(user, patentId, { sessionId, figureCount }, requestHeaders)
+  
+  // Check if planning succeeded
+  if (!planResponse.ok) {
+    const errorData = await planResponse.json()
+    console.error('[PlanAndGenerate] Planning stage failed:', errorData)
+    return NextResponse.json({ 
+      error: `Planning failed: ${errorData.error || 'Unknown error'}`,
+      stage: 'planning'
+    }, { status: planResponse.status })
+  }
+
+  const planResult = await planResponse.json()
+  console.log('[PlanAndGenerate] Planning complete:', planResult.plan?.figures?.length, 'figures planned')
+
+  // Stage 2: Generate code based on the plan
+  // We pass usePlan=true so it uses the plan we just saved
+  const generateResponse = await handleGenerateDiagramsLLM(
+    user, 
+    patentId, 
+    { 
+      sessionId, 
+      usePlan: true,  // Use the plan from Stage 1
+      replaceExisting: replaceExisting !== false
+    }, 
+    requestHeaders
+  )
+
+  // Check if generation succeeded
+  if (!generateResponse.ok) {
+    const errorData = await generateResponse.json()
+    console.error('[PlanAndGenerate] Generation stage failed:', errorData)
+    return NextResponse.json({ 
+      error: `Generation failed: ${errorData.error || 'Unknown error'}`,
+      stage: 'generation',
+      plan: planResult.plan  // Include the plan so user can see what was planned
+    }, { status: generateResponse.status })
+  }
+
+  const generateResult = await generateResponse.json()
+  console.log('[PlanAndGenerate] Generation complete:', generateResult.figures?.length, 'figures generated')
+
+  // Return combined result (sketch suggestions are generated separately via 'generate_sketch_suggestions')
+  return NextResponse.json({
+    success: true,
+    plan: planResult.plan,
+    figures: generateResult.figures,
+    message: `Successfully planned and generated ${generateResult.figures?.length || 0} diagrams`
+  })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STAGE 2: FIGURE GENERATION LLM
+// ═══════════════════════════════════════════════════════════════════════════════
+// This function takes a figure plan (from Stage 1) and generates PlantUML code.
+// It focuses ONLY on code quality, rule compliance, and syntax correctness.
+
+async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const { sessionId, prompt, replaceExisting, usePlan } = data
+
+  // When using plan, prompt is optional (we build it from plan)
+  if (!sessionId || (!prompt && !usePlan)) {
     return NextResponse.json({ error: 'Session ID and prompt are required' }, { status: 400 })
   }
 
@@ -5962,6 +6689,133 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
     include: { referenceMap: true, ideaRecord: true }
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // PLAN-BASED GENERATION (Stage 2 of two-stage approach)
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // If usePlan is true, we use the pre-computed figure plan to guide generation.
+  // This separates "what to draw" (Stage 1) from "how to draw it" (Stage 2).
+  
+  let effectivePrompt = prompt
+  let figurePlan: FigurePlanResult | null = null
+  
+  if (usePlan) {
+    // Fetch the plan from session (stored in aiAnalysisData.figurePlan)
+    const aiData = (session as any).aiAnalysisData || {}
+    const rawPlan = aiData.figurePlan
+    
+    // Parse and validate the plan
+    figurePlan = parseFigurePlan(rawPlan)
+    
+    if (!figurePlan || !Array.isArray(figurePlan.diagrams) || figurePlan.diagrams.length === 0) {
+      return NextResponse.json({ 
+        error: 'No figure plan found. Call plan_figures_llm first or set usePlan=false.' 
+      }, { status: 400 })
+    }
+
+    // Build components context
+    const components = (session.referenceMap as any)?.components || []
+    const componentsContext = components.length > 0
+      ? components.map((c: any) => `- ${c.name} (${c.numeral || '?'})`).join('\n')
+      : 'No components defined.'
+
+    // Map diagram types to PlantUML diagram types
+    const typeToPlantUML: Record<string, string> = {
+      'BLOCK': 'block/component diagram',
+      'FLOW': 'activity diagram (linear flow, no decisions)',
+      'SEQUENCE': 'sequence diagram',
+      'ACTIVITY': 'activity diagram (linear steps only)'
+    }
+
+    // Build plan-based prompt using PRODUCTION-SAFE template
+    // CRITICAL: Generator is a RENDERER, not an explainer.
+    // If it's not in the planner's include[], it doesn't exist.
+    effectivePrompt = `═══════════════════════════════════════════════════════════════════════════════
+PATENT DIAGRAM GENERATOR — PRODUCTION SAFE (PLANTUML)
+═══════════════════════════════════════════════════════════════════════════════
+
+You generate PATENT-READY diagrams in PlantUML.
+Your goal is MAXIMUM RELIABILITY and CLARITY.
+You are a RENDERER, not an explainer.
+
+INPUTS (SOURCE OF TRUTH):
+- Planner suggestions (JSON): See FIGURE PLAN below
+- Component registry (use verbatim; do not invent): See COMPONENTS below
+
+═══════════════════════════════════════════════════════════════════════════════
+GLOBAL RULES (NON-NEGOTIABLE)
+═══════════════════════════════════════════════════════════════════════════════
+1) Generate ALL diagrams in ONE response.
+2) Each diagram must be a complete PlantUML block with exactly ONE @startuml and ONE @enduml.
+3) Use ONLY the diagram type specified in the planner.
+4) ABSOLUTELY FORBIDDEN:
+   - if / else / endif
+   - alt, loop, fork, repeat, while, switch
+   - error handling, fault handling, power modes
+   - note, box, title, caption
+5) Do NOT invent components, steps, or interactions.
+6) If unsure, OMIT rather than add.
+
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE COMPONENTS (Use ONLY these - do not invent new ones)
+═══════════════════════════════════════════════════════════════════════════════
+${componentsContext}
+
+═══════════════════════════════════════════════════════════════════════════════
+FIGURE PLAN (MANDATORY - Generate exactly these figures)
+═══════════════════════════════════════════════════════════════════════════════
+${figurePlan.diagrams.map(d => `
+${d.figure}: ${d.title}
+  Type: ${d.type}
+  Include: ${d.include.join(', ')}
+`).join('\n')}
+
+═══════════════════════════════════════════════════════════════════════════════
+DIAGRAM TYPES — STRICT BEHAVIOR
+═══════════════════════════════════════════════════════════════════════════════
+
+BLOCK:
+- Use rectangle + optional package only
+- Max 10 components
+- Simple arrows only (-->, ..>)
+- No cycles unless physically obvious
+
+FLOW:
+- Rectangles + arrows only
+- Linear sequence only
+- Max 8 steps
+- No branching
+
+ACTIVITY:
+- start → linear actions → stop
+- Max 8 actions
+- No conditions or forks
+
+SEQUENCE:
+- participant + messages only
+- Max 5 participants, 12 messages
+- Flat only (no box, no alt, no loop)
+
+═══════════════════════════════════════════════════════════════════════════════
+STYLE (APPLIED TO EVERY DIAGRAM — DO NOT GENERATE SKINPARAMS)
+═══════════════════════════════════════════════════════════════════════════════
+The system will inject skinparams automatically. Do NOT include any skinparam lines.
+Just start with @startuml, add content, end with @enduml.
+
+═══════════════════════════════════════════════════════════════════════════════
+OUTPUT FORMAT (MANDATORY)
+═══════════════════════════════════════════════════════════════════════════════
+Return a JSON array of exactly ${figurePlan.diagrams.length} objects.
+Each object must be:
+{
+  "title": "<figure number> - <title from plan>",
+  "purpose": "<one sentence describing what the figure shows>",
+  "plantuml": "<PlantUML code from @startuml to @enduml>"
+}
+
+Return JSON only. No markdown. No commentary.
+`
+  }
 
   // Get active jurisdiction for this session
   const activeJurisdiction = (session as any).activeJurisdiction || 
@@ -6011,9 +6865,16 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
-  // Extract diagram count from prompt (e.g., "exactly 5 items" or "exactly 5 diagrams")
-  const diagramCountMatch = prompt.match(/exactly\s+(\d+)\s+(?:items|diagrams|figures)/i)
-  const diagramCount = diagramCountMatch ? parseInt(diagramCountMatch[1], 10) : 5
+  // Extract diagram count: from figure plan (if using plan) or from prompt
+  let diagramCount = 5 // Default
+  if (figurePlan && Array.isArray(figurePlan.diagrams)) {
+    // When using plan, get count from the plan itself
+    diagramCount = figurePlan.diagrams.length
+  } else if (prompt) {
+    // Legacy mode: extract from prompt text
+    const diagramCountMatch = prompt.match(/exactly\s+(\d+)\s+(?:items|diagrams|figures)/i)
+    diagramCount = diagramCountMatch ? parseInt(diagramCountMatch[1], 10) : 5
+  }
 
   // Extract claims for intelligent diagram type selection
   const frozenClaims = idea?.claimsStructured || []
@@ -6070,7 +6931,7 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
     nomenclature += ' Use: Reagent, Compound, Stage, Phase, Catalyst, Reactor (and similar domain entities).'
   }
 
-  const finalPrompt = `${prompt}
+  const finalPrompt = `${effectivePrompt}
 ${multiJurisdictionInstructions}
 ═══════════════════════════════════════════════════════════════════════════════
 JURISDICTION-SPECIFIC REQUIREMENTS (${activeJurisdiction})
@@ -6093,49 +6954,109 @@ NOMENCLATURE GUIDE: ${nomenclature}
 ${diagramTypeInstructions}
 
 ═══════════════════════════════════════════════════════════════════════════════
-DIAGRAM TECHNICAL REQUIREMENTS
+PRODUCTION-SAFE DIAGRAM RULES (MANDATORY)
 ═══════════════════════════════════════════════════════════════════════════════
-To ensure the diagrams render correctly, please follow these rules:
+You are a RENDERER, not an explainer. Apply these rules without exception.
 
-1. ARROW DIRECTIONS: Use "-down->", "-up->", "-left->", "-right->" for layout control.
-   - CORRECT: A -down-> B
-   - CORRECT: A -[hidden]- B
-   - INCORRECT: A -[hidden]down- B (Do not mix [hidden] with direction)
+─────────────────────────────────────────────────────────────────────────────────
+ABSOLUTELY FORBIDDEN (Will cause regeneration)
+─────────────────────────────────────────────────────────────────────────────────
+Do NOT use ANY of the following constructs:
+- if / else / endif (NO decision logic)
+- alt, loop, fork, repeat, while, switch
+- note, box, title, caption
+- Error handling, fault paths, power modes
+- Any component not in the include[] list
 
-2. CONNECTIONS: Always specify both endpoints.
-   - CORRECT: 500 --> 600
-   - INCORRECT: 500 -- (Dangling connection)
+─────────────────────────────────────────────────────────────────────────────────
+ALLOWED CONSTRUCTS ONLY
+─────────────────────────────────────────────────────────────────────────────────
+@startuml / @enduml
+rectangle "Name (XXX)" as ALIAS
+package "Group Name" { }
+participant "Name (XXX)" as ALIAS
+--> (solid arrow for data/control)
+..> (dashed arrow for power/utility)
+start / stop (ACTIVITY only)
+:Action text; (ACTIVITY only)
 
-3. BLOCKS: Close all blocks properly.
-   - matching "endif" for every "if"
-   - matching "end" for every "start"
-   - matching "stop" for every "start" in activity diagrams
+─────────────────────────────────────────────────────────────────────────────────
+SKINPARAM HANDLING (CRITICAL)
+─────────────────────────────────────────────────────────────────────────────────
+Do NOT generate ANY skinparam lines. The system injects them automatically.
 
-4. STRUCTURE:
-   - Exactly ONE @startuml and ONE @enduml per diagram.
-   - NO "note" elements (they create visual clutter).
-   - NO comments on components.
-
-5. CONTENT:
-   - Use ONLY provided components/numerals.
-   - Do not invent new components.
-   - NUMERALS MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
-
-6. ACTIVITY DIAGRAMS (when assigned):
-   - Use :Action text; format for actions
-   - Use if (condition?) then (yes) / else (no) / endif for decisions
-   - Use start and stop for begin/end
+─────────────────────────────────────────────────────────────────────────────────
+STRUCTURAL RULES
+─────────────────────────────────────────────────────────────────────────────────
+1. ORIENTATION: Use "top to bottom direction" as DEFAULT.
+2. SYSTEM BOUNDARY: Wrap all components in one outer rectangle.
+3. SUBSYSTEM GROUPING: Use max 3 packages for logical grouping.
+4. REFERENCE NUMERALS: Always use parentheses: "Controller (100)"
+5. ARROWS: Simple connections only. No labels or 1-3 word labels max.
+6. ONE @startuml, ONE @enduml per diagram.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CRITICAL: SYNTAX VERIFICATION
+REFERENCE EXAMPLES (LINEAR ONLY - NO LOGIC)
 ═══════════════════════════════════════════════════════════════════════════════
-Your output is fed directly to a renderer. Please verify:
-- All braces/blocks are closed.
-- All arrows have targets.
-- No invalid PlantUML syntax.
-- Activity diagrams have proper start/stop and if/endif pairs.
+⚠️ Use ONLY the components and numerals from the actual invention context.
 
-If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
+─────────────────────────────────────────────────────────────────────────────────
+EXAMPLE: Block Diagram (Correct - Linear, No Logic)
+─────────────────────────────────────────────────────────────────────────────────
+@startuml
+top to bottom direction
+
+rectangle "System (100)" as SYS {
+  package "Input" {
+    rectangle "Sensor (110)" as SENS
+  }
+  package "Processing" {
+    rectangle "Controller (200)" as CTRL
+  }
+  package "Output" {
+    rectangle "Actuator (300)" as ACT
+  }
+  SENS --> CTRL
+  CTRL --> ACT
+}
+@enduml
+
+─────────────────────────────────────────────────────────────────────────────────
+EXAMPLE: Activity Diagram (Correct - Linear Steps Only)
+─────────────────────────────────────────────────────────────────────────────────
+@startuml
+start
+:Receive input via sensor (110);
+:Process in controller (200);
+:Activate actuator (300);
+stop
+@enduml
+
+─────────────────────────────────────────────────────────────────────────────────
+EXAMPLE: Sequence Diagram (Correct - Flat, No Nesting)
+─────────────────────────────────────────────────────────────────────────────────
+@startuml
+participant "User (900)" as U
+participant "Controller (200)" as C
+participant "Sensor (110)" as S
+
+U -> C : request
+C -> S : query
+S --> C : data
+C --> U : response
+@enduml
+
+═══════════════════════════════════════════════════════════════════════════════
+FINAL CHECK (Before Output)
+═══════════════════════════════════════════════════════════════════════════════
+✓ No if/else/endif, alt, loop, fork, repeat, while, switch
+✓ No note, box, title, caption
+✓ No skinparam lines (system injects them)
+✓ Only uses components from include[] list
+✓ One @startuml and one @enduml
+✓ Linear flow only - no branching
+
+If in doubt, OMIT rather than add.
 `
 
   const request = { headers: requestHeaders || {} }
@@ -6144,7 +7065,10 @@ If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
     stageCode: 'DRAFT_DIAGRAM_GENERATION', // Use admin-configured model/limits
     prompt: finalPrompt,
     idempotencyKey: crypto.randomUUID(),
-    inputTokens: Math.ceil(finalPrompt.length / 4),
+    inputTokens: 8000, // Increased for comprehensive prompts with templates/rules
+    parameters: {
+      maxOutputTokens: 12000 // Large output for multiple PlantUML diagrams
+    },
     metadata: {
       patentId,
       sessionId,
@@ -6206,7 +7130,7 @@ If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
 
   // Persist immediately: assign figure numbers and save PlantUML + titles
   try {
-    const saved: Array<{ figureNo: number; title: string; plantuml: string; purpose: string; wasRepaired: boolean; repairFailed: boolean }> = []
+    const saved: Array<{ figureNo: number; title: string; plantuml: string; purpose: string; diagramType: string; hasValidationWarnings: boolean }> = []
 
     // When appending, continue numbering after existing figures; when replacing, start fresh
     const existingPlans = await prisma.figurePlan.findMany({ where: { sessionId } })
@@ -6225,35 +7149,51 @@ If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
       const title = typeof fig?.title === 'string' ? fig.title : 'Figure'
       const description = typeof fig?.purpose === 'string' ? fig.purpose : undefined
       const codeRaw = typeof fig?.plantuml === 'string' ? fig.plantuml : ''
+      
+      // Determine diagram type from figure plan or title
+      const figureType = fig?.type?.toUpperCase() || 
+        (figurePlan?.diagrams?.[i]?.type?.toUpperCase()) || 
+        'BLOCK'
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PRODUCTION-SAFE DIAGRAM PROCESSING PIPELINE
+      // Step 1: Sanitize (remove unsafe constructs)
+      // Step 2: Check forbidden keywords (C3 gate)
+      // Step 3: Inject fixed skinparams (F)
+      // Step 4: Enforce element caps (C2)
+      // Step 5: Validate structure
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      // Step 1: Basic sanitization
       let code = sanitizePlantUML(codeRaw)
       if (!code.includes('@startuml')) continue
 
-      // Validate and Auto-Repair PlantUML
-      let wasRepaired = false
-      let repairFailed = false
+      // Step 2: C3 FORBIDDEN KEYWORD GATE (Critical - triggers skip if any match)
+      // If forbidden keywords are detected, log and skip this diagram.
+      // PHILOSOPHY: Regenerate, don't repair. Since we can't regenerate individual
+      // diagrams in this context, we skip the problematic one.
+      const forbiddenCheck = containsForbiddenKeywords(code)
+      if (forbiddenCheck.hasForbidden) {
+        console.warn(`[DiagramsLLM] FORBIDDEN KEYWORDS detected in "${title}": ${forbiddenCheck.matches.join(', ')}. Skipping diagram.`)
+        continue // Skip this diagram - forbidden constructs detected
+      }
+
+      // Step 3: F - INJECT FIXED SKINPARAMS
+      // LLM should not have generated skinparams, but we inject the canonical block anyway.
+      code = injectFixedSkinparams(code)
+      
+      // Step 4: C2 - ENFORCE ELEMENT CAPS (truncate silently if over limit)
+      code = enforceDiagramCaps(code, figureType)
+
+      // Step 5: Validate structure (syntax check only, no repair)
+      // PHILOSOPHY: Regenerate, don't repair. We validate but don't attempt repair.
+      // If validation fails, we save with a warning but don't mutate the structure.
       const validation = validatePlantUmlStructure(code)
-      if (!validation.ok) {
-        console.log(`[DiagramsLLM] Figure "${title}" has syntax errors, attempting repair...`)
-        const components = session.referenceMap?.components || []
-        const allowedNumerals = Array.isArray(components) 
-          ? components.map((c: any) => c.numeral).filter(Boolean)
-          : []
-          
-        const repair = await attemptRepairPlantUml(code, validation.errors, {
-          figureTitle: title,
-          description: description,
-          numerals: allowedNumerals,
-          requestHeaders: requestHeaders || {}
-        })
-        
-        if (repair.ok && repair.code) {
-          console.log(`[DiagramsLLM] Repair successful for "${title}"`)
-          code = repair.code
-          wasRepaired = true
-        } else {
-          console.warn(`[DiagramsLLM] Repair failed for "${title}", saving original with errors.`)
-          repairFailed = true
-        }
+      const hasValidationErrors = !validation.ok
+      if (hasValidationErrors) {
+        console.warn(`[DiagramsLLM] Figure "${title}" has validation errors: ${validation.errors.map(e => e.message).join('; ')}`)
+        // Note: We still save the diagram but flag it. No repair attempts.
+        // Users can manually edit or regenerate the entire diagram set.
       }
 
       const figureNo = nextNo()
@@ -6276,101 +7216,164 @@ If in doubt, prefer a SIMPLE, VALID diagram over a complex one.
       saved.push({ 
         figureNo, 
         title: safeTitle, 
-        plantuml: code, // Include the (possibly repaired) code
+        plantuml: code,
         purpose: description || '',
-        wasRepaired,
-        repairFailed
+        diagramType: figureType,
+        hasValidationWarnings: hasValidationErrors
       })
     }
 
-    // Build response with repaired code included
-    const responseFigures = saved.map((s) => ({
+    // Build response with processed code
+    const responseFigures = saved.map((s: any) => ({
       title: s.title,
       figureNo: s.figureNo,
       plantuml: s.plantuml,
       purpose: s.purpose,
-      wasRepaired: s.wasRepaired,
-      repairFailed: s.repairFailed
+      diagramType: s.diagramType,
+      hasValidationWarnings: s.hasValidationWarnings || false
     }))
 
-    // === GENERATE SKETCH SUGGESTIONS ===
-    // After generating diagrams, also generate sketch suggestions for the Sketch tab
-    let sketchSuggestions: any[] = []
-    try {
-      // Build list of existing diagrams to avoid duplicating as sketches
-      const existingDiagramTitles = saved.map((s: any) => 
-        `Figure ${s.figureNo}: ${s.title}${s.purpose ? ` - ${s.purpose}` : ''}`
-      )
-      const sketchSuggestPrompt = buildSketchSuggestionsPrompt(session, existingDiagramTitles)
-      
-      const sketchResult = await llmGateway.executeLLMOperation(request, {
-        taskCode: 'LLM3_DIAGRAM',
-        stageCode: 'DRAFT_FIGURE_PLANNER', // Use Figure Planning tag
-        prompt: sketchSuggestPrompt,
-        idempotencyKey: crypto.randomUUID(),
-        inputTokens: Math.ceil(sketchSuggestPrompt.length / 4),
-        metadata: {
-          patentId,
-          sessionId,
-          purpose: 'generate_sketch_suggestions'
-        }
-      })
+    // === GENERATE SKETCH SUGGESTIONS IN BACKGROUND ===
+    // Fire-and-forget: Generate sketch suggestions asynchronously without blocking the response
+    // This allows PlantUML diagrams to be returned immediately to the user
+    const existingDiagramTitles = saved.map((s: any) => 
+      `Figure ${s.figureNo}: ${s.title}${s.purpose ? ` - ${s.purpose}` : ''}`
+    )
+    
+    // Start background sketch suggestion generation (do not await)
+    generateSketchSuggestionsInBackground(
+      session,
+      patentId,
+      sessionId,
+      existingDiagramTitles,
+      requestHeaders
+    ).catch(err => {
+      console.warn('[DiagramsLLM] Background sketch suggestion generation failed:', err)
+    })
 
-      if (sketchResult.success && sketchResult.response?.output) {
-        // Parse sketch suggestions from response
-        const suggestionText = sketchResult.response.output.trim()
-        try {
-          // Try to parse as JSON array
-          const start = suggestionText.indexOf('[')
-          const end = suggestionText.lastIndexOf(']')
-          if (start !== -1 && end !== -1) {
-            const jsonStr = suggestionText.substring(start, end + 1)
-            const parsed = JSON.parse(jsonStr)
-            if (Array.isArray(parsed)) {
-              sketchSuggestions = parsed.filter(s => s.title && s.description)
-            }
-          }
-        } catch {
-          // Fallback: try to extract from structured text using exec loop
-          const regex = /(?:TITLE|Title):\s*(.+?)(?:\n|$)[\s\S]*?(?:DESCRIPTION|Description):\s*([\s\S]+?)(?=(?:TITLE|Title):|$)/gi
-          let match: RegExpExecArray | null
-          while ((match = regex.exec(suggestionText)) !== null) {
-            if (match[1] && match[2]) {
-              sketchSuggestions.push({
-                title: match[1].trim(),
-                description: match[2].trim().split('\n')[0] // Take first paragraph
-              })
-            }
-          }
-        }
-
-        // Create SUGGESTED sketch records if we got suggestions
-        if (sketchSuggestions.length > 0) {
-          const { createSketchSuggestions, clearSketchSuggestions } = await import('@/lib/sketch-service')
-          
-          // Clear old suggestions before creating new ones
-          await clearSketchSuggestions(sessionId)
-          
-          // Create new suggestion records
-          await createSketchSuggestions(patentId, sessionId, sketchSuggestions)
-          
-          console.log(`[DiagramsLLM] Created ${sketchSuggestions.length} sketch suggestions`)
-        }
-      }
-    } catch (sketchErr) {
-      console.warn('[DiagramsLLM] Failed to generate sketch suggestions:', sketchErr)
-      // Don't fail the main response - sketch suggestions are optional
-    }
-
+    // Return diagrams immediately without waiting for sketch suggestions
     return NextResponse.json({ 
       figures: responseFigures, 
       saved,
-      sketchSuggestions: sketchSuggestions.length > 0 ? sketchSuggestions : undefined
+      sketchSuggestionsGenerating: true // Indicate that suggestions are being generated in background
     })
   } catch (persistErr) {
     console.error('Persist diagrams error:', persistErr)
     // Even if persistence fails, return figures so UI shows codes
     return NextResponse.json({ figures, warning: 'Figures generated but could not be saved.' })
+  }
+}
+
+/**
+ * Generates sketch suggestions in the background without blocking the main response.
+ * This function is called after PlantUML diagrams are generated and returned to the user.
+ * The suggestions are saved to the database and can be fetched by the UI later.
+ * 
+ * IMPORTANT: This function will SKIP generation if sketch suggestions already exist.
+ * Users can manually regenerate suggestions via the Sketch UI which uses a separate action.
+ * 
+ * @param session - The drafting session object
+ * @param patentId - The patent ID
+ * @param sessionId - The session ID
+ * @param existingDiagramTitles - List of existing diagram titles to avoid duplication
+ * @param requestHeaders - Request headers for LLM gateway authentication
+ */
+async function generateSketchSuggestionsInBackground(
+  session: any,
+  patentId: string,
+  sessionId: string,
+  existingDiagramTitles: string[],
+  requestHeaders: Record<string, string>
+): Promise<void> {
+  console.log(`[SketchSuggestions] Checking for existing suggestions for session: ${sessionId}`)
+  
+  try {
+    // Check if sketch suggestions already exist for this session
+    // If they do, skip auto-generation to avoid unnecessary LLM calls
+    // Users can manually regenerate via the Sketch UI if needed
+    const existingSuggestions = await prisma.sketchRecord.findMany({
+      where: {
+        sessionId,
+        status: 'SUGGESTED',
+        isDeleted: false
+      },
+      select: { id: true }
+    })
+    
+    if (existingSuggestions.length > 0) {
+      console.log(`[SketchSuggestions] Skipping auto-generation: ${existingSuggestions.length} suggestions already exist for session: ${sessionId}`)
+      return // Silently skip - user can manually regenerate from Sketch UI if needed
+    }
+    
+    console.log(`[SketchSuggestions] No existing suggestions found, starting background generation for session: ${sessionId}`)
+    
+    const sketchSuggestPrompt = buildSketchSuggestionsPrompt(session, existingDiagramTitles)
+    
+    const request = { headers: requestHeaders || {} }
+    const sketchResult = await llmGateway.executeLLMOperation(request, {
+      taskCode: 'LLM3_DIAGRAM',
+      stageCode: 'DRAFT_FIGURE_PLANNER', // Use Figure Planning tag
+      prompt: sketchSuggestPrompt,
+      idempotencyKey: crypto.randomUUID(),
+      inputTokens: Math.ceil(sketchSuggestPrompt.length / 4),
+      metadata: {
+        patentId,
+        sessionId,
+        purpose: 'generate_sketch_suggestions_background'
+      }
+    })
+
+    if (!sketchResult.success || !sketchResult.response?.output) {
+      console.warn(`[SketchSuggestions] LLM call failed for session: ${sessionId}`)
+      return
+    }
+
+    // Parse sketch suggestions from response
+    const suggestionText = sketchResult.response.output.trim()
+    let sketchSuggestions: any[] = []
+    
+    try {
+      // Try to parse as JSON array
+      const start = suggestionText.indexOf('[')
+      const end = suggestionText.lastIndexOf(']')
+      if (start !== -1 && end !== -1) {
+        const jsonStr = suggestionText.substring(start, end + 1)
+        const parsed = JSON.parse(jsonStr)
+        if (Array.isArray(parsed)) {
+          sketchSuggestions = parsed.filter(s => s.title && s.description)
+        }
+      }
+    } catch {
+      // Fallback: try to extract from structured text using exec loop
+      const regex = /(?:TITLE|Title):\s*(.+?)(?:\n|$)[\s\S]*?(?:DESCRIPTION|Description):\s*([\s\S]+?)(?=(?:TITLE|Title):|$)/gi
+      let match: RegExpExecArray | null
+      while ((match = regex.exec(suggestionText)) !== null) {
+        if (match[1] && match[2]) {
+          sketchSuggestions.push({
+            title: match[1].trim(),
+            description: match[2].trim().split('\n')[0] // Take first paragraph
+          })
+        }
+      }
+    }
+
+    // Create SUGGESTED sketch records if we got suggestions
+    if (sketchSuggestions.length > 0) {
+      const { createSketchSuggestions, clearSketchSuggestions } = await import('@/lib/sketch-service')
+      
+      // Clear old suggestions before creating new ones
+      await clearSketchSuggestions(sessionId)
+      
+      // Create new suggestion records
+      await createSketchSuggestions(patentId, sessionId, sketchSuggestions)
+      
+      console.log(`[SketchSuggestions] Background generation complete: Created ${sketchSuggestions.length} suggestions for session: ${sessionId}`)
+    } else {
+      console.log(`[SketchSuggestions] Background generation complete: No suggestions generated for session: ${sessionId}`)
+    }
+  } catch (err) {
+    console.error(`[SketchSuggestions] Background generation error for session ${sessionId}:`, err)
+    // Silent failure - this is a background task
   }
 }
 
@@ -6588,25 +7591,41 @@ async function handleSavePlantUML(user: any, patentId: string, data: any) {
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
 
-  // Sanitize and validate PlantUML, attempt auto-repair if needed
-  const allowedNumerals: string[] = Array.isArray((session as any)?.referenceMap?.components)
-    ? (session as any).referenceMap.components.map((c: any) => c.numeral).filter(Boolean)
-    : []
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION-SAFE DIAGRAM PROCESSING (handleSavePlantUML)
+  // PHILOSOPHY: Regenerate, don't repair. No LLM repair attempts.
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Step 1: Sanitize (removes all skinparams, forbidden constructs)
   let workingCode = sanitizePlantUML(plantumlCode)
-  let validation = validatePlantUmlStructure(workingCode)
-  if (!validation.ok) {
-    const repair = await attemptRepairPlantUml(workingCode, validation.errors, {
-      figureTitle: title,
-      description,
-      numerals: allowedNumerals
-    })
-    if (repair.ok && repair.code) {
-      workingCode = repair.code
-      validation = validatePlantUmlStructure(workingCode)
-    }
+  
+  // Step 2: C3 FORBIDDEN KEYWORD GATE
+  const forbiddenCheck = containsForbiddenKeywords(workingCode)
+  if (forbiddenCheck.hasForbidden) {
+    return NextResponse.json(
+      { 
+        error: 'Diagram contains forbidden constructs', 
+        details: `Detected: ${forbiddenCheck.matches.join(', ')}. These are not allowed in patent diagrams.`,
+        action: 'Please edit the PlantUML code to remove if/else, loops, or decision logic.'
+      },
+      { status: 400 }
+    )
   }
+  
+  // Step 3: Inject fixed skinparams
+  workingCode = injectFixedSkinparams(workingCode)
+  
+  // Step 4: Validate structure (no repair - just validate)
+  const validation = validatePlantUmlStructure(workingCode)
   if (!validation.ok) {
-    return NextResponse.json({ error: 'PlantUML validation failed', details: validation.errors }, { status: 400 })
+    return NextResponse.json(
+      { 
+        error: 'PlantUML validation failed', 
+        details: validation.errors,
+        action: 'Please edit the code to fix structural issues.'
+      }, 
+      { status: 400 }
+    )
   }
 
   // Upsert diagram source and figure plan title
@@ -6626,58 +7645,34 @@ async function handleSavePlantUML(user: any, patentId: string, data: any) {
   })
 
   // Generate and save image from PlantUML code
-  // NOTE: Repair flow is streamlined - only 1 LLM repair attempt on render failure (validation repair already done above)
+  // NOTE: REGENERATE-NOT-REPAIR - No LLM repair attempts. If render fails, return error.
   try {
-    // Clean the PlantUML code for rendering (preserves allowed skinparams)
-    let cleaned = cleanForRendering(workingCode)
+    // Clean the PlantUML code for rendering
+    const cleaned = cleanForRendering(workingCode)
 
     const base = process.env.PLANTUML_BASE_URL || 'https://www.plantuml.com/plantuml'
-    let encoded = plantumlEncoder.encode(cleaned)
+    const encoded = plantumlEncoder.encode(cleaned)
 
-    let resp = await fetch(`${base}/png/${encoded}`, {
+    const resp = await fetch(`${base}/png/${encoded}`, {
       cache: 'no-store',
       method: 'GET',
       headers: { 'Accept': 'image/png' }
     })
 
-    // One-time retry with LLM repair if render fails
+    // REGENERATE-NOT-REPAIR: If render fails, return error immediately (no retry)
     if (!resp.ok) {
       const failureText = await resp.text().catch(() => '')
       const txtError = await fetchPlantUmlErrorText(base, encoded)
-      const retryRepair = await attemptRepairPlantUml(workingCode, validation.errors, {
-        figureTitle: cleanedTitle,
-        description,
-        numerals: allowedNumerals,
-        plantumlErrorText: txtError || failureText || undefined
-      })
-      if (retryRepair.ok && retryRepair.code) {
-        workingCode = retryRepair.code
-        cleaned = cleanForRendering(workingCode)
-        await prisma.diagramSource.update({
-          where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } },
-          data: { plantumlCode: workingCode, checksum: crypto.createHash('sha256').update(workingCode).digest('hex') }
-        })
-        const retryEncoded = plantumlEncoder.encode(cleaned)
-        resp = await fetch(`${base}/png/${retryEncoded}`, {
-          cache: 'no-store',
-          method: 'GET',
-          headers: { 'Accept': 'image/png' }
-        })
-      }
-      if (!resp.ok) {
-        const retryFailure = await resp.text().catch(() => '')
-        return NextResponse.json(
-          {
-            error: 'Diagram render failed after auto-repair attempt',
-            details: retryFailure || failureText || `HTTP ${resp.status}`,
-            autoRepairAttempted: true,
-            action: 'Please submit a manual regenerate request for this diagram.',
-            figureTitle: cleanedTitle,
-            figureDescription: description || 'No description available'
-          },
-          { status: 502 }
-        )
-      }
+      return NextResponse.json(
+        {
+          error: 'Diagram render failed',
+          details: txtError || failureText || `HTTP ${resp.status}`,
+          action: 'Please edit the PlantUML code to fix syntax issues, then save again.',
+          figureTitle: cleanedTitle,
+          figureDescription: description || 'No description available'
+        },
+        { status: 502 }
+      )
     }
 
     const buf = Buffer.from(await resp.arrayBuffer())
@@ -7208,7 +8203,7 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
 
   // Build prompt - if existing diagram exists, emphasize MODIFICATION; otherwise generate fresh
   const hasExistingDiagram = existingDiagramCode && existingDiagramCode.includes('@startuml')
-  
+
   const prompt = hasExistingDiagram 
     ? `You are MODIFYING an existing ${diagramInfo.name.toLowerCase()} for a patent figure.
 
@@ -7218,6 +8213,7 @@ USER'S MODIFICATION REQUEST (HIGHEST PRIORITY)
 ${instructions || 'No specific instructions provided'}
 
 THE USER'S REQUEST ABOVE TAKES ABSOLUTE PRIORITY. Follow it exactly.
+If user explicitly requests different styles, layouts, or overrides, FOLLOW THE USER'S INSTRUCTIONS.
 
 ═══════════════════════════════════════════════════════════════════════════════
 MODIFICATION GUIDELINES
@@ -7225,19 +8221,55 @@ MODIFICATION GUIDELINES
 1. USER INSTRUCTIONS COME FIRST: Always prioritize what the user explicitly asks for.
 
 2. WHAT USERS CAN REQUEST (honor all of these):
-   - LAYOUT CHANGES: "make it vertical", "horizontal", "rearrange", "reorder" → Change structure
+   - LAYOUT CHANGES: "make it vertical", "horizontal", "rearrange", "reorder" → Change structure as requested
    - SMALL CORRECTIONS: "fix typo", "rename X to Y", "change label" → Preserve structure, fix targeted item
    - ADD/REMOVE: "add component", "remove X", "add arrow" → Apply change, preserve rest
    - SIMPLIFY: "simplify", "remove clutter", "show only main flow" → Reduce complexity as requested
    - EXPAND: "add more detail", "show sub-steps", "elaborate" → Add detail as requested
-   - DIAGRAM TYPE CONVERSION: "convert to sequence diagram", "make it an activity diagram" → Convert type
+   - DIAGRAM TYPE CONVERSION: "convert to sequence diagram", "make it an activity diagram" → Convert type as requested
    - RESTRUCTURE: "reorganize", "change the flow", "flip direction" → Restructure as requested
+   - STYLE OVERRIDES: If user explicitly requests different skinparams/styles → Apply user's style preferences
    
-   NOTE: Do NOT add colors, custom styling, or skinparam changes. Patent diagrams must remain monochrome.
+   NOTE: Do NOT add colors unless user explicitly requests. Patent diagrams should remain monochrome by default.
 
-3. DEFAULT BEHAVIOR (when user intent is unclear):
-   - Lean toward preserving existing structure while applying the specific change
-   - Keep components, connections, and flow intact unless explicitly asked to change them
+3. DEFAULT BEHAVIOR (when user does NOT specify style/layout changes):
+   - Apply the canonical style settings below
+   - Preserve existing structure while applying the specific change
+
+═══════════════════════════════════════════════════════════════════════════════
+CANONICAL STYLE DEFAULTS (Apply unless user explicitly overrides)
+═══════════════════════════════════════════════════════════════════════════════
+When modifying the diagram, APPLY these canonical skinparam settings UNLESS user explicitly requests different styles:
+
+skinparam backgroundColor white
+skinparam rectangleBackgroundColor white
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam defaultFontName Arial
+skinparam defaultFontSize 14
+skinparam ArrowColor black
+skinparam BorderColor black
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 45
+skinparam BorderThickness 1.3
+skinparam PackageBorderThickness 1.3
+skinparam PackageTitleFontStyle bold
+
+Default direction: top to bottom direction (use left to right only for very simple diagrams ≤3 components)
+
+**PATENT FIGURE SEMANTICS (Apply unless user overrides):**
+- All connectors should be orthogonal (skinparam linetype ortho) unless user requests otherwise.
+- Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
+- Solid arrows (-->) = data/control paths.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
+- Nesting depth max = 2 levels.
+
+**HELPER NODES ALLOWED:**
+- Un-numbered helper nodes ("Power bus", "Comms bus", "Data bus") are allowed for routing clarity.
+- Helper nodes MUST NOT contain numerals.
 
 ═══════════════════════════════════════════════════════════════════════════════
 EXISTING DIAGRAM TO MODIFY
@@ -7267,14 +8299,61 @@ TECHNICAL REQUIREMENTS
 2. CONNECTIONS: Always specify both endpoints.
 3. BLOCKS: Close all blocks properly (endif for if, end for start).
 4. STRUCTURE: Exactly ONE @startuml and ONE @enduml per diagram. NO notes.
-5. CONTENT: Use ONLY provided components/numerals. Do not invent new components.
+5. CONTENT: Use ONLY provided numbered components/numerals. Un-numbered helper nodes (buses) are allowed.
+6. SKINPARAMS: Apply canonical skinparam settings above. If user explicitly requests different styles, follow user's instructions instead.
 
 Figure title: ${title}
 Output ONLY the modified diagram code (@startuml..@enduml).`
     : `You are creating a ${diagramInfo.name.toLowerCase()} for a patent figure.
-Keep the diagram simple and valid. Use only these components/numerals: ${numeralsPreview}.
+Keep the diagram simple and valid.
 CRITICAL: All reference numerals MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 Invention Type: ${archetype}
+
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE COMPONENTS/NUMERALS
+═══════════════════════════════════════════════════════════════════════════════
+${numeralsPreview}
+
+**NUMBERED ELEMENT RULE (STRICT):**
+- Use ONLY the provided numbered components and their numerals listed above.
+- Do NOT invent any additional numbered components or numerals.
+
+**HELPER NODES ALLOWED:**
+- You MAY add un-numbered helper nodes ONLY for routing clarity: "Power bus", "Comms bus", "Data bus", "Interface bus"
+- Helper nodes MUST NOT contain numerals.
+
+═══════════════════════════════════════════════════════════════════════════════
+CANONICAL STYLE (MANDATORY)
+═══════════════════════════════════════════════════════════════════════════════
+Your diagram MUST include these skinparam settings:
+
+skinparam backgroundColor white
+skinparam rectangleBackgroundColor white
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam defaultFontName Arial
+skinparam defaultFontSize 14
+skinparam ArrowColor black
+skinparam BorderColor black
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 45
+skinparam BorderThickness 1.3
+skinparam PackageBorderThickness 1.3
+skinparam PackageTitleFontStyle bold
+
+Default direction: top to bottom direction (produces cleaner patent figures)
+
+═══════════════════════════════════════════════════════════════════════════════
+PATENT FIGURE SEMANTICS (STRICT)
+═══════════════════════════════════════════════════════════════════════════════
+- All connectors must be orthogonal (skinparam linetype ortho is mandatory).
+- No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
+- Solid arrows (-->) = data/control paths.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
+- Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
 DIAGRAM TYPE: ${diagramInfo.name}
@@ -7282,9 +8361,6 @@ DIAGRAM TYPE: ${diagramInfo.name}
 ${diagramInfo.description}
 
 ${diagramInfo.syntaxGuide}
-
-Example:
-${diagramInfo.exampleCode}
 
 ═══════════════════════════════════════════════════════════════════════════════
 JURISDICTION-SPECIFIC REQUIREMENTS (${activeJurisdiction})
@@ -7303,12 +8379,9 @@ NOMENCLATURE GUIDE (Apply based on Invention Type)
 ═══════════════════════════════════════════════════════════════════════════════
 DIAGRAM TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════════════
-To ensure the diagram renders correctly, please follow these rules:
-
 1. ARROW DIRECTIONS: Use "-down->", "-up->", "-left->", "-right->" for layout control.
    - CORRECT: A -down-> B
-   - CORRECT: A -[hidden]- B
-   - INCORRECT: A -[hidden]down- B (Do not mix [hidden] with direction)
+   - Use hidden links (-[hidden]->) to control layout without visible arrows.
 
 2. CONNECTIONS: Always specify both endpoints.
    - CORRECT: 500 --> 600
@@ -7321,11 +8394,10 @@ To ensure the diagram renders correctly, please follow these rules:
 4. STRUCTURE:
    - Exactly ONE @startuml and ONE @enduml per diagram.
    - NO "note" elements (they create visual clutter).
-   - NO comments on components.
 
 5. CONTENT:
-   - Use ONLY provided components/numerals.
-   - Do not invent new components.
+   - Use ONLY provided numbered components/numerals.
+   - Un-numbered helper nodes (buses) are allowed for routing.
    - NUMERALS MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 
 Existing title: ${title}
@@ -7358,31 +8430,30 @@ Output ONLY the diagram code (@startuml..@enduml).`
     return NextResponse.json({ error: 'Diagram code became invalid after processing. Please try again with different instructions.' }, { status: 400 })
   }
 
-  // Validate and Auto-Repair PlantUML
-  let wasRepaired = false
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION-SAFE PROCESSING (REGENERATE-NOT-REPAIR)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // C3: Check forbidden keywords
+  const forbiddenCheck = containsForbiddenKeywords(code)
+  if (forbiddenCheck.hasForbidden) {
+    return NextResponse.json({ 
+      error: 'Generated diagram contains forbidden constructs',
+      details: `Detected: ${forbiddenCheck.matches.join(', ')}. Please try again with instructions that avoid decision logic.`
+    }, { status: 400 })
+  }
+  
+  // Inject fixed skinparams
+  code = injectFixedSkinparams(code)
+  
+  // Validate structure (NO repair - regenerate-not-repair philosophy)
   const validation = validatePlantUmlStructure(code)
   if (!validation.ok) {
-    console.log(`[RegenerateDiagramLLM] Figure ${figureNo} has syntax errors, attempting repair...`)
-    const allowedNumerals = components.map((c: any) => c.numeral).filter(Boolean)
-    
-    const repair = await attemptRepairPlantUml(code, validation.errors, {
-      figureTitle: title,
-      numerals: allowedNumerals,
-      requestHeaders: requestHeaders || {}
-    })
-    
-    if (repair.ok && repair.code) {
-      console.log(`[RegenerateDiagramLLM] Repair successful for figure ${figureNo}`)
-      code = repair.code
-      wasRepaired = true
-    } else {
-      console.warn(`[RegenerateDiagramLLM] Repair failed for figure ${figureNo}`)
-      // Return error with details instead of saving broken code
-      return NextResponse.json({ 
-        error: 'Generated diagram has syntax errors that could not be auto-repaired. Please try again with different instructions.',
-        details: validation.errors 
-      }, { status: 400 })
-    }
+    console.warn(`[RegenerateDiagramLLM] Figure ${figureNo} has syntax errors`)
+    return NextResponse.json({ 
+      error: 'Generated diagram has syntax errors. Please try again with different instructions.',
+      details: validation.errors 
+    }, { status: 400 })
   }
 
   const checksum = crypto.createHash('sha256').update(code).digest('hex')
@@ -7402,7 +8473,7 @@ Output ONLY the diagram code (@startuml..@enduml).`
     create: { sessionId, figureNo, plantumlCode: code, checksum, language: 'en' }
   })
 
-  return NextResponse.json({ diagramSource, wasRepaired })
+  return NextResponse.json({ diagramSource })
 }
 
 async function handleAddFigureLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
@@ -7436,9 +8507,54 @@ async function handleAddFigureLLM(user: any, patentId: string, data: any, reques
   const diagramInfo = DIAGRAM_TYPES[diagramType]
 
   const prompt = `Add one new ${diagramInfo.name.toLowerCase()} figure for a patent.
-Use only numerals: ${numeralsPreview}.
 CRITICAL: All reference numerals MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 Invention Type: ${archetype}
+
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE COMPONENTS/NUMERALS
+═══════════════════════════════════════════════════════════════════════════════
+${numeralsPreview}
+
+**NUMBERED ELEMENT RULE (STRICT):**
+- Use ONLY the provided numbered components and their numerals listed above.
+- Do NOT invent any additional numbered components or numerals.
+
+**HELPER NODES ALLOWED:**
+- You MAY add un-numbered helper nodes ONLY for routing clarity: "Power bus", "Comms bus", "Data bus", "Interface bus"
+- Helper nodes MUST NOT contain numerals.
+
+═══════════════════════════════════════════════════════════════════════════════
+CANONICAL STYLE (MANDATORY)
+═══════════════════════════════════════════════════════════════════════════════
+Your diagram MUST include these skinparam settings:
+
+skinparam backgroundColor white
+skinparam rectangleBackgroundColor white
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam defaultFontName Arial
+skinparam defaultFontSize 14
+skinparam ArrowColor black
+skinparam BorderColor black
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 45
+skinparam BorderThickness 1.3
+skinparam PackageBorderThickness 1.3
+skinparam PackageTitleFontStyle bold
+
+Default direction: top to bottom direction (produces cleaner patent figures)
+
+═══════════════════════════════════════════════════════════════════════════════
+PATENT FIGURE SEMANTICS (STRICT)
+═══════════════════════════════════════════════════════════════════════════════
+- All connectors must be orthogonal (skinparam linetype ortho is mandatory).
+- No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
+- Solid arrows (-->) = data/control paths.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
+- Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
 DIAGRAM TYPE: ${diagramInfo.name}
@@ -7446,9 +8562,6 @@ DIAGRAM TYPE: ${diagramInfo.name}
 ${diagramInfo.description}
 
 ${diagramInfo.syntaxGuide}
-
-Example:
-${diagramInfo.exampleCode}
 
 ═══════════════════════════════════════════════════════════════════════════════
 JURISDICTION-SPECIFIC REQUIREMENTS (${activeJurisdiction})
@@ -7467,30 +8580,22 @@ NOMENCLATURE GUIDE (Apply based on Invention Type)
 ═══════════════════════════════════════════════════════════════════════════════
 DIAGRAM TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════════════
-To ensure the diagram renders correctly, please follow these rules:
-
 1. ARROW DIRECTIONS: Use "-down->", "-up->", "-left->", "-right->" for layout control.
-   - CORRECT: A -down-> B
-   - CORRECT: A -[hidden]- B
-   - INCORRECT: A -[hidden]down- B (Do not mix [hidden] with direction)
+   - Use hidden links (-[hidden]->) to control layout without visible arrows.
 
 2. CONNECTIONS: Always specify both endpoints.
    - CORRECT: 500 --> 600
    - INCORRECT: 500 -- (Dangling connection)
 
 3. BLOCKS: Close all blocks properly.
-   - matching "endif" for every "if"
-   - matching "end" for every "start"
-   - matching "stop" for every "start" in activity diagrams
 
 4. STRUCTURE:
    - Exactly ONE @startuml and ONE @enduml per diagram.
    - NO "note" elements (they create visual clutter).
-   - NO comments on components.
 
 5. CONTENT:
-   - Use ONLY provided components/numerals.
-   - Do not invent new components.
+   - Use ONLY provided numbered components/numerals.
+   - Un-numbered helper nodes (buses) are allowed for routing.
    - NUMERALS MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 
 User instructions: ${instructions || 'none'}
@@ -7521,29 +8626,30 @@ Return ONLY diagram code.`
     return NextResponse.json({ error: 'Diagram code became invalid after processing. Please try again with different instructions.' }, { status: 400 })
   }
 
-  // Validate and Auto-Repair PlantUML
-  let wasRepaired = false
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION-SAFE PROCESSING (REGENERATE-NOT-REPAIR)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // C3: Check forbidden keywords
+  const forbiddenCheck = containsForbiddenKeywords(code)
+  if (forbiddenCheck.hasForbidden) {
+    return NextResponse.json({ 
+      error: 'Generated diagram contains forbidden constructs',
+      details: `Detected: ${forbiddenCheck.matches.join(', ')}. Please try again with instructions that avoid decision logic.`
+    }, { status: 400 })
+  }
+  
+  // Inject fixed skinparams
+  code = injectFixedSkinparams(code)
+  
+  // Validate structure (NO repair - regenerate-not-repair philosophy)
   const validation = validatePlantUmlStructure(code)
   if (!validation.ok) {
-    console.log(`[AddFigureLLM] New figure has syntax errors, attempting repair...`)
-    const allowedNumerals = components2.map((c: any) => c.numeral).filter(Boolean)
-    
-    const repair = await attemptRepairPlantUml(code, validation.errors, {
-      numerals: allowedNumerals,
-      requestHeaders: requestHeaders || {}
-    })
-    
-    if (repair.ok && repair.code) {
-      console.log(`[AddFigureLLM] Repair successful`)
-      code = repair.code
-      wasRepaired = true
-    } else {
-      console.warn(`[AddFigureLLM] Repair failed`)
-      return NextResponse.json({ 
-        error: 'Generated diagram has syntax errors that could not be auto-repaired. Please try again with different instructions.',
-        details: validation.errors 
-      }, { status: 400 })
-    }
+    console.warn(`[AddFigureLLM] New figure has syntax errors`)
+    return NextResponse.json({ 
+      error: 'Generated diagram has syntax errors. Please try again with different instructions.',
+      details: validation.errors 
+    }, { status: 400 })
   }
 
   // Assign next figure number
@@ -7558,7 +8664,7 @@ Return ONLY diagram code.`
   await prisma.figurePlan.upsert({ where: { sessionId_figureNo: { sessionId, figureNo } }, update: { title }, create: { sessionId, figureNo, title, nodes: [], edges: [] } })
   const diagramSource = await prisma.diagramSource.upsert({ where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } }, update: { plantumlCode: code, checksum }, create: { sessionId, figureNo, plantumlCode: code, checksum, language: 'en' } })
 
-  return NextResponse.json({ diagramSource, wasRepaired })
+  return NextResponse.json({ diagramSource })
 }
 
 async function handleAddFiguresLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
@@ -7593,10 +8699,55 @@ async function handleAddFiguresLLM(user: any, patentId: string, data: any, reque
 
   const aggregatePrompt = `You are adding ${instructionsList.length} new simple block diagram figures to a patent.
 Invention: ${inventionTitle}
-Use only components/numerals: ${numeralsPreview}
 CRITICAL: All reference numerals MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 Existing figures: ${existingNames || 'none'}
 Invention Type: ${archetype}
+
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE COMPONENTS/NUMERALS
+═══════════════════════════════════════════════════════════════════════════════
+${numeralsPreview}
+
+**NUMBERED ELEMENT RULE (STRICT):**
+- Use ONLY the provided numbered components and their numerals listed above.
+- Do NOT invent any additional numbered components or numerals.
+
+**HELPER NODES ALLOWED:**
+- You MAY add un-numbered helper nodes ONLY for routing clarity: "Power bus", "Comms bus", "Data bus", "Interface bus"
+- Helper nodes MUST NOT contain numerals.
+
+═══════════════════════════════════════════════════════════════════════════════
+CANONICAL STYLE (MANDATORY FOR EACH DIAGRAM)
+═══════════════════════════════════════════════════════════════════════════════
+Each diagram MUST include these skinparam settings:
+
+skinparam backgroundColor white
+skinparam rectangleBackgroundColor white
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam defaultFontName Arial
+skinparam defaultFontSize 14
+skinparam ArrowColor black
+skinparam BorderColor black
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 45
+skinparam BorderThickness 1.3
+skinparam PackageBorderThickness 1.3
+skinparam PackageTitleFontStyle bold
+
+Default direction: top to bottom direction (produces cleaner patent figures)
+
+═══════════════════════════════════════════════════════════════════════════════
+PATENT FIGURE SEMANTICS (STRICT)
+═══════════════════════════════════════════════════════════════════════════════
+- All connectors must be orthogonal (skinparam linetype ortho is mandatory).
+- No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
+- Solid arrows (-->) = data/control paths.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
+- Nesting depth max = 2 levels.
 
 ═══════════════════════════════════════════════════════════════════════════════
 JURISDICTION-SPECIFIC REQUIREMENTS (${activeJurisdiction})
@@ -7615,29 +8766,20 @@ NOMENCLATURE GUIDE (Apply based on Invention Type)
 ═══════════════════════════════════════════════════════════════════════════════
 DIAGRAM TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════════════
-To ensure the diagrams render correctly, please follow these rules:
-
 1. ARROW DIRECTIONS: Use "-down->", "-up->", "-left->", "-right->" for layout control.
-   - CORRECT: A -down-> B
-   - CORRECT: A -[hidden]- B
-   - INCORRECT: A -[hidden]down- B (Do not mix [hidden] with direction)
+   - Use hidden links (-[hidden]->) to control layout without visible arrows.
 
 2. CONNECTIONS: Always specify both endpoints.
-   - CORRECT: 500 --> 600
-   - INCORRECT: 500 -- (Dangling connection)
 
 3. BLOCKS: Close all blocks properly.
-   - matching "endif" for every "if"
-   - matching "end" for every "start"
 
 4. STRUCTURE:
    - Exactly ONE @startuml and ONE @enduml per diagram.
    - NO "note" elements (they create visual clutter).
-   - NO comments on components.
 
 5. CONTENT:
-   - Use ONLY provided components/numerals.
-   - Do not invent new components.
+   - Use ONLY provided numbered components/numerals.
+   - Un-numbered helper nodes (buses) are allowed for routing.
    - NUMERALS MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 
 Generate ${instructionsList.length} SEPARATE DIAGRAMS. Each must be complete and valid.
@@ -7684,31 +8826,36 @@ Items:\n- ${instructionsList.join('\n- ')}`
     return n
   }
 
-  const allowedNumerals = components3.map((c: any) => c.numeral).filter(Boolean)
   const created: any[] = []
+  const skipped: number[] = []
+  
   for (let i = 0; i < blocks.length; i++) {
     const rawCode = blocks[i]
     // IMPORTANT: Sanitize PlantUML code to remove forbidden directives that would cause render failure
     let code = sanitizePlantUML(rawCode)
     if (!code.includes('@startuml')) continue // Skip invalid blocks after sanitization
     
-    // Validate and Auto-Repair PlantUML
-    let wasRepaired = false
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRODUCTION-SAFE PROCESSING (REGENERATE-NOT-REPAIR)
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    // C3: Check forbidden keywords - skip block if found
+    const forbiddenCheck = containsForbiddenKeywords(code)
+    if (forbiddenCheck.hasForbidden) {
+      console.warn(`[AddFiguresLLM] Block ${i + 1} contains forbidden keywords: ${forbiddenCheck.matches.join(', ')}. Skipping.`)
+      skipped.push(i + 1)
+      continue
+    }
+    
+    // Inject fixed skinparams
+    code = injectFixedSkinparams(code)
+    
+    // Validate structure (NO repair - skip if invalid)
     const validation = validatePlantUmlStructure(code)
     if (!validation.ok) {
-      console.log(`[AddFiguresLLM] Block ${i + 1} has syntax errors, attempting repair...`)
-      const repair = await attemptRepairPlantUml(code, validation.errors, {
-        numerals: allowedNumerals,
-        requestHeaders: requestHeaders || {}
-      })
-      
-      if (repair.ok && repair.code) {
-        console.log(`[AddFiguresLLM] Repair successful for block ${i + 1}`)
-        code = repair.code
-        wasRepaired = true
-      } else {
-        console.warn(`[AddFiguresLLM] Repair failed for block ${i + 1}, saving original with errors`)
-      }
+      console.warn(`[AddFiguresLLM] Block ${i + 1} has syntax errors. Skipping.`)
+      skipped.push(i + 1)
+      continue
     }
     
     const no = nextNo()
@@ -7717,10 +8864,10 @@ Items:\n- ${instructionsList.join('\n- ')}`
     const checksum = crypto.createHash('sha256').update(code).digest('hex')
     await prisma.figurePlan.upsert({ where: { sessionId_figureNo: { sessionId, figureNo: no } }, update: { title: safeTitle }, create: { sessionId, figureNo: no, title: safeTitle, nodes: [], edges: [] } })
     const diagramSource = await prisma.diagramSource.upsert({ where: { sessionId_figureNo_language: { sessionId, figureNo: no, language: 'en' } }, update: { plantumlCode: code, checksum }, create: { sessionId, figureNo: no, plantumlCode: code, checksum, language: 'en' } })
-    created.push({ figureNo: no, diagramSource, wasRepaired })
+    created.push({ figureNo: no, diagramSource })
   }
 
-  return NextResponse.json({ created })
+  return NextResponse.json({ created, skippedBlocks: skipped.length > 0 ? skipped : undefined })
 }
 
 async function handleDeleteFigure(user: any, patentId: string, data: any) {

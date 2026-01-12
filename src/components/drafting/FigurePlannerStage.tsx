@@ -111,11 +111,29 @@ function normalizePageSizes(input: any): string[] {
   return []
 }
 
+// Patent-specific progress messages for figure generation (no technical jargon)
+const FIGURE_GENERATION_MESSAGES = [
+  "Analyzing patent claims and technical specifications...",
+  "Identifying key inventive elements and subsystems...",
+  "Mapping component relationships and data flows...",
+  "Determining optimal figure perspectives for disclosure...",
+  "Planning system architecture illustrations...",
+  "Structuring method flow visualizations...",
+  "Generating patent-office compliant drawings...",
+  "Applying reference numerals and annotations...",
+  "Finalizing figure set for maximum claim coverage..."
+]
+
 export default function FigurePlannerStage({ session, patent, onComplete, onRefresh }: FigurePlannerStageProps) {
   const [isGenerating, setIsGenerating] = useState(false)
   const [figures, setFigures] = useState<LLMFigure[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [diagramCount, setDiagramCount] = useState(5)
+  // In AI mode, null/empty means "AI decides the count"
+  // User can optionally override by entering a number
+  const [diagramCount, setDiagramCount] = useState<number | null>(null)
+  
+  // Progress message cycling during generation
+  const [generationMessageIndex, setGenerationMessageIndex] = useState(0)
 
   // Helper for cleaning titles
   const sanitizeFigureLabel = (text?: string | null) => {
@@ -171,6 +189,22 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setUserDecides(true)
     }
   }, [mode])
+
+  // Cycle through progress messages during figure generation
+  useEffect(() => {
+    if (!isGenerating) {
+      setGenerationMessageIndex(0)
+      return
+    }
+    
+    const interval = setInterval(() => {
+      setGenerationMessageIndex(prev => 
+        prev < FIGURE_GENERATION_MESSAGES.length - 1 ? prev + 1 : prev
+      )
+    }, 4000) // Change message every 4 seconds
+    
+    return () => clearInterval(interval)
+  }, [isGenerating])
 
   const [manualCount, setManualCount] = useState(0)
   const [manualInputs, setManualInputs] = useState<{ title: string; description: string }[]>([])
@@ -643,8 +677,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       diagramSources.forEach((d: any) => {
         const key = getDiagramKey(d.figureNo, d.language || 'en')
         // Clear processing status if: new key OR diagram has code but no image (needs re-rendering)
-        // This fixes the bug where modified diagrams wouldn't auto-render after a previous failure
-        if (updated[key] === undefined || (d.plantumlCode && !d.imageUploadedAt)) {
+        // BUT: DO NOT clear if status contains "Failed" - this prevents infinite retry loops
+        // Users must manually click "Retry Render" to attempt again after a failure
+        const currentStatus = updated[key] || ''
+        const isFailed = currentStatus.toLowerCase().includes('failed')
+        if (updated[key] === undefined || (d.plantumlCode && !d.imageUploadedAt && !isFailed)) {
           updated[key] = ''
         }
       })
@@ -655,7 +692,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       diagramSources.forEach((d: any) => {
         const key = getDiagramKey(d.figureNo, d.language || 'en')
         // Clear processing step if: new key OR diagram has code but no image (needs re-rendering)
-        if (updated[key] === undefined || (d.plantumlCode && !d.imageUploadedAt)) {
+        // BUT: DO NOT clear if step is -1 (failed) - this prevents infinite retry loops
+        const currentStep = updated[key]
+        const isFailed = currentStep === -1
+        if (updated[key] === undefined || (d.plantumlCode && !d.imageUploadedAt && !isFailed)) {
           updated[key] = 0
         }
       })
@@ -1459,6 +1499,9 @@ Each object must be:
 {
   "title": "Fig.X - <short title>",
   "purpose": "<one sentence>",
+  "styleUsed": "STYLE_1" or "STYLE_2" or "SEQUENCE" or "ACTIVITY" (whichever user requested or best fits),
+  "layoutPlan": "One sentence describing the spatial arrangement",
+  "patternsUsed": ["power_bus", "hidden_links", etc. - only patterns actually used],
   "plantuml": "<PlantUML code from @startuml to @enduml>"
 }
 Return JSON only. No markdown. No commentary.
@@ -1467,8 +1510,13 @@ NUMBERING
 - These new figures will be numbered starting from Fig.${startingFigNo}.
 - Use titles like "Fig.${startingFigNo} - ...", "Fig.${startingFigNo + 1} - ...", etc., in order.
 
-USER INSTRUCTIONS FOR EACH NEW FIGURE
-${overrideList.map((instruction, index) => `Fig.${startingFigNo + index}: ${instruction}`).join('\n')}`
+═══════════════════════════════════════════════════════════════════════════════
+USER INSTRUCTIONS FOR EACH NEW FIGURE (HIGHEST PRIORITY)
+═══════════════════════════════════════════════════════════════════════════════
+${overrideList.map((instruction, index) => `Fig.${startingFigNo + index}: ${instruction}`).join('\n')}
+
+THE USER'S INSTRUCTIONS ABOVE TAKE ABSOLUTE PRIORITY. Follow them exactly.
+If user explicitly requests different styles, layouts, diagram types, or overrides, FOLLOW THE USER'S INSTRUCTIONS.`
 
         // Include existing figures context if checkbox is checked
         if (includeExistingFigures && session?.figurePlans?.length > 0) {
@@ -1491,70 +1539,105 @@ IMPORTANT: New figures should continue the "zoom-in" progression. If existing fi
 
         customPrompt += `
 
-COMPONENTS / NUMERALS (MANDATORY)
-You may use ONLY these components and numerals: ${numeralsPreview}.
-- Do NOT invent components or numerals.
+═══════════════════════════════════════════════════════════════════════════════
+COMPONENTS / NUMERALS
+═══════════════════════════════════════════════════════════════════════════════
+Available numbered components: ${numeralsPreview}.
+
+**NUMBERED ELEMENT RULE (STRICT):**
+- Use ONLY the provided **numbered** components and their numerals listed above.
+- Do NOT invent any additional numbered components or numerals.
 - Every component label MUST include its numeral in parentheses, e.g., "Controller (200)".
+
+**HELPER NODES ALLOWED:**
+- You MAY add **un-numbered helper nodes** ONLY for routing clarity: "Power bus", "Comms bus", "Data bus", "Interface bus"
+- Helper nodes MUST NOT contain numerals.
+
 - Figure label format: ${figureLabelFormat}.
 - Color policy: ${colorAllowed ? 'color permitted if essential' : 'MONOCHROME ONLY (no color)'}.
 - Reference numerals: ${refNumeralsMandatory ? 'MANDATORY in all drawings' : 'Optional'}.
 
-USER INSTRUCTIONS TAKE PRIORITY
-Follow the user's specific instructions above. If the user requests a specific diagram type 
-(flowchart, state diagram, deployment diagram, etc.), you may use that type.
-However, you MUST still apply the DESIGN REQUIREMENTS below to ensure patent-office compliance.
+═══════════════════════════════════════════════════════════════════════════════
+CANONICAL STYLE DEFAULTS (Apply unless user explicitly overrides)
+═══════════════════════════════════════════════════════════════════════════════
+Apply these skinparam settings by default. If user explicitly requests different styles, follow user's instructions instead.
 
-DESIGN REQUIREMENTS (ALWAYS APPLY)
-These settings ensure black-and-white, print-friendly diagrams:
-
-REQUIRED SKINPARAM BLOCK (include at start of every diagram):
 skinparam monochrome true
 skinparam shadowing false
-skinparam roundcorner 0
+skinparam roundcorner 10
 skinparam defaultFontName Arial
 skinparam defaultFontSize 14
 skinparam ArrowColor black
 skinparam BorderColor black
+skinparam linetype ortho
+skinparam nodesep 40
+skinparam ranksep 35
+skinparam BorderThickness 1.7
+skinparam PackageBorderThickness 1.7
+skinparam PackageTitleFontStyle bold
+
+Default direction: left to right direction (unless user requests different)
+
+**PATENT FIGURE SEMANTICS (Apply unless user overrides):**
+- All connectors should be orthogonal (skinparam linetype ortho) unless user requests otherwise.
+- Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
+- Solid arrows (-->) = data/control paths.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
+- Nesting depth max = 2 levels.
 
 FORBIDDEN DIRECTIVES:
 - No !include / !theme / !pragma
 - No title / caption / header / footer
-- No sprites / icons / colors
+- No sprites / icons (unless user explicitly requests)
 
-PREFERRED STYLES (use unless user specifies otherwise):
-- STYLE 1: Nested block diagram (rectangles with nested rectangles) - for system overviews
-- STYLE 2: Linear pipeline (rectangles in chain with "skinparam linetype ortho") - for data flow
-- STYLE 3: Sequence diagram (with skinparam sequence block) - for interactions
-- STYLE 4: Activity diagram (with skinparam activity block) - for method steps
+═══════════════════════════════════════════════════════════════════════════════
+AVAILABLE DIAGRAM STYLES (use based on user request or best fit)
+═══════════════════════════════════════════════════════════════════════════════
+- STYLE 1: Nested block diagram (rectangles with nested rectangles) - DEFAULT for system diagrams
+- STYLE 2: Linear pipeline (rectangles in chain) - for strict linear data flow
+- SEQUENCE: Sequence diagram - for message interactions (if user requests)
+- ACTIVITY: Activity diagram - for method steps/flowcharts (if user requests)
 
-STYLE TEMPLATES FOR REFERENCE:
-
-NESTED BLOCK:
+STYLE 1 — NESTED BLOCK (CANONICAL TEMPLATE):
 @startuml
 skinparam monochrome true
 skinparam shadowing false
-skinparam roundcorner 0
+skinparam roundcorner 10
 skinparam defaultFontName Arial
 skinparam defaultFontSize 14
 skinparam ArrowColor black
 skinparam BorderColor black
-top to bottom direction
+skinparam linetype ortho
+skinparam nodesep 40
+skinparam ranksep 35
+skinparam BorderThickness 1.7
+skinparam PackageBorderThickness 1.7
+skinparam PackageTitleFontStyle bold
+
+left to right direction
+
 rectangle "System (10)" as SYS {
-  rectangle "Subsystem A (12)" as A
-  rectangle "Subsystem B (14)" as B
+  rectangle "Subsystem A" as A {
+    rectangle "Component A1 (101)" as A1
+  }
+  rectangle "Subsystem B" as B {
+    rectangle "Component B1 (201)" as B1
+  }
 }
-A --> B : data
+A1 --> B1 : data
 @enduml
 
-SEQUENCE (with required skinparam block):
+SEQUENCE (with canonical skinparams):
 @startuml
 skinparam monochrome true
 skinparam shadowing false
-skinparam roundcorner 0
+skinparam roundcorner 10
 skinparam defaultFontName Arial
 skinparam defaultFontSize 14
 skinparam ArrowColor black
 skinparam BorderColor black
+skinparam BorderThickness 1.7
 skinparam sequence {
   LifeLineBorderColor black
   LifeLineBackgroundColor white
@@ -1568,15 +1651,16 @@ U -> D : input
 D --> U : response
 @enduml
 
-ACTIVITY (with required skinparam block):
+ACTIVITY (with canonical skinparams):
 @startuml
 skinparam monochrome true
 skinparam shadowing false
-skinparam roundcorner 0
+skinparam roundcorner 10
 skinparam defaultFontName Arial
 skinparam defaultFontSize 14
 skinparam ArrowColor black
 skinparam BorderColor black
+skinparam BorderThickness 1.7
 skinparam activity {
   BackgroundColor white
   BorderColor black
@@ -1589,10 +1673,15 @@ start
 stop
 @enduml
 
+═══════════════════════════════════════════════════════════════════════════════
 FINAL SELF-CHECK (MANDATORY)
-- Follows user's instructions for diagram content and type.
-- Includes required skinparam block for patent compliance.
-- Uses only allowed numerals/components.
+═══════════════════════════════════════════════════════════════════════════════
+- Follows user's instructions for diagram content, type, and style (user instructions override defaults).
+- Applies canonical skinparam settings unless user explicitly requested different styles.
+- Uses only allowed numbered components (un-numbered helper nodes like "Power bus" are OK).
+- styleUsed field matches actual diagram style.
+- layoutPlan field accurately describes the spatial arrangement.
+- patternsUsed field only includes patterns actually present.
 - Has @startuml and @enduml.
 Now output the JSON array.`
 
@@ -1614,244 +1703,39 @@ Now output the JSON array.`
         return
       }
 
-      // Build concise context to nudge LLM
-      const components = session?.referenceMap?.components || []
-      const numeralsPreview = components.map((c: any) => `${c.name} (${c.numeral || '?'})`).join(', ')
-
-      // Get frozen claims for claim-aware diagram generation
-      const normalizedData = session?.ideaRecord?.normalizedData || {}
-      const frozenClaims = normalizedData.claimsStructured || []
-      const claimsText = normalizedData.claims || ''
-      const hasClaimsContext = frozenClaims.length > 0 || claimsText
-
-      // Build claims context for the prompt
-      let claimsContext = ''
-      if (hasClaimsContext) {
-        if (frozenClaims.length > 0) {
-          const claimsSummary = frozenClaims.slice(0, 5).map((c: any) => 
-            `Claim ${c.number} (${c.type}${c.category ? `, ${c.category}` : ''}): ${(c.text || '').substring(0, 150)}...`
-          ).join('\n')
-          claimsContext = `\n\nFROZEN PATENT CLAIMS (diagrams should illustrate these):\n${claimsSummary}`
-          if (frozenClaims.length > 5) {
-            claimsContext += `\n(+ ${frozenClaims.length - 5} more claims)`
-          }
-        } else if (claimsText) {
-          // Parse HTML claims text
-          const plainClaims = claimsText.replace(/<[^>]*>/g, '').substring(0, 800)
-          claimsContext = `\n\nFROZEN PATENT CLAIMS (diagrams should illustrate these):\n${plainClaims}...`
-        }
-      }
-
-      const drawingRules = countryProfile?.rules?.drawings || {}
-      const figureLabelFormat = countryProfile?.profileData?.diagrams?.figureLabelFormat || countryProfile?.profileData?.rules?.drawings?.figureLabelFormat || 'Fig. {number}'
-      const colorAllowed = drawingRules.colorAllowed !== undefined ? drawingRules.colorAllowed : false
-      const lineStyle = drawingRules.lineStyle || 'black_and_white_solid'
-      const refNumeralsMandatory = drawingRules.referenceNumeralsMandatoryWhenDrawings !== false
-      const minTextSize = drawingRules.minReferenceTextSizePt || 8
-      const allowedPageSizeList = [
-        ...normalizePageSizes(drawingRules.allowedPageSizes),
-        ...normalizePageSizes(drawingRules.paperSize)
-      ]
-      const allowedPageSizes = allowedPageSizeList.join(', ')
-
-      const prompt = `SYSTEM ROLE — Patent Figure Diagram Generator (PlantUML)
-
-You generate patent-office-friendly diagrams (USPTO/EPO/IPO) in black-and-white, suitable for filing.
-Your diagrams MUST be easy to understand when printed.
-
-OUTPUT FORMAT (MANDATORY)
-Return a JSON array of exactly ${diagramCount} objects.
-Each object must be:
-{
-  "title": "Fig.X - <short title>",
-  "purpose": "<one sentence>",
-  "plantuml": "<PlantUML code from @startuml to @enduml>"
-}
-Return JSON only. No markdown. No commentary.
-
-COMPONENTS / NUMERALS (MANDATORY)
-You may use ONLY these components and numerals: ${numeralsPreview}.
-- Do NOT invent components or numerals.
-- Every component label MUST include its numeral in parentheses, e.g., "Controller (200)".
-- Use concise labels.
-- Figure label format: ${figureLabelFormat}.
-- Color policy: ${colorAllowed ? 'color permitted if essential' : 'MONOCHROME ONLY (no color)'}.
-- Reference numerals: ${refNumeralsMandatory ? 'MANDATORY in all drawings' : 'Optional'}.
-
-FIGURE HIERARCHY (MANDATORY)
-Fig.1: System Overview (broad, abstract)
-Fig.2: Subsystem Zoom (nested within the system)
-Fig.3: Either (A) linear data/control pipeline OR (B) method flowchart; choose the clearest.
-Fig.4+: Only if needed (deployment/interface or another component zoom)
-${claimsContext ? `
-═══════════════════════════════════════════════════════════════════════════════
-CLAIM-AWARE DIAGRAM GENERATION
-═══════════════════════════════════════════════════════════════════════════════
-The following claims define the legal scope of this patent. Design figures that:
-- Illustrate the method steps described in method claims
-- Show the system architecture described in system/apparatus claims
-- Highlight the key inventive features that distinguish this invention
-${claimsContext}
-` : ''}
-DIAGRAM TYPE POLICY (IMPORTANT)
-You are allowed ONLY these four diagram styles:
-STYLE 1: Nested block diagram (rectangles with nested rectangles)
-STYLE 2: Linear ortho pipeline (rectangles in a chain; linetype ortho)
-STYLE 3: Sequence diagram (only for real message/interactions)
-STYLE 4: Activity diagram (method steps; max one decision)
-
-Do NOT use any other PlantUML types (no class, component keyword, usecase, mindmap, etc.).
-No !include / !theme / !pragma. No title/caption. No sprites/icons. No colors.
-
-READABILITY LIMITS (STRICT)
-- Block/pipeline: 4–10 rectangles, max 12 arrows.
-- Nested block: max depth = 2 levels (System → Subsystem → Components). No deeper.
-- Sequence: 3–6 participants, max 10 messages.
-- Activity: 4–10 steps, max 1 decision.
-- Max label length (excluding numeral): 28 characters.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-APPROVED STYLE TEMPLATES (COPY EXACTLY, THEN MODIFY CONTENT)
-You MUST use one of these templates per figure.
-Preserve the skinparam lines and overall structure.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-STYLE 1 — NESTED BLOCK DIAGRAM (preferred for Fig.1 & Fig.2)
-@startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 0
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-
-top to bottom direction
-
-rectangle "System (10)" as SYS {
-  rectangle "Subsystem A (12)" as A {
-    rectangle "Component A1 (121)" as A1
-    rectangle "Component A2 (122)" as A2
-  }
-  rectangle "Subsystem B (14)" as B {
-    rectangle "Component B1 (141)" as B1
-    rectangle "Component B2 (142)" as B2
-  }
-}
-
-A --> B : data
-@enduml
-
-STYLE 2 — LINEAR ORTHO PIPELINE (preferred for Fig.3 if linear flow)
-@startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 0
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-
-top to bottom direction
-
-rectangle "Input (20)" as IN
-rectangle "Filter (22)" as FIL
-rectangle "Analyzer (24)" as AN
-rectangle "Controller (26)" as CO
-rectangle "Output (28)" as OUT
-
-IN --> FIL
-FIL --> AN
-AN --> CO
-CO --> OUT
-@enduml
-
-STYLE 3 — SEQUENCE (ONLY if truly message/interactions matter)
-@startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 0
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam sequence {
-  LifeLineBorderColor black
-  LifeLineBackgroundColor white
-  ParticipantBorderColor black
-  ParticipantBackgroundColor white
-}
-
-actor "User (900)" as U
-participant "Device (100)" as D
-participant "Controller (200)" as C
-participant "Storage (500)" as S
-
-U -> D : input
-D -> C : transmit data
-C -> S : read/write
-S --> C : response
-C --> D : output
-D --> U : present result
-@enduml
-
-STYLE 4 — ACTIVITY (ONLY for method steps; max 1 decision)
-@startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 0
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-
-skinparam activity {
-  BackgroundColor white
-  BorderColor black
-  FontColor black
-}
-
-start
-:Receive input data (100);
-:Extract features (200);
-:Determine condition (210);
-
-if (Condition satisfied?) then (Yes)
-  :Generate control output (400);
-else (No)
-  :Apply fallback rule (500);
-endif
-
-:Transmit result (600);
-stop
-@enduml
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-FINAL SELF-CHECK (MANDATORY)
-For each figure:
-- Uses EXACTLY one of the four styles above.
-- Uses only allowed numerals/components.
-- Meets readability caps.
-- Has @startuml and @enduml.${claimsContext ? `
-- Diagrams illustrate the frozen claims where applicable.` : ''}
-Now output the JSON array.`
+      // ═══════════════════════════════════════════════════════════════════════════════
+      // AI MODE: Use two-stage figure generation (Plan → Generate)
+      // ═══════════════════════════════════════════════════════════════════════════════
+      // Stage 1: AI analyzes invention and creates a figure plan
+      // Stage 2: AI generates PlantUML code based on the plan
+      // 
+      // If user specified a diagramCount, AI will plan exactly that many figures.
+      // If diagramCount is null/empty, AI decides the optimal count (typically 3-7).
 
       const res = await onComplete({
-        action: 'generate_diagrams_llm',
+        action: 'plan_and_generate_diagrams_llm',
         sessionId: session?.id,
-        prompt,
+        // Pass figureCount only if user specified one (null means AI decides)
+        ...(diagramCount ? { figureCount: diagramCount } : {}),
         // In autopilot mode, we intentionally replace the existing figure set
         replaceExisting: true
       })
 
-      if (!res || !Array.isArray(res.figures)) {
-        throw new Error('LLM did not return valid figure list')
+      if (!res || !res.success) {
+        throw new Error(res?.error || 'Figure generation failed')
       }
 
-      // Backend already saves figures with correct figure numbers (1, 2, 3... for replace mode)
-      // No need to call handleSavePlantUML - it would be redundant
+      // Log the plan result
+      console.log('[FigurePlanner] Generated', res.figures?.length, 'figures from plan')
+      if (res.plan) {
+        console.log('[FigurePlanner] Plan rationale:', res.plan.rationale)
+      }
+
+      // Update sketch suggestions from the planning stage (if any)
+      if (res.sketchSuggestions && Array.isArray(res.sketchSuggestions) && res.sketchSuggestions.length > 0) {
+        console.log('[FigurePlanner] Received', res.sketchSuggestions.length, 'sketch suggestions')
+        setSketchSuggestions(res.sketchSuggestions)
+      }
 
       setFigures([]) // Clear proposed figures since they're now automatically approved
 
@@ -2144,14 +2028,14 @@ Now output the JSON array.`
                 AI-Driven Generation
               </CardTitle>
               <CardDescription>
-                Let our intelligent agent analyze your patent claims and description to automatically propose and generate the perfect set of figures.
+                Our two-stage AI first plans the optimal figure set, then generates high-quality patent diagrams tailored to your invention.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <ul className="space-y-2 text-sm text-gray-600">
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Automatic figure count optimization</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Context-aware component labeling</li>
-                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Standard patent diagram styles</li>
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> AI determines optimal figure count (or override)</li>
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Claim-aware diagram planning</li>
+                <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Distinct perspectives per figure</li>
               </ul>
             </CardContent>
           </Card>
@@ -2197,42 +2081,102 @@ Now output the JSON array.`
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <Label htmlFor="diagram-count" className="text-sm font-medium text-gray-700">
-                  Number of Diagrams:
+                  Number of Figures:
                 </Label>
-                <Input
-                  id="diagram-count"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={diagramCount}
-                  onChange={(e) => setDiagramCount(Math.max(1, Math.min(10, parseInt(e.target.value) || 5)))}
-                  className="w-20 text-center"
-                  disabled={isGenerating}
-                />
+                <div className="relative">
+                  <Input
+                    id="diagram-count"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={diagramCount === null ? '' : diagramCount}
+                    onChange={(e) => {
+                      const val = e.target.value.trim()
+                      if (val === '') {
+                        setDiagramCount(null) // Empty = AI decides
+                      } else {
+                        const num = parseInt(val, 10)
+                        if (!isNaN(num)) {
+                          setDiagramCount(Math.max(1, Math.min(10, num)))
+                        }
+                      }
+                    }}
+                    placeholder="Auto"
+                    className="w-24 text-center"
+                    disabled={isGenerating}
+                  />
+                </div>
+                <span className="text-xs text-gray-500">
+                  {diagramCount === null ? '(AI will decide)' : '(1-10)'}
+                </span>
               </div>
             </div>
-            <Button 
-              size="lg"
-              onClick={handleGenerateFromLLM}
-              disabled={isGenerating}
-              className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white gap-2 h-12 px-8 text-lg shadow-lg shadow-indigo-200"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Analyzing Patent Structure<AnimatedDots />
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-5 h-5" />
-                  Generate Diagram Set
-                </>
-              )}
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button 
+                size="lg"
+                onClick={handleGenerateFromLLM}
+                disabled={isGenerating}
+                className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white gap-2 h-12 px-8 text-lg shadow-lg shadow-indigo-200"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Processing Step {generationMessageIndex + 1}/{FIGURE_GENERATION_MESSAGES.length}<AnimatedDots />
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5" />
+                    {diagramCount === null ? 'Generate Optimal Figures' : `Generate ${diagramCount} Figures`}
+                  </>
+                )}
+              </Button>
+            </div>
             {isGenerating && (
-              <p className="text-sm text-gray-500 animate-pulse">
-                Our AI is reading your specification and designing the optimal figure set...
-              </p>
+              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-5 border border-indigo-100 shadow-sm">
+                {/* Progress steps indicator */}
+                <div className="flex items-center gap-1.5 mb-4">
+                  {FIGURE_GENERATION_MESSAGES.map((_, idx) => (
+                    <div 
+                      key={idx}
+                      className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
+                        idx < generationMessageIndex 
+                          ? 'bg-indigo-500' 
+                          : idx === generationMessageIndex 
+                            ? 'bg-indigo-400 animate-pulse' 
+                            : 'bg-gray-200'
+                      }`}
+                    />
+                  ))}
+                </div>
+                
+                {/* Current status message */}
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-indigo-900 mb-1">
+                      Step {generationMessageIndex + 1} of {FIGURE_GENERATION_MESSAGES.length}
+                    </p>
+                    <p className="text-sm text-indigo-700 leading-relaxed">
+                      {FIGURE_GENERATION_MESSAGES[generationMessageIndex]}
+                    </p>
+                    {diagramCount && (
+                      <p className="text-xs text-indigo-500 mt-2">
+                        Generating {diagramCount} figure{diagramCount > 1 ? 's' : ''} as requested
+                      </p>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Helpful tip */}
+                <div className="mt-4 pt-3 border-t border-indigo-100">
+                  <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5" />
+                    This process ensures patent-office compliant figures with proper reference numerals
+                  </p>
+                </div>
+              </div>
             )}
           </motion.div>
         ) : (
