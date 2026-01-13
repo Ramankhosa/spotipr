@@ -436,18 +436,13 @@ const DatabaseSearchViz = ({ recordsSearched, matchesFound }: { recordsSearched?
         ))}
       </div>
       
-      {/* Stats overlay */}
+      {/* Stats overlay - SRS: removed "records analyzed" per Section 4.1 */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-3xl font-mono font-bold text-cyan-400">
-            {displayRecords.toLocaleString()}
+          <div className="text-2xl font-medium text-cyan-400">
+            Analyzing...
           </div>
-          <div className="text-xs text-slate-400 mt-1">records analyzed</div>
-          {matchesFound !== undefined && matchesFound > 0 && (
-            <div className="mt-2 text-sm text-amber-400">
-              {matchesFound} potential matches found
-            </div>
-          )}
+          <div className="text-xs text-slate-400 mt-1">Evaluating conceptual originality</div>
         </div>
       </div>
     </div>
@@ -536,11 +531,6 @@ const StreamingIdeaCard = ({ idea, index }: { idea: StreamingIdea; index: number
             ) : config.label}
           </span>
         </div>
-        {idea.noveltyScore !== undefined && (
-          <div className={`text-xs font-bold ${idea.noveltyScore >= 60 ? 'text-green-600' : 'text-amber-600'}`}>
-            {idea.noveltyScore}/100
-          </div>
-        )}
       </div>
       
       <h4 className="font-semibold text-slate-800 text-sm mb-1 line-clamp-1">
@@ -796,12 +786,12 @@ export default function IdeationProcessingView({
                 </div>
               </div>
 
-              {/* Overall Progress Bar */}
+              {/* Overall Progress Bar - SRS Section 4.1: No stage numbers */}
               <div className="mb-4">
                 <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs text-slate-400">Overall Progress</span>
+                  <span className="text-xs text-slate-400">Progress</span>
                   <span className="text-xs text-slate-400">
-                    {currentStageIdx + 1} / {stageOrder.length}
+                    {Math.round(((currentStageIdx + 0.5) / stageOrder.length) * 100)}%
                   </span>
                 </div>
                 <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">

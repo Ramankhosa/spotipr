@@ -27,14 +27,6 @@ import { Badge } from '@/components/ui/badge'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 
-// TRIZ Operator type from session
-interface TrizOperator {
-  id: string
-  name: string
-  description: string
-  examples?: string[]
-}
-
 // Bucket for grouping dimensions
 interface IdeaBucket {
   id: string
@@ -45,8 +37,8 @@ interface IdeaBucket {
 interface CombineTrayProps {
   selectedNodes: Set<string>
   nodes: Node[]
-  availableOperators: TrizOperator[]
-  onGenerate: (count: number, intent: string, selectedOperators: string[], buckets?: IdeaBucket[], userGuidance?: string) => void
+  // SRS: TRIZ operators removed - onGenerate no longer takes selectedOperators
+  onGenerate: (count: number, intent: string, buckets?: IdeaBucket[], userGuidance?: string) => void
   onClear: () => void
   onRemoveNode?: (nodeId: string) => void
   loading: boolean
@@ -87,35 +79,9 @@ const intentOptions: { value: RecipeIntent; label: string; description: string; 
   },
 ]
 
-// TRIZ Operator detailed descriptions
-const TRIZ_OPERATOR_TIPS: Record<string, string> = {
-  'Segmentation': 'Divide an object into independent parts, or make it modular/easy to disassemble',
-  'Extraction': 'Remove the problematic part or extract only the necessary component',
-  'Local Quality': 'Change uniform structure to non-uniform, make each part function optimally',
-  'Asymmetry': 'Replace symmetrical form with asymmetrical to improve function',
-  'Merging': 'Combine identical or similar objects, or operations in time',
-  'Universality': 'Make an object perform multiple functions, eliminating the need for other objects',
-  'Nesting': 'Place one object inside another, pass one through the cavity of another',
-  'Anti-Weight': 'Compensate object weight by merging with others that provide lift',
-  'Prior Action': 'Perform action in advance, or pre-arrange objects for convenient operation',
-  'Cushion in Advance': 'Prepare emergency means beforehand to compensate for low reliability',
-  'Equipotentiality': 'Change conditions so object doesn\'t need to be raised or lowered',
-  'Do It in Reverse': 'Invert the action, make movable parts fixed and vice versa',
-  'Spheroidality': 'Replace linear parts with curved, flat surfaces with spherical',
-  'Dynamics': 'Allow characteristics to change optimally, divide into movable parts',
-  'Partial or Excessive Action': 'If 100% is hard, use "less" or "more" to simplify the problem',
-  'Another Dimension': 'Move in 3D space, use multi-story arrangement, tilt object',
-  'Mechanical Vibration': 'Use oscillation, increase frequency to ultrasonic',
-  'Periodic Action': 'Replace continuous with periodic action, use pauses for other actions',
-  'Continuity of Useful Action': 'Carry on work continuously, eliminate idle runs',
-  'Skipping': 'Conduct process at high speed to skip harmful stages',
-  'default': 'Apply this TRIZ principle to transform your dimensions into inventive ideas'
-}
-
 export default function CombineTray({
   selectedNodes,
   nodes,
-  availableOperators,
   onGenerate,
   onClear,
   onRemoveNode,
@@ -124,8 +90,6 @@ export default function CombineTray({
 }: CombineTrayProps) {
   const [ideaCount, setIdeaCount] = useState(3)
   const [intent, setIntent] = useState<RecipeIntent>('DIVERGENT')
-  const [selectedOperators, setSelectedOperators] = useState<Set<string>>(new Set())
-  const [showOperatorInfo, setShowOperatorInfo] = useState(false)
   
   // User guidance for idea generation
   const [userGuidance, setUserGuidance] = useState('')
@@ -161,18 +125,6 @@ export default function CombineTray({
     return dimensionNodes.filter(n => !assignedIds.has(n.id))
   }, [dimensionNodes, buckets, useBuckets])
 
-  // Toggle operator selection
-  const toggleOperator = (opId: string) => {
-    setSelectedOperators(prev => {
-      const next = new Set(prev)
-      if (next.has(opId)) {
-        next.delete(opId)
-      } else {
-        next.add(opId)
-      }
-      return next
-    })
-  }
 
   // Auto-generate bucket name from first dimension or counter
   const generateBucketName = useCallback((dimensionIds: string[] = []) => {
@@ -291,10 +243,10 @@ export default function CombineTray({
     const guidance = userGuidance.trim() || undefined
     if (useBuckets && buckets.length > 0) {
       // Generate with buckets
-      onGenerate(ideaCount, intent, Array.from(selectedOperators), buckets, guidance)
+      onGenerate(ideaCount, intent, buckets, guidance)
     } else {
       // Generate without buckets (all selected dimensions together)
-      onGenerate(ideaCount, intent, Array.from(selectedOperators), undefined, guidance)
+      onGenerate(ideaCount, intent, undefined, guidance)
     }
   }
 
@@ -311,7 +263,6 @@ export default function CombineTray({
             <button
               onClick={() => {
                 onClear()
-                setSelectedOperators(new Set())
                 setBuckets([])
                 setUseBuckets(false)
                 setBucketCounter(1)
@@ -534,66 +485,6 @@ export default function CombineTray({
             </div>
           )}
         </div>
-
-        {/* TRIZ Operators */}
-        <AnimatePresence>
-          {totalDimensionsSelected > 0 && availableOperators.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="bg-white rounded-xl p-3 border border-slate-200"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-amber-500" />
-                  <span className="text-sm font-semibold text-slate-700">TRIZ Operators</span>
-                  <Badge variant="secondary" className="text-[10px] h-4">
-                    {selectedOperators.size}
-                  </Badge>
-                </div>
-                <button
-                  onClick={() => setShowOperatorInfo(!showOperatorInfo)}
-                  className="text-slate-400 hover:text-slate-600"
-                >
-                  <Info className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              
-              {showOperatorInfo && (
-                <p className="text-[11px] text-slate-500 mb-2 p-2 bg-amber-50 rounded border border-amber-100">
-                  TRIZ operators guide how dimensions combine into ideas. Optional but recommended.
-                </p>
-              )}
-              
-              <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto">
-                {availableOperators.slice(0, 10).map(op => (
-                  <button
-                    key={op.id}
-                    onClick={() => toggleOperator(op.id)}
-                    title={TRIZ_OPERATOR_TIPS[op.name] || op.description || TRIZ_OPERATOR_TIPS['default']}
-                    className={`
-                      p-2 rounded-lg border text-left transition-all text-xs group relative
-                      ${selectedOperators.has(op.id)
-                        ? 'bg-amber-50 border-amber-300 text-amber-800'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-amber-200'
-                      }
-                    `}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      {selectedOperators.has(op.id) ? (
-                        <Check className="w-3 h-3 text-amber-600" />
-                      ) : (
-                        <Zap className="w-3 h-3 text-slate-400" />
-                      )}
-                      <span className="font-medium truncate">{op.name}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* Generation Settings */}
         {totalDimensionsSelected > 0 && (

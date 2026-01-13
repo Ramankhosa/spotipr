@@ -763,6 +763,27 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         const data = await response.json()
         setCurrentSession(data.session)
         
+        // SRS Section 3.1 & 3.3: Map groundingContext and inventiveFraming from session
+        // These are returned from the API with proper field names
+        if (data.session.groundingContext || data.session.normalization) {
+          // groundingContext is the SRS-compliant field name
+          const grounding = data.session.groundingContext || data.session.normalization
+          setCurrentSession(prev => prev ? { 
+            ...prev, 
+            groundingContext: grounding 
+          } : null)
+        }
+        
+        if (data.session.inventiveFraming || data.session.classification) {
+          // inventiveFraming is the SRS-compliant field name  
+          const framing = data.session.inventiveFraming || data.session.classification
+          setInventiveFraming(framing)
+          setCurrentSession(prev => prev ? { 
+            ...prev, 
+            inventiveFraming: framing 
+          } : null)
+        }
+        
         // Load graph nodes and edges
         if (data.graph) {
           const loadedNodes = data.graph.nodes.map((n: any) => ({
@@ -1262,10 +1283,10 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
 
   // Generate ideas - mechanism-pure per SRS Section 3.6
   // userGuidance: Optional user-provided guidance for the AI to follow with HIGH PRIORITY
+  // SRS: TRIZ operators removed from pipeline
   const handleGenerateIdeas = async (
     count: number = 5, 
     intent: string = 'DIVERGENT', 
-    selectedOperatorIds: string[] = [],
     buckets?: IdeaBucket[],
     userGuidance?: string
   ) => {
@@ -2305,9 +2326,8 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
             <CombineTray
               selectedNodes={selectedNodes}
               nodes={nodes}
-              availableOperators={[]} // No TRIZ operators in new pipeline
-              onGenerate={(count, intent, ops, buckets, guidance) => 
-                handleGenerateIdeas(count, intent, ops, buckets, guidance)
+              onGenerate={(count, intent, buckets, guidance) => 
+                handleGenerateIdeas(count, intent, buckets, guidance)
               }
               onClear={() => {
                 setSelectedNodes(new Set())

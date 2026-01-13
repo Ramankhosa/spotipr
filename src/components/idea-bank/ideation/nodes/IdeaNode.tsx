@@ -63,23 +63,13 @@ function IdeaNode({ data, selected }: NodeProps) {
             </p>
           )}
           
-          <div className="flex items-center gap-2 mt-2">
-            {nodeData.status && (
+          {nodeData.status && (
+            <div className="flex items-center gap-2 mt-2">
               <span className={`text-[10px] px-2 py-0.5 rounded-full border ${getStatusColor(nodeData.status)}`}>
                 {nodeData.status}
               </span>
-            )}
-            {nodeData.noveltyScore !== undefined && (
-              <span className={`
-                text-[10px] px-2 py-0.5 rounded-full
-                ${nodeData.noveltyScore >= 70 ? 'bg-green-100 text-green-700' :
-                  nodeData.noveltyScore >= 40 ? 'bg-yellow-100 text-yellow-700' :
-                  'bg-red-100 text-red-700'}
-              `}>
-                {nodeData.noveltyScore}% novel
-              </span>
-            )}
-          </div>
+            </div>
+          )}
           
           {nodeData.userRating && (
             <div className="flex items-center gap-0.5 mt-2">

@@ -382,10 +382,10 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
                   <Target className="w-4 h-4 text-green-600" />
                 </div>
                 <div>
-                  <h4 className="font-semibold text-sm text-slate-800">Post-Generation Check</h4>
+                  <h4 className="font-semibold text-sm text-slate-800">Preliminary Novelty Assessment</h4>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Click "Check Novelty" on any idea to run a patent search. The AI compares against 
-                    existing patents and provides a novelty score (0-100).
+                    Click "Check Novelty" on any idea to get a preliminary assessment of conceptual 
+                    originality and novelty risk. This helps identify potential examiner objections.
                   </p>
                 </div>
               </div>
@@ -395,23 +395,22 @@ export default function IdeationHelpModal({ isOpen, onClose }: IdeationHelpModal
                   <Lightbulb className="w-4 h-4 text-violet-600" />
                 </div>
                 <div>
-                  <h4 className="font-semibold text-sm text-slate-800">Feedback Loop</h4>
+                  <h4 className="font-semibold text-sm text-slate-800">Improvement Directions</h4>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Ideas scoring below 60% are auto-flagged with mutation suggestions — specific 
-                    changes that could increase novelty (like "try biological analogy").
+                    Each assessment includes improvement directions — specific suggestions to 
+                    strengthen the inventive aspects of your idea.
                   </p>
                 </div>
               </div>
             </div>
 
-            <div className="p-3 bg-green-50 rounded-lg border border-green-200">
-              <p className="text-sm text-green-800">
-                <strong>Novelty Scores:</strong><br />
+            <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+              <p className="text-sm text-amber-800">
+                <strong>Important:</strong><br />
                 <span className="text-xs">
-                  • <strong>70-100:</strong> Highly inventive ✅ Ready for patent drafting<br />
-                  • <strong>50-69:</strong> Non-obvious ⚡ Good with some refinement<br />
-                  • <strong>30-49:</strong> Marginal ⚠️ Needs differentiation<br />
-                  • <strong>0-29:</strong> Obvious ❌ Requires significant changes
+                  This is a preliminary novelty assessment only. It does NOT search patent databases 
+                  and does NOT provide legal clearance. Always perform exhaustive prior-art search 
+                  before filing any patent application.
                 </span>
               </p>
             </div>

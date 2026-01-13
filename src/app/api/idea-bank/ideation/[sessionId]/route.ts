@@ -64,6 +64,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       data: { relation: edge.relation },
     }));
 
+    // Map normalization/classification to SRS-compliant field names
+    // per SRS Section 3.1 and 3.3
+    const groundingContext = ideationSession.normalizationJson;
+    const inventiveFraming = ideationSession.classificationJson;
+
     return NextResponse.json({
       success: true,
       session: {
@@ -72,6 +77,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         seedText: ideationSession.seedText,
         seedGoal: ideationSession.seedGoal,
         seedConstraints: ideationSession.seedConstraints,
+        // SRS-compliant field names
+        groundingContext,
+        inventiveFraming,
+        // Legacy field names for backward compatibility
         normalization: ideationSession.normalizationJson,
         classification: ideationSession.classificationJson,
         settings: ideationSession.settingsJson,
@@ -102,6 +111,106 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     console.error('Failed to get ideation session:', error);
     return NextResponse.json(
       { error: 'Failed to get session' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH - Update session (supports clarification updates per SRS Section 3.2)
+ * 
+ * When clearDownstream: true is sent, this will:
+ * 1. Update seedText with clarification answers
+ * 2. Delete all downstream artifacts (inventive framing, dimensions, moves, ideas)
+ * 3. Reset session status to SEED_INPUT for re-grounding
+ */
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  try {
+    const authResult = await authenticateUser(request);
+    if (!authResult.user) {
+      return NextResponse.json(
+        { error: authResult.error?.message },
+        { status: authResult.error?.status || 401 }
+      );
+    }
+
+    const { sessionId } = await params;
+    const body = await request.json();
+    const { seedText, clearDownstream } = body;
+
+    const ideationSession = await prisma.ideationSession.findUnique({
+      where: { id: sessionId },
+      select: { userId: true },
+    });
+
+    if (!ideationSession) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+
+    if (ideationSession.userId !== authResult.user.id) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    }
+
+    // If clearDownstream is true, delete all artifacts per SRS Section 3.2
+    if (clearDownstream) {
+      // Delete all downstream artifacts in a transaction
+      await prisma.$transaction([
+        // Delete idea frames
+        prisma.ideaFrame.deleteMany({
+          where: { sessionId },
+        }),
+        // Delete evidence results
+        prisma.evidenceResult.deleteMany({
+          where: { sessionId },
+        }),
+        // Delete mind map edges
+        prisma.mindMapEdge.deleteMany({
+          where: { sessionId },
+        }),
+        // Delete mind map nodes (except SEED)
+        prisma.mindMapNode.deleteMany({
+          where: { 
+            sessionId,
+            type: { not: 'SEED' },
+          },
+        }),
+        // Reset session state
+        prisma.ideationSession.update({
+          where: { id: sessionId },
+          data: {
+            seedText: seedText || undefined,
+            status: 'SEED_INPUT',
+            classificationJson: undefined, // Clear inventive framing
+            // Keep normalizationJson - it will be re-run by frontend
+          },
+        }),
+      ]);
+
+      return NextResponse.json({
+        success: true,
+        message: 'Session updated and downstream artifacts cleared',
+        cleared: {
+          ideaFrames: true,
+          nodes: true,
+          edges: true,
+          inventiveFraming: true,
+        },
+      });
+    }
+
+    // Simple update without clearing
+    await prisma.ideationSession.update({
+      where: { id: sessionId },
+      data: {
+        seedText: seedText || undefined,
+      },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Failed to update ideation session:', error);
+    return NextResponse.json(
+      { error: 'Failed to update session' },
       { status: 500 }
     );
   }

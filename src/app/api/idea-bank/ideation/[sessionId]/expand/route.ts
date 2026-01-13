@@ -53,7 +53,22 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       requestHeaders[key] = value;
     });
 
-    // Handle 'initialize' action - creates the dimension family nodes
+    // Handle 'discover' action - SRS Section 3.4 Dimension Discovery
+    // Discovers invention-specific dimensions (replaces fixed dimension families)
+    if (action === 'discover') {
+      console.log('[Expand API] Running dimension discovery for session:', sessionId);
+      const discoveryResult = await IdeationService.dimensionDiscovery(sessionId, requestHeaders);
+      
+      return NextResponse.json({
+        success: true,
+        inventionArchetype: discoveryResult.inventionArchetype,
+        primaryDimensions: discoveryResult.primaryDimensions,
+        excludedDimensions: discoveryResult.excludedDimensions,
+        message: `Discovered ${discoveryResult.primaryDimensions.length} invention-specific dimensions`,
+      });
+    }
+
+    // Handle 'initialize' action - creates the dimension family nodes from discovered dimensions
     if (action === 'initialize') {
       console.log('[Expand API] Initializing dimensions for session:', sessionId);
       const nodes = await IdeationService.initializeDimensions(sessionId);
@@ -73,6 +88,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           selectable: node.selectable,
           depth: node.depth,
           parentId: node.parentNodeId,
+          // SRS Section 4.2.B - Each dimension node must show whyItMatters and typicalAssumption
+          whyItMatters: (node.payloadJson as any)?.whyItMatters,
+          typicalAssumption: (node.payloadJson as any)?.typicalAssumption,
         },
       }));
 
@@ -83,10 +101,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       });
     }
 
-    // Handle 'expand' action - expands a specific node
+    // Handle 'expand' action - expands a specific node with assumption-breaking moves
     if (action !== 'expand') {
       console.error('[Expand API] Invalid action:', action);
-      return NextResponse.json({ error: `Invalid action: ${action}. Use 'initialize' or 'expand'` }, { status: 400 });
+      return NextResponse.json({ error: `Invalid action: ${action}. Use 'discover', 'initialize', or 'expand'` }, { status: 400 });
     }
 
     if (!nodeId) {
