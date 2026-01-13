@@ -1,16 +1,33 @@
 /**
  * Ideation Engine - Zod Schemas
  * 
- * JSON contracts for LLM interactions in the patent ideation engine.
- * All LLM calls must return ONLY valid JSON matching these schemas.
+ * PatentNest.ai - Patent Ideation Engine (Refactored per SRS)
+ * 
+ * IMPORTANT: This is a PRELIMINARY NOVELTY ASSESSMENT system.
+ * No patent databases are used. No legal novelty claims are made.
+ * 
+ * Pipeline Stages (Internal Only - UI MUST NOT show stage names):
+ * SEED_INPUT → SEMANTIC_GROUNDING → INVENTIVE_FRAMING → 
+ * DIMENSION_DISCOVERY → DIMENSION_EXPANSION → IDEA_GENERATION → 
+ * PRELIMINARY_NOVELTY_ASSESSMENT
  */
 
 import { z } from 'zod';
 
 // =============================================================================
-// ENUMS (matching Prisma enums)
+// ENUMS
 // =============================================================================
 
+export const InventionArchetypeEnum = z.enum([
+  'PHYSICAL_DEVICE',
+  'PROCESS_FLOW',
+  'DIGITAL_SYSTEM',
+  'BIO_CHEMICAL',
+  'HYBRID',
+]);
+export type InventionArchetype = z.infer<typeof InventionArchetypeEnum>;
+
+// Legacy enum maintained for backward compatibility
 export const InventionClassEnum = z.enum([
   'PRODUCT_DEVICE',
   'SYSTEM',
@@ -40,15 +57,25 @@ export type ForkMode = z.infer<typeof ForkModeEnum>;
 export const MindMapNodeTypeEnum = z.enum([
   'SEED',
   'COMPONENT',
+  'DIMENSION',           // Invention-specific dimension (primary)
+  'DIMENSION_MOVE',      // Assumption-breaking move under a dimension
+  'IDEA_FRAME',
+  // Legacy types kept for backward compatibility
   'DIMENSION_FAMILY',
   'DIMENSION_OPTION',
   'OPERATOR',
   'CONSTRAINT',
-  'IDEA_FRAME',
   'EVIDENCE_CLUSTER',
 ]);
 export type MindMapNodeType = z.infer<typeof MindMapNodeTypeEnum>;
 
+export const OriginalityStrengthEnum = z.enum(['HIGH', 'MEDIUM', 'LOW']);
+export type OriginalityStrength = z.infer<typeof OriginalityStrengthEnum>;
+
+export const NoveltyRiskLevelEnum = z.enum(['LOW', 'MODERATE', 'HIGH']);
+export type NoveltyRiskLevel = z.infer<typeof NoveltyRiskLevelEnum>;
+
+// Legacy enums maintained for backward compatibility
 export const SaturationLevelEnum = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 export type SaturationLevel = z.infer<typeof SaturationLevelEnum>;
 
@@ -69,11 +96,62 @@ export const RecipeIntentEnum = z.enum([
 ]);
 export type RecipeIntent = z.infer<typeof RecipeIntentEnum>;
 
+export const PrimaryChangeEnum = z.enum([
+  'REMOVE',
+  'INVERT',
+  'DECOUPLE',
+  'RELOCATE',
+  'DELAY',
+]);
+export type PrimaryChange = z.infer<typeof PrimaryChangeEnum>;
+
 // =============================================================================
-// 3.1 INPUT NORMALIZATION JSON (Enhanced with Contradiction Extraction)
+// STAGE 1: SEMANTIC_GROUNDING (Replaces normalize)
 // =============================================================================
 
-// Technical contradiction - core of inventive problem solving
+/**
+ * SEMANTIC_GROUNDING - Understand the idea WITHOUT inventing, reframing, or solving.
+ * This is a READ-ONLY understanding of the user's invention concept.
+ */
+export const SemanticGroundingSchema = z.object({
+  coreEntity: z.string().min(1).describe('The main physical or conceptual thing being invented'),
+  currentApproach: z.string().describe('How the user currently approaches or describes the solution'),
+  userIntent: z.string().min(1).describe('What the user wants to achieve or solve'),
+  explicitConstraints: z.array(z.string()).default([]).describe('Hard limits explicitly mentioned'),
+  implicitAssumptions: z.array(z.string()).default([]).describe('Hidden assumptions inferred from context'),
+  ambiguityFlags: z.array(z.string()).default([]).describe('Areas of the idea that are unclear or ambiguous'),
+  clarificationQuestions: z.array(z.string()).default([]).describe('Questions that would help clarify the invention (max 3-5)'),
+});
+export type SemanticGrounding = z.infer<typeof SemanticGroundingSchema>;
+
+// Legacy alias for backward compatibility
+export const InputNormalizationSchema = SemanticGroundingSchema.extend({
+  // Additional legacy fields for backward compatibility
+  intentGoal: z.string().optional(),
+  constraints: z.array(z.string()).default([]),
+  assumptions: z.array(z.string()).default([]),
+  context: z.string().optional(),
+  negativeConstraints: z.array(z.string()).default([]),
+  knownComponents: z.array(z.string()).default([]),
+  unknownsToAsk: z.array(z.string()).default([]),
+  technicalContradictions: z.array(z.object({
+    parameterToImprove: z.string(),
+    parameterThatWorsens: z.string(),
+    conflictDescription: z.string(),
+  })).default([]),
+  unstatedAssumptions: z.array(z.string()).default([]),
+  secondOrderGoals: z.array(z.string()).default([]),
+  patentableProblemStatement: z.string().optional(),
+});
+export type InputNormalization = z.infer<typeof InputNormalizationSchema>;
+
+// =============================================================================
+// STAGE 2: INVENTIVE_FRAMING (Replaces contradiction logic in normalize)
+// =============================================================================
+
+/**
+ * Technical contradiction - only if it naturally exists
+ */
 export const TechnicalContradictionSchema = z.object({
   parameterToImprove: z.string().describe('What we want to improve'),
   parameterThatWorsens: z.string().describe('What gets worse when we improve the first'),
@@ -81,113 +159,380 @@ export const TechnicalContradictionSchema = z.object({
 });
 export type TechnicalContradiction = z.infer<typeof TechnicalContradictionSchema>;
 
-export const InputNormalizationSchema = z.object({
-  coreEntity: z.string().min(1).describe('The main invention/concept'),
-  intentGoal: z.string().min(1).describe('What the user wants to achieve'),
-  constraints: z.array(z.string()).default([]).describe('Hard constraints on the invention'),
-  assumptions: z.array(z.string()).default([]).describe('Assumed context or conditions'),
-  context: z.string().optional().describe('Domain or use setting'),
-  negativeConstraints: z.array(z.string()).default([]).describe('Things user forbids, e.g., "no electronics"'),
-  knownComponents: z.array(z.string()).default([]).describe('Parts/components user already mentioned'),
-  unknownsToAsk: z.array(z.string()).default([]).describe('Questions to clarify with user'),
-  // NEW: Contradiction extraction for inventive problem solving
-  technicalContradictions: z.array(TechnicalContradictionSchema).default([]).describe('Underlying tradeoffs that drive invention'),
-  unstatedAssumptions: z.array(z.string()).default([]).describe('Hidden assumptions that could be challenged'),
-  secondOrderGoals: z.array(z.string()).default([]).describe('Goals that emerge from solving the primary goal'),
-  patentableProblemStatement: z.string().optional().describe('Reframed problem in patent-worthy terms'),
+/**
+ * Non-technical tension (e.g., cost vs quality, speed vs accuracy)
+ */
+export const NonTechnicalTensionSchema = z.object({
+  aspect1: z.string(),
+  aspect2: z.string(),
+  tensionDescription: z.string(),
 });
-export type InputNormalization = z.infer<typeof InputNormalizationSchema>;
+export type NonTechnicalTension = z.infer<typeof NonTechnicalTensionSchema>;
 
-// =============================================================================
-// 3.1.5 CONTRADICTION MAPPING JSON (NEW STAGE)
-// =============================================================================
+/**
+ * INVENTIVE_FRAMING - Identify real tensions ONLY if they exist.
+ * DO NOT force TRIZ-style conflicts. Return empty arrays if no real contradiction exists.
+ */
+export const InventiveFramingSchema = z.object({
+  technicalContradictions: z.array(TechnicalContradictionSchema).default([])
+    .describe('Technical contradictions ONLY if they naturally exist'),
+  nonTechnicalTensions: z.array(NonTechnicalTensionSchema).default([])
+    .describe('Non-technical tensions like cost/quality tradeoffs'),
+  assumptionToChallenge: z.string().optional()
+    .describe('The most important assumption that could be challenged'),
+  patentableProblemStatement: z.string().optional()
+    .describe('Reframed problem in inventive terms'),
+});
+export type InventiveFraming = z.infer<typeof InventiveFramingSchema>;
 
+// Legacy ContradictionMapping alias
 export const ContradictionMappingSchema = z.object({
   contradictions: z.array(z.object({
     parameterToImprove: z.string(),
     parameterThatWorsens: z.string(),
-    whyThisIsHard: z.string().describe('Why this tradeoff is difficult to resolve'),
-    trizContradictionNumber: z.number().optional().describe('TRIZ contradiction matrix number if applicable'),
-  })).min(1),
-  secondOrderEffects: z.array(z.string()).default([]).describe('Side effects of solving each contradiction'),
-  inventivePrinciples: z.array(z.string()).default([]).describe('TRIZ principles that could resolve these contradictions'),
+    whyThisIsHard: z.string().optional(),
+    trizContradictionNumber: z.number().optional(),
+  })).default([]),
+  secondOrderEffects: z.array(z.string()).default([]),
+  inventivePrinciples: z.array(z.string()).default([]),
   resolutionStrategies: z.array(z.object({
     strategy: z.enum(['SEPARATION_IN_TIME', 'SEPARATION_IN_SPACE', 'SEPARATION_ON_CONDITION', 'SEPARATION_BETWEEN_PARTS', 'INVERSION', 'SUBSTANCE_FIELD_SHIFT', 'DYNAMIZATION']),
     description: z.string(),
-    applicableTo: z.string().describe('Which contradiction this resolves'),
+    applicableTo: z.string(),
   })).default([]),
 });
 export type ContradictionMapping = z.infer<typeof ContradictionMappingSchema>;
 
 // =============================================================================
-// 3.3.5 OBVIOUSNESS FILTER JSON (NEW STAGE)
+// STAGE 3: DIMENSION_DISCOVERY (Replaces fixed dimension families)
+// =============================================================================
+
+/**
+ * Primary dimension - discovered from the invention, NOT from a fixed template
+ */
+export const PrimaryDimensionSchema = z.object({
+  dimensionId: z.string().min(1).describe('Unique identifier for this dimension'),
+  name: z.string().min(1).describe('Short name of the dimension'),
+  whyItMatters: z.string().describe('Why this dimension is critical to the invention'),
+  typicalAssumption: z.string().describe('The typical/default assumption about this dimension'),
+});
+export type PrimaryDimension = z.infer<typeof PrimaryDimensionSchema>;
+
+/**
+ * DIMENSION_DISCOVERY - Discover invention-specific dimensions.
+ * Dimensions MUST emerge from the invention, NOT from generic templates.
+ */
+export const DimensionDiscoverySchema = z.object({
+  inventionArchetype: InventionArchetypeEnum.describe('Classification of invention type'),
+  primaryDimensions: z.array(PrimaryDimensionSchema).min(4).max(6)
+    .describe('4-6 invention-specific dimensions that control success or failure'),
+  excludedDimensions: z.array(z.string()).default([])
+    .describe('Dimensions explicitly NOT relevant to this invention'),
+});
+export type DimensionDiscovery = z.infer<typeof DimensionDiscoverySchema>;
+
+// =============================================================================
+// STAGE 4: DIMENSION_EXPANSION (Assumption-breaking moves)
+// =============================================================================
+
+/**
+ * Assumption-breaking move - NOT a feature addition
+ */
+export const AssumptionBreakingMoveSchema = z.object({
+  moveText: z.string().min(1).describe('What if we... statement'),
+  primaryChange: PrimaryChangeEnum.describe('Type of change: REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY'),
+  immediateEffect: z.string().describe('What happens immediately when this move is applied'),
+  newProblemCreated: z.string().describe('What new problem or constraint this creates'),
+  contradictionAddressed: z.string().optional()
+    .describe('Which tension or contradiction this move addresses'),
+});
+export type AssumptionBreakingMove = z.infer<typeof AssumptionBreakingMoveSchema>;
+
+/**
+ * DIMENSION_EXPANSION response - generates 3-5 assumption-breaking moves per dimension
+ */
+export const DimensionExpansionSchema = z.object({
+  dimensionId: z.string().describe('ID of the dimension being expanded'),
+  moves: z.array(AssumptionBreakingMoveSchema).min(3).max(5)
+    .describe('3-5 assumption-breaking invention moves'),
+});
+export type DimensionExpansion = z.infer<typeof DimensionExpansionSchema>;
+
+// Legacy SuggestedMove schema for backward compatibility
+export const SuggestedMoveSchema = z.object({
+  id: z.string().min(1).describe('Unique move ID'),
+  move: z.string().min(1).describe('What-if statement'),
+  impact: z.string().min(1).describe('Immediate change'),
+  leadsTo: z.string().min(1).describe('New constraint or opportunity'),
+  tension: z.string().optional().describe('What assumption this challenges'),
+  challengesPrior: z.boolean().default(false),
+  modifies: z.enum([
+    'BEHAVIOR_OVER_TIME',
+    'ARCHITECTURE_CONTROL_FLOW',
+    'INTERFACE_BOUNDARY',
+    'FAILURE_MODE_LIFECYCLE'
+  ]).optional().default('BEHAVIOR_OVER_TIME'),
+});
+export type SuggestedMove = z.infer<typeof SuggestedMoveSchema>;
+
+export const SuggestedMovesResponseSchema = z.object({
+  moves: z.array(SuggestedMoveSchema).min(1).max(10),
+  contextAcknowledged: z.boolean().default(false),
+  priorSelectionsUsed: z.array(z.string()).default([]),
+});
+export type SuggestedMovesResponse = z.infer<typeof SuggestedMovesResponseSchema>;
+
+// =============================================================================
+// STAGE 5: IDEA_GENERATION (Mechanism-Pure)
+// =============================================================================
+
+/**
+ * Mechanism boundary test - what the idea does NOT solve
+ */
+export const MechanismBoundaryTestSchema = z.object({
+  whatItDoesNotSolve: z.string().describe('Problems this mechanism explicitly does NOT address'),
+  outOfScope: z.string().describe('Areas considered outside the scope of this invention'),
+});
+export type MechanismBoundaryTest = z.infer<typeof MechanismBoundaryTestSchema>;
+
+/**
+ * IDEA_FRAME - Patent idea with EXACTLY ONE causal mechanism
+ * 
+ * RULE: If more than ONE causal mechanism is required → discard and regenerate.
+ */
+export const NewIdeaFrameSchema = z.object({
+  ideaId: z.string().min(1).describe('Unique ID for this idea'),
+  coreMechanism: z.string().min(1)
+    .describe('A single sentence describing the ONE primary inventive mechanism'),
+  inventiveLeap: z.string().min(1)
+    .describe('The non-obvious insight that makes this patentable'),
+  eliminatedAssumption: z.string().min(1)
+    .describe('Which traditional assumption is eliminated or challenged'),
+  contradictionResolved: z.string().optional()
+    .describe('Which technical contradiction this resolves'),
+  whyNotObvious: z.string().min(1)
+    .describe('Why a skilled person would NOT arrive at this solution'),
+  mechanismBoundaryTest: MechanismBoundaryTestSchema
+    .describe('Explicit boundaries of what this mechanism does NOT solve'),
+});
+export type NewIdeaFrame = z.infer<typeof NewIdeaFrameSchema>;
+
+// Legacy IdeaFrame schema (extended to include new required fields)
+export const IdeaVariantSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().min(1),
+  differentiator: z.string().optional(),
+});
+export type IdeaVariant = z.infer<typeof IdeaVariantSchema>;
+
+export const IdeaFrameSchema = z.object({
+  ideaId: z.string().min(1),
+  title: z.string().min(1).max(200),
+  classLabels: z.array(z.string()).default([]),
+  problem: z.string().min(1),
+  principle: z.string().min(1).max(500),
+  
+  // NEW REQUIRED FIELDS (per SRS)
+  coreMechanism: z.string().min(1)
+    .describe('EXACTLY ONE causal mechanism - if more than one is required, idea is invalid'),
+  inventiveLeap: z.string().min(1)
+    .describe('The non-obvious insight'),
+  eliminatedAssumption: z.string().optional()
+    .describe('Traditional assumption eliminated'),
+  contradictionResolved: z.string().optional(),
+  whyNotObvious: z.string().min(1),
+  mechanismBoundaryTest: MechanismBoundaryTestSchema.optional(),
+  
+  // Legacy fields for backward compatibility
+  components: z.array(z.string()).default([]),
+  mechanismSteps: z.array(z.string()).default([]),
+  triggerCondition: z.string().optional(),
+  technicalEffect: z.string().optional(),
+  constraintsSatisfied: z.array(z.string()).default([]),
+  operatorsUsed: z.array(z.string()).default([]),
+  dimensionsUsed: z.array(z.string()).default([]),
+  variants: z.array(IdeaVariantSchema).default([]),
+  claimHooks: z.array(z.string()).default([]),
+  riskNotes: z.array(z.string()).default([]),
+  searchQueries: z.array(z.string()).default([]),
+  analogySource: z.string().optional(),
+  eliminatedComponent: z.string().optional(),
+  secondOrderEffect: z.string().optional(),
+  resolutionStrategy: z.string().optional(),
+});
+export type IdeaFrame = z.infer<typeof IdeaFrameSchema>;
+
+// =============================================================================
+// STAGE 6: PRELIMINARY_NOVELTY_ASSESSMENT (LLM-Only, No Prior Art)
+// =============================================================================
+
+/**
+ * PRELIMINARY_NOVELTY_ASSESSMENT - LLM-only assessment of conceptual originality.
+ * 
+ * IMPORTANT: This is NOT a legal novelty determination.
+ * No patent databases are searched. No clearance is implied.
+ */
+export const PreliminaryNoveltyAssessmentSchema = z.object({
+  originalityStrength: OriginalityStrengthEnum
+    .describe('HIGH | MEDIUM | LOW - conceptual originality'),
+  noveltyRiskLevel: NoveltyRiskLevelEnum
+    .describe('LOW | MODERATE | HIGH - risk that prior art exists'),
+  likelyExaminerObjection: z.string()
+    .describe('What objection a patent examiner would likely raise'),
+  redundancyRisk: z.string()
+    .describe('Risk that this is redundant with existing solutions'),
+  strongestNovelAspect: z.string()
+    .describe('The most novel aspect of the idea'),
+  weakestNovelAspect: z.string()
+    .describe('The least novel aspect that may face challenges'),
+  improvementDirections: z.array(z.string()).default([])
+    .describe('Suggestions to improve novelty'),
+});
+export type PreliminaryNoveltyAssessment = z.infer<typeof PreliminaryNoveltyAssessmentSchema>;
+
+// Legacy NoveltyGate schema (DEPRECATED - use PreliminaryNoveltyAssessment)
+// Kept for backward compatibility during migration
+export const NoveltySearchResultSchema = z.object({
+  source: z.string(),
+  title: z.string(),
+  snippet: z.string().optional(),
+  url: z.string().optional(),
+  publicationNumber: z.string().optional(),
+  assignee: z.string().optional(),
+  filingDate: z.string().optional(),
+  similarityScore: z.number().min(0).max(100).optional(),
+  whyRelevant: z.string(),
+});
+export type NoveltySearchResult = z.infer<typeof NoveltySearchResultSchema>;
+
+export const ClosestPriorArtSchema = z.object({
+  publicationNumber: z.string().default('Unknown'),
+  title: z.string().default('Unknown Patent'),
+  relevanceScore: z.number().min(0).max(100).default(50),
+  overlappingFeatures: z.array(z.string()).default([]),
+  differentiatingFactors: z.array(z.string()).default([]),
+  remark: z.string().default('Requires manual review'),
+});
+export type ClosestPriorArt = z.infer<typeof ClosestPriorArtSchema>;
+
+export const MutationInstructionsSchema = z.object({
+  action: z.enum(['MUTATE_DIMENSION', 'MUTATE_OPERATOR', 'ADD_ANALOGY', 'NARROW_PROBLEM', 'INVERT_APPROACH']),
+  specifics: z.string(),
+  retainElements: z.array(z.string()).default([]),
+  suggestedAnalogy: z.string().optional(),
+  dimensionToReplace: z.string().optional(),
+  replacementSuggestion: z.string().optional(),
+});
+export type MutationInstructions = z.infer<typeof MutationInstructionsSchema>;
+
+export const NoveltyGateSchema = z.object({
+  // Map new fields to legacy structure for backward compatibility
+  query: z.string().default(''),
+  results: z.array(NoveltySearchResultSchema).default([]),
+  conceptSaturation: SaturationLevelEnum.default('MEDIUM'),
+  solutionSaturation: SaturationLevelEnum.default('MEDIUM'),
+  noveltyScore: z.number().int().min(0).max(100).default(50),
+  recommendedAction: NoveltyActionEnum.default('KEEP'),
+  reasoning: z.string().optional(),
+  
+  // New fields from PreliminaryNoveltyAssessment
+  originalityStrength: OriginalityStrengthEnum.optional(),
+  noveltyRiskLevel: NoveltyRiskLevelEnum.optional(),
+  likelyExaminerObjection: z.string().optional(),
+  redundancyRisk: z.string().optional(),
+  strongestNovelAspect: z.string().optional(),
+  weakestNovelAspect: z.string().optional(),
+  improvementDirections: z.array(z.string()).default([]),
+  
+  // Legacy fields (DEPRECATED - no longer populated)
+  patentsAnalyzed: z.number().optional(),
+  closestPriorArt: z.array(ClosestPriorArtSchema).default([]),
+  priorArtSummary: z.string().optional(),
+  obviousnessFlags: z.array(z.enum([
+    'COMBINATIONAL',
+    'SAME_DOMAIN',
+    'PARAMETER_TWEAK',
+    'OBVIOUS_SUBSTITUTION',
+    'PREDICTABLE_RESULT',
+  ])).default([]),
+  mutationInstructions: MutationInstructionsSchema.optional(),
+  phositaTest: z.string().optional(),
+  suggestedIterations: z.array(z.string()).default([]),
+});
+export type NoveltyGate = z.infer<typeof NoveltyGateSchema>;
+
+// =============================================================================
+// LEGACY: CLASSIFICATION (Kept for backward compatibility)
+// =============================================================================
+
+export const ClassificationLabelSchema = z.object({
+  class: InventionClassEnum,
+  weight: z.number().min(0).max(1),
+  rationaleShort: z.string(),
+});
+export type ClassificationLabel = z.infer<typeof ClassificationLabelSchema>;
+
+export const ClassificationSchema = z.object({
+  labels: z.array(ClassificationLabelSchema).min(1),
+  dominantClass: InventionClassEnum,
+  forkMode: ForkModeEnum,
+  archetype: ArchetypeEnum,
+});
+export type Classification = z.infer<typeof ClassificationSchema>;
+
+// =============================================================================
+// LEGACY: OBVIOUSNESS FILTER (DEPRECATED - no longer used)
 // =============================================================================
 
 export const ObviousnessFilterSchema = z.object({
-  combinationNovelty: z.number().min(0).max(100).describe('How novel is this combination? 0=obvious, 100=highly inventive'),
+  combinationNovelty: z.number().min(0).max(100),
   obviousnessFlags: z.array(z.enum([
-    'COMBINATIONAL',      // Just adding known elements together
-    'SAME_DOMAIN',        // All elements from same field
-    'PARAMETER_TWEAK',    // Just changing values, not structure
-    'OBVIOUS_SUBSTITUTION', // Replacing A with well-known alternative
-    'PREDICTABLE_RESULT', // Outcome is expected
+    'COMBINATIONAL',
+    'SAME_DOMAIN',
+    'PARAMETER_TWEAK',
+    'OBVIOUS_SUBSTITUTION',
+    'PREDICTABLE_RESULT',
   ])).default([]),
-  wildCardSuggestion: z.string().optional().describe('Suggestion to increase novelty'),
+  wildCardSuggestion: z.string().optional(),
   dimensionQualityScores: z.array(z.object({
     dimensionId: z.string(),
     noveltyContribution: z.number().min(0).max(100),
     recommendation: z.enum(['KEEP', 'REPLACE', 'INVERT']),
   })).default([]),
-  suggestedAnalogySources: z.array(z.string()).default([]).describe('Distant domains to draw analogies from'),
+  suggestedAnalogySources: z.array(z.string()).default([]),
 });
 export type ObviousnessFilter = z.infer<typeof ObviousnessFilterSchema>;
 
 // =============================================================================
-// 3.2 CLASSIFICATION JSON
-// =============================================================================
-
-export const ClassificationLabelSchema = z.object({
-  class: InventionClassEnum,
-  weight: z.number().min(0).max(1).describe('Confidence weight 0-1'),
-  rationaleShort: z.string().describe('Brief reason for this classification'),
-});
-export type ClassificationLabel = z.infer<typeof ClassificationLabelSchema>;
-
-export const ClassificationSchema = z.object({
-  labels: z.array(ClassificationLabelSchema).min(1).describe('Multi-label classification'),
-  dominantClass: InventionClassEnum.describe('Primary classification'),
-  forkMode: ForkModeEnum.describe('Whether to run multiple tracks'),
-  archetype: ArchetypeEnum.describe('Technical archetype'),
-});
-export type Classification = z.infer<typeof ClassificationSchema>;
-
-// =============================================================================
-// 3.3 DIMENSION GRAPH JSON (Mind-map nodes + edges)
+// GRAPH STRUCTURES
 // =============================================================================
 
 export const DimensionNodeSchema = z.object({
-  id: z.string().min(1).describe('Unique node ID within the graph'),
+  id: z.string().min(1),
   type: MindMapNodeTypeEnum,
   title: z.string().min(1),
   description: z.string().optional(),
   descriptionShort: z.string().optional(),
-  family: z.string().optional().describe('Dimension family name'),
+  family: z.string().optional(),
   selectable: z.boolean().default(true),
   defaultExpanded: z.boolean().default(false),
   tags: z.array(z.string()).default([]),
-  parentId: z.string().optional().describe('Parent node ID for hierarchy'),
-  positionX: z.number().optional().describe('X coordinate for React Flow positioning'),
-  positionY: z.number().optional().describe('Y coordinate for React Flow positioning'),
-  state: z.string().optional().describe('Node expansion state'),
-  depth: z.number().optional().describe('Node depth in hierarchy'),
-  payloadJson: z.any().optional().describe('Additional payload data'),
+  parentId: z.string().optional(),
+  positionX: z.number().optional(),
+  positionY: z.number().optional(),
+  state: z.string().optional(),
+  depth: z.number().optional(),
+  payloadJson: z.any().optional(),
+  // New fields for SRS compliance
+  whyItMatters: z.string().optional(),
+  typicalAssumption: z.string().optional(),
 });
 export type DimensionNode = z.infer<typeof DimensionNodeSchema>;
 
 export const DimensionEdgeSchema = z.object({
-  from: z.string().min(1).describe('Source node ID'),
-  to: z.string().min(1).describe('Target node ID'),
-  relation: z.string().min(1).describe('Relationship type: contains, enables, requires, produces, etc.'),
+  from: z.string().min(1),
+  to: z.string().min(1),
+  relation: z.string().min(1),
 });
 export type DimensionEdge = z.infer<typeof DimensionEdgeSchema>;
 
@@ -197,9 +542,7 @@ export const DimensionGraphSchema = z.object({
 });
 export type DimensionGraph = z.infer<typeof DimensionGraphSchema>;
 
-// Extended node type that includes payloadJson for suggested moves
-// This is a standalone interface that matches what we return from the service
-// (compatible with both Prisma nulls and Zod undefineds)
+// Extended node type for suggested moves payload
 export interface DimensionNodeWithPayload {
   id: string;
   type: z.infer<typeof MindMapNodeTypeEnum>;
@@ -216,9 +559,10 @@ export interface DimensionNodeWithPayload {
   state?: string | null;
   depth?: number | null;
   payloadJson?: SuggestedMovePayloadType | Record<string, unknown> | null;
+  whyItMatters?: string;
+  typicalAssumption?: string;
 }
 
-// Payload structure for suggested moves
 export interface SuggestedMovePayloadType {
   move: string;
   impact: string;
@@ -227,174 +571,33 @@ export interface SuggestedMovePayloadType {
   challengesPrior?: boolean;
   modifies?: 'BEHAVIOR_OVER_TIME' | 'ARCHITECTURE_CONTROL_FLOW' | 'INTERFACE_BOUNDARY' | 'FAILURE_MODE_LIFECYCLE';
   isSuggestedMove: true;
+  // New fields for SRS compliance
+  primaryChange?: 'REMOVE' | 'INVERT' | 'DECOUPLE' | 'RELOCATE' | 'DELAY';
+  newProblemCreated?: string;
+  contradictionAddressed?: string;
 }
 
-// Extended graph type for expansion results that include payloadJson
 export interface ExpandedDimensionGraph {
   nodes: DimensionNodeWithPayload[];
   edges: Array<{ from: string; to: string; relation: string }>;
 }
 
 // =============================================================================
-// 3.3.1 SUGGESTED MOVE SCHEMA (Context-Aware Dimension Exploration)
-// =============================================================================
-
-/**
- * A SuggestedMove replaces abstract dimension options with actionable invention moves.
- * Each move must modify: behavior, architecture, interface boundary, OR failure mode.
- * Moves are generated dynamically with context from previously selected dimensions.
- */
-export const SuggestedMoveSchema = z.object({
-  id: z.string().min(1).describe('Unique move ID: move-{familyId}-{N}'),
-  move: z.string().min(1).describe('What-if statement: "What if we <design action>?"'),
-  impact: z.string().min(1).describe('Immediate behavioral/functional change'),
-  leadsTo: z.string().min(1).describe('New constraint, problem, or opportunity this creates'),
-  tension: z.string().optional().describe('What existing assumption this challenges'),
-  challengesPrior: z.boolean().default(false).describe('True if this relaxes an assumption from prior selections'),
-  // Made optional with default to handle LLM inconsistency - fallback to BEHAVIOR_OVER_TIME
-  modifies: z.enum([
-    'BEHAVIOR_OVER_TIME',
-    'ARCHITECTURE_CONTROL_FLOW', 
-    'INTERFACE_BOUNDARY',
-    'FAILURE_MODE_LIFECYCLE'
-  ]).optional().default('BEHAVIOR_OVER_TIME').describe('What structural aspect this move modifies'),
-});
-export type SuggestedMove = z.infer<typeof SuggestedMoveSchema>;
-
-export const SuggestedMovesResponseSchema = z.object({
-  // min(1) instead of min(3) to be lenient - LLMs sometimes return fewer moves
-  // The prompt asks for 3-5, but we accept 1+ to avoid parsing failures
-  moves: z.array(SuggestedMoveSchema).min(1).max(10),
-  contextAcknowledged: z.boolean().default(false).describe('True if prior selections were considered'),
-  priorSelectionsUsed: z.array(z.string()).default([]).describe('IDs of prior selections that influenced these moves'),
-});
-export type SuggestedMovesResponse = z.infer<typeof SuggestedMovesResponseSchema>;
-
-// =============================================================================
-// 3.4 COMBINE RECIPE JSON
+// COMBINE RECIPE
 // =============================================================================
 
 export const CombineRecipeSchema = z.object({
-  selectedComponents: z.array(z.string()).default([]).describe('IDs of selected component nodes'),
-  selectedDimensions: z.array(z.string()).default([]).describe('IDs of selected dimension nodes'),
-  selectedOperators: z.array(z.string()).default([]).describe('IDs of selected operator nodes'),
+  selectedComponents: z.array(z.string()).default([]),
+  selectedDimensions: z.array(z.string()).default([]),
+  selectedOperators: z.array(z.string()).default([]),
   recipeIntent: RecipeIntentEnum.default('DIVERGENT'),
-  count: z.number().int().min(1).max(20).default(5).describe('Number of ideas to generate'),
-  userGuidance: z.string().optional().describe('User-provided guidance for idea generation (HIGH PRIORITY)'),
+  count: z.number().int().min(1).max(20).default(5),
+  userGuidance: z.string().optional(),
 });
 export type CombineRecipe = z.infer<typeof CombineRecipeSchema>;
 
 // =============================================================================
-// 3.5 IDEA FRAME JSON (Core output - Enhanced with Inventive Logic)
-// =============================================================================
-
-export const IdeaVariantSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().min(1),
-  differentiator: z.string().optional().describe('What makes this variant different'),
-});
-export type IdeaVariant = z.infer<typeof IdeaVariantSchema>;
-
-export const IdeaFrameSchema = z.object({
-  ideaId: z.string().min(1).describe('Unique ID for this idea'),
-  title: z.string().min(1).max(200),
-  // Allow any string labels - LLM may generate custom labels
-  classLabels: z.array(z.string()).default([]).describe('Classification labels for the idea'),
-  problem: z.string().min(1).describe('Problem being solved'),
-  principle: z.string().min(1).max(500).describe('One-liner describing the core principle'),
-  coreMechanism: z.string().optional().describe('A single sentence describing the ONE primary inventive mechanism'),
-  components: z.array(z.string()).default([]).describe('List of components/parts'),
-  mechanismSteps: z.array(z.string()).default([]).describe('How it works, step by step'),
-  triggerCondition: z.string().optional().describe('What triggers the mechanism'),
-  technicalEffect: z.string().min(1).describe('Technical outcome/benefit'),
-  constraintsSatisfied: z.array(z.string()).default([]).describe('Which constraints this addresses'),
-  operatorsUsed: z.array(z.string()).default([]).describe('TRIZ operators applied'),
-  dimensionsUsed: z.array(z.string()).default([]).describe('Dimensions explored'),
-  variants: z.array(IdeaVariantSchema).min(0).max(5).default([]).describe('Alternative embodiments'),
-  claimHooks: z.array(z.string()).default([]).describe('Phrases to convert into claim elements'),
-  riskNotes: z.array(z.string()).default([]).describe('Why this might fail or be challenged'),
-  searchQueries: z.array(z.string()).default([]).describe('Queries for novelty search'),
-  
-  // NEW: Inventive Logic Fields (Patent-Worthy Enhancement)
-  inventiveLeap: z.string().optional().describe('The non-obvious insight that makes this patentable'),
-  whyNotObvious: z.string().optional().describe('Why a skilled person would NOT arrive at this solution'),
-  analogySource: z.string().optional().describe('Distant domain this draws inspiration from (2+ hops away)'),
-  eliminatedComponent: z.string().optional().describe('Traditional element removed or inverted'),
-  secondOrderEffect: z.string().optional().describe('Unexpected benefit from the inventive approach'),
-  contradictionResolved: z.string().optional().describe('Which technical contradiction this idea resolves'),
-  resolutionStrategy: z.string().optional().describe('How the contradiction was resolved (separation, inversion, etc.)'),
-});
-export type IdeaFrame = z.infer<typeof IdeaFrameSchema>;
-
-// =============================================================================
-// 3.6 NOVELTY GATE JSON (Enhanced with Feedback Loop)
-// =============================================================================
-
-export const NoveltySearchResultSchema = z.object({
-  source: z.string().describe('Where this result came from'),
-  title: z.string(),
-  snippet: z.string().optional(),
-  url: z.string().optional(),
-  publicationNumber: z.string().optional().describe('Patent publication number (e.g., US1234567B1)'),
-  assignee: z.string().optional().describe('Patent assignee/owner'),
-  filingDate: z.string().optional().describe('Patent filing date'),
-  similarityScore: z.number().min(0).max(100).optional(),
-  whyRelevant: z.string().describe('Why this result is relevant'),
-});
-
-// Schema for closest prior art patents identified by LLM
-export const ClosestPriorArtSchema = z.object({
-  publicationNumber: z.string().default('Unknown').describe('Patent publication number'),
-  title: z.string().default('Unknown Patent').describe('Patent title'),
-  relevanceScore: z.number().min(0).max(100).default(50).describe('How closely this matches the invention (0-100)'),
-  overlappingFeatures: z.array(z.string()).default([]).describe('Features that overlap with the invention'),
-  differentiatingFactors: z.array(z.string()).default([]).describe('How the invention differs from this patent'),
-  remark: z.string().default('Requires manual review').describe('Brief analysis of this patent vs the invention'),
-});
-export type ClosestPriorArt = z.infer<typeof ClosestPriorArtSchema>;
-
-// Mutation instructions for iterating weak ideas
-export const MutationInstructionsSchema = z.object({
-  action: z.enum(['MUTATE_DIMENSION', 'MUTATE_OPERATOR', 'ADD_ANALOGY', 'NARROW_PROBLEM', 'INVERT_APPROACH']),
-  specifics: z.string().describe('Detailed instruction for mutation'),
-  retainElements: z.array(z.string()).default([]).describe('Elements to keep from original idea'),
-  suggestedAnalogy: z.string().optional().describe('Distant domain to draw from'),
-  dimensionToReplace: z.string().optional(),
-  replacementSuggestion: z.string().optional(),
-});
-export type MutationInstructions = z.infer<typeof MutationInstructionsSchema>;
-export type NoveltySearchResult = z.infer<typeof NoveltySearchResultSchema>;
-
-export const NoveltyGateSchema = z.object({
-  query: z.string().describe('The search query used'),
-  results: z.array(NoveltySearchResultSchema).default([]),
-  conceptSaturation: SaturationLevelEnum.describe('How crowded is the concept space'),
-  solutionSaturation: SaturationLevelEnum.describe('How crowded is this specific solution'),
-  noveltyScore: z.number().int().min(0).max(100).describe('Overall novelty assessment 0-100'),
-  recommendedAction: NoveltyActionEnum.describe('What to do next'),
-  reasoning: z.string().optional().describe('Explanation of the assessment'),
-  
-  // Prior art analysis
-  patentsAnalyzed: z.number().optional().describe('Total number of patents analyzed'),
-  closestPriorArt: z.array(ClosestPriorArtSchema).default([]).describe('Top 3-5 most relevant prior art patents with analysis'),
-  priorArtSummary: z.string().optional().describe('Brief summary of prior art landscape and how invention differentiates'),
-  
-  // Enhanced feedback loop fields
-  obviousnessFlags: z.array(z.enum([
-    'COMBINATIONAL',      // Just adding known elements together
-    'SAME_DOMAIN',        // All elements from same field  
-    'PARAMETER_TWEAK',    // Just changing values, not structure
-    'OBVIOUS_SUBSTITUTION', // Replacing A with well-known alternative
-    'PREDICTABLE_RESULT', // Outcome is expected
-  ])).default([]),
-  mutationInstructions: MutationInstructionsSchema.optional().describe('How to improve if novelty is low'),
-  phositaTest: z.string().optional().describe('Why a Person Having Ordinary Skill In The Art would/would not find this obvious'),
-  suggestedIterations: z.array(z.string()).default([]).describe('Specific suggestions to increase novelty'),
-});
-export type NoveltyGate = z.infer<typeof NoveltyGateSchema>;
-
-// =============================================================================
-// TRIZ OPERATORS (Pre-defined library)
+// TRIZ OPERATORS (Kept for backward compatibility)
 // =============================================================================
 
 export const TrizOperatorSchema = z.object({
@@ -406,7 +609,6 @@ export const TrizOperatorSchema = z.object({
 });
 export type TrizOperator = z.infer<typeof TrizOperatorSchema>;
 
-// Pre-defined TRIZ-lite operators
 export const TRIZ_OPERATORS: TrizOperator[] = [
   {
     id: 'op-segmentation',
@@ -423,81 +625,11 @@ export const TRIZ_OPERATORS: TrizOperator[] = [
     applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS'],
   },
   {
-    id: 'op-local-quality',
-    name: 'Local Quality',
-    description: 'Change uniform structure to non-uniform; make each part optimal for its function',
-    examples: ['Variable thickness walls', 'Graded materials'],
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-asymmetry',
-    name: 'Asymmetry',
-    description: 'Replace symmetric forms with asymmetric ones',
-    examples: ['Asymmetric tire treads', 'Off-center handles'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM'],
-  },
-  {
-    id: 'op-merging',
-    name: 'Merging',
-    description: 'Combine identical or similar objects; unite operations in time',
-    examples: ['Multi-blade razors', 'Combined washer-dryer'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'op-universality',
-    name: 'Universality',
-    description: 'Make an object perform multiple functions; eliminate need for other parts',
-    examples: ['Swiss army knife', 'Smartphone'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'SOFTWARE_ALGORITHM'],
-  },
-  {
-    id: 'op-nesting',
-    name: 'Nesting',
-    description: 'Place one object inside another; pass one through cavity of another',
-    examples: ['Telescoping antenna', 'Nested containers'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM'],
-  },
-  {
-    id: 'op-counterweight',
-    name: 'Counterweight',
-    description: 'Compensate weight with another weight; use aerodynamic/hydrodynamic forces',
-    examples: ['Counterbalanced crane', 'Hydrofoils'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM'],
-  },
-  {
-    id: 'op-prior-action',
-    name: 'Prior Action',
-    description: 'Perform required change before it is needed; pre-arrange objects',
-    examples: ['Pre-stressed concrete', 'Pre-formatted forms'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING', 'SYSTEM'],
-  },
-  {
-    id: 'op-prior-counteraction',
-    name: 'Prior Counteraction',
-    description: 'Create stresses in advance to oppose known undesirable stresses',
-    examples: ['Pre-tensioned cables', 'Preventive medication'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING', 'BIOTECH_PHARMA'],
-  },
-  {
-    id: 'op-equipotentiality',
-    name: 'Equipotentiality',
-    description: 'Eliminate need to raise or lower objects; change operating conditions',
-    examples: ['Locks in canals', 'Pressure equalization'],
-    applicableTo: ['SYSTEM', 'METHOD_PROCESS'],
-  },
-  {
     id: 'op-inversion',
     name: 'Inversion',
     description: 'Invert the action; make fixed parts movable and vice versa',
     examples: ['Inside-out umbrella', 'Rotating object vs rotating tool'],
     applicableTo: ['PRODUCT_DEVICE', 'METHOD_PROCESS', 'SYSTEM'],
-  },
-  {
-    id: 'op-spheroidality',
-    name: 'Spheroidality/Curvature',
-    description: 'Replace linear parts with curved; use rollers, balls, spirals',
-    examples: ['Ball bearings', 'Dome structures'],
-    applicableTo: ['PRODUCT_DEVICE', 'MANUFACTURING'],
   },
   {
     id: 'op-dynamics',
@@ -507,379 +639,132 @@ export const TRIZ_OPERATORS: TrizOperator[] = [
     applicableTo: ['PRODUCT_DEVICE', 'SYSTEM'],
   },
   {
-    id: 'op-partial-excessive',
-    name: 'Partial or Excessive Action',
-    description: 'If 100% is hard, do more or less; solve partial problem first',
-    examples: ['Overfilling then removing excess', 'Quick approximation then refinement'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING', 'SOFTWARE_ALGORITHM'],
-  },
-  {
-    id: 'op-dimension-change',
-    name: 'Dimension Change',
-    description: 'Move into another dimension; use multi-layer assembly; tilt or reorient',
-    examples: ['3D printing', 'Multi-story buildings'],
-    applicableTo: ['PRODUCT_DEVICE', 'MANUFACTURING', 'SYSTEM'],
-  },
-  {
-    id: 'op-vibration',
-    name: 'Mechanical Vibration',
-    description: 'Use oscillation; increase frequency; use resonance',
-    examples: ['Ultrasonic cleaning', 'Vibratory feeders'],
-    applicableTo: ['PRODUCT_DEVICE', 'METHOD_PROCESS', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-periodic-action',
-    name: 'Periodic Action',
-    description: 'Replace continuous action with periodic; use pauses for other actions',
-    examples: ['Pulsed lasers', 'Intermittent wipers'],
-    applicableTo: ['METHOD_PROCESS', 'SYSTEM', 'SOFTWARE_ALGORITHM'],
-  },
-  {
-    id: 'op-continuity',
-    name: 'Continuity of Action',
-    description: 'Carry out action continuously; eliminate idle motions',
-    examples: ['Continuous casting', 'Conveyor systems'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-rushing-through',
-    name: 'Rushing Through',
-    description: 'Conduct harmful process at very high speed',
-    examples: ['High-speed cutting through heat zone', 'Quick freeze'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-harm-to-benefit',
-    name: 'Convert Harm to Benefit',
-    description: 'Use harmful factors to achieve positive effect',
-    examples: ['Using waste heat', 'Controlled explosions in mining'],
-    applicableTo: ['METHOD_PROCESS', 'SYSTEM', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-feedback',
-    name: 'Feedback',
-    description: 'Introduce feedback; if feedback exists, change its magnitude or influence',
-    examples: ['Thermostat', 'Auto-focus'],
-    applicableTo: ['SYSTEM', 'SOFTWARE_ALGORITHM', 'PRODUCT_DEVICE'],
-  },
-  {
-    id: 'op-intermediary',
-    name: 'Intermediary',
-    description: 'Use intermediate carrier or process',
-    examples: ['Catalysts', 'Buffer zones'],
-    applicableTo: ['METHOD_PROCESS', 'COMPOSITION', 'SYSTEM'],
-  },
-  {
-    id: 'op-self-service',
-    name: 'Self-Service',
-    description: 'Make object serve itself; use waste resources',
-    examples: ['Self-cleaning ovens', 'Regenerative braking'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM'],
-  },
-  {
-    id: 'op-copying',
-    name: 'Copying',
-    description: 'Use simple and inexpensive copies; replace with optical copies or images',
-    examples: ['Virtual prototypes', 'Digital twins'],
-    applicableTo: ['METHOD_PROCESS', 'SOFTWARE_ALGORITHM', 'SYSTEM'],
-  },
-  {
-    id: 'op-cheap-disposable',
-    name: 'Cheap Short-Living',
-    description: 'Replace expensive object with multiple cheap ones; accept shorter life',
-    examples: ['Disposable medical devices', 'Single-use cameras'],
-    applicableTo: ['PRODUCT_DEVICE', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-substitute-mechanical',
-    name: 'Mechanical Substitution',
-    description: 'Replace mechanical means with sensory, optical, acoustic',
-    examples: ['Touch screens', 'Voice commands'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'SOFTWARE_ALGORITHM'],
-  },
-  {
-    id: 'op-pneumatics-hydraulics',
-    name: 'Pneumatics/Hydraulics',
-    description: 'Use gas or liquid parts instead of solid; inflatable, fluid-filled',
-    examples: ['Air cushions', 'Hydraulic lifts'],
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM'],
-  },
-  {
-    id: 'op-flexible-membranes',
-    name: 'Flexible Membranes',
-    description: 'Use flexible shells and thin films; isolate with flexible membranes',
-    examples: ['Shrink wrap', 'Membrane keyboards'],
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION'],
-  },
-  {
-    id: 'op-porous-materials',
-    name: 'Porous Materials',
-    description: 'Make object porous; add porous elements; fill pores with useful substance',
-    examples: ['Foam structures', 'Drug-eluting stents'],
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION', 'BIOTECH_PHARMA'],
-  },
-  {
-    id: 'op-color-change',
-    name: 'Color Change',
-    description: 'Change color or translucency; use additives to observe',
-    examples: ['Temperature-indicating strips', 'UV-reactive materials'],
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'op-homogeneity',
-    name: 'Homogeneity',
-    description: 'Make objects interact with same material or matched properties',
-    examples: ['Same-material joints', 'Matched thermal expansion'],
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-discarding-recovering',
-    name: 'Discarding/Recovering',
-    description: 'Make portions that have fulfilled function disappear or modify',
-    examples: ['Dissolvable sutures', 'Rocket stage separation'],
-    applicableTo: ['PRODUCT_DEVICE', 'BIOTECH_PHARMA', 'SYSTEM'],
-  },
-  {
-    id: 'op-parameter-change',
-    name: 'Parameter Change',
-    description: 'Change physical/chemical parameters: concentration, flexibility, temperature',
-    examples: ['Heat treatment', 'pH adjustment'],
-    applicableTo: ['METHOD_PROCESS', 'COMPOSITION', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-phase-transition',
-    name: 'Phase Transition',
-    description: 'Use phase transition phenomena: volume changes, heat absorption',
-    examples: ['Ice packs', 'Phase-change memory'],
-    applicableTo: ['COMPOSITION', 'PRODUCT_DEVICE', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'op-thermal-expansion',
-    name: 'Thermal Expansion',
-    description: 'Use thermal expansion/contraction; use materials with different coefficients',
-    examples: ['Bimetallic strips', 'Shrink-fit assemblies'],
-    applicableTo: ['PRODUCT_DEVICE', 'MANUFACTURING'],
-  },
-  {
-    id: 'op-oxidation',
-    name: 'Strong Oxidizers',
-    description: 'Replace normal air with oxygen-enriched; use ozone; use ionized oxygen',
-    examples: ['Oxygen cutting', 'Ozone sterilization'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING', 'BIOTECH_PHARMA'],
-  },
-  {
-    id: 'op-inert-atmosphere',
-    name: 'Inert Atmosphere',
-    description: 'Replace normal environment with inert; add neutral parts or inert additives',
-    examples: ['Nitrogen packaging', 'Argon welding'],
-    applicableTo: ['METHOD_PROCESS', 'MANUFACTURING', 'COMPOSITION'],
-  },
-  {
-    id: 'op-composite',
-    name: 'Composite Materials',
-    description: 'Change from uniform to composite materials',
-    examples: ['Carbon fiber composites', 'Reinforced concrete'],
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION', 'MANUFACTURING'],
+    id: 'op-merging',
+    name: 'Merging',
+    description: 'Combine identical or similar objects; unite operations in time',
+    examples: ['Multi-blade razors', 'Combined washer-dryer'],
+    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS'],
   },
 ];
 
 // =============================================================================
-// DIMENSION FAMILIES (Pre-defined categories)
+// DIMENSION FAMILIES - DELETED PER SRS
 // =============================================================================
-
-export const DimensionFamilySchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string(),
-  icon: z.string().optional(),
-  applicableTo: z.array(InventionClassEnum).default([]),
-});
-export type DimensionFamily = z.infer<typeof DimensionFamilySchema>;
-
-export const DIMENSION_FAMILIES: DimensionFamily[] = [
-  {
-    id: 'dim-mechanism',
-    name: 'Mechanism',
-    description: 'How the invention works: mechanical, electrical, chemical, biological',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'dim-material',
-    name: 'Material',
-    description: 'What the invention is made of: metals, polymers, composites, bio-materials',
-    applicableTo: ['PRODUCT_DEVICE', 'COMPOSITION', 'MANUFACTURING'],
-  },
-  {
-    id: 'dim-structure',
-    name: 'Structure',
-    description: 'Physical arrangement: shape, geometry, layers, topology',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'COMPOSITION'],
-  },
-  {
-    id: 'dim-lifecycle',
-    name: 'Lifecycle',
-    description: 'Stages of existence: manufacture, use, maintenance, disposal, recycling',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS', 'MANUFACTURING'],
-  },
-  {
-    id: 'dim-interface',
-    name: 'Interface',
-    description: 'Connection points: user interface, system interfaces, APIs, physical connectors',
-    applicableTo: ['SYSTEM', 'SOFTWARE_ALGORITHM', 'PRODUCT_DEVICE'],
-  },
-  {
-    id: 'dim-control',
-    name: 'Control',
-    description: 'How behavior is regulated: feedback, feedforward, adaptive, manual',
-    applicableTo: ['SYSTEM', 'SOFTWARE_ALGORITHM', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'dim-energy',
-    name: 'Energy',
-    description: 'Power sources and consumption: electrical, thermal, kinetic, chemical',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'dim-information',
-    name: 'Information',
-    description: 'Data aspects: sensing, processing, storage, transmission, display',
-    applicableTo: ['SYSTEM', 'SOFTWARE_ALGORITHM', 'PRODUCT_DEVICE'],
-  },
-  {
-    id: 'dim-environment',
-    name: 'Environment',
-    description: 'Operating context: temperature, humidity, pressure, contamination',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'dim-risk',
-    name: 'Risk/Failure',
-    description: 'What could go wrong: misuse, wear, contamination, side effects',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'METHOD_PROCESS', 'BIOTECH_PHARMA'],
-  },
-  {
-    id: 'dim-cost',
-    name: 'Cost',
-    description: 'Economic factors: material cost, manufacturing cost, maintenance, TCO',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'MANUFACTURING', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'dim-scale',
-    name: 'Scale',
-    description: 'Size considerations: miniaturization, scaling up, batch vs continuous',
-    applicableTo: ['PRODUCT_DEVICE', 'MANUFACTURING', 'METHOD_PROCESS'],
-  },
-  {
-    id: 'dim-time',
-    name: 'Time',
-    description: 'Temporal aspects: speed, duration, sequencing, synchronization',
-    applicableTo: ['METHOD_PROCESS', 'SYSTEM', 'SOFTWARE_ALGORITHM'],
-  },
-  {
-    id: 'dim-user',
-    name: 'User',
-    description: 'Human factors: ergonomics, accessibility, training, safety',
-    applicableTo: ['PRODUCT_DEVICE', 'SYSTEM', 'SERVICE_WORKFLOW'],
-  },
-  {
-    id: 'dim-regulatory',
-    name: 'Regulatory',
-    description: 'Compliance requirements: safety standards, certifications, patents',
-    applicableTo: ['PRODUCT_DEVICE', 'BIOTECH_PHARMA', 'MANUFACTURING'],
-  },
-];
+// NOTE: Fixed dimension families have been REMOVED per SRS requirements.
+// Dimensions are now discovered dynamically from each invention via DIMENSION_DISCOVERY stage.
+// The legacy DIMENSION_FAMILIES constant is intentionally NOT included here.
 
 // =============================================================================
-// LLM PROMPT HELPERS
+// VALIDATION HELPERS
 // =============================================================================
 
-/**
- * Get the JSON schema string for a given schema (for LLM prompts)
- */
 export function getSchemaDescription(schemaName: string): string {
   const descriptions: Record<string, string> = {
+    SemanticGrounding: `{
+  "coreEntity": "string (the main thing being invented)",
+  "currentApproach": "string (how user currently approaches it)",
+  "userIntent": "string (what user wants to achieve)",
+  "explicitConstraints": ["string array of hard limits"],
+  "implicitAssumptions": ["string array of hidden assumptions"],
+  "ambiguityFlags": ["string array of unclear areas"],
+  "clarificationQuestions": ["string array of questions to clarify - max 3-5"]
+}`,
+    InventiveFraming: `{
+  "technicalContradictions": [{"parameterToImprove": "", "parameterThatWorsens": "", "conflictDescription": ""}],
+  "nonTechnicalTensions": [{"aspect1": "", "aspect2": "", "tensionDescription": ""}],
+  "assumptionToChallenge": "string (most important assumption to challenge)",
+  "patentableProblemStatement": "string (problem reframed in inventive terms)"
+}`,
+    DimensionDiscovery: `{
+  "inventionArchetype": "PHYSICAL_DEVICE | PROCESS_FLOW | DIGITAL_SYSTEM | BIO_CHEMICAL | HYBRID",
+  "primaryDimensions": [
+    {
+      "dimensionId": "unique-id",
+      "name": "short name",
+      "whyItMatters": "why this dimension is critical",
+      "typicalAssumption": "the default assumption about this dimension"
+    }
+  ],
+  "excludedDimensions": ["dimensions NOT relevant to this invention"]
+}`,
+    DimensionExpansion: `[
+  {
+    "moveText": "What if we...",
+    "primaryChange": "REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY",
+    "immediateEffect": "what happens immediately",
+    "newProblemCreated": "what new problem this creates",
+    "contradictionAddressed": "which tension this addresses"
+  }
+]`,
+    IdeaFrame: `{
+  "ideaId": "unique-id",
+  "coreMechanism": "EXACTLY ONE causal mechanism (required)",
+  "inventiveLeap": "the non-obvious insight (required)",
+  "eliminatedAssumption": "what traditional assumption is eliminated",
+  "contradictionResolved": "which contradiction this solves",
+  "whyNotObvious": "why skilled person wouldn't arrive at this (required)",
+  "mechanismBoundaryTest": {
+    "whatItDoesNotSolve": "explicit non-goals",
+    "outOfScope": "areas outside scope"
+  }
+}`,
+    PreliminaryNoveltyAssessment: `{
+  "originalityStrength": "HIGH | MEDIUM | LOW",
+  "noveltyRiskLevel": "LOW | MODERATE | HIGH",
+  "likelyExaminerObjection": "string (what examiner would object to)",
+  "redundancyRisk": "string (risk of overlap with existing solutions)",
+  "strongestNovelAspect": "string (most novel part)",
+  "weakestNovelAspect": "string (least novel part)",
+  "improvementDirections": ["string array of suggestions"]
+}`,
+    // Legacy schema descriptions for backward compatibility
     InputNormalization: `{
-  "coreEntity": "string (main invention/concept)",
-  "intentGoal": "string (what to achieve)",
-  "constraints": ["string array of hard constraints"],
-  "assumptions": ["string array of assumed conditions"],
-  "context": "string (domain/use setting)",
-  "negativeConstraints": ["things forbidden, e.g., 'no electronics'"],
-  "knownComponents": ["parts already mentioned"],
-  "unknownsToAsk": ["clarifying questions for user"]
+  "coreEntity": "string",
+  "intentGoal": "string",
+  "constraints": ["string array"],
+  "assumptions": ["string array"],
+  "context": "string",
+  "negativeConstraints": ["string array"],
+  "knownComponents": ["string array"],
+  "unknownsToAsk": ["string array"]
 }`,
     Classification: `{
-  "labels": [{"class": "PRODUCT_DEVICE|SYSTEM|METHOD_PROCESS|...", "weight": 0.0-1.0, "rationaleShort": "reason"}],
+  "labels": [{"class": "PRODUCT_DEVICE|SYSTEM|...", "weight": 0.0-1.0, "rationaleShort": "reason"}],
   "dominantClass": "primary classification",
   "forkMode": "SINGLE|FORK|MERGE",
   "archetype": "MECH|ELEC|SOFT|CHEM|BIO|MIXED"
 }`,
     DimensionGraph: `{
-  "nodes": [{"id": "unique-id", "type": "SEED|COMPONENT|DIMENSION_FAMILY|...", "title": "name", "descriptionShort": "desc", "family": "dimension family", "selectable": true, "defaultExpanded": false, "tags": [], "parentId": "parent-id"}],
-  "edges": [{"from": "source-id", "to": "target-id", "relation": "contains|enables|requires|..."}]
-}`,
-    IdeaFrame: `{
-  "ideaId": "unique-id",
-  "title": "invention title (max 200 chars)",
-  "classLabels": ["PRODUCT_DEVICE", ...],
-  "problem": "problem being solved",
-  "principle": "one-liner core principle (max 300 chars)",
-  "components": ["list of components"],
-  "mechanismSteps": ["step 1", "step 2", ...],
-  "triggerCondition": "what triggers the mechanism",
-  "technicalEffect": "technical outcome/benefit",
-  "constraintsSatisfied": ["constraints addressed"],
-  "operatorsUsed": ["TRIZ operators applied"],
-  "dimensionsUsed": ["dimensions explored"],
-  "variants": [{"title": "variant", "description": "desc", "differentiator": "difference"}],
-  "claimHooks": ["phrases for claim elements"],
-  "riskNotes": ["potential challenges"],
-  "searchQueries": ["novelty search queries"]
+  "nodes": [{"id": "unique-id", "type": "SEED|DIMENSION|...", "title": "name", "descriptionShort": "desc", "whyItMatters": "importance", "typicalAssumption": "default assumption"}],
+  "edges": [{"from": "source-id", "to": "target-id", "relation": "contains|enables|..."}]
 }`,
     NoveltyGate: `{
-  "conceptSaturation": "LOW|MEDIUM|HIGH",
-  "solutionSaturation": "LOW|MEDIUM|HIGH",
-  "noveltyScore": 0-100,
-  "recommendedAction": "KEEP|MUTATE_OPERATOR|MUTATE_DIMENSION|NARROW_MICRO_PROBLEM|ASK_USER_QUESTION",
-  "reasoning": "explanation of assessment",
-  "closestPriorArt": [
-    {
-      "publicationNumber": "patent number from search results",
-      "title": "patent title",
-      "relevanceScore": 0-100,
-      "overlappingFeatures": ["features that overlap with invention"],
-      "differentiatingFactors": ["how invention differs"],
-      "remark": "1-2 sentence analysis"
-    }
-  ],
-  "priorArtSummary": "2-3 sentence summary of prior art landscape and differentiation",
-  "obviousnessFlags": ["COMBINATIONAL", "SAME_DOMAIN", "PARAMETER_TWEAK", "OBVIOUS_SUBSTITUTION", "PREDICTABLE_RESULT"],
-  "phositaTest": "why PHOSITA would/wouldn't find this obvious",
-  "suggestedIterations": ["suggestions to increase novelty"],
-  "mutationInstructions": {"action": "MUTATE_DIMENSION|ADD_ANALOGY|etc", "specifics": "details", "retainElements": [], "suggestedAnalogy": "domain"}
+  "originalityStrength": "HIGH | MEDIUM | LOW",
+  "noveltyRiskLevel": "LOW | MODERATE | HIGH",
+  "likelyExaminerObjection": "string",
+  "redundancyRisk": "string",
+  "strongestNovelAspect": "string",
+  "weakestNovelAspect": "string",
+  "improvementDirections": ["string array"]
 }`,
     SuggestedMovesResponse: `{
   "moves": [
     {
-      "id": "move-{familyId}-1",
-      "move": "What if we <specific design action that changes structure/behavior>?",
-      "impact": "<immediate behavioral or functional change>",
-      "leadsTo": "<new constraint, problem, or opportunity this creates>",
-      "tension": "<what existing assumption this challenges, if any>",
+      "id": "move-id",
+      "move": "What if we <specific action>?",
+      "impact": "immediate effect",
+      "leadsTo": "new constraint or opportunity",
+      "tension": "what assumption this challenges",
       "challengesPrior": true/false,
       "modifies": "BEHAVIOR_OVER_TIME|ARCHITECTURE_CONTROL_FLOW|INTERFACE_BOUNDARY|FAILURE_MODE_LIFECYCLE"
     }
   ],
   "contextAcknowledged": true/false,
-  "priorSelectionsUsed": ["id-of-prior-selection", ...]
+  "priorSelectionsUsed": ["id-of-prior-selection"]
 }`,
   };
   return descriptions[schemaName] || 'Schema not found';
 }
-
-// =============================================================================
-// VALIDATION HELPERS
-// =============================================================================
 
 /**
  * Safely parse JSON from LLM response with repair attempt
@@ -889,18 +774,28 @@ export function safeParseJson<T>(
   schema: z.ZodSchema<T>
 ): { success: true; data: T } | { success: false; error: string } {
   try {
-    // Try to extract JSON from markdown code blocks
     let cleaned = jsonString.trim();
     const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) {
       cleaned = jsonMatch[1].trim();
     }
     
-    // Remove any leading/trailing text before/after JSON
+    // Handle array responses
     const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    const firstBracket = cleaned.indexOf('[');
+    
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      // Array response
+      const lastBracket = cleaned.lastIndexOf(']');
+      if (lastBracket > firstBracket) {
+        cleaned = cleaned.slice(firstBracket, lastBracket + 1);
+      }
+    } else if (firstBrace !== -1) {
+      // Object response
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (lastBrace > firstBrace) {
+        cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+      }
     }
     
     const parsed = JSON.parse(cleaned);
@@ -909,15 +804,15 @@ export function safeParseJson<T>(
     if (result.success) {
       return { success: true, data: result.data };
     } else {
-      return { 
-        success: false, 
-        error: `Validation failed: ${result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}` 
+      return {
+        success: false,
+        error: `Validation failed: ${result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`
       };
     }
   } catch (e) {
-    return { 
-      success: false, 
-      error: `JSON parse error: ${e instanceof Error ? e.message : 'Unknown error'}` 
+    return {
+      success: false,
+      error: `JSON parse error: ${e instanceof Error ? e.message : 'Unknown error'}`
     };
   }
 }
@@ -933,4 +828,3 @@ export function validateIdeaFrames(data: unknown): IdeaFrame[] {
   }
   throw new Error(`Invalid idea frames: ${result.error.message}`);
 }
-

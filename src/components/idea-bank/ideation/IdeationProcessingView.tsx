@@ -57,218 +57,186 @@ interface IdeationProcessingViewProps {
   seedText?: string
   onCancel: () => void
   streamingIdeas?: StreamingIdea[]
-  noveltyProgress?: {
+  // Preliminary assessment progress (LLM-only, no patent database per SRS)
+  assessmentProgress?: {
     currentStep: number
     totalSteps: number
     message: string
-    recordsSearched?: number
-    matchesFound?: number
   }
 }
 
+// Processing stages - UI must NOT show stage names per SRS Section 4.1
 const PROCESSING_STAGES: Record<string, ProcessingStage> = {
-  normalizing: {
-    id: 'normalizing',
-    name: 'Analyze',
+  // SEMANTIC_GROUNDING stage (SRS Section 3.1)
+  grounding: {
+    id: 'grounding',
+    name: '', // NO stage names in UI per SRS
     title: 'Analyzing Your Invention',
-    description: 'Extracting the core essence and identifying hidden assumptions',
+    description: 'Understanding the core entity and identifying implicit assumptions',
     icon: <Brain className="w-8 h-8" />,
     color: 'violet',
     bgGradient: 'from-violet-500/10 via-purple-500/5 to-indigo-500/10',
     thinkingPhrases: [
-      'Identifying the core entity...',
-      'Extracting key components...',
-      'Analyzing intent and goals...',
-      'Finding constraints and limits...',
-      'Detecting unstated assumptions...',
-      'Discovering technical contradictions...',
-      'Formulating patentable problem...',
-      'Generating clarifying questions...',
+      'Identifying core entity...',
+      'Understanding current approach...',
+      'Analyzing user intent...',
+      'Extracting explicit constraints...',
+      'Detecting implicit assumptions...',
+      'Checking for ambiguities...',
+      'Generating clarification questions...',
     ],
     substeps: [
       'Parse invention description',
-      'Identify core entity & goal',
+      'Identify core entity',
       'Extract constraints',
-      'Find hidden assumptions',
-      'Map contradictions',
+      'Find implicit assumptions',
+      'Check for ambiguities',
     ],
     tips: [
-      'The AI looks for tradeoffs you might not have noticed',
-      'Contradictions are where real inventions happen',
+      'The AI understands WITHOUT inventing or reframing',
+      'Ambiguities will be flagged for clarification',
       'Better input = better patent ideas',
     ],
   },
-  classifying: {
-    id: 'classifying',
-    name: 'Classify',
-    title: 'Classifying Invention Type',
-    description: 'Determining the patent category and technical domain',
-    icon: <Layers className="w-8 h-8" />,
-    color: 'blue',
-    bgGradient: 'from-blue-500/10 via-cyan-500/5 to-sky-500/10',
-    thinkingPhrases: [
-      'Analyzing invention archetype...',
-      'Mapping to patent classes...',
-      'Identifying technical domain...',
-      'Evaluating hybrid potential...',
-      'Selecting applicable dimensions...',
-      'Matching TRIZ operators...',
-    ],
-    substeps: [
-      'Determine invention type',
-      'Assign patent categories',
-      'Select applicable operators',
-      'Initialize mind map',
-    ],
-    tips: [
-      'Your invention might span multiple categories',
-      'The archetype determines which creativity tools apply',
-      'Some inventions work best as method + device hybrids',
-    ],
-  },
-  mapping_contradictions: {
-    id: 'mapping_contradictions',
-    name: 'Contradictions',
-    title: 'Mapping Technical Contradictions',
-    description: 'Applying TRIZ inventive principles to resolve conflicts',
+  // INVENTIVE_FRAMING stage (SRS Section 3.3)
+  framing: {
+    id: 'framing',
+    name: '',
+    title: 'Identifying Inventive Tensions',
+    description: 'Finding genuine contradictions and inventive opportunities',
     icon: <Scale className="w-8 h-8" />,
     color: 'amber',
     bgGradient: 'from-amber-500/10 via-orange-500/5 to-yellow-500/10',
     thinkingPhrases: [
-      'Analyzing parameter conflicts...',
-      'Mapping to TRIZ matrix...',
-      'Identifying inventive principles...',
-      'Finding separation strategies...',
-      'Exploring resolution paths...',
-      'Discovering second-order effects...',
+      'Looking for technical contradictions...',
+      'Identifying non-technical tensions...',
+      'Finding assumptions to challenge...',
+      'Formulating patentable problem...',
     ],
     substeps: [
       'Identify contradictions',
-      'Map to TRIZ principles',
-      'Generate resolution strategies',
-      'Check for side effects',
+      'Find tensions',
+      'Select assumption to challenge',
+      'Formulate problem statement',
     ],
     tips: [
-      'Every great invention resolves a contradiction',
-      'TRIZ has 40 inventive principles used by top innovators',
-      'Sometimes inverting the problem reveals the solution',
+      'Not every invention has a contradiction - and that\'s OK',
+      'Genuine tensions are where real inventions happen',
+      'The AI won\'t force TRIZ-style conflicts',
     ],
   },
-  expanding: {
-    id: 'expanding',
-    name: 'Build',
-    title: 'Building Mind Map',
-    description: 'Creating dimension families and exploration paths',
+  // DIMENSION_DISCOVERY stage (SRS Section 3.4)
+  discovering: {
+    id: 'discovering',
+    name: '',
+    title: 'Discovering Invention Dimensions',
+    description: 'Finding invention-specific dimensions that control success',
     icon: <GitBranch className="w-8 h-8" />,
     color: 'emerald',
     bgGradient: 'from-emerald-500/10 via-green-500/5 to-teal-500/10',
     thinkingPhrases: [
-      'Creating dimension families...',
-      'Generating material options...',
-      'Exploring form variations...',
-      'Mapping energy alternatives...',
-      'Analyzing spatial configurations...',
-      'Building temporal sequences...',
+      'Analyzing invention archetype...',
+      'Discovering primary dimensions...',
+      'Understanding why each matters...',
+      'Identifying typical assumptions...',
     ],
     substeps: [
-      'Initialize dimension tree',
-      'Generate family nodes',
-      'Position mind map layout',
+      'Determine archetype',
+      'Discover dimensions',
+      'Analyze importance',
+      'Map assumptions',
+    ],
+    tips: [
+      'Dimensions emerge FROM your invention - no templates',
+      'Each dimension controls success or failure',
+      '4-6 dimensions is the sweet spot',
+    ],
+  },
+  // DIMENSION_EXPANSION stage (SRS Section 3.5)
+  expanding: {
+    id: 'expanding',
+    name: '',
+    title: 'Building Invention Map',
+    description: 'Generating assumption-breaking moves for each dimension',
+    icon: <GitBranch className="w-8 h-8" />,
+    color: 'emerald',
+    bgGradient: 'from-emerald-500/10 via-green-500/5 to-teal-500/10',
+    thinkingPhrases: [
+      'Generating assumption-breaking moves...',
+      'Exploring REMOVE possibilities...',
+      'Exploring INVERT possibilities...',
+      'Exploring DECOUPLE possibilities...',
+      'Exploring RELOCATE possibilities...',
+      'Exploring DELAY possibilities...',
+    ],
+    substeps: [
+      'Initialize invention map',
+      'Generate moves per dimension',
+      'Position map layout',
       'Connect exploration paths',
     ],
     tips: [
-      'Each dimension is a creative direction to explore',
-      'The best ideas often come from unexpected combinations',
-      'Don\'t just pick the obvious options!',
+      'Moves BREAK assumptions, not add features',
+      'The best ideas often come from removing or inverting',
+      'No AI/sensor/cloud stacking allowed!',
     ],
   },
-  checking_obviousness: {
-    id: 'checking_obviousness',
-    name: 'Novelty Check',
-    title: 'Checking Combination Novelty',
-    description: 'Ensuring your selection is non-obvious and patentable',
-    icon: <Eye className="w-8 h-8" />,
-    color: 'rose',
-    bgGradient: 'from-rose-500/10 via-pink-500/5 to-red-500/10',
-    thinkingPhrases: [
-      'Evaluating combination novelty...',
-      'Checking for obvious patterns...',
-      'Analyzing domain distance...',
-      'Assessing inventive step...',
-      'Suggesting improvements...',
-    ],
-    substeps: [
-      'Score combination novelty',
-      'Check for obvious patterns',
-      'Suggest wild card options',
-      'Validate inventive leap',
-    ],
-    tips: [
-      'Combinations from distant domains score higher',
-      'Removing something can be more inventive than adding',
-      'The AI suggests wild cards to boost novelty',
-    ],
-  },
+  // IDEA_GENERATION stage (SRS Section 3.6)
   generating: {
     id: 'generating',
-    name: 'Generate',
-    title: 'Generating Inventive Ideas',
-    description: 'Creating patent-worthy concepts with forced analogy transfer',
+    name: '',
+    title: 'Generating Mechanism-Pure Ideas',
+    description: 'Creating patent ideas with exactly ONE causal mechanism each',
     icon: <Rocket className="w-8 h-8" />,
     color: 'violet',
     bgGradient: 'from-violet-500/10 via-fuchsia-500/5 to-purple-500/10',
     thinkingPhrases: [
-      'Forcing inventive leaps...',
-      'Applying TRIZ operators...',
-      'Generating cross-domain analogies...',
-      'Creating claim hooks...',
-      'Validating non-obviousness...',
-      'Building technical specifications...',
-      'Crafting patent language...',
-      'Generating variants...',
+      'Generating core mechanism...',
+      'Forcing inventive leap...',
+      'Eliminating assumption...',
+      'Resolving contradiction...',
+      'Explaining non-obviousness...',
+      'Testing mechanism boundary...',
     ],
     substeps: [
-      'Apply creativity operators',
-      'Force analogy transfer',
-      'Generate idea frames',
-      'Craft claim language',
-      'Create variants',
+      'Generate mechanism',
+      'Force inventive leap',
+      'Validate single mechanism',
+      'Test boundaries',
     ],
     tips: [
-      'Each idea includes a claim hook ready for patent drafting',
+      'Each idea has exactly ONE causal mechanism',
+      'Multi-mechanism ideas are discarded',
       'The AI explains WHY each idea is non-obvious',
-      'Variants help you find the strongest angle',
     ],
   },
-  checking_novelty: {
-    id: 'checking_novelty',
-    name: 'Verify',
-    title: 'Verifying Patent Novelty',
-    description: 'Searching through millions of patent records worldwide',
-    icon: <Database className="w-8 h-8" />,
+  // PRELIMINARY_NOVELTY_ASSESSMENT stage (SRS Section 3.7)
+  assessing: {
+    id: 'assessing',
+    name: '',
+    title: 'Preliminary Novelty Assessment',
+    description: 'Assessing conceptual originality and novelty risk',
+    icon: <Eye className="w-8 h-8" />,
     color: 'cyan',
     bgGradient: 'from-cyan-500/10 via-teal-500/5 to-blue-500/10',
     thinkingPhrases: [
-      'Connecting to patent databases...',
-      'Searching through global records...',
-      'Analyzing similar inventions...',
-      'Cross-referencing citations...',
-      'Evaluating prior art relevance...',
-      'Calculating novelty confidence...',
-      'Assessing patentability indicators...',
-      'Generating differentiation strategy...',
+      'Analyzing conceptual originality...',
+      'Evaluating novelty risk level...',
+      'Predicting examiner objection...',
+      'Assessing redundancy risk...',
+      'Identifying strongest aspects...',
+      'Finding improvement directions...',
     ],
     substeps: [
-      'Connect to patent databases',
-      'Execute semantic search',
-      'Analyze prior art matches',
-      'Score novelty confidence',
-      'Generate assessment',
+      'Analyze originality',
+      'Evaluate risk',
+      'Predict objections',
+      'Suggest improvements',
     ],
     tips: [
-      'We search through millions of patents from USPTO, EPO, and more',
-      'Prior art analysis helps strengthen your claims',
-      'Higher novelty scores indicate stronger patent potential',
+      'This is a PRELIMINARY assessment only',
+      'No patent databases are searched',
+      'Perform exhaustive prior-art search before filing',
     ],
   },
 }
@@ -659,13 +627,13 @@ export default function IdeationProcessingView({
   seedText,
   onCancel,
   streamingIdeas = [],
-  noveltyProgress,
+  assessmentProgress,
 }: IdeationProcessingViewProps) {
   const [currentThoughtIdx, setCurrentThoughtIdx] = useState(0)
   const [completedSubsteps, setCompletedSubsteps] = useState<number[]>([])
   const [currentTipIdx, setCurrentTipIdx] = useState(0)
   
-  const stageConfig = PROCESSING_STAGES[stage] || PROCESSING_STAGES.normalizing
+  const stageConfig = PROCESSING_STAGES[stage] || PROCESSING_STAGES.grounding
 
   // Cycle through thinking phrases
   useEffect(() => {
@@ -699,8 +667,8 @@ export default function IdeationProcessingView({
     return () => clearInterval(interval)
   }, [stageConfig.tips.length])
 
-  // Stage progress
-  const stageOrder = ['normalizing', 'classifying', 'mapping_contradictions', 'expanding', 'checking_obviousness', 'generating']
+  // Stage progress (new pipeline)
+  const stageOrder = ['grounding', 'framing', 'discovering', 'expanding', 'generating', 'assessing']
   const currentStageIdx = stageOrder.indexOf(stage)
 
   // If we have streaming ideas, show them in a side panel
@@ -761,18 +729,20 @@ export default function IdeationProcessingView({
                   </motion.span>
                 </div>
                 
-                {/* Show extracted concepts for normalization stage */}
-                {stage === 'normalizing' && seedText && (
+                {/* Show extracted concepts for grounding stage */}
+                {stage === 'grounding' && seedText && (
                   <ExtractedConcepts seedText={seedText} />
                 )}
                 
-                {/* Database search visualization for novelty checking */}
-                {stage === 'checking_novelty' && (
-                  <div className="mt-4">
-                    <DatabaseSearchViz 
-                      recordsSearched={noveltyProgress?.recordsSearched || 2500000} 
-                      matchesFound={noveltyProgress?.matchesFound}
-                    />
+                {/* Show assessment progress (LLM-only, no database per SRS) */}
+                {stage === 'assessing' && assessmentProgress && (
+                  <div className="mt-4 text-center">
+                    <div className="text-sm text-cyan-600 font-medium">
+                      {assessmentProgress.message}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-400">
+                      Step {assessmentProgress.currentStep} of {assessmentProgress.totalSteps}
+                    </div>
                   </div>
                 )}
               </div>
@@ -880,34 +850,23 @@ export default function IdeationProcessingView({
             </div>
           </div>
 
-          {/* Stage Pills */}
-          <div className="flex justify-center gap-1 mt-4 flex-wrap">
-            {stageOrder.slice(0, 4).map((s, idx) => {
-              const config = PROCESSING_STAGES[s]
+          {/* Progress dots - NO stage names per SRS Section 4.1 */}
+          <div className="flex justify-center gap-2 mt-4">
+            {stageOrder.map((s, idx) => {
               const isActive = s === stage
               const isComplete = stageOrder.indexOf(s) < currentStageIdx
               
               return (
                 <div
                   key={s}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-all ${
+                  className={`w-3 h-3 rounded-full transition-all ${
                     isActive
-                      ? 'bg-violet-100 text-violet-700'
+                      ? 'bg-violet-500 animate-pulse'
                       : isComplete
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : 'bg-slate-100 text-slate-400'
+                        ? 'bg-emerald-500'
+                        : 'bg-slate-200'
                   }`}
-                >
-                  {isComplete && <CheckCircle2 className="w-2.5 h-2.5" />}
-                  {isActive && (
-                    <motion.div
-                      className="w-1.5 h-1.5 rounded-full bg-violet-500"
-                      animate={{ scale: [1, 1.3, 1] }}
-                      transition={{ duration: 1, repeat: Infinity }}
-                    />
-                  )}
-                  {config?.name || s}
-                </div>
+                />
               )
             })}
           </div>

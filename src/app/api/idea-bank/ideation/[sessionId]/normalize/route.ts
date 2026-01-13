@@ -1,7 +1,8 @@
 /**
- * Normalize Seed API
+ * Semantic Grounding API (SRS Section 3.1)
  * 
- * POST - Run normalization on the seed input
+ * POST - Run semantic grounding on the seed input
+ * This replaces the old normalize stage entirely
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -43,17 +44,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       requestHeaders[key] = value;
     });
 
-    const normalization = await IdeationService.normalizeSeed(sessionId, requestHeaders);
+    // Run semantic grounding (new pipeline)
+    const groundingContext = await IdeationService.semanticGrounding(sessionId, requestHeaders);
 
     return NextResponse.json({
       success: true,
-      normalization,
-      hasUnknowns: normalization.unknownsToAsk.length > 0,
+      groundingContext,
+      // MANDATORY: Check for clarification questions (SRS Section 3.2)
+      hasClarifications: groundingContext.clarificationQuestions?.length > 0,
     });
   } catch (error) {
-    console.error('Failed to normalize seed:', error);
+    console.error('Failed to run semantic grounding:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to normalize' },
+      { error: error instanceof Error ? error.message : 'Failed to analyze invention' },
       { status: 500 }
     );
   }

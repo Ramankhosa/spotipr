@@ -1,7 +1,8 @@
 /**
- * Classify Invention API
+ * Inventive Framing API (SRS Section 3.3)
  * 
- * POST - Run classification on the normalized input
+ * POST - Identify genuine inventive tensions
+ * This replaces the old classify stage
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     if (!ideationSession.normalizationJson) {
       return NextResponse.json(
-        { error: 'Session must be normalized first' },
+        { error: 'Session must be grounded first' },
         { status: 400 }
       );
     }
@@ -50,17 +51,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       requestHeaders[key] = value;
     });
 
-    const classification = await IdeationService.classifyInvention(sessionId, requestHeaders);
+    // Run inventive framing (new pipeline)
+    const inventiveFraming = await IdeationService.inventiveFraming(sessionId, requestHeaders);
 
     return NextResponse.json({
       success: true,
-      classification,
-      shouldFork: classification.forkMode === 'FORK',
+      inventiveFraming,
+      hasTensions: inventiveFraming.technicalContradictions?.length > 0 || 
+                   inventiveFraming.nonTechnicalTensions?.length > 0,
     });
   } catch (error) {
-    console.error('Failed to classify invention:', error);
+    console.error('Failed to identify inventive tensions:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to classify' },
+      { error: error instanceof Error ? error.message : 'Failed to frame invention' },
       { status: 500 }
     );
   }

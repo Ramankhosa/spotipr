@@ -66,20 +66,19 @@ interface IdeationWorkspaceProps {
   onExportToBank: () => void
 }
 
-// Session status stages
+// Session status stages (internal only - UI does NOT show these names per SRS)
 type SessionStage = 
-  | 'idle'           // Initial - no session
-  | 'seed_input'     // Editing seed (new or returning to edit)
-  | 'normalizing'    // Processing - analyzing seed
-  | 'clarifying'     // Input needed - questions from AI
-  | 'classifying'    // Processing - classifying invention
-  | 'mapping_contradictions' // Processing - mapping technical contradictions to TRIZ
-  | 'expanding'      // Processing - building dimensions
-  | 'exploring'      // Workspace - user explores mind map
-  | 'checking_obviousness' // Processing - checking if combination is too obvious
-  | 'generating'     // Processing - creating ideas
-  | 'checking_novelty' // Processing - verifying novelty against patent databases
-  | 'reviewing'      // Workspace - reviewing ideas
+  | 'idle'                    // Initial - no session
+  | 'seed_input'              // Editing seed (new or returning to edit)
+  | 'grounding'               // Processing - semantic grounding (was normalizing)
+  | 'clarifying'              // Input needed - questions from AI (BLOCKING)
+  | 'framing'                 // Processing - inventive framing
+  | 'discovering'             // Processing - dimension discovery
+  | 'expanding'               // Processing - dimension expansion
+  | 'exploring'               // Workspace - user explores mind map
+  | 'generating'              // Processing - creating ideas
+  | 'assessing'               // Processing - preliminary novelty assessment (LLM-only)
+  | 'reviewing'               // Workspace - reviewing ideas
 
 // Streaming idea interface for progressive display
 interface StreamingIdea {
@@ -96,8 +95,7 @@ const isInputView = (stage: SessionStage) =>
   ['idle', 'seed_input', 'clarifying'].includes(stage)
 
 const isProcessingView = (stage: SessionStage) =>
-  ['normalizing', 'classifying', 'mapping_contradictions', 'expanding', 'generating', 'checking_novelty'].includes(stage)
-  // Note: 'checking_obviousness' is handled inline in the combine tray, not as a full processing view
+  ['grounding', 'framing', 'discovering', 'expanding', 'generating', 'assessing'].includes(stage)
 
 const isWorkspaceView = (stage: SessionStage) =>
   ['exploring', 'reviewing'].includes(stage)
@@ -108,40 +106,39 @@ interface IdeationSession {
   seedText: string
   seedGoal?: string
   seedConstraints: string[]
-  normalization?: any
-  classification?: any
+  groundingContext?: any      // SEMANTIC_GROUNDING output
+  inventiveFraming?: any      // INVENTIVE_FRAMING output
+  primaryDimensions?: any[]   // DIMENSION_DISCOVERY output
 }
 
+// IdeaFrame data model per SRS Section 5
 interface IdeaFrame {
   id: string
-  title: string
-  problem: string
-  principle: string
-  technicalEffect?: string
+  title?: string
   status: string
-  noveltyScore?: number
   userRating?: number
-  data?: any
-  noveltySummary?: {
-    patentsAnalyzed?: number
-    closestPriorArt?: Array<{
-      publicationNumber: string
-      title: string
-      relevanceScore: number
-      overlappingFeatures: string[]
-      differentiatingFactors: string[]
-      remark: string
-    }>
-    priorArtSummary?: string
-    phositaTest?: string
-    reasoning?: string
-    results?: Array<{
-      publicationNumber?: string
-      title: string
-      snippet?: string
-      assignee?: string
-    }>
+  // Core fields from mechanism-pure generation
+  coreMechanism: string
+  inventiveLeap: string
+  eliminatedAssumption: string
+  contradictionResolved: string
+  whyNotObvious: string
+  mechanismBoundaryTest?: {
+    whatItDoesNotSolve: string
+    outOfScope: string
   }
+  // Preliminary novelty assessment (LLM-only, NO prior art)
+  noveltyAssessment?: {
+    originalityStrength: 'HIGH' | 'MEDIUM' | 'LOW'
+    noveltyRiskLevel: 'LOW' | 'MODERATE' | 'HIGH'
+    likelyExaminerObjection: string
+    redundancyRisk: string
+    strongestNovelAspect: string
+    weakestNovelAspect: string
+    improvementDirections: string[]
+  }
+  // Legacy fields for compatibility
+  data?: any
 }
 
 const nodeTypes: NodeTypes = {
@@ -193,15 +190,18 @@ function getNodeType(type: string): string {
   return typeMap[type] || 'dimension'
 }
 
-// Utility: Map session status to UI stage
+// Utility: Map session status to UI stage (per new pipeline)
 function mapStatusToStage(status: string): SessionStage {
   const stageMap: Record<string, SessionStage> = {
     'SEED_INPUT': 'seed_input',
+    'GROUNDING': 'grounding',
     'CLARIFYING': 'clarifying',
-    'CLASSIFYING': 'classifying',
+    'FRAMING': 'framing',
+    'DISCOVERING': 'discovering',
     'EXPANDING': 'expanding',
     'EXPLORING': 'exploring',
     'GENERATING': 'generating',
+    'ASSESSING': 'assessing',
     'REVIEWING': 'reviewing',
     'ARCHIVED': 'reviewing',
   }
@@ -259,32 +259,23 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
   // Streaming ideas for progressive display during generation
   const [streamingIdeas, setStreamingIdeas] = useState<StreamingIdea[]>([])
   
-  // Novelty check progress state
-  const [noveltyProgress, setNoveltyProgress] = useState<{
+  // Preliminary assessment progress state (LLM-only, no patent search)
+  const [assessmentProgress, setAssessmentProgress] = useState<{
     currentStep: number
     totalSteps: number
     message: string
-    recordsSearched?: number
-    matchesFound?: number
   } | undefined>(undefined)
   
-  // Track which idea is being novelty checked
-  const [noveltyCheckingIdeaId, setNoveltyCheckingIdeaId] = useState<string | null>(null)
+  // Track which idea is being assessed
+  const [assessingIdeaId, setAssessingIdeaId] = useState<string | null>(null)
 
-  // NEW: Pipeline enhancement states
-  const [contradictionMapping, setContradictionMapping] = useState<any>(null)
-  const [obviousnessWarning, setObviousnessWarning] = useState<any>(null)
-  const [checkingObviousness, setCheckingObviousness] = useState(false) // Inline loading state for obviousness check
+  // Pipeline state (new SRS flow)
+  const [inventiveFraming, setInventiveFraming] = useState<any>(null)
   const [feedbackLoopResults, setFeedbackLoopResults] = useState<any>(null)
   const [qualityMetrics, setQualityMetrics] = useState<any>(null)
   
-  // Store pending generation params for "Generate Anyway" functionality
-  const [pendingGenerationParams, setPendingGenerationParams] = useState<{
-    count: number
-    intent: string
-    selectedOperators: string[]
-    buckets?: any[]
-  } | null>(null)
+  // Mechanism validation warning (single-mechanism enforcement)
+  const [mechanismWarning, setMechanismWarning] = useState<string | null>(null)
 
   // Help modal state
   const [showHelp, setShowHelp] = useState(false)
@@ -868,8 +859,8 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         }
         setNodes([seedNode])
 
-        // Start normalization
-        await handleNormalize(data.session.id)
+        // Start semantic grounding (new pipeline)
+        await handleSemanticGrounding(data.session.id)
       } else {
         const err = await response.json()
         setError(err.error || 'Failed to create session')
@@ -881,9 +872,9 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     }
   }
 
-  // Normalize seed
-  const handleNormalize = async (sessionId: string) => {
-    setStage('normalizing')
+  // Semantic Grounding (replaces normalize per SRS Section 3.1)
+  const handleSemanticGrounding = async (sessionId: string) => {
+    setStage('grounding')
     try {
       const response = await fetch(`/api/idea-bank/ideation/${sessionId}/normalize`, {
         method: 'POST',
@@ -894,25 +885,26 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
 
       if (response.ok) {
         const data = await response.json()
-        setCurrentSession(prev => prev ? { ...prev, normalization: data.normalization } : null)
+        setCurrentSession(prev => prev ? { ...prev, groundingContext: data.groundingContext } : null)
         
-        if (data.hasUnknowns) {
+        // MANDATORY: Block if clarification questions exist (SRS Section 3.2)
+        if (data.hasClarifications && data.groundingContext?.clarificationQuestions?.length > 0) {
           setStage('clarifying')
         } else {
-          await handleClassify(sessionId)
+          await handleInventiveFraming(sessionId)
         }
       } else {
-        throw new Error('Normalization failed')
+        throw new Error('Semantic grounding failed')
       }
     } catch (e) {
-      setError('Failed to normalize seed')
+      setError('Failed to analyze invention')
       setStage('seed_input')
     }
   }
 
-  // Classify invention
-  const handleClassify = async (sessionId: string) => {
-    setStage('classifying')
+  // Inventive Framing (SRS Section 3.3)
+  const handleInventiveFraming = async (sessionId: string) => {
+    setStage('framing')
     try {
       const response = await fetch(`/api/idea-bank/ideation/${sessionId}/classify`, {
         method: 'POST',
@@ -923,45 +915,45 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
 
       if (response.ok) {
         const data = await response.json()
-        setCurrentSession(prev => prev ? { ...prev, classification: data.classification } : null)
+        setCurrentSession(prev => prev ? { ...prev, inventiveFraming: data.inventiveFraming } : null)
+        setInventiveFraming(data.inventiveFraming)
         
-        // NEW: Run contradiction mapping (Stage 2.5)
-        await handleMapContradictions(sessionId)
+        // Continue to dimension discovery
+        await handleDimensionDiscovery(sessionId)
       } else {
-        throw new Error('Classification failed')
+        throw new Error('Inventive framing failed')
       }
     } catch (e) {
-      setError('Failed to classify invention')
+      setError('Failed to identify inventive tensions')
       setStage('seed_input')
     }
   }
 
-  // NEW: Map technical contradictions to TRIZ principles (Stage 2.5)
-  const handleMapContradictions = async (sessionId: string) => {
-    setStage('mapping_contradictions')
+  // Dimension Discovery (SRS Section 3.4 - replaces fixed dimension families)
+  const handleDimensionDiscovery = async (sessionId: string) => {
+    setStage('discovering')
     try {
-      const response = await fetch(`/api/idea-bank/ideation/${sessionId}/contradiction-mapping`, {
+      const response = await fetch(`/api/idea-bank/ideation/${sessionId}/expand`, {
         method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
         },
+        body: JSON.stringify({ action: 'discover' }),
       })
 
       if (response.ok) {
         const data = await response.json()
-        setContradictionMapping(data.contradictionMapping)
+        setCurrentSession(prev => prev ? { ...prev, primaryDimensions: data.primaryDimensions } : null)
         
         // Continue to dimension initialization
         await handleInitializeDimensions(sessionId)
       } else {
-        // Non-fatal - continue without contradiction mapping
-        console.warn('Contradiction mapping failed, continuing...')
-        await handleInitializeDimensions(sessionId)
+        throw new Error('Dimension discovery failed')
       }
     } catch (e) {
-      // Non-fatal - continue without contradiction mapping
-      console.warn('Contradiction mapping error:', e)
-      await handleInitializeDimensions(sessionId)
+      setError('Failed to discover dimensions')
+      setStage('seed_input')
     }
   }
 
@@ -1017,13 +1009,17 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     setShowIdeaPanel(false)
   }
 
-  // Submit clarifying answers and continue
+  // Submit clarifying answers - MANDATORY per SRS Section 3.2
+  // When user answers clarifying questions:
+  // 1. Update seedText
+  // 2. Re-run SEMANTIC_GROUNDING
+  // 3. DELETE all downstream artifacts
   const handleSubmitClarifyingAnswers = async () => {
     if (!currentSession) return
     
-    const questions = currentSession.normalization?.unknownsToAsk as string[] || []
+    const questions = currentSession.groundingContext?.clarificationQuestions as string[] || []
     
-    // If there are answers, combine with seed text
+    // If there are answers, update seed text with clarifications
     if (Object.keys(clarifyingAnswers).length > 0 && questions.length > 0) {
       const answersText = Object.entries(clarifyingAnswers)
         .map(([idx, answer]) => {
@@ -1037,12 +1033,44 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         // Update seed text with additional context from answers
         const updatedSeedText = seedText + '\n\nAdditional clarifications:\n' + answersText
         setSeedText(updatedSeedText)
+        
+        // Update session with new seed text
+        try {
+          await fetch(`/api/idea-bank/ideation/${currentSession.id}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+            },
+            body: JSON.stringify({ 
+              seedText: updatedSeedText,
+              // Clear all downstream artifacts per SRS
+              clearDownstream: true 
+            }),
+          })
+        } catch (e) {
+          console.error('Failed to update session:', e)
+        }
       }
     }
     
-    // Clear answers and proceed to classification
+    // Clear answers and re-run semantic grounding from the start
     setClarifyingAnswers({})
-    await handleClassify(currentSession.id)
+    // Clear local state for downstream artifacts
+    setInventiveFraming(null)
+    setNodes([])
+    setEdges([])
+    setIdeaFrames([])
+    
+    // Re-run the pipeline from semantic grounding
+    await handleSemanticGrounding(currentSession.id)
+  }
+  
+  // Skip clarifications and proceed (with warning)
+  const handleSkipClarifications = async () => {
+    if (!currentSession) return
+    setClarifyingAnswers({})
+    await handleInventiveFraming(currentSession.id)
   }
 
   // Expand a node - SILK SMOOTH EXPANSION
@@ -1219,92 +1247,40 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     dimensionIds: string[]
   }
 
-  // NEW: Check obviousness before generation (Stage 3.5)
-  // Note: This is handled inline with loading state, not as a full processing view
-  const handleCheckObviousness = async (
-    selectedDimensionIds: string[],
-    generationParams: { count: number; intent: string; selectedOperators: string[]; buckets?: any[] }
-  ): Promise<boolean> => {
-    if (!currentSession || selectedDimensionIds.length === 0) return true
-
-    // Use inline loading state instead of full processing view
-    setCheckingObviousness(true)
-    try {
-      const response = await fetch(`/api/idea-bank/ideation/${currentSession.id}/obviousness-filter`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
-        },
-        body: JSON.stringify({ selectedDimensions: selectedDimensionIds }),
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        
-        if (!data.shouldProceed) {
-          // Store pending params for "Generate Anyway"
-          setPendingGenerationParams(generationParams)
-          
-          // Show warning to user
-          setObviousnessWarning({
-            score: data.noveltyScore,
-            flags: data.flags || [],
-            wildCard: data.wildCard,
-            analogySuggestions: data.analogySuggestions || [],
-            message: 'This combination may be too obvious. Consider adding the suggested wildcard dimension.',
-          })
-          return false // Indicate user should reconsider
-        }
-        
-        // Clear any previous warning
-        setObviousnessWarning(null)
-        setPendingGenerationParams(null)
-        return true // OK to proceed
-      }
-    } catch (e) {
-      console.warn('Obviousness check failed:', e)
-    } finally {
-      setCheckingObviousness(false)
+  // Validate single-mechanism constraint (SRS Section 3.6)
+  // If selection implies multiple mechanisms, show validation warning
+  const validateSingleMechanism = (selectedDimensions: string[]): boolean => {
+    // Simple validation: too many unrelated dimensions may imply multiple mechanisms
+    // Real validation happens during generation and will reject multi-mechanism ideas
+    if (selectedDimensions.length > 6) {
+      setMechanismWarning('Warning: Too many dimensions selected. Generated ideas must contain exactly ONE causal mechanism. Consider reducing selection.')
+      return true // Still allow, but warn
     }
-    
-    return true // On error, allow proceeding
+    setMechanismWarning(null)
+    return true
   }
 
-  // Generate ideas - operators now come from tray selection, not mind map
+  // Generate ideas - mechanism-pure per SRS Section 3.6
   // userGuidance: Optional user-provided guidance for the AI to follow with HIGH PRIORITY
   const handleGenerateIdeas = async (
     count: number = 5, 
     intent: string = 'DIVERGENT', 
     selectedOperatorIds: string[] = [],
     buckets?: IdeaBucket[],
-    userGuidance?: string,
-    skipObviousnessCheck: boolean = false
+    userGuidance?: string
   ) => {
     if (!currentSession) return
 
     // Get selected dimension nodes from mind map
     const selectedNodeData = nodes.filter(n => selectedNodes.has(n.id))
-    const components = selectedNodeData.filter(n => (n.data as any)?.type === 'COMPONENT').map(n => n.id)
     const dimensions = selectedNodeData.filter(n => 
       (n.data as any)?.type === 'DIMENSION_FAMILY' || (n.data as any)?.type === 'DIMENSION_OPTION'
     ).map(n => n.id)
 
-    const allDimensions = [...dimensions, ...Array.from(selectedNodes).filter(id => !components.includes(id))]
+    const allDimensions = [...dimensions, ...Array.from(selectedNodes)]
 
-    // NEW: Run obviousness check first (Stage 3.5)
-    if (!skipObviousnessCheck && allDimensions.length > 0) {
-      const shouldProceed = await handleCheckObviousness(allDimensions, {
-        count,
-        intent,
-        selectedOperators: selectedOperatorIds,
-        buckets,
-      })
-      if (!shouldProceed) {
-        setStage('exploring') // Return to exploring, let user decide
-        return
-      }
-    }
+    // Validate single-mechanism constraint
+    validateSingleMechanism(allDimensions)
 
     setStage('generating')
     setLoading(true)
@@ -1328,33 +1304,22 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         },
         body: JSON.stringify({
           recipe: {
-            selectedComponents: components,
             selectedDimensions: allDimensions,
-            selectedOperators: selectedOperatorIds,
             recipeIntent: intent,
             count,
             buckets: buckets || null,
-            userGuidance: userGuidance?.trim() || undefined,  // Pass user guidance to API
+            userGuidance: userGuidance?.trim() || undefined,
           },
-          userGuidance: userGuidance?.trim() || undefined,  // Also at top level for backwards compatibility
-          enableFeedbackLoop: false, // Disable automatic novelty checking - user can check manually
-          maxIterations: 0,
-          noveltyThreshold: 60,
-          skipObviousnessCheck: true, // Already checked above
+          userGuidance: userGuidance?.trim() || undefined,
         }),
       })
 
       if (response.ok) {
         const data = await response.json()
         
-        // Store feedback loop and quality metrics
+        // Store quality metrics
         setFeedbackLoopResults(data.feedbackLoop)
         setQualityMetrics(data.qualityMetrics)
-        
-        // Store any obviousness warning from the generation
-        if (data.obviousnessWarning) {
-          setObviousnessWarning(data.obviousnessWarning)
-        }
         
         // Reload session to get idea frames (skip stage update to prevent resetting to exploring)
         await loadSession(currentSession.id, false, true)
@@ -1370,11 +1335,10 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
               if (updated[i]) {
                 updated[i] = {
                   id: idea.id,
-                  title: idea.ideaFrameJson?.title || idea.title || 'Untitled Idea',
-                  problem: idea.ideaFrameJson?.problem || '',
-                  principle: idea.ideaFrameJson?.principle || '',
+                  title: idea.coreMechanism || 'Mechanism-based Idea',
+                  problem: '',
+                  principle: idea.inventiveLeap || '',
                   status: 'ready',
-                  noveltyScore: idea.noveltyScore,
                 }
               }
               return updated
@@ -1399,56 +1363,37 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     }
   }
 
-  // Force generate despite obviousness warning
-  const handleForceGenerate = async (
-    count: number = 5, 
-    intent: string = 'DIVERGENT', 
-    selectedOperatorIds: string[] = [],
-    buckets?: IdeaBucket[],
-    userGuidance?: string
-  ) => {
-    setObviousnessWarning(null)
-    await handleGenerateIdeas(count, intent, selectedOperatorIds, buckets, userGuidance, true)
-  }
-
-  // Check novelty with progress visualization
-  const handleCheckNovelty = async (ideaFrameId: string) => {
+  // Preliminary Novelty Assessment - LLM-ONLY, NO PRIOR ART SEARCH (SRS Section 3.7)
+  const handlePreliminaryAssessment = async (ideaFrameId: string) => {
     if (!currentSession) return
 
-    // Set stage to show novelty checking view
-    setNoveltyCheckingIdeaId(ideaFrameId)
-    setStage('checking_novelty')
+    // Set stage to show assessment view
+    setAssessingIdeaId(ideaFrameId)
+    setStage('assessing')
     
-    // Initialize progress
-    setNoveltyProgress({
+    // Initialize progress (NO patent database references per SRS)
+    setAssessmentProgress({
       currentStep: 1,
-      totalSteps: 5,
-      message: 'Connecting to patent databases...',
-      recordsSearched: 0,
-      matchesFound: 0,
+      totalSteps: 3,
+      message: 'Analyzing conceptual originality...',
     })
 
     try {
-      // Simulate progress updates while the API call runs
+      // Progress simulation for LLM assessment
       const progressSimulation = setInterval(() => {
-        setNoveltyProgress(prev => {
+        setAssessmentProgress(prev => {
           if (!prev) return prev
-          const newRecords = prev.recordsSearched! + Math.floor(Math.random() * 100000) + 50000
           const steps = [
-            { step: 1, msg: 'Connecting to patent databases...' },
-            { step: 2, msg: 'Executing semantic search across global records...' },
-            { step: 3, msg: 'Analyzing prior art relevance...' },
-            { step: 4, msg: 'Scoring novelty confidence...' },
-            { step: 5, msg: 'Generating assessment report...' },
+            { step: 1, msg: 'Analyzing conceptual originality...' },
+            { step: 2, msg: 'Evaluating novelty risk...' },
+            { step: 3, msg: 'Generating preliminary assessment...' },
           ]
-          const nextStep = Math.min(prev.currentStep + 1, 5)
+          const nextStep = Math.min(prev.currentStep + 1, 3)
           const stepInfo = steps.find(s => s.step === nextStep) || steps[steps.length - 1]
           return {
             ...prev,
             currentStep: nextStep,
             message: stepInfo.msg,
-            recordsSearched: Math.min(newRecords, 2500000),
-            matchesFound: prev.matchesFound! + (Math.random() > 0.7 ? 1 : 0),
           }
         })
       }, 1500)
@@ -1467,12 +1412,10 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
 
       if (response.ok) {
         // Final progress state
-        setNoveltyProgress({
-          currentStep: 5,
-          totalSteps: 5,
+        setAssessmentProgress({
+          currentStep: 3,
+          totalSteps: 3,
           message: 'Assessment complete!',
-          recordsSearched: 2500000,
-          matchesFound: (await response.json()).noveltyGate?.results?.length || 0,
         })
         
         // Brief delay to show completion
@@ -1481,14 +1424,14 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         await loadSession(currentSession.id, false)
         setStage('reviewing')
       } else {
-        throw new Error('Novelty check failed')
+        throw new Error('Preliminary assessment failed')
       }
     } catch (e) {
-      setError('Failed to check novelty')
+      setError('Failed to assess novelty')
       setStage('reviewing')
     } finally {
-      setNoveltyCheckingIdeaId(null)
-      setNoveltyProgress(undefined)
+      setAssessingIdeaId(null)
+      setAssessmentProgress(undefined)
     }
   }
 
@@ -1631,7 +1574,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
 
   // ===== INPUT VIEW =====
   // Shows for: idle, seed_input, clarifying stages
-  if (isInputView(stage) || (!currentSession && stage !== 'normalizing')) {
+  if (isInputView(stage) || (!currentSession && stage !== 'grounding')) {
     return (
       <div className="min-h-[calc(100vh-80px)] flex items-center justify-center p-8">
         <motion.div
@@ -1653,30 +1596,26 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
             </p>
           </div>
 
-          {/* Stage Indicator */}
+          {/* Progress Indicator - NO stage names per SRS Section 4.1 */}
           {currentSession && (
             <div className="flex justify-center mb-6">
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-slate-200 shadow-sm">
-                {['Input', 'Analyze', 'Build', 'Explore'].map((step, idx) => {
-                  const stageIdx = stage === 'idle' || stage === 'seed_input' ? 0 :
+              <div className="inline-flex items-center gap-1 px-4 py-2 rounded-full bg-white border border-slate-200 shadow-sm">
+                {[1, 2, 3, 4].map((dot, idx) => {
+                  const currentIdx = stage === 'idle' || stage === 'seed_input' ? 0 :
                                    stage === 'clarifying' ? 0 :
-                                   stage === 'normalizing' || stage === 'classifying' ? 1 :
-                                   stage === 'expanding' ? 2 : 3
-                  const isActive = idx === stageIdx
-                  const isComplete = idx < stageIdx
+                                   stage === 'grounding' || stage === 'framing' ? 1 :
+                                   stage === 'discovering' || stage === 'expanding' ? 2 : 3
+                  const isActive = idx === currentIdx
+                  const isComplete = idx < currentIdx
                   
                   return (
-                    <div key={step} className="flex items-center">
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold
-                        ${isComplete ? 'bg-green-500 text-white' : 
-                          isActive ? 'bg-violet-500 text-white' : 
-                          'bg-slate-200 text-slate-500'}`}>
-                        {isComplete ? '✓' : idx + 1}
-                      </div>
-                      <span className={`text-xs ml-1 ${isActive ? 'font-semibold text-violet-700' : 'text-slate-500'}`}>
-                        {step}
-                      </span>
-                      {idx < 3 && <ChevronRight className="w-3 h-3 text-slate-300 mx-1" />}
+                    <div key={idx} className="flex items-center">
+                      <div className={`w-3 h-3 rounded-full transition-all
+                        ${isComplete ? 'bg-green-500' : 
+                          isActive ? 'bg-violet-500 animate-pulse' : 
+                          'bg-slate-200'}`}
+                      />
+                      {idx < 3 && <div className="w-6 h-0.5 bg-slate-200" />}
                     </div>
                   )
                 })}
@@ -1762,50 +1701,62 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
                 )}
               </div>
 
-              {/* ===== CLARIFYING QUESTIONS SECTION ===== */}
+              {/* ===== CLARIFYING QUESTIONS SECTION (MANDATORY BLOCKING) ===== */}
+              {/* Per SRS Section 3.2: User cannot proceed unless they apply or explicitly skip */}
               {stage === 'clarifying' && (
                 <div className="border-t border-slate-200 pt-6">
                   <div className="flex items-center gap-2 mb-4">
-                    <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
-                      <AlertCircle className="w-4 h-4 text-amber-600" />
+                    <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center">
+                      <HelpCircle className="w-4 h-4 text-violet-600" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-slate-900">AI Has Questions</h3>
-                      <p className="text-xs text-slate-500">Help refine your invention concept</p>
+                      <h3 className="font-semibold text-slate-900">Clarifications Needed</h3>
+                      <p className="text-xs text-slate-500">Answer these questions to proceed (required)</p>
                     </div>
                   </div>
                   
-                  {/* Display questions with input fields */}
-                  {currentSession?.normalization?.unknownsToAsk && 
-                   (currentSession.normalization.unknownsToAsk as string[]).length > 0 ? (
+                  {/* Display clarification questions from grounding context */}
+                  {currentSession?.groundingContext?.clarificationQuestions && 
+                   (currentSession.groundingContext.clarificationQuestions as string[]).length > 0 ? (
                     <div className="space-y-4">
-                      {(currentSession.normalization.unknownsToAsk as string[]).map((question: string, idx: number) => (
-                        <div key={idx} className="p-4 bg-amber-50/50 rounded-xl border border-amber-100">
-                          <label className="block text-sm font-medium text-amber-800 mb-2">
-                            Q{idx + 1}: {question}
+                      {(currentSession.groundingContext.clarificationQuestions as string[]).map((question: string, idx: number) => (
+                        <div key={idx} className="p-4 bg-violet-50/50 rounded-xl border border-violet-100">
+                          <label className="block text-sm font-medium text-violet-800 mb-2">
+                            {question}
                           </label>
                           <Textarea
                             value={clarifyingAnswers[idx] || ''}
                             onChange={(e) => setClarifyingAnswers(prev => ({ ...prev, [idx]: e.target.value }))}
                             placeholder="Type your answer here..."
                             rows={2}
-                            className="w-full bg-white border-amber-200 focus:border-amber-500 focus:ring-amber-500/20 rounded-lg text-sm"
+                            className="w-full bg-white border-violet-200 focus:border-violet-500 focus:ring-violet-500/20 rounded-lg text-sm"
                           />
                         </div>
                       ))}
+                      
+                      {/* Ambiguity flags if any */}
+                      {currentSession?.groundingContext?.ambiguityFlags?.length > 0 && (
+                        <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                          <p className="text-xs font-medium text-amber-700 mb-1">⚠️ Ambiguities Detected:</p>
+                          <ul className="text-xs text-amber-600 list-disc list-inside">
+                            {(currentSession.groundingContext.ambiguityFlags as string[]).map((flag: string, i: number) => (
+                              <li key={i}>{flag}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="p-4 bg-slate-50 rounded-xl text-center text-slate-500">
-                      <p>The AI is ready to proceed. Click continue to build the mind map.</p>
+                      <p>No clarifications needed. Click continue to proceed.</p>
                     </div>
                   )}
                   
-                  {/* Action Buttons for Clarifying Stage */}
+                  {/* Action Buttons - BLOCKING per SRS */}
                   <div className="flex gap-3 mt-4">
                     <Button
                       variant="outline"
                       onClick={() => {
-                        // Go back to seed input to allow editing
                         setStage('seed_input')
                         setClarifyingAnswers({})
                       }}
@@ -1816,18 +1767,20 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={() => currentSession && handleClassify(currentSession.id)}
-                      className="flex-1"
+                      onClick={handleSkipClarifications}
+                      className="flex-1 text-slate-500 hover:text-slate-700"
                     >
-                      Skip & Continue
+                      Skip (Not Recommended)
                     </Button>
                     <Button
                       onClick={handleSubmitClarifyingAnswers}
-                      disabled={Object.keys(clarifyingAnswers).length === 0 && 
-                        (currentSession?.normalization?.unknownsToAsk as string[] || []).length > 0}
-                      className="flex-1 bg-amber-500 hover:bg-amber-600 text-white"
+                      disabled={
+                        (currentSession?.groundingContext?.clarificationQuestions as string[] || []).length > 0 &&
+                        Object.keys(clarifyingAnswers).length === 0
+                      }
+                      className="flex-1 bg-violet-500 hover:bg-violet-600 text-white"
                     >
-                      {Object.keys(clarifyingAnswers).length > 0 ? 'Submit & Continue' : 'Continue'}
+                      Apply Clarifications
                       <ArrowRight className="w-4 h-4 ml-1" />
                     </Button>
                   </div>
@@ -1877,7 +1830,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
                           setShowTray(true)
                         } else {
                           // Otherwise start fresh analysis
-                          handleNormalize(currentSession.id)
+                          handleSemanticGrounding(currentSession.id)
                         }
                       }}
                       className="rounded-xl"
@@ -1984,7 +1937,8 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
   }
 
   // ===== PROCESSING VIEW (Rich Animated Display) =====
-  // Shows for: normalizing, classifying, mapping_contradictions, expanding, checking_obviousness, generating, checking_novelty stages
+  // Shows for: grounding, framing, discovering, expanding, generating, assessing stages
+  // NOTE: UI must NOT show stage names per SRS Section 4.1
   if (isProcessingView(stage)) {
     return (
       <IdeationProcessingView
@@ -1992,7 +1946,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         seedText={currentSession?.seedText || seedText}
         onCancel={handleReset}
         streamingIdeas={streamingIdeas}
-        noveltyProgress={noveltyProgress}
+        assessmentProgress={assessmentProgress}
       />
     )
   }
@@ -2174,24 +2128,19 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
                 </div>
               </div>
 
-              {/* Current Stage */}
+              {/* Status indicator - NO stage names per SRS Section 4.1 */}
               <div className="flex items-center gap-2 p-2 rounded-lg bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 mb-2">
                 <CheckCircle2 className="w-4 h-4 text-green-500" />
                 <span className="text-sm font-medium text-green-700">
-                  {stage === 'exploring' ? 'Explore & Select Dimensions' :
-                   stage === 'reviewing' ? 'Review Generated Ideas' :
-                   'Ready'}
+                  {ideaFrames.length > 0 ? 'Ideas generated' : 'Ready to explore'}
                 </span>
               </div>
 
-              {/* Classification Badge */}
-              {currentSession?.classification && (
+              {/* Invention Archetype (from dimension discovery) */}
+              {currentSession?.primaryDimensions && (
                 <div className="flex items-center gap-1.5 flex-wrap mb-2">
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
-                    {(currentSession.classification as any).dominantClass?.replace(/_/g, ' ')}
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                    {(currentSession.classification as any).archetype}
+                    {(currentSession as any).inventionArchetype?.replace(/_/g, ' ') || 'Custom Invention'}
                   </span>
                 </div>
               )}
@@ -2319,7 +2268,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
           )}
         </ReactFlow>
 
-        {/* Loading Overlay */}
+        {/* Loading Overlay - NO stage names per SRS */}
         <AnimatePresence>
           {loading && (
             <motion.div
@@ -2331,10 +2280,12 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
               <div className="text-center">
                 <Loader2 className="w-12 h-12 animate-spin text-violet-500 mx-auto mb-4" />
                 <p className="text-slate-600 font-medium">
-                  {stage === 'normalizing' && 'Analyzing your invention...'}
-                  {stage === 'classifying' && 'Classifying invention type...'}
-                  {stage === 'expanding' && 'Initializing dimensions...'}
+                  {stage === 'grounding' && 'Analyzing your invention...'}
+                  {stage === 'framing' && 'Identifying inventive tensions...'}
+                  {stage === 'discovering' && 'Discovering dimensions...'}
+                  {stage === 'expanding' && 'Exploring possibilities...'}
                   {stage === 'generating' && 'Generating ideas...'}
+                  {stage === 'assessing' && 'Assessing novelty...'}
                 </p>
               </div>
             </motion.div>
@@ -2354,16 +2305,13 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
             <CombineTray
               selectedNodes={selectedNodes}
               nodes={nodes}
-              availableOperators={
-                // Get operators from session classification
-                ((currentSession?.classification as any)?.applicableOperators as any[]) || []
-              }
+              availableOperators={[]} // No TRIZ operators in new pipeline
               onGenerate={(count, intent, ops, buckets, guidance) => 
-                handleGenerateIdeas(count, intent, ops, buckets, guidance, false)
+                handleGenerateIdeas(count, intent, ops, buckets, guidance)
               }
               onClear={() => {
                 setSelectedNodes(new Set())
-                setObviousnessWarning(null) // Clear warning when clearing selection
+                setMechanismWarning(null)
               }}
               onRemoveNode={(nodeId) => {
                 setSelectedNodes(prev => {
@@ -2371,14 +2319,10 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
                   next.delete(nodeId)
                   return next
                 })
-                setObviousnessWarning(null) // Clear warning when removing dimension
+                setMechanismWarning(null)
               }}
               loading={loading}
-              checkingObviousness={checkingObviousness}
-              obviousnessWarning={obviousnessWarning}
-              onForceGenerate={(count, intent, ops, buckets, guidance) => 
-                handleForceGenerate(count, intent, ops, buckets, guidance)
-              }
+              mechanismWarning={mechanismWarning}
             />
           </motion.div>
         )}
@@ -2397,7 +2341,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
             <IdeaFramePanel
               ideas={ideaFrames}
               onSelectIdea={setSelectedIdea}
-              onCheckNovelty={handleCheckNovelty}
+              onAssessNovelty={handlePreliminaryAssessment}
               onExport={handleExportToBank}
               onClose={() => setShowIdeaPanel(false)}
               onDeleteIdea={handleDeleteIdea}
@@ -2438,15 +2382,15 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         )}
       </AnimatePresence>
 
-      {/* Obviousness Warning Modal */}
+      {/* Mechanism Warning Modal */}
       <AnimatePresence>
-        {obviousnessWarning && (
+        {mechanismWarning && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-            onClick={() => setObviousnessWarning(null)}
+            onClick={() => setMechanismWarning(null)}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -2460,119 +2404,31 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
                   <AlertCircle className="w-6 h-6 text-amber-600" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Low Novelty Warning</h3>
-                  <p className="text-sm text-slate-500">This combination may be too obvious</p>
+                  <h3 className="text-lg font-bold text-slate-900">Single Mechanism Required</h3>
+                  <p className="text-sm text-slate-500">Ideas must contain exactly one causal mechanism</p>
                 </div>
               </div>
 
-              {/* Novelty Score */}
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-slate-600">Combination Novelty</span>
-                  <span className={`text-lg font-bold ${
-                    obviousnessWarning.score < 30 ? 'text-red-500' :
-                    obviousnessWarning.score < 50 ? 'text-amber-500' :
-                    'text-green-500'
-                  }`}>
-                    {obviousnessWarning.score}/100
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full transition-all ${
-                      obviousnessWarning.score < 30 ? 'bg-red-500' :
-                      obviousnessWarning.score < 50 ? 'bg-amber-500' :
-                      'bg-green-500'
-                    }`}
-                    style={{ width: `${obviousnessWarning.score}%` }}
-                  />
-                </div>
-              </div>
+              <p className="text-sm text-slate-600 mb-4">
+                {mechanismWarning}
+              </p>
 
-              {/* Obviousness Flags */}
-              {obviousnessWarning.flags && obviousnessWarning.flags.length > 0 && (
-                <div className="mb-4">
-                  <p className="text-sm font-semibold text-slate-700 mb-2">Issues Detected:</p>
-                  <div className="space-y-1">
-                    {obviousnessWarning.flags.map((flag: string, idx: number) => (
-                      <div key={idx} className="flex items-start gap-2 text-sm text-slate-600">
-                        <span className="text-red-400">•</span>
-                        {flag}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Wildcard Suggestion */}
-              {obviousnessWarning.wildCard && (
-                <div className="mb-4 p-3 bg-violet-50 rounded-xl border border-violet-200">
-                  <p className="text-sm font-semibold text-violet-700 mb-1">
-                    💡 Suggested Wildcard Dimension
-                  </p>
-                  <p className="text-sm text-violet-600">
-                    <strong>{obviousnessWarning.wildCard.dimension}:</strong>{' '}
-                    {obviousnessWarning.wildCard.reason}
-                  </p>
-                </div>
-              )}
-
-              {/* Analogy Suggestions */}
-              {obviousnessWarning.analogySuggestions && obviousnessWarning.analogySuggestions.length > 0 && (
-                <div className="mb-4">
-                  <p className="text-sm font-semibold text-slate-700 mb-2">
-                    Consider analogies from:
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {obviousnessWarning.analogySuggestions.map((domain: string, idx: number) => (
-                      <Badge key={idx} variant="outline" className="text-xs">
-                        {domain}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 mt-6">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setObviousnessWarning(null)
-                    setPendingGenerationParams(null)
-                  }}
-                  className="flex-1"
-                >
-                  Modify Selection
-                </Button>
-                <Button
-                  onClick={() => {
-                    setObviousnessWarning(null)
-                    if (pendingGenerationParams) {
-                      handleForceGenerate(
-                        pendingGenerationParams.count,
-                        pendingGenerationParams.intent,
-                        pendingGenerationParams.selectedOperators,
-                        pendingGenerationParams.buckets
-                      )
-                    }
-                    setPendingGenerationParams(null)
-                  }}
-                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-white"
-                >
-                  Generate Anyway
-                </Button>
-              </div>
+              <Button
+                onClick={() => setMechanismWarning(null)}
+                className="w-full bg-violet-500 hover:bg-violet-600 text-white"
+              >
+                Understood
+              </Button>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Contradiction Insight Panel */}
-      {contradictionMapping && (
+      {/* Inventive Framing Insight Panel (replaces Contradiction Panel) */}
+      {inventiveFraming && inventiveFraming.technicalContradictions?.length > 0 && (
         <ContradictionInsightPanel 
-          data={contradictionMapping}
-          onClose={() => setContradictionMapping(null)}
+          data={inventiveFraming}
+          onClose={() => setInventiveFraming(null)}
         />
       )}
 

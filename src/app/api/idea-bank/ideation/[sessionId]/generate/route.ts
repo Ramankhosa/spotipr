@@ -1,11 +1,10 @@
 /**
- * Generate Ideas API (Enhanced with Feedback Loop)
+ * Generate Mechanism-Pure Ideas API (SRS Section 3.6)
  * 
- * POST - Generate idea frames from the combine tray
- * Features:
- * - Optional obviousness pre-check
- * - Automatic feedback loop for weak ideas (noveltyScore < 60)
- * - Retry with mutation instructions up to maxIterations
+ * POST - Generate idea frames with exactly ONE causal mechanism each
+ * 
+ * RULE: If more than ONE causal mechanism is required → discard and regenerate.
+ * NO prior art search. NO obviousness gating.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -20,9 +19,9 @@ interface RouteParams {
 
 interface GenerateRequestBody {
   recipe?: {
-    selectedComponents: string[];
+    selectedComponents?: string[];
     selectedDimensions: string[];
-    selectedOperators: string[];
+    selectedOperators?: string[];
     recipeIntent: string;
     count: number;
     buckets?: any[];
@@ -31,17 +30,9 @@ interface GenerateRequestBody {
   intent?: string;
   count?: number;
   userGuidance?: string;  // User's guidance for idea generation (alternative location)
-  // Feedback loop options
-  enableFeedbackLoop?: boolean;
-  maxIterations?: number;
-  noveltyThreshold?: number;
-  // Pre-check options
-  skipObviousnessCheck?: boolean;
 }
 
-// Maximum number of iteration attempts to prevent infinite loops
-const MAX_SAFE_ITERATIONS = 3;
-const DEFAULT_NOVELTY_THRESHOLD = 60;
+// SRS: Each idea MUST contain exactly ONE causal mechanism
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
@@ -88,18 +79,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       selectedOperators: body.recipe?.selectedOperators || ideationSession.combineTray?.selectedOperators || [],
       recipeIntent,
       count: body.recipe?.count || body.count || ideationSession.combineTray?.requestedCount || 5,
-      userGuidance,  // Pass user guidance to recipe
+      userGuidance,
     };
 
     // Validate minimum selections
-    const totalSelections = 
-      recipe.selectedComponents.length + 
-      recipe.selectedDimensions.length + 
-      recipe.selectedOperators.length;
-
-    if (totalSelections === 0) {
+    if (recipe.selectedDimensions.length === 0) {
       return NextResponse.json(
-        { error: 'Select at least one component, dimension, or operator' },
+        { error: 'Select at least one dimension' },
         { status: 400 }
       );
     }
@@ -111,170 +97,41 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     });
 
     // =========================================================================
-    // OPTIONAL: Pre-check obviousness before generating
+    // Generate mechanism-pure ideas (SRS Section 3.6)
+    // Each idea MUST contain exactly ONE causal mechanism
     // =========================================================================
-    let obviousnessWarning: any = null;
-    if (!body.skipObviousnessCheck && recipe.selectedDimensions.length > 0) {
-      try {
-        const obviousnessResult = await IdeationService.checkObviousness(
-          sessionId,
-          recipe.selectedDimensions,
-          requestHeaders
-        );
-        
-        if (obviousnessResult.combinationNovelty < 40) {
-          obviousnessWarning = {
-            score: obviousnessResult.combinationNovelty,
-            flags: obviousnessResult.obviousnessFlags,
-            wildCardSuggestion: obviousnessResult.wildCardSuggestion,
-            analogySuggestions: obviousnessResult.suggestedAnalogySources,
-            message: 'Combination may be too obvious. Consider adding suggested wildcard.',
-          };
-        }
-      } catch (e) {
-        // Non-fatal - continue with generation
-        console.warn('Obviousness pre-check failed:', e);
-      }
-    }
-
-    // =========================================================================
-    // Generate initial ideas
-    // =========================================================================
-    let ideas = await IdeationService.generateIdeas({
+    let ideas = await IdeationService.generateMechanismPureIdeas({
       sessionId,
       recipe,
       requestHeaders,
-      userGuidance: userGuidance?.trim() || undefined,  // Pass user guidance for HIGH PRIORITY consideration
+      userGuidance: userGuidance?.trim() || undefined,
     });
 
     // =========================================================================
-    // FEEDBACK LOOP: Auto-iterate weak ideas
-    // =========================================================================
-    const enableFeedbackLoop = body.enableFeedbackLoop ?? true; // Enabled by default
-    const maxIterations = Math.min(body.maxIterations || 2, MAX_SAFE_ITERATIONS);
-    const noveltyThreshold = body.noveltyThreshold || DEFAULT_NOVELTY_THRESHOLD;
-    
-    let iterationResults: Array<{
-      ideaId: string;
-      iteration: number;
-      originalNovelty: number;
-      finalNovelty: number;
-      improved: boolean;
-      mutationApplied?: string;
-    }> = [];
-
-    if (enableFeedbackLoop && ideas.length > 0) {
-      // Store generated ideas first
-      const storedIdeas = await prisma.ideaFrame.findMany({
-        where: { sessionId },
-        orderBy: { createdAt: 'desc' },
-        take: ideas.length,
-      });
-
-      // Check novelty for each idea and iterate if needed
-      for (const storedIdea of storedIdeas) {
-        let currentNovelty = 0;
-        let iterationCount = 0;
-        let improved = false;
-        let mutationApplied: string | undefined;
-
-        try {
-          // Check novelty
-          const noveltyResult = await IdeationService.checkNovelty({
-            sessionId,
-            ideaFrameId: storedIdea.id,
-            requestHeaders,
-          });
-
-          currentNovelty = noveltyResult.noveltyScore;
-
-          // If below threshold and we have mutation instructions, iterate
-          if (
-            currentNovelty < noveltyThreshold && 
-            noveltyResult.mutationInstructions &&
-            iterationCount < maxIterations
-          ) {
-            // Log the mutation attempt
-            console.log(`[FeedbackLoop] Idea ${storedIdea.id} has low novelty (${currentNovelty}). Attempting mutation...`);
-            
-            // Store mutation instruction for response
-            mutationApplied = noveltyResult.mutationInstructions.specifics;
-            
-            // Update the idea with mutation suggestion (don't regenerate, just flag it)
-            await prisma.ideaFrame.update({
-              where: { id: storedIdea.id },
-              data: {
-                userNotes: `[Auto-flagged] Low novelty (${currentNovelty}/100). Suggested mutation: ${mutationApplied}`,
-                noveltySummaryJson: noveltyResult as any,
-              },
-            });
-
-            iterationCount++;
-            improved = currentNovelty >= noveltyThreshold;
-          }
-        } catch (e) {
-          console.warn(`Novelty check failed for idea ${storedIdea.id}:`, e);
-        }
-
-        iterationResults.push({
-          ideaId: storedIdea.id,
-          iteration: iterationCount,
-          originalNovelty: currentNovelty,
-          finalNovelty: currentNovelty,
-          improved,
-          mutationApplied,
-        });
-      }
-    }
-
-    // =========================================================================
-    // Prepare response with enhanced idea data
+    // Prepare response with mechanism-pure idea data (SRS Section 5)
     // =========================================================================
     const enhancedIdeas = ideas.map(idea => ({
       ideaId: idea.ideaId,
-      title: idea.title,
-      problem: idea.problem,
-      principle: idea.principle,
-      technicalEffect: idea.technicalEffect,
-      components: idea.components,
-      mechanismSteps: idea.mechanismSteps,
-      variants: idea.variants,
-      claimHooks: idea.claimHooks,
-      searchQueries: idea.searchQueries,
-      // NEW: Inventive logic fields
+      // Core mechanism-pure fields
+      coreMechanism: idea.coreMechanism,
       inventiveLeap: idea.inventiveLeap,
-      whyNotObvious: idea.whyNotObvious,
-      analogySource: idea.analogySource,
-      eliminatedComponent: idea.eliminatedComponent,
+      eliminatedAssumption: idea.eliminatedAssumption,
       contradictionResolved: idea.contradictionResolved,
-      resolutionStrategy: idea.resolutionStrategy,
-      secondOrderEffect: idea.secondOrderEffect,
+      whyNotObvious: idea.whyNotObvious,
+      mechanismBoundaryTest: idea.mechanismBoundaryTest,
     }));
 
-    // Calculate summary stats
-    const ideasWithInventiveLeap = enhancedIdeas.filter(i => i.inventiveLeap).length;
-    const ideasWithAnalogy = enhancedIdeas.filter(i => i.analogySource).length;
-    const lowNoveltyCount = iterationResults.filter(r => r.originalNovelty < noveltyThreshold).length;
+    // Calculate quality metrics
+    const ideasWithBoundaryTest = enhancedIdeas.filter(i => i.mechanismBoundaryTest).length;
 
     return NextResponse.json({
       success: true,
       ideas: enhancedIdeas,
       count: ideas.length,
-      // Feedback loop results
-      feedbackLoop: {
-        enabled: enableFeedbackLoop,
-        iterations: iterationResults,
-        lowNoveltyCount,
-        totalChecked: iterationResults.length,
-      },
-      // Obviousness warning if applicable
-      obviousnessWarning,
       // Quality metrics
       qualityMetrics: {
-        ideasWithInventiveLeap,
-        ideasWithAnalogy,
-        inventiveLeapRatio: ideas.length > 0 ? ideasWithInventiveLeap / ideas.length : 0,
-        analogyRatio: ideas.length > 0 ? ideasWithAnalogy / ideas.length : 0,
+        ideasWithBoundaryTest,
+        boundaryTestRatio: ideas.length > 0 ? ideasWithBoundaryTest / ideas.length : 0,
       },
     });
   } catch (error) {

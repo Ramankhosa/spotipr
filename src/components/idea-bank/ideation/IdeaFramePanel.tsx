@@ -27,40 +27,37 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 
-interface ClosestPriorArt {
-  publicationNumber: string
-  title: string
-  relevanceScore: number
-  overlappingFeatures: string[]
-  differentiatingFactors: string[]
-  remark: string
+// Preliminary Novelty Assessment (LLM-only, NO prior art per SRS)
+interface NoveltyAssessment {
+  originalityStrength: 'HIGH' | 'MEDIUM' | 'LOW'
+  noveltyRiskLevel: 'LOW' | 'MODERATE' | 'HIGH'
+  likelyExaminerObjection: string
+  redundancyRisk: string
+  strongestNovelAspect: string
+  weakestNovelAspect: string
+  improvementDirections: string[]
 }
 
-interface NoveltySummary {
-  patentsAnalyzed?: number
-  closestPriorArt?: ClosestPriorArt[]
-  priorArtSummary?: string
-  phositaTest?: string
-  reasoning?: string
-  results?: Array<{
-    publicationNumber?: string
-    title: string
-    snippet?: string
-    assignee?: string
-  }>
-}
-
+// IdeaFrame per SRS Section 5 - mechanism-pure ideas
 interface IdeaFrame {
   id: string
-  title: string
-  problem: string
-  principle: string
-  technicalEffect?: string
   status: string
-  noveltyScore?: number
   userRating?: number
+  // Core mechanism-pure fields (SRS Section 3.6)
+  coreMechanism: string
+  inventiveLeap: string
+  eliminatedAssumption: string
+  contradictionResolved: string
+  whyNotObvious: string
+  mechanismBoundaryTest?: {
+    whatItDoesNotSolve: string
+    outOfScope: string
+  }
+  // Preliminary novelty assessment (LLM-only, NO prior art search)
+  noveltyAssessment?: NoveltyAssessment
+  // Legacy compatibility
+  title?: string
   data?: any
-  noveltySummary?: NoveltySummary
 }
 
 interface FeedbackLoopResult {
@@ -89,19 +86,28 @@ interface QualityMetrics {
 interface IdeaFramePanelProps {
   ideas: IdeaFrame[]
   onSelectIdea: (idea: IdeaFrame) => void
-  onCheckNovelty: (ideaId: string) => void
+  onAssessNovelty: (ideaId: string) => void  // Renamed: Preliminary assessment only
   onExport: (ideaIds: string[]) => void
   onClose: () => void
-  onDeleteIdea?: (ideaId: string) => void  // NEW: Delete an idea
+  onDeleteIdea?: (ideaId: string) => void
   feedbackLoopResults?: FeedbackLoopResults | null
   qualityMetrics?: QualityMetrics | null
 }
 
 // Helper functions defined outside component to avoid recreation
-const getNoveltyColorStatic = (score?: number) => {
-  if (score === undefined) return 'bg-slate-100 text-slate-600'
-  if (score >= 70) return 'bg-green-100 text-green-700'
-  if (score >= 40) return 'bg-yellow-100 text-yellow-700'
+// Originality strength colors (SRS: HIGH | MEDIUM | LOW)
+const getOriginalityColor = (strength?: string) => {
+  if (!strength) return 'bg-slate-100 text-slate-600'
+  if (strength === 'HIGH') return 'bg-green-100 text-green-700'
+  if (strength === 'MEDIUM') return 'bg-yellow-100 text-yellow-700'
+  return 'bg-red-100 text-red-700'
+}
+
+// Novelty risk colors (SRS: LOW | MODERATE | HIGH)
+const getRiskColor = (risk?: string) => {
+  if (!risk) return 'bg-slate-100 text-slate-600'
+  if (risk === 'LOW') return 'bg-green-100 text-green-700'
+  if (risk === 'MODERATE') return 'bg-yellow-100 text-yellow-700'
   return 'bg-red-100 text-red-700'
 }
 
@@ -124,8 +130,8 @@ interface FullscreenIdeaModalProps {
   onClose: () => void
   onCopy: (idea: IdeaFrame) => void
   copied: boolean
-  onCheckNovelty: (ideaId: string) => void
-  checkingNovelty: string | null
+  onAssessNovelty: (ideaId: string) => void  // Renamed: Preliminary assessment only
+  assessingNovelty: string | null
   onToggleExport: (ideaId: string) => void
   isSelectedForExport: boolean
 }
@@ -135,8 +141,8 @@ function FullscreenIdeaModal({
   onClose,
   onCopy,
   copied,
-  onCheckNovelty,
-  checkingNovelty,
+  onAssessNovelty,
+  assessingNovelty,
   onToggleExport,
   isSelectedForExport,
 }: FullscreenIdeaModalProps) {
@@ -155,21 +161,26 @@ function FullscreenIdeaModal({
         className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
-        {/* Modal Header */}
+        {/* Modal Header - SRS Section 4.2D: Display Core Mechanism as title */}
         <div className="p-4 md:p-6 border-b border-slate-200 bg-gradient-to-r from-purple-50 to-violet-50 flex-shrink-0">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
                 {getStatusIconStatic(idea.status)}
                 <h2 className="text-lg md:text-xl font-bold text-slate-900 line-clamp-2">
-                  {idea.title}
+                  {idea.coreMechanism || idea.title || 'Mechanism-based Idea'}
                 </h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                {idea.noveltyScore !== undefined && (
-                  <Badge className={`${getNoveltyColorStatic(idea.noveltyScore)} text-sm`}>
-                    {idea.noveltyScore}% novel
-                  </Badge>
+                {idea.noveltyAssessment && (
+                  <>
+                    <Badge className={`${getOriginalityColor(idea.noveltyAssessment.originalityStrength)} text-sm`}>
+                      {idea.noveltyAssessment.originalityStrength} originality
+                    </Badge>
+                    <Badge className={`${getRiskColor(idea.noveltyAssessment.noveltyRiskLevel)} text-sm`}>
+                      {idea.noveltyAssessment.noveltyRiskLevel} risk
+                    </Badge>
+                  </>
                 )}
                 {idea.userRating && (
                   <div className="flex items-center gap-0.5">
@@ -219,272 +230,154 @@ function FullscreenIdeaModal({
           </div>
         </div>
 
-        {/* Modal Content - Scrollable */}
+        {/* Modal Content - Scrollable - SRS Section 4.2D fields */}
         <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 md:space-y-6">
-          {/* Problem */}
-          <div className="bg-slate-50 rounded-xl p-4">
-            <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-              Problem Statement
+          {/* Core Mechanism */}
+          <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-200">
+            <label className="text-xs md:text-sm font-semibold text-violet-600 uppercase tracking-wider">
+              🔧 Core Mechanism
             </label>
-            <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
-              {idea.problem}
+            <p className="text-sm md:text-base text-violet-800 mt-2 leading-relaxed">
+              {idea.coreMechanism}
             </p>
           </div>
-
-          {/* Principle */}
-          <div className="bg-slate-50 rounded-xl p-4">
-            <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-              Core Principle
-            </label>
-            <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
-              {idea.principle}
-            </p>
-          </div>
-
-          {/* Technical Effect */}
-          {idea.technicalEffect && (
-            <div className="bg-slate-50 rounded-xl p-4">
-              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                Technical Effect
-              </label>
-              <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
-                {idea.technicalEffect}
-              </p>
-            </div>
-          )}
 
           {/* Inventive Leap */}
-          {idea.data?.inventiveLeap && (
-            <div className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-200">
-              <label className="text-xs md:text-sm font-semibold text-violet-600 uppercase tracking-wider">
-                🚀 Inventive Leap
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-200">
+            <label className="text-xs md:text-sm font-semibold text-amber-600 uppercase tracking-wider">
+              🚀 Inventive Leap
+            </label>
+            <p className="text-sm md:text-base text-amber-800 mt-2 leading-relaxed">
+              {idea.inventiveLeap}
+            </p>
+          </div>
+
+          {/* Eliminated Assumption */}
+          <div className="bg-slate-50 rounded-xl p-4">
+            <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
+              ❌ Eliminated Assumption
+            </label>
+            <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
+              {idea.eliminatedAssumption}
+            </p>
+          </div>
+
+          {/* Contradiction Resolved */}
+          {idea.contradictionResolved && (
+            <div className="bg-slate-50 rounded-xl p-4">
+              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
+                ⚡ Contradiction Resolved
               </label>
-              <p className="text-sm md:text-base text-violet-800 mt-2 leading-relaxed">
-                {idea.data.inventiveLeap}
+              <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
+                {idea.contradictionResolved}
               </p>
             </div>
           )}
 
           {/* Why Not Obvious */}
-          {idea.data?.whyNotObvious && (
+          <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+            <label className="text-xs md:text-sm font-semibold text-green-600 uppercase tracking-wider">
+              💡 Why Not Obvious
+            </label>
+            <p className="text-sm md:text-base text-green-800 mt-2 leading-relaxed">
+              {idea.whyNotObvious}
+            </p>
+          </div>
+
+          {/* Mechanism Boundary Test */}
+          {idea.mechanismBoundaryTest && (
             <div className="bg-slate-50 rounded-xl p-4">
               <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                Why This Is Not Obvious
+                🎯 Mechanism Boundaries
               </label>
-              <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
-                {idea.data.whyNotObvious}
-              </p>
-            </div>
-          )}
-
-          {/* Cross-Domain Analogy */}
-          {idea.data?.analogySource && (
-            <div className="bg-gradient-to-r from-cyan-50 to-blue-50 rounded-xl p-4 border border-cyan-200">
-              <label className="text-xs md:text-sm font-semibold text-cyan-600 uppercase tracking-wider">
-                🔗 Cross-Domain Analogy
-              </label>
-              <div className="mt-2">
-                <span className="text-sm md:text-base font-medium text-cyan-800">
-                  From: {idea.data.analogySource.domain}
-                </span>
-                <p className="text-sm md:text-base text-cyan-700 mt-1">
-                  {idea.data.analogySource.concept}
-                </p>
+              <div className="mt-2 space-y-2">
+                <div>
+                  <span className="text-xs font-medium text-slate-600">What it does NOT solve:</span>
+                  <p className="text-sm text-slate-700">{idea.mechanismBoundaryTest.whatItDoesNotSolve}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-medium text-slate-600">Out of scope:</span>
+                  <p className="text-sm text-slate-700">{idea.mechanismBoundaryTest.outOfScope}</p>
+                </div>
               </div>
             </div>
           )}
 
-          {/* Contradiction Resolved */}
-          {idea.data?.contradictionResolved && (
-            <div className="bg-slate-50 rounded-xl p-4">
-              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                Contradiction Resolved
-              </label>
-              <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
-                {idea.data.contradictionResolved}
-              </p>
-            </div>
-          )}
-
-          {/* Resolution Strategy */}
-          {idea.data?.resolutionStrategy && (
-            <div className="bg-slate-50 rounded-xl p-4">
-              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                TRIZ Resolution Strategy
-              </label>
-              <p className="text-sm md:text-base text-slate-700 mt-2 leading-relaxed">
-                {idea.data.resolutionStrategy}
-              </p>
-            </div>
-          )}
-
-          {/* Second Order Effect */}
-          {idea.data?.secondOrderEffect && (
-            <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-200">
-              <label className="text-xs md:text-sm font-semibold text-amber-600 uppercase tracking-wider">
-                ⚡ Second-Order Effect
-              </label>
-              <p className="text-sm md:text-base text-amber-800 mt-2 leading-relaxed">
-                {idea.data.secondOrderEffect}
-              </p>
-            </div>
-          )}
-
-          {/* Components */}
-          {idea.data?.components?.length > 0 && (
-            <div className="bg-slate-50 rounded-xl p-4">
-              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                Key Components
-              </label>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {idea.data.components.map((comp: string, i: number) => (
-                  <Badge key={i} variant="outline" className="text-xs md:text-sm py-1 px-3">
-                    {comp}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Variants */}
-          {idea.data?.variants?.length > 0 && (
-            <div className="bg-slate-50 rounded-xl p-4">
-              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                Implementation Variants ({idea.data.variants.length})
-              </label>
-              <div className="mt-3 space-y-3">
-                {idea.data.variants.map((v: any, i: number) => (
-                  <div key={i} className="pl-4 border-l-4 border-violet-300 bg-white rounded-r-lg p-3">
-                    <span className="font-semibold text-slate-800">{v.title}</span>
-                    <p className="text-sm text-slate-600 mt-1">{v.description}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Claim Hooks */}
-          {idea.data?.claimHooks?.length > 0 && (
-            <div className="bg-slate-50 rounded-xl p-4">
-              <label className="text-xs md:text-sm font-semibold text-slate-500 uppercase tracking-wider">
-                Patent Claim Hooks
-              </label>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {idea.data.claimHooks.map((hook: string, i: number) => (
-                  <Badge key={i} className="bg-purple-100 text-purple-700 text-xs md:text-sm py-1 px-3">
-                    {hook}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Prior Art Analysis - Shows after novelty check */}
-          {idea.noveltySummary && (
+          {/* ===== NOVELTY ASSESSMENT SECTION (LLM-only, NO prior art) ===== */}
+          {/* SRS Section 4.2D: Originality Strength, Novelty Risk Level, Examiner Objection, Improvement Directions */}
+          {idea.noveltyAssessment && (
             <div className="bg-gradient-to-r from-cyan-50 to-blue-50 rounded-xl p-4 border border-cyan-200">
               <label className="text-xs md:text-sm font-semibold text-cyan-700 uppercase tracking-wider flex items-center gap-2">
                 <Scale className="w-4 h-4" />
-                Prior Art Analysis
+                Preliminary Novelty Assessment
               </label>
               
-              {/* Summary */}
-              {idea.noveltySummary.priorArtSummary && (
-                <p className="text-sm text-slate-700 mt-3 leading-relaxed">
-                  {idea.noveltySummary.priorArtSummary}
-                </p>
-              )}
+              {/* Strength & Risk Badges */}
+              <div className="flex flex-wrap gap-2 mt-3">
+                <Badge className={`${getOriginalityColor(idea.noveltyAssessment.originalityStrength)} text-sm`}>
+                  Originality: {idea.noveltyAssessment.originalityStrength}
+                </Badge>
+                <Badge className={`${getRiskColor(idea.noveltyAssessment.noveltyRiskLevel)} text-sm`}>
+                  Novelty Risk: {idea.noveltyAssessment.noveltyRiskLevel}
+                </Badge>
+              </div>
 
-              {/* Patents Analyzed Count */}
-              {idea.noveltySummary.patentsAnalyzed !== undefined && idea.noveltySummary.patentsAnalyzed >= 0 && (
-                <div className="mt-3 flex items-center gap-2 text-xs text-cyan-600">
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>{idea.noveltySummary.patentsAnalyzed} patents analyzed</span>
+              {/* Strongest Novel Aspect */}
+              {idea.noveltyAssessment.strongestNovelAspect && (
+                <div className="mt-3 p-2 bg-green-50 rounded-lg border border-green-200">
+                  <div className="text-xs font-semibold text-green-700">✓ Strongest Novel Aspect:</div>
+                  <p className="text-xs text-green-800 mt-1">{idea.noveltyAssessment.strongestNovelAspect}</p>
                 </div>
               )}
 
-              {/* Closest Prior Art */}
-              {idea.noveltySummary.closestPriorArt && idea.noveltySummary.closestPriorArt.length > 0 && (
-                <div className="mt-4">
-                  <div className="text-xs font-semibold text-slate-600 mb-2">
-                    Most Relevant Prior Art:
-                  </div>
-                  <div className="space-y-2">
-                    {idea.noveltySummary.closestPriorArt.map((patent, i) => (
-                      <div key={i} className="bg-white rounded-lg p-3 border border-slate-200">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge className="bg-slate-100 text-slate-700 text-[10px] font-mono">
-                                {patent.publicationNumber || 'N/A'}
-                              </Badge>
-                              {patent.relevanceScore !== undefined && (
-                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                  patent.relevanceScore >= 70 
-                                    ? 'bg-red-100 text-red-700' 
-                                    : patent.relevanceScore >= 40 
-                                      ? 'bg-amber-100 text-amber-700' 
-                                      : 'bg-green-100 text-green-700'
-                                }`}>
-                                  {patent.relevanceScore}% match
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-xs font-medium text-slate-800 mt-1 line-clamp-2">
-                              {patent.title || 'Unknown Patent'}
-                            </p>
-                            {patent.remark && (
-                              <p className="text-[11px] text-slate-500 mt-1 italic">
-                                {patent.remark}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        {patent.differentiatingFactors && patent.differentiatingFactors.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {patent.differentiatingFactors.slice(0, 2).map((factor, j) => (
-                              <span key={j} className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
-                                ✓ {factor}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+              {/* Weakest Novel Aspect */}
+              {idea.noveltyAssessment.weakestNovelAspect && (
+                <div className="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-200">
+                  <div className="text-xs font-semibold text-amber-700">⚠️ Weakest Novel Aspect:</div>
+                  <p className="text-xs text-amber-800 mt-1">{idea.noveltyAssessment.weakestNovelAspect}</p>
+                </div>
+              )}
+
+              {/* Likely Examiner Objection */}
+              {idea.noveltyAssessment.likelyExaminerObjection && (
+                <div className="mt-3 p-2 bg-red-50 rounded-lg border border-red-200">
+                  <div className="text-xs font-semibold text-red-700">🔍 Likely Examiner Objection:</div>
+                  <p className="text-xs text-red-800 mt-1">{idea.noveltyAssessment.likelyExaminerObjection}</p>
+                </div>
+              )}
+
+              {/* Redundancy Risk */}
+              {idea.noveltyAssessment.redundancyRisk && (
+                <div className="mt-2">
+                  <div className="text-xs font-semibold text-slate-600">Redundancy Risk:</div>
+                  <p className="text-xs text-slate-700 mt-1">{idea.noveltyAssessment.redundancyRisk}</p>
+                </div>
+              )}
+
+              {/* Improvement Directions */}
+              {idea.noveltyAssessment.improvementDirections && idea.noveltyAssessment.improvementDirections.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-xs font-semibold text-cyan-700 mb-1">📈 Improvement Directions:</div>
+                  <ul className="space-y-1">
+                    {idea.noveltyAssessment.improvementDirections.map((direction, i) => (
+                      <li key={i} className="text-xs text-cyan-800 flex items-start gap-1">
+                        <span className="text-cyan-500">→</span>
+                        {direction}
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 </div>
               )}
 
-              {/* All Patents Searched */}
-              {idea.noveltySummary.results && idea.noveltySummary.results.length > 0 && (
-                <details className="mt-4">
-                  <summary className="text-xs font-medium text-cyan-700 cursor-pointer hover:text-cyan-800">
-                    View all {idea.noveltySummary.results.length} patents searched →
-                  </summary>
-                  <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-                    {idea.noveltySummary.results.map((r, i) => (
-                      <div key={i} className="text-[11px] text-slate-600 py-1 border-b border-slate-100 last:border-0">
-                        <span className="font-mono text-slate-500">{r.publicationNumber || 'N/A'}</span>
-                        {' - '}
-                        <span>{r.title}</span>
-                        {r.assignee && <span className="text-slate-400"> ({r.assignee})</span>}
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-
-              {/* PHOSITA Test */}
-              {idea.noveltySummary.phositaTest && (
-                <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <div className="text-xs font-semibold text-amber-700">PHOSITA Assessment</div>
-                      <p className="text-xs text-amber-800 mt-1">{idea.noveltySummary.phositaTest}</p>
-                    </div>
-                  </div>
+              {/* MANDATORY DISCLAIMER - SRS Section 4.2E */}
+              <div className="mt-4 p-3 bg-amber-100/50 rounded-lg border border-amber-300">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-800 font-medium">
+                    This is a preliminary novelty assessment. Perform exhaustive prior-art search before filing.
+                  </p>
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>
@@ -493,19 +386,24 @@ function FullscreenIdeaModal({
         <div className="p-4 md:p-6 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row gap-3 flex-shrink-0">
           <Button
             variant="outline"
-            onClick={() => onCheckNovelty(idea.id)}
-            disabled={checkingNovelty === idea.id}
+            onClick={() => onAssessNovelty(idea.id)}
+            disabled={assessingNovelty === idea.id || !!idea.noveltyAssessment}
             className="flex-1"
           >
-            {checkingNovelty === idea.id ? (
+            {assessingNovelty === idea.id ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Checking Novelty...
+                Assessing...
+              </>
+            ) : idea.noveltyAssessment ? (
+              <>
+                <CheckCircle2 className="w-4 h-4 mr-2 text-green-500" />
+                Assessed
               </>
             ) : (
               <>
                 <Search className="w-4 h-4 mr-2" />
-                Check Novelty
+                Assess Novelty
               </>
             )}
           </Button>
@@ -528,7 +426,7 @@ function FullscreenIdeaModal({
 export default function IdeaFramePanel({
   ideas,
   onSelectIdea,
-  onCheckNovelty,
+  onAssessNovelty,
   onExport,
   onClose,
   onDeleteIdea,
@@ -537,7 +435,7 @@ export default function IdeaFramePanel({
 }: IdeaFramePanelProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set())
-  const [checkingNovelty, setCheckingNovelty] = useState<string | null>(null)
+  const [assessingNovelty, setAssessingNovelty] = useState<string | null>(null)
   const [fullscreenIdea, setFullscreenIdea] = useState<IdeaFrame | null>(null)
   const [copied, setCopied] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
@@ -561,27 +459,26 @@ export default function IdeaFramePanel({
     return () => window.removeEventListener('keydown', handleEscape)
   }, [fullscreenIdea])
 
-  // Update fullscreenIdea when ideas prop changes (e.g., after novelty check)
-  // This ensures the modal shows updated data like noveltySummary
+  // Update fullscreenIdea when ideas prop changes (e.g., after assessment)
+  // This ensures the modal shows updated data like noveltyAssessment
   useEffect(() => {
     if (fullscreenIdea) {
       const updatedIdea = ideas.find(i => i.id === fullscreenIdea.id)
       if (updatedIdea) {
-        // Check if novelty data was added/updated
-        const hasNewNoveltyData = updatedIdea.noveltySummary && !fullscreenIdea.noveltySummary
-        const noveltyScoreChanged = updatedIdea.noveltyScore !== fullscreenIdea.noveltyScore
+        // Check if novelty assessment was added/updated
+        const hasNewAssessment = updatedIdea.noveltyAssessment && !fullscreenIdea.noveltyAssessment
         
-        if (hasNewNoveltyData || noveltyScoreChanged) {
+        if (hasNewAssessment) {
           setFullscreenIdea(updatedIdea)
         }
       }
     }
   }, [ideas]) // Only depend on ideas to avoid infinite loops
 
-  const handleNoveltyCheck = async (ideaId: string) => {
-    setCheckingNovelty(ideaId)
-    await onCheckNovelty(ideaId)
-    setCheckingNovelty(null)
+  const handleNoveltyAssessment = async (ideaId: string) => {
+    setAssessingNovelty(ideaId)
+    await onAssessNovelty(ideaId)
+    setAssessingNovelty(null)
   }
 
   const toggleExportSelection = (ideaId: string) => {
@@ -602,13 +499,6 @@ export default function IdeaFramePanel({
     }
   }
 
-  const getNoveltyColor = (score?: number) => {
-    if (score === undefined) return 'bg-slate-100 text-slate-600'
-    if (score >= 70) return 'bg-green-100 text-green-700'
-    if (score >= 40) return 'bg-yellow-100 text-yellow-700'
-    return 'bg-red-100 text-red-700'
-  }
-
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'SHORTLISTED':
@@ -622,26 +512,36 @@ export default function IdeaFramePanel({
     }
   }
 
-  // Copy to clipboard handler - moved outside modal to use local state
+  // Copy to clipboard handler - using new IdeaFrame fields
   const handleCopyToClipboard = async (idea: IdeaFrame) => {
     const text = `
-Title: ${idea.title}
+Core Mechanism: ${idea.coreMechanism}
 
-Problem: ${idea.problem}
+Inventive Leap: ${idea.inventiveLeap}
 
-Principle: ${idea.principle}
+Eliminated Assumption: ${idea.eliminatedAssumption}
 
-${idea.technicalEffect ? `Technical Effect: ${idea.technicalEffect}` : ''}
+${idea.contradictionResolved ? `Contradiction Resolved: ${idea.contradictionResolved}` : ''}
 
-${idea.data?.inventiveLeap ? `Inventive Leap: ${idea.data.inventiveLeap}` : ''}
+Why Not Obvious: ${idea.whyNotObvious}
 
-${idea.data?.whyNotObvious ? `Why Not Obvious: ${idea.data.whyNotObvious}` : ''}
+${idea.mechanismBoundaryTest ? `
+Boundaries:
+- What it does NOT solve: ${idea.mechanismBoundaryTest.whatItDoesNotSolve}
+- Out of scope: ${idea.mechanismBoundaryTest.outOfScope}
+` : ''}
 
-${idea.data?.analogySource ? `Cross-Domain Analogy: ${idea.data.analogySource.domain} - ${idea.data.analogySource.concept}` : ''}
+${idea.noveltyAssessment ? `
+Preliminary Novelty Assessment:
+- Originality Strength: ${idea.noveltyAssessment.originalityStrength}
+- Novelty Risk Level: ${idea.noveltyAssessment.noveltyRiskLevel}
+- Strongest Aspect: ${idea.noveltyAssessment.strongestNovelAspect}
+- Weakest Aspect: ${idea.noveltyAssessment.weakestNovelAspect}
+- Examiner Objection: ${idea.noveltyAssessment.likelyExaminerObjection}
+- Improvement Directions: ${idea.noveltyAssessment.improvementDirections?.join(', ') || 'N/A'}
 
-${idea.data?.contradictionResolved ? `Contradiction Resolved: ${idea.data.contradictionResolved}` : ''}
-
-${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(', ')}` : ''}
+⚠️ This is a preliminary novelty assessment. Perform exhaustive prior-art search before filing.
+` : ''}
     `.trim()
 
     await navigator.clipboard.writeText(text)
@@ -659,8 +559,8 @@ ${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(
             onClose={() => setFullscreenIdea(null)}
             onCopy={handleCopyToClipboard}
             copied={copied}
-            onCheckNovelty={handleNoveltyCheck}
-            checkingNovelty={checkingNovelty}
+            onAssessNovelty={handleNoveltyAssessment}
+            assessingNovelty={assessingNovelty}
             onToggleExport={toggleExportSelection}
             isSelectedForExport={selectedForExport.has(fullscreenIdea.id)}
           />
@@ -765,24 +665,29 @@ ${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(
                     )}
                   </button>
 
-                  {/* Content */}
+                  {/* Content - Using new IdeaFrame fields */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       {getStatusIcon(idea.status)}
                       <h4 className="font-medium text-slate-900 text-xs md:text-sm line-clamp-1">
-                        {idea.title}
+                        {idea.coreMechanism || idea.title || 'Mechanism-based Idea'}
                       </h4>
                     </div>
                     <p className="text-[10px] md:text-xs text-slate-500 line-clamp-2">
-                      {idea.principle}
+                      {idea.inventiveLeap}
                     </p>
 
-                    {/* Tags & Scores */}
+                    {/* Assessment Badges - NO numeric scores per SRS */}
                     <div className="flex flex-wrap items-center gap-1 md:gap-2 mt-2">
-                      {idea.noveltyScore !== undefined && (
-                        <Badge className={`${getNoveltyColor(idea.noveltyScore)} text-[9px] md:text-[10px] py-0.5`}>
-                          {idea.noveltyScore}% novel
-                        </Badge>
+                      {idea.noveltyAssessment && (
+                        <>
+                          <Badge className={`${getOriginalityColor(idea.noveltyAssessment.originalityStrength)} text-[9px] md:text-[10px] py-0.5`}>
+                            {idea.noveltyAssessment.originalityStrength}
+                          </Badge>
+                          <Badge className={`${getRiskColor(idea.noveltyAssessment.noveltyRiskLevel)} text-[9px] md:text-[10px] py-0.5`}>
+                            {idea.noveltyAssessment.noveltyRiskLevel} risk
+                          </Badge>
+                        </>
                       )}
                       {idea.userRating && (
                         <div className="flex items-center gap-0.5">
@@ -848,104 +753,47 @@ ${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(
                     className="overflow-hidden"
                   >
                     <div className="px-4 pb-4 space-y-3">
-                      {/* Problem */}
+                      {/* Eliminated Assumption */}
                       <div>
                         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                          Problem
+                          Eliminated Assumption
                         </label>
                         <p className="text-sm text-slate-700 mt-1">
-                          {idea.problem}
+                          {idea.eliminatedAssumption}
                         </p>
                       </div>
 
-                      {/* Technical Effect */}
-                      {idea.technicalEffect && (
-                        <div>
-                          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                            Technical Effect
-                          </label>
-                          <p className="text-sm text-slate-700 mt-1">
-                            {idea.technicalEffect}
-                          </p>
-                        </div>
-                      )}
+                      {/* Why Not Obvious */}
+                      <div className="p-2 bg-green-50 rounded-lg border border-green-100">
+                        <label className="text-xs font-semibold text-green-600 uppercase tracking-wider">
+                          Why Not Obvious
+                        </label>
+                        <p className="text-sm text-green-800 mt-1">
+                          {idea.whyNotObvious}
+                        </p>
+                      </div>
 
-                      {/* Additional Data */}
-                      {idea.data && (
-                        <>
-                          {/* Inventive Leap */}
-                          {idea.data.inventiveLeap && (
-                            <div className="p-2 bg-violet-50 rounded-lg border border-violet-100">
-                              <label className="text-xs font-semibold text-violet-600 uppercase tracking-wider">
-                                Inventive Leap
-                              </label>
-                              <p className="text-sm text-violet-800 mt-1">
-                                {idea.data.inventiveLeap}
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Cross-Domain Analogy */}
-                          {idea.data.analogySource && (
-                            <div className="p-2 bg-cyan-50 rounded-lg border border-cyan-100">
-                              <label className="text-xs font-semibold text-cyan-600 uppercase tracking-wider">
-                                Cross-Domain Analogy
-                              </label>
-                              <div className="text-sm text-cyan-800 mt-1">
-                                <span className="font-medium">{idea.data.analogySource.domain}:</span>{' '}
-                                {idea.data.analogySource.concept}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Claim Hooks */}
-                          {idea.data.claimHooks?.length > 0 && (
-                            <div>
-                              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                                Claim Hooks
-                              </label>
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {idea.data.claimHooks.slice(0, 5).map((hook: string, i: number) => (
-                                  <Badge key={i} className="bg-purple-100 text-purple-700 text-[10px]">
-                                    {hook}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {/* Prior Art Summary (Compact) */}
-                      {idea.noveltySummary && (
+                      {/* Preliminary Novelty Assessment Summary (Compact) */}
+                      {idea.noveltyAssessment && (
                         <div className="p-3 bg-cyan-50 rounded-lg border border-cyan-200">
                           <div className="flex items-center justify-between">
                             <label className="text-xs font-semibold text-cyan-700 uppercase tracking-wider flex items-center gap-1">
                               <Scale className="w-3 h-3" />
-                              Prior Art Analysis
+                              Preliminary Assessment
                             </label>
-                            {idea.noveltySummary.patentsAnalyzed !== undefined && (
-                              <span className="text-[10px] text-cyan-600">
-                                {idea.noveltySummary.patentsAnalyzed} patents
-                              </span>
-                            )}
-                          </div>
-                          {idea.noveltySummary.priorArtSummary && (
-                            <p className="text-xs text-slate-600 mt-2 line-clamp-2">
-                              {idea.noveltySummary.priorArtSummary}
-                            </p>
-                          )}
-                          {idea.noveltySummary.closestPriorArt && idea.noveltySummary.closestPriorArt.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-1">
-                              {idea.noveltySummary.closestPriorArt.slice(0, 2).map((p, i) => (
-                                <Badge key={i} className="bg-white text-cyan-700 text-[9px] font-mono border border-cyan-200">
-                                  {p.publicationNumber || 'N/A'}
-                                </Badge>
-                              ))}
-                              {idea.noveltySummary.closestPriorArt.length > 2 && (
-                                <span className="text-[9px] text-cyan-500">+{idea.noveltySummary.closestPriorArt.length - 2} more</span>
-                              )}
+                            <div className="flex gap-1">
+                              <Badge className={`${getOriginalityColor(idea.noveltyAssessment.originalityStrength)} text-[9px]`}>
+                                {idea.noveltyAssessment.originalityStrength}
+                              </Badge>
+                              <Badge className={`${getRiskColor(idea.noveltyAssessment.noveltyRiskLevel)} text-[9px]`}>
+                                {idea.noveltyAssessment.noveltyRiskLevel}
+                              </Badge>
                             </div>
+                          </div>
+                          {idea.noveltyAssessment.strongestNovelAspect && (
+                            <p className="text-xs text-slate-600 mt-2 line-clamp-2">
+                              <span className="font-medium text-green-700">✓</span> {idea.noveltyAssessment.strongestNovelAspect}
+                            </p>
                           )}
                           <button
                             onClick={(e) => {
@@ -954,8 +802,13 @@ ${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(
                             }}
                             className="text-[10px] text-cyan-600 hover:text-cyan-800 mt-2 underline"
                           >
-                            View full analysis →
+                            View full assessment →
                           </button>
+                          
+                          {/* MANDATORY DISCLAIMER */}
+                          <p className="text-[9px] text-amber-600 mt-2 italic">
+                            ⚠️ Preliminary assessment only. Perform exhaustive prior-art search before filing.
+                          </p>
                         </div>
                       )}
 
@@ -966,20 +819,25 @@ ${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation()
-                            handleNoveltyCheck(idea.id)
+                            handleNoveltyAssessment(idea.id)
                           }}
-                          disabled={checkingNovelty === idea.id}
+                          disabled={assessingNovelty === idea.id || !!idea.noveltyAssessment}
                           className="text-xs"
                         >
-                          {checkingNovelty === idea.id ? (
+                          {assessingNovelty === idea.id ? (
                             <>
                               <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                              Checking...
+                              Assessing...
+                            </>
+                          ) : idea.noveltyAssessment ? (
+                            <>
+                              <CheckCircle2 className="w-3 h-3 mr-1 text-green-500" />
+                              Assessed
                             </>
                           ) : (
                             <>
                               <Search className="w-3 h-3 mr-1" />
-                              Check Novelty
+                              Assess Novelty
                             </>
                           )}
                         </Button>
@@ -1008,21 +866,19 @@ ${idea.data?.claimHooks?.length > 0 ? `Claim Hooks: ${idea.data.claimHooks.join(
                   animate={{ opacity: 1 }}
                   className="px-3 pb-3 space-y-2"
                 >
-                  {/* Show novelty summary indicator on mobile */}
-                  {idea.noveltySummary && (
+                  {/* Show novelty assessment indicator on mobile */}
+                  {idea.noveltyAssessment && (
                     <div className="p-2 bg-cyan-50 rounded-lg border border-cyan-200 text-xs">
                       <div className="flex items-center gap-2 text-cyan-700">
                         <Scale className="w-3 h-3" />
-                        <span className="font-medium">Prior Art Analyzed</span>
-                        {idea.noveltySummary.patentsAnalyzed !== undefined && (
-                          <span className="text-cyan-600">({idea.noveltySummary.patentsAnalyzed} patents)</span>
-                        )}
+                        <span className="font-medium">Preliminary Assessment</span>
+                        <Badge className={`${getOriginalityColor(idea.noveltyAssessment.originalityStrength)} text-[8px]`}>
+                          {idea.noveltyAssessment.originalityStrength}
+                        </Badge>
                       </div>
-                      {idea.noveltySummary.closestPriorArt && idea.noveltySummary.closestPriorArt.length > 0 && (
-                        <div className="mt-1 text-[10px] text-slate-500">
-                          {idea.noveltySummary.closestPriorArt.length} relevant patents found
-                        </div>
-                      )}
+                      <p className="text-[9px] text-amber-600 mt-1 italic">
+                        ⚠️ Perform prior-art search before filing
+                      </p>
                     </div>
                   )}
                   <Button

@@ -1,51 +1,65 @@
 /**
- * Ideation Engine Service
+ * Patent Ideation Engine Service
  * 
- * Backend service for the mind-map patent ideation engine.
- * Handles session management, LLM calls, novelty searches, and idea generation.
+ * PatentNest.ai - Ideation Engine (Refactored per SRS)
+ * 
+ * IMPORTANT: This is a PRELIMINARY NOVELTY ASSESSMENT system.
+ * - NO patent databases are searched
+ * - NO legal novelty claims are made
+ * - This is an invention-thinking system, NOT a patent clearance system
+ * 
+ * Pipeline (Internal Only - UI MUST NOT show stage names):
+ * SEED_INPUT → SEMANTIC_GROUNDING → INVENTIVE_FRAMING → 
+ * DIMENSION_DISCOVERY → DIMENSION_EXPANSION → IDEA_GENERATION → 
+ * PRELIMINARY_NOVELTY_ASSESSMENT
  */
 
 import { prisma } from '@/lib/prisma';
-import { serpApiProvider } from '@/lib/serpapi-provider';
 import { z } from 'zod';
 import {
-  InputNormalizationSchema,
-  ClassificationSchema,
-  DimensionGraphSchema,
+  SemanticGroundingSchema,
+  InventiveFramingSchema,
+  DimensionDiscoverySchema,
+  DimensionExpansionSchema,
   IdeaFrameSchema,
-  NoveltyGateSchema,
-  ContradictionMappingSchema,
-  ObviousnessFilterSchema,
+  PreliminaryNoveltyAssessmentSchema,
+  DimensionGraphSchema,
   SuggestedMovesResponseSchema,
   SuggestedMoveSchema,
   safeParseJson,
   getSchemaDescription,
   TRIZ_OPERATORS,
-  DIMENSION_FAMILIES,
-  type InputNormalization,
-  type Classification,
+  type SemanticGrounding,
+  type InventiveFraming,
+  type DimensionDiscovery,
+  type PrimaryDimension,
+  type DimensionExpansion,
+  type IdeaFrame,
+  type PreliminaryNoveltyAssessment,
   type DimensionGraph,
   type DimensionNode,
-  type IdeaFrame,
-  type NoveltyGate,
   type CombineRecipe,
-  type InventionClass,
   type TrizOperator,
-  type DimensionFamily,
-  type ContradictionMapping,
-  type ObviousnessFilter,
   type SuggestedMove,
   type SuggestedMovesResponse,
   type ExpandedDimensionGraph,
   type SuggestedMovePayloadType,
+  // Legacy types for backward compatibility
+  type InputNormalization,
+  type Classification,
+  type NoveltyGate,
 } from './schemas';
-import type { 
-  IdeationSession, 
-  MindMapNode, 
+import type {
+  IdeationSession,
+  MindMapNode,
   IdeaFrame as PrismaIdeaFrame,
   Prisma,
 } from '@prisma/client';
 import crypto from 'crypto';
+
+// Import the LLM Gateway for proper API key handling
+import { llmGateway } from '@/lib/metering/gateway'
+import type { TaskCode } from '@prisma/client'
 
 // =============================================================================
 // TYPES
@@ -65,14 +79,14 @@ export interface ExpandNodeInput {
   nodeId: string;
   depth?: number;
   requestHeaders: Record<string, string>;
-  userInput?: string;  // User's specific direction/thought to explore
+  userInput?: string;
 }
 
 export interface GenerateIdeasInput {
   sessionId: string;
   recipe: CombineRecipe;
   requestHeaders: Record<string, string>;
-  userGuidance?: string;  // User's guidance for how to approach idea generation
+  userGuidance?: string;
 }
 
 export interface NoveltyCheckInput {
@@ -88,22 +102,10 @@ export interface ExportToIdeaBankInput {
   tenantId: string;
 }
 
-// Import the LLM Gateway for proper API key handling
-import { llmGateway } from '@/lib/metering/gateway'
-import type { TaskCode } from '@prisma/client'
-
 // =============================================================================
-// LLM INTEGRATION (Using existing LLM Gateway)
+// LLM INTEGRATION
 // =============================================================================
 
-/**
- * Call LLM through the existing gateway infrastructure
- * This ensures proper API key handling, rate limiting, and cost tracking
- * 
- * Model Resolution:
- * The gateway uses stageCode to resolve the model configured by Super Admin
- * for each ideation stage (IDEATION_NORMALIZE, IDEATION_CLASSIFY, etc.)
- */
 async function callLLM(
   prompt: string,
   taskCode: string,
@@ -111,13 +113,11 @@ async function callLLM(
   requestHeaders: Record<string, string>,
 ): Promise<{ response: string; tokensUsed: number; model: string }> {
   try {
-    // Use the existing LLM gateway which handles API keys properly
-    // stageCode enables Super Admin to configure which model to use for each ideation stage
     const result = await llmGateway.executeLLMOperation(
       { headers: requestHeaders },
       {
         taskCode: taskCode as TaskCode,
-        stageCode: taskCode, // Use taskCode as stageCode for model resolution (e.g., IDEATION_NORMALIZE)
+        stageCode: taskCode,
         prompt,
         parameters: {
           temperature: 0.7,
@@ -138,7 +138,6 @@ async function callLLM(
     const tokensUsed = result.response.outputTokens || 0;
     const model = result.response.modelClass || 'unknown';
 
-    // Log the LLM call - get session for userId
     const session = await prisma.ideationSession.findUnique({
       where: { id: sessionId },
       select: { userId: true },
@@ -149,7 +148,7 @@ async function callLLM(
         sessionId,
         action: `LLM_CALL_${taskCode}`,
         stage: taskCode,
-        inputJson: { prompt: prompt.slice(0, 1000) }, // Truncate for storage
+        inputJson: { prompt: prompt.slice(0, 1000) },
         outputJson: { response: response.slice(0, 1000) },
         userId: session?.userId || 'unknown',
         tokensUsed,
@@ -168,9 +167,6 @@ async function callLLM(
 // SESSION MANAGEMENT
 // =============================================================================
 
-/**
- * Create a new ideation session
- */
 export async function createSession(input: CreateSessionInput): Promise<IdeationSession> {
   const session = await prisma.ideationSession.create({
     data: {
@@ -184,7 +180,6 @@ export async function createSession(input: CreateSessionInput): Promise<Ideation
     },
   });
 
-  // Create the seed node (positioned at left for left-to-right flow)
   await prisma.mindMapNode.create({
     data: {
       sessionId: session.id,
@@ -201,7 +196,6 @@ export async function createSession(input: CreateSessionInput): Promise<Ideation
     },
   });
 
-  // Log session creation
   await prisma.ideationHistory.create({
     data: {
       sessionId: session.id,
@@ -215,9 +209,6 @@ export async function createSession(input: CreateSessionInput): Promise<Ideation
   return session;
 }
 
-/**
- * Get session with all related data
- */
 export async function getSession(sessionId: string) {
   return prisma.ideationSession.findUnique({
     where: { id: sessionId },
@@ -231,9 +222,6 @@ export async function getSession(sessionId: string) {
   });
 }
 
-/**
- * List sessions for a user
- */
 export async function listSessions(userId: string, tenantId: string) {
   return prisma.ideationSession.findMany({
     where: { userId, tenantId },
@@ -247,23 +235,26 @@ export async function listSessions(userId: string, tenantId: string) {
 }
 
 // =============================================================================
-// NORMALIZATION
+// STAGE 1: SEMANTIC_GROUNDING (Replaces normalizeSeed)
 // =============================================================================
 
 /**
- * Normalize the seed input using LLM
- * @param sessionId - The ideation session ID
- * @param requestHeaders - HTTP headers from the API request (must include Authorization)
+ * SEMANTIC_GROUNDING - Understand the idea WITHOUT inventing, reframing, or solving.
+ * 
+ * CANONICAL PROMPT - DO NOT MODIFY WITHOUT REVIEW
  */
-export async function normalizeSeed(
+export async function semanticGrounding(
   sessionId: string,
   requestHeaders: Record<string, string>
-): Promise<InputNormalization> {
+): Promise<SemanticGrounding> {
   const session = await prisma.ideationSession.findUniqueOrThrow({
     where: { id: sessionId },
   });
 
-  const prompt = `You are a patent ideation assistant specializing in extracting INVENTIVE problems. Analyze the following invention idea and extract structured information, focusing on underlying CONTRADICTIONS that drive innovation.
+  const prompt = `ROLE: Semantic Grounding Agent
+
+TASK:
+Understand the user's idea WITHOUT inventing, reframing, or solving it.
 
 INPUT IDEA:
 """
@@ -273,402 +264,248 @@ ${session.seedText}
 ${session.seedGoal ? `STATED GOAL: ${session.seedGoal}` : ''}
 ${session.seedConstraints.length > 0 ? `USER CONSTRAINTS: ${session.seedConstraints.join(', ')}` : ''}
 
-Return ONLY valid JSON matching this schema (no other text):
-${getSchemaDescription('InputNormalization')}
+OUTPUT (VALID JSON ONLY):
+${getSchemaDescription('SemanticGrounding')}
 
-CRITICAL RULES:
-- coreEntity: The main physical or conceptual thing being invented
-- intentGoal: What the user wants to achieve or solve
-- constraints: Hard limits mentioned (cost, size, no electronics, etc.)
-- negativeConstraints: Things explicitly forbidden
-- unknownsToAsk: Questions that would help clarify the invention (max 3)
-
-CONTRADICTION EXTRACTION (Most Important):
-- technicalContradictions: Identify 1-3 underlying tradeoffs where improving one parameter worsens another
-  * Example: "lightweight" vs "durable" - making it lighter makes it weaker
-  * If not explicit, INFER from goal vs constraint conflict
-- unstatedAssumptions: Hidden assumptions in the problem that could be challenged (e.g., "must be single-piece")
-- secondOrderGoals: Goals that emerge from solving the primary goal
-- patentableProblemStatement: Reframe the problem in inventive terms (focus on the CONTRADICTION, not just the wish)
-
-Example contradiction format:
-{
-  "parameterToImprove": "comfort (soft material)",
-  "parameterThatWorsens": "safety (rigidity)",
-  "conflictDescription": "Softer materials increase comfort but reduce protective capability"
-}
-
-Do NOT invent facts; derive contradictions from the stated context.`;
+RULES:
+- DO NOT propose solutions
+- DO NOT invent contradictions
+- DO NOT assume technical domains
+- Prefer "unknown" over guessing
+- Generate 3-5 clarification questions maximum
+- Questions should help understand the WHAT and WHY, not suggest solutions`;
 
   const { response, tokensUsed, model } = await callLLM(
     prompt,
-    'IDEATION_NORMALIZE',
+    'IDEATION_NORMALIZE', // Using existing task code for compatibility
     sessionId,
     requestHeaders,
   );
 
-  const parsed = safeParseJson(response, InputNormalizationSchema);
-  
+  const parsed = safeParseJson(response, SemanticGroundingSchema);
+
   if (!parsed.success) {
-    throw new Error(`Normalization failed: ${parsed.error}`);
+    throw new Error(`Semantic grounding failed: ${parsed.error}`);
   }
 
-  // Update session with normalization
-  // Ensure all required fields have defaults
-  const normalizedData: InputNormalization = {
+  const groundingContext: SemanticGrounding = {
     coreEntity: parsed.data.coreEntity,
-    intentGoal: parsed.data.intentGoal,
-    constraints: parsed.data.constraints ?? [],
-    assumptions: parsed.data.assumptions ?? [],
-    negativeConstraints: parsed.data.negativeConstraints ?? [],
-    knownComponents: parsed.data.knownComponents ?? [],
-    unknownsToAsk: parsed.data.unknownsToAsk ?? [],
-    context: parsed.data.context,
-    // NEW: Contradiction extraction fields
-    technicalContradictions: parsed.data.technicalContradictions ?? [],
-    unstatedAssumptions: parsed.data.unstatedAssumptions ?? [],
-    secondOrderGoals: parsed.data.secondOrderGoals ?? [],
-    patentableProblemStatement: parsed.data.patentableProblemStatement,
+    currentApproach: parsed.data.currentApproach || '',
+    userIntent: parsed.data.userIntent,
+    explicitConstraints: parsed.data.explicitConstraints ?? [],
+    implicitAssumptions: parsed.data.implicitAssumptions ?? [],
+    ambiguityFlags: parsed.data.ambiguityFlags ?? [],
+    clarificationQuestions: parsed.data.clarificationQuestions ?? [],
   };
 
+  // Persist as groundingContext (read-only for downstream stages)
   await prisma.ideationSession.update({
     where: { id: sessionId },
     data: {
-      normalizationJson: normalizedData as any,
-      status: normalizedData.unknownsToAsk.length > 0 ? 'CLARIFYING' : 'CLASSIFYING',
+      normalizationJson: groundingContext as any,
+      status: groundingContext.clarificationQuestions.length > 0 ? 'CLARIFYING' : 'CLASSIFYING',
     },
   });
 
-  return normalizedData;
+  return groundingContext;
 }
 
+// Legacy alias for backward compatibility
+export const normalizeSeed = semanticGrounding;
+
 // =============================================================================
-// CLASSIFICATION
+// STAGE 2: INVENTIVE_FRAMING (Replaces contradiction logic)
 // =============================================================================
 
 /**
- * Classify the normalized invention
- * @param sessionId - The ideation session ID
- * @param requestHeaders - HTTP headers from the API request (must include Authorization)
+ * INVENTIVE_FRAMING - Identify real tensions ONLY if they exist.
+ * 
+ * CANONICAL PROMPT - DO NOT MODIFY WITHOUT REVIEW
  */
-export async function classifyInvention(
+export async function inventiveFraming(
   sessionId: string,
   requestHeaders: Record<string, string>
-): Promise<Classification> {
+): Promise<InventiveFraming> {
   const session = await prisma.ideationSession.findUniqueOrThrow({
     where: { id: sessionId },
   });
 
   if (!session.normalizationJson) {
-    throw new Error('Session must be normalized before classification');
+    throw new Error('Session must have grounding context before inventive framing');
   }
 
-  const normalization = session.normalizationJson as InputNormalization;
+  const groundingContext = session.normalizationJson as SemanticGrounding;
 
-  const prompt = `You are a patent classification expert. Classify the following invention into appropriate categories.
+  const prompt = `ROLE: Inventive Framing Agent
 
-INVENTION:
-- Core Entity: ${normalization.coreEntity}
-- Goal: ${normalization.intentGoal}
-- Components: ${normalization.knownComponents?.join(', ') || 'Not specified'}
-- Context: ${normalization.context || 'General'}
-- Constraints: ${normalization.constraints?.join(', ') || 'None'}
+INPUT:
+${JSON.stringify(groundingContext, null, 2)}
 
-AVAILABLE CLASSES:
-- PRODUCT_DEVICE: Physical objects (syringe, umbrella, shoe)
-- SYSTEM: Multiple interacting components (often software + hardware)
-- METHOD_PROCESS: Steps/procedures (manufacturing, operating, analysis)
-- COMPOSITION: Chemical, materials, mixtures
-- SOFTWARE_ALGORITHM: Pure logic/data processing
-- BIOTECH_PHARMA: Biological materials, treatments
-- MANUFACTURING: Process + tooling + QA
-- SERVICE_WORKFLOW: Human-centered operational methods
-- HYBRID: When multiple classes are equally strong
+TASK:
+Identify genuine inventive tensions ONLY if they naturally exist.
 
-Return ONLY valid JSON matching this schema (no other text):
-${getSchemaDescription('Classification')}
-
-Rules:
-- Assign weights that sum to ~1.0 across top labels
-- If top-2 weights are within 0.15, set forkMode to "FORK"
-- archetype should reflect the dominant technical domain`;
-
-  const { response } = await callLLM(
-    prompt,
-    'IDEATION_CLASSIFY',
-    sessionId,
-    requestHeaders,
-  );
-
-  const parsed = safeParseJson(response, ClassificationSchema);
-  
-  if (!parsed.success) {
-    throw new Error(`Classification failed: ${parsed.error}`);
-  }
-
-  // Update session
-  await prisma.ideationSession.update({
-    where: { id: sessionId },
-    data: {
-      classificationJson: parsed.data as any,
-      status: 'EXPANDING',
-      activeTracks: parsed.data.forkMode === 'FORK' 
-        ? parsed.data.labels.slice(0, 2).map(l => l.class)
-        : [parsed.data.dominantClass],
-    },
-  });
-
-  return parsed.data;
-}
-
-// =============================================================================
-// STAGE 2.5: CONTRADICTION MAPPING (NEW)
-// =============================================================================
-
-/**
- * Map contradictions to TRIZ principles and resolution strategies
- * This makes contradictions first-class citizens in the ideation process
- */
-export async function mapContradictions(
-  sessionId: string,
-  requestHeaders: Record<string, string>
-): Promise<ContradictionMapping> {
-  const session = await prisma.ideationSession.findUniqueOrThrow({
-    where: { id: sessionId },
-  });
-
-  if (!session.normalizationJson) {
-    throw new Error('Session must be normalized before contradiction mapping');
-  }
-
-  const normalization = session.normalizationJson as InputNormalization;
-  const existingContradictions = normalization.technicalContradictions || [];
-
-  const prompt = `You are a TRIZ expert and patent strategist. Analyze the contradictions in this invention and map them to resolution strategies.
-
-INVENTION CONTEXT:
-- Core Entity: ${normalization.coreEntity}
-- Goal: ${normalization.intentGoal}
-- Constraints: ${normalization.constraints?.join(', ') || 'None'}
-- Forbidden: ${normalization.negativeConstraints?.join(', ') || 'None'}
-
-IDENTIFIED CONTRADICTIONS:
-${existingContradictions.length > 0 
-  ? existingContradictions.map((c, i) => `${i + 1}. Improve "${c.parameterToImprove}" → Worsens "${c.parameterThatWorsens}": ${c.conflictDescription}`).join('\n')
-  : 'None explicitly identified - you must infer them from the goal vs constraints'
-}
-
-Return ONLY valid JSON:
-${getSchemaDescription('ContradictionMapping')}
+OUTPUT (VALID JSON):
+${getSchemaDescription('InventiveFraming')}
 
 RULES:
-1. If no contradictions were identified, INFER them from goal vs constraint conflicts
-2. For each contradiction, explain WHY it's hard to solve (not just what it is)
-3. Map to TRIZ inventive principles that could resolve each contradiction
-4. Suggest resolution strategies:
-   - SEPARATION_IN_TIME: Do X at time T1, Y at time T2
-   - SEPARATION_IN_SPACE: X happens in region A, Y in region B
-   - SEPARATION_ON_CONDITION: X when condition C, Y when not C
-   - SEPARATION_BETWEEN_PARTS: Part A does X, Part B does Y
-   - INVERSION: Instead of X, do opposite of X
-   - SUBSTANCE_FIELD_SHIFT: Change the field/energy type
-   - DYNAMIZATION: Make static parts dynamic
-5. Identify second-order effects (solving contradiction A may create B)
-
-Example inventive principles: Segmentation, Extraction, Local Quality, Asymmetry, Merging, Universality, Nesting, Anti-weight, Prior Counteraction, Prior Action, Cushion in Advance, Equipotentiality, Inversion, Spheroidality, Dynamics, Partial/Excessive Action`;
+- If no real contradiction exists, return empty arrays
+- DO NOT force TRIZ-style conflicts
+- DO NOT invent technical problems
+- Only identify tensions that are INHERENT to the idea
+- The patentableProblemStatement should focus on what makes this inventive, not just the wish`;
 
   const { response } = await callLLM(
     prompt,
-    'IDEATION_CONTRADICTION_MAPPING',
+    'IDEATION_CLASSIFY', // Using existing task code
     sessionId,
     requestHeaders,
   );
 
-  const parsed = safeParseJson(response, ContradictionMappingSchema);
-  
+  const parsed = safeParseJson(response, InventiveFramingSchema);
+
   if (!parsed.success) {
-    // Return minimal valid structure on parse failure
-    const fallback: ContradictionMapping = {
-      contradictions: existingContradictions.map(c => ({
-        parameterToImprove: c.parameterToImprove,
-        parameterThatWorsens: c.parameterThatWorsens,
-        whyThisIsHard: 'Auto-derived from normalization',
-      })),
-      secondOrderEffects: [],
-      inventivePrinciples: [],
-      resolutionStrategies: [],
+    // Return empty framing if parsing fails - don't block the pipeline
+    const fallback: InventiveFraming = {
+      technicalContradictions: [],
+      nonTechnicalTensions: [],
+      assumptionToChallenge: undefined,
+      patentableProblemStatement: undefined,
     };
     return fallback;
   }
 
-  // Ensure all fields have proper defaults
-  const result: ContradictionMapping = {
-    contradictions: parsed.data.contradictions,
-    secondOrderEffects: parsed.data.secondOrderEffects ?? [],
-    inventivePrinciples: parsed.data.inventivePrinciples ?? [],
-    resolutionStrategies: parsed.data.resolutionStrategies ?? [],
-  };
-
-  // Store contradiction mapping in session
+  // Store inventive framing
   await prisma.ideationSession.update({
     where: { id: sessionId },
     data: {
-      normalizationJson: {
-        ...(session.normalizationJson as object),
-        contradictionMapping: result,
+      classificationJson: {
+        inventiveFraming: parsed.data,
+      },
+      status: 'EXPANDING',
+    },
+  });
+
+  return {
+    technicalContradictions: parsed.data.technicalContradictions ?? [],
+    nonTechnicalTensions: parsed.data.nonTechnicalTensions ?? [],
+    assumptionToChallenge: parsed.data.assumptionToChallenge,
+    patentableProblemStatement: parsed.data.patentableProblemStatement,
+  };
+}
+
+// Legacy alias
+export const classifyInvention = inventiveFraming;
+
+// =============================================================================
+// STAGE 3: DIMENSION_DISCOVERY (Replaces fixed dimension families)
+// =============================================================================
+
+/**
+ * DIMENSION_DISCOVERY - Discover invention-specific dimensions.
+ * 
+ * CANONICAL PROMPT - DO NOT MODIFY WITHOUT REVIEW
+ */
+export async function dimensionDiscovery(
+  sessionId: string,
+  requestHeaders: Record<string, string>
+): Promise<DimensionDiscovery> {
+  const session = await prisma.ideationSession.findUniqueOrThrow({
+    where: { id: sessionId },
+  });
+
+  if (!session.normalizationJson) {
+    throw new Error('Session must have grounding context');
+  }
+
+  const groundingContext = session.normalizationJson as SemanticGrounding;
+  const inventiveFraming = (session.classificationJson as any)?.inventiveFraming || {};
+
+  const prompt = `ROLE: Dimension Discovery Agent
+
+INPUT:
+Grounding Context:
+${JSON.stringify(groundingContext, null, 2)}
+
+Inventive Framing:
+${JSON.stringify(inventiveFraming, null, 2)}
+
+TASK:
+Identify invention-specific dimensions that control success or failure.
+
+OUTPUT (VALID JSON):
+${getSchemaDescription('DimensionDiscovery')}
+
+RULES:
+- Generate 4 to 6 dimensions ONLY
+- Dimensions must emerge FROM THE INVENTION
+- No generic/template dimensions allowed
+- Each dimension must have:
+  * A specific name relevant to THIS invention
+  * Why it matters for THIS specific problem
+  * The typical assumption people make about this dimension
+- excludedDimensions: List dimensions that are NOT relevant (to show intentional scoping)`;
+
+  const { response } = await callLLM(
+    prompt,
+    'IDEATION_EXPAND',
+    sessionId,
+    requestHeaders,
+  );
+
+  const parsed = safeParseJson(response, DimensionDiscoverySchema);
+
+  if (!parsed.success) {
+    throw new Error(`Dimension discovery failed: ${parsed.error}`);
+  }
+
+  // Store discovered dimensions
+  await prisma.ideationSession.update({
+    where: { id: sessionId },
+    data: {
+      classificationJson: {
+        ...(session.classificationJson as object || {}),
+        dimensionDiscovery: parsed.data,
       },
     },
   });
 
-  return result;
+  return {
+    inventionArchetype: parsed.data.inventionArchetype,
+    primaryDimensions: parsed.data.primaryDimensions,
+    excludedDimensions: parsed.data.excludedDimensions ?? [],
+  };
 }
 
 // =============================================================================
-// STAGE 3.5: OBVIOUSNESS FILTER (NEW)
+// DIMENSION INITIALIZATION (Creates mind map nodes from discovered dimensions)
 // =============================================================================
 
-/**
- * Score selected dimensions for novelty BEFORE idea generation
- * Prevents wasting LLM calls on obvious combinations
- */
-export async function checkObviousness(
-  sessionId: string,
-  selectedDimensions: string[],
-  requestHeaders: Record<string, string>
-): Promise<ObviousnessFilter> {
-  const session = await prisma.ideationSession.findUniqueOrThrow({
-    where: { id: sessionId },
-    include: { nodes: true },
-  });
-
-  if (!session.normalizationJson || !session.classificationJson) {
-    throw new Error('Session must be normalized and classified');
-  }
-
-  const normalization = session.normalizationJson as InputNormalization;
-  const classification = session.classificationJson as Classification;
-  
-  // Get dimension details
-  const dimensionNodes = session.nodes.filter(n => selectedDimensions.includes(n.nodeId));
-  const dimensionDetails = dimensionNodes.map(n => `${n.family}: ${n.title} (${n.description || 'no desc'})`);
-
-  const prompt = `You are a patent examiner assessing obviousness. Would a person having ordinary skill in the art (PHOSITA) find this combination obvious?
-
-INVENTION:
-- Core Entity: ${normalization.coreEntity}
-- Goal: ${normalization.intentGoal}
-- Class: ${classification.dominantClass}
-- Domain: ${classification.archetype}
-
-SELECTED DIMENSIONS FOR COMBINATION:
-${dimensionDetails.map((d, i) => `${i + 1}. ${d}`).join('\n')}
-
-Return ONLY valid JSON:
-${getSchemaDescription('ObviousnessFilter')}
-
-ASSESSMENT CRITERIA:
-1. combinationNovelty (0-100):
-   - 0-30: Obvious - known combination in the field
-   - 31-50: Marginal - somewhat predictable
-   - 51-70: Non-obvious - unexpected combination
-   - 71-100: Highly inventive - cross-domain leap
-
-2. obviousnessFlags - mark ALL that apply:
-   - COMBINATIONAL: Just adding known elements (A + B)
-   - SAME_DOMAIN: All elements from same technical field
-   - PARAMETER_TWEAK: Only changing values, not structure
-   - OBVIOUS_SUBSTITUTION: Well-known material/component swap
-   - PREDICTABLE_RESULT: Expected outcome from this combo
-
-3. If combinationNovelty < 40:
-   - Suggest a "wildCardSuggestion" - an unexpected dimension from a DISTANT domain
-   - Example: For mechanical problem, suggest biological analogy
-
-4. dimensionQualityScores: Rate each dimension's novelty contribution
-   - KEEP: Contributes to novelty
-   - REPLACE: Too obvious, suggest replacement
-   - INVERT: Try the opposite approach
-
-5. suggestedAnalogySources: List 2-3 distant domains to draw from
-   - Should be 2+ conceptual hops away from ${classification.archetype}`;
-
-  const { response } = await callLLM(
-    prompt,
-    'IDEATION_OBVIOUSNESS_FILTER',
-    sessionId,
-    requestHeaders,
-  );
-
-  const parsed = safeParseJson(response, ObviousnessFilterSchema);
-  
-  if (!parsed.success) {
-    // Return default moderate score on failure
-    const fallback: ObviousnessFilter = {
-      combinationNovelty: 50,
-      obviousnessFlags: [],
-      dimensionQualityScores: [],
-      suggestedAnalogySources: [],
-    };
-    return fallback;
-  }
-
-  return parsed.data as ObviousnessFilter;
-}
-
-// =============================================================================
-// DIMENSION EXPANSION
-// =============================================================================
-
-/**
- * Get applicable dimension families based on classification
- */
-export function getApplicableDimensions(classification: Classification): DimensionFamily[] {
-  return DIMENSION_FAMILIES.filter(dim => 
-    dim.applicableTo.length === 0 || 
-    dim.applicableTo.includes(classification.dominantClass)
-  );
-}
-
-/**
- * Get applicable TRIZ operators based on classification
- */
-export function getApplicableOperators(classification: Classification): TrizOperator[] {
-  return TRIZ_OPERATORS.filter(op =>
-    op.applicableTo.length === 0 ||
-    op.applicableTo.includes(classification.dominantClass)
-  );
-}
-
-/**
- * Initialize dimension families in the mind map
- */
 export async function initializeDimensions(sessionId: string): Promise<MindMapNode[]> {
   const session = await prisma.ideationSession.findUniqueOrThrow({
     where: { id: sessionId },
     include: { nodes: true },
   });
 
-  if (!session.classificationJson) {
-    throw new Error('Session must be classified before dimension expansion');
+  const dimensionDiscovery = (session.classificationJson as any)?.dimensionDiscovery as DimensionDiscovery | undefined;
+
+  if (!dimensionDiscovery) {
+    throw new Error('Session must have dimension discovery before initialization');
   }
 
-  const classification = session.classificationJson as Classification;
-  const applicableDimensions = getApplicableDimensions(classification);
-  const applicableOperators = getApplicableOperators(classification);
+  const primaryDimensions = dimensionDiscovery.primaryDimensions;
+  const groundingContext = session.normalizationJson as SemanticGrounding;
 
   const nodesToCreate: Prisma.MindMapNodeCreateManyInput[] = [];
   const edgesToCreate: Prisma.MindMapEdgeCreateManyInput[] = [];
 
-  // Layout constants for left-to-right tree with generous spacing
-  const LEVEL_WIDTH = 480;  // Horizontal spacing between levels
-  const NODE_HEIGHT = 200;  // Vertical spacing between dimension family nodes
-  const START_X = 100;      // Starting X position (seed is at left)
-  const START_Y = 100;      // Starting Y position
+  const LEVEL_WIDTH = 480;
+  const NODE_HEIGHT = 200;
+  const START_X = 100;
+  const START_Y = 100;
 
-  // Calculate seed node Y position based on number of dimensions (centered)
-  const seedY = START_Y + (applicableDimensions.length * NODE_HEIGHT) / 2;
+  const seedY = START_Y + (primaryDimensions.length * NODE_HEIGHT) / 2;
 
-  // Update existing seed node with normalized title and proper position
+  // Update existing seed node
   await prisma.mindMapNode.update({
     where: {
       sessionId_nodeId: {
@@ -677,23 +514,22 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
       },
     },
     data: {
-      title: (session.normalizationJson as any)?.coreEntity || 'Seed Idea',
+      title: groundingContext?.coreEntity || 'Seed Idea',
       positionX: START_X,
       positionY: seedY,
     },
   });
 
-  // Create dimension family nodes at level 1 (to the right of seed)
-  const totalDimensions = applicableDimensions.length;
-  applicableDimensions.forEach((dim, idx) => {
+  // Create dimension nodes from discovered dimensions
+  primaryDimensions.forEach((dim, idx) => {
     const yPos = START_Y + (idx * NODE_HEIGHT);
-    
+
     nodesToCreate.push({
       sessionId,
-      nodeId: dim.id,
-      type: 'DIMENSION_FAMILY',
+      nodeId: dim.dimensionId,
+      type: 'DIMENSION_FAMILY', // Discovered dimensions
       title: dim.name,
-      description: dim.description,
+      description: dim.whyItMatters,
       family: dim.name,
       state: 'COLLAPSED',
       selectable: false,
@@ -702,26 +538,28 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
       parentNodeId: 'seed-root',
       positionX: START_X + LEVEL_WIDTH,
       positionY: yPos,
+      payloadJson: {
+        whyItMatters: dim.whyItMatters,
+        typicalAssumption: dim.typicalAssumption,
+        dimensionId: dim.dimensionId,
+      },
     });
 
     edgesToCreate.push({
       sessionId,
       fromNodeId: 'seed-root',
-      toNodeId: dim.id,
+      toNodeId: dim.dimensionId,
       relation: 'has_dimension',
     });
   });
 
-  // NOTE: Operators are NOT added to the mind map anymore
-  // They are shown in the Combine Tray after user selects dimensions
-  // Store applicable operators in session metadata for the tray
+  // Store TRIZ operators for the combine tray (keeping for backward compatibility)
   await prisma.ideationSession.update({
     where: { id: sessionId },
     data: {
-      // Store operators as JSON for retrieval by the frontend
       classificationJson: {
         ...(session.classificationJson as object),
-        applicableOperators: applicableOperators.map(op => ({
+        applicableOperators: TRIZ_OPERATORS.slice(0, 10).map(op => ({
           id: op.id,
           name: op.name,
           description: op.description,
@@ -731,22 +569,20 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
     },
   });
 
-  // Batch create with skipDuplicates to handle re-initialization
   if (nodesToCreate.length > 0) {
-    await prisma.mindMapNode.createMany({ 
+    await prisma.mindMapNode.createMany({
       data: nodesToCreate,
       skipDuplicates: true,
     });
   }
-  
+
   if (edgesToCreate.length > 0) {
-    await prisma.mindMapEdge.createMany({ 
+    await prisma.mindMapEdge.createMany({
       data: edgesToCreate,
       skipDuplicates: true,
     });
   }
 
-  // Update session status
   await prisma.ideationSession.update({
     where: { id: sessionId },
     data: { status: 'EXPLORING' },
@@ -758,25 +594,26 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
   });
 }
 
+// =============================================================================
+// STAGE 4: DIMENSION_EXPANSION (Assumption-breaking moves)
+// =============================================================================
+
 /**
- * Get previously selected dimensions for context-aware expansion
+ * Get context from previously selected dimensions
  */
 async function getSelectedDimensionsContext(sessionId: string): Promise<{
   selectedMoves: Array<{ id: string; title: string; impact: string; family: string }>;
   hasContext: boolean;
 }> {
-  // Get the combine tray to find selected dimensions
   const combineTray = await prisma.combineTray.findUnique({
     where: { sessionId },
   });
 
-  // Safely handle missing combineTray or empty/undefined selectedDimensions
   const selectedDimensionIds = combineTray?.selectedDimensions ?? [];
   if (!combineTray || selectedDimensionIds.length === 0) {
     return { selectedMoves: [], hasContext: false };
   }
 
-  // Get the selected dimension nodes with their payloads
   const selectedNodes = await prisma.mindMapNode.findMany({
     where: {
       sessionId,
@@ -795,11 +632,9 @@ async function getSelectedDimensionsContext(sessionId: string): Promise<{
 }
 
 /**
- * Expand a dimension family with context-aware suggested moves
+ * DIMENSION_EXPANSION - Generate assumption-breaking moves, NOT features.
  * 
- * This function generates actionable invention moves instead of abstract options.
- * Each move includes: What-If statement, Impact, and Leads-To consequence.
- * Moves are context-aware, considering previously selected dimensions.
+ * CANONICAL PROMPT - DO NOT MODIFY WITHOUT REVIEW
  */
 export async function expandDimensionNode(input: ExpandNodeInput): Promise<DimensionGraph> {
   const session = await prisma.ideationSession.findUniqueOrThrow({
@@ -812,111 +647,63 @@ export async function expandDimensionNode(input: ExpandNodeInput): Promise<Dimen
     throw new Error(`Node ${input.nodeId} not found`);
   }
 
-  if (!session.normalizationJson || !session.classificationJson) {
-    throw new Error('Session must be normalized and classified');
-  }
+  const groundingContext = session.normalizationJson as SemanticGrounding;
+  const inventiveFraming = (session.classificationJson as any)?.inventiveFraming || {};
+  const nodePayload = node.payloadJson as any || {};
 
-  const normalization = session.normalizationJson as InputNormalization;
-  const classification = session.classificationJson as Classification;
-
-  // Get context from previously selected dimensions
   const { selectedMoves, hasContext } = await getSelectedDimensionsContext(input.sessionId);
 
-  // Build context section for prompt
-  const contextSection = hasContext 
+  const contextSection = hasContext
     ? `
-═══════════════════════════════════════════════════════════════
-PREVIOUSLY SELECTED MOVES (Consider these for context-awareness)
-═══════════════════════════════════════════════════════════════
-${selectedMoves.map((m, i) => `${i + 1}. [${m.family}] ${m.title}
-   → Impact: ${m.impact}`).join('\n')}
-
-CONTEXT INSTRUCTIONS:
-- Reference prior selections when suggesting synergies or tensions
-- At least ONE move MUST challenge or relax an assumption from prior selections
-- Use phrasing like: "Given your selection of X, this becomes interesting..."
-- If a move conflicts with prior choices, explicitly frame the tradeoff
-`
-    : `
-═══════════════════════════════════════════════════════════════
-NO PRIOR SELECTIONS
-═══════════════════════════════════════════════════════════════
-This is the first dimension being explored. Generate foundational moves.
-`;
-
-  // Build user input section (HIGH PRIORITY) for prompt
-  const userInputSection = input.userInput?.trim() 
-    ? `
-═══════════════════════════════════════════════════════════════
-⚡ USER DIRECTION (HIGH PRIORITY - MUST ADDRESS)
-═══════════════════════════════════════════════════════════════
-The user wants to explore THIS specific direction:
-"${input.userInput.trim()}"
-
-MANDATORY REQUIREMENTS:
-- You MUST generate at least 2 moves that DIRECTLY address the user's direction
-- Frame moves that build upon or extend the user's thinking
-- If the user's idea has merit, explore its variations and implications
-- If the user's direction conflicts with prior context, acknowledge the tradeoff
-- Place user-directed moves FIRST in the output list
+PREVIOUSLY SELECTED MOVES (Consider for context):
+${selectedMoves.map((m, i) => `${i + 1}. [${m.family}] ${m.title} → ${m.impact}`).join('\n')}
 `
     : '';
 
-  const prompt = `You are a PATENT INVENTION ADVISOR generating context-aware SUGGESTED MOVES for mind-map exploration.
+  const userInputSection = input.userInput?.trim()
+    ? `
+⚡ USER DIRECTION (HIGH PRIORITY - MUST ADDRESS):
+"${input.userInput.trim()}"
+`
+    : '';
 
-═══════════════════════════════════════════════════════════════
-INVENTION CONTEXT
-═══════════════════════════════════════════════════════════════
-- Core Entity: ${normalization.coreEntity}
-- Goal: ${normalization.intentGoal}
-- Class: ${classification.dominantClass}
-- Archetype: ${classification.archetype}
-- Constraints: ${normalization.constraints?.join(', ') || 'None specified'}
-${(normalization.technicalContradictions && normalization.technicalContradictions.length > 0 && normalization.technicalContradictions[0])
-  ? `- Key Contradiction: "${normalization.technicalContradictions[0].parameterToImprove}" vs "${normalization.technicalContradictions[0].parameterThatWorsens}"`
-  : ''}
+  const prompt = `ROLE: Assumption-Breaking Inventor
 
-═══════════════════════════════════════════════════════════════
-DIMENSION FAMILY TO EXPLORE: ${node.title}
-═══════════════════════════════════════════════════════════════
-Description: ${node.description || 'No description'}
-${userInputSection}${contextSection}
-═══════════════════════════════════════════════════════════════
-OUTPUT REQUIREMENTS
-═══════════════════════════════════════════════════════════════
+DIMENSION:
+${node.title}
 
-Generate 3-5 SUGGESTED MOVES. Each move must:
+TYPICAL ASSUMPTION:
+${nodePayload.typicalAssumption || 'Not specified'}
 
-1. Be phrased as: "What if we <specific design action>?"
-2. Specify IMPACT: The immediate behavioral/functional change
-3. Specify LEADS TO: The new constraint, problem, or opportunity created
-4. Modify at least ONE of:
-   - BEHAVIOR_OVER_TIME (how system acts across time)
-   - ARCHITECTURE_CONTROL_FLOW (structure or control logic)
-   - INTERFACE_BOUNDARY (connection points or APIs)
-   - FAILURE_MODE_LIFECYCLE (error handling or lifecycle stage)
+RELATED TENSION:
+${inventiveFraming.assumptionToChallenge || 'None identified'}
 
-FORBIDDEN PATTERNS (reject these):
-❌ "Optimize X" or "Improve Y" without structural change
-❌ "Add AI/ML" or "Use cloud" (buzzwords)
-❌ "Make it faster/better/cheaper" (vague)
-❌ Pure feature additions without behavior change
+INVENTION CONTEXT:
+- Core Entity: ${groundingContext?.coreEntity || 'Not specified'}
+- User Intent: ${groundingContext?.userIntent || 'Not specified'}
+${contextSection}${userInputSection}
 
-${hasContext ? `MANDATORY: At least 1 move must challenge an implicit assumption from prior selections.` : ''}
+TASK:
+Generate 3–5 assumption-breaking invention moves.
 
-Return ONLY valid JSON matching this schema:
-${getSchemaDescription('SuggestedMovesResponse')}
+OUTPUT (VALID JSON ARRAY):
+[
+  {
+    "moveText": "What if we...",
+    "primaryChange": "REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY",
+    "immediateEffect": "what happens immediately",
+    "newProblemCreated": "what new problem this creates",
+    "contradictionAddressed": "which tension this addresses (optional)"
+  }
+]
 
-Example move format:
-{
-  "id": "move-${input.nodeId}-1",
-  "move": "What if the system operates only on threshold events instead of continuously?",
-  "impact": "Reduces energy consumption by 90% during idle periods",
-  "leadsTo": "Need for reliable event detection and state persistence",
-  "tension": "Challenges assumption of real-time responsiveness",
-  "challengesPrior": true,
-  "modifies": "BEHAVIOR_OVER_TIME"
-}`;
+FORBIDDEN:
+- Feature addition
+- Parameter tuning
+- AI / sensor / cloud stacking
+- Generic "optimize" or "improve" suggestions
+
+Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
 
   const { response } = await callLLM(
     prompt,
@@ -925,110 +712,68 @@ Example move format:
     input.requestHeaders,
   );
 
-  // Parse the new SuggestedMovesResponse format
-  let parsed = safeParseJson(response, SuggestedMovesResponseSchema);
-  
+  // Try to parse as array of moves
+  const arraySchema = z.array(z.object({
+    moveText: z.string(),
+    primaryChange: z.enum(['REMOVE', 'INVERT', 'DECOUPLE', 'RELOCATE', 'DELAY']),
+    immediateEffect: z.string(),
+    newProblemCreated: z.string(),
+    contradictionAddressed: z.string().optional(),
+  }));
+
+  let moves: z.infer<typeof arraySchema>;
+  const parsed = safeParseJson(response, arraySchema);
+
   if (!parsed.success) {
-    // Fallback 1: Try parsing as raw array of moves (LLM sometimes omits wrapper)
-    const rawArraySchema = z.array(SuggestedMoveSchema).min(1);
-    const rawArrayParsed = safeParseJson(response, rawArraySchema);
-    if (rawArrayParsed.success) {
-      console.log('LLM returned raw moves array, wrapping in response object');
-      parsed = { 
-        success: true, 
-        data: { 
-          moves: rawArrayParsed.data, 
-          contextAcknowledged: false, 
-          priorSelectionsUsed: [] 
-        } 
-      };
+    // Fallback to legacy format
+    const legacyParsed = safeParseJson(response, SuggestedMovesResponseSchema);
+    if (legacyParsed.success) {
+      moves = legacyParsed.data.moves.map(m => ({
+        moveText: m.move,
+        primaryChange: 'INVERT' as const,
+        immediateEffect: m.impact,
+        newProblemCreated: m.leadsTo,
+        contradictionAddressed: m.tension,
+      }));
     } else {
-      console.warn('Failed to parse SuggestedMovesResponse, falling back to legacy parsing:', parsed.error);
-      // Fallback 2: Attempt legacy DimensionGraph parsing
-      const legacyParsed = safeParseJson(response, DimensionGraphSchema);
-      if (!legacyParsed.success) {
-        throw new Error(`Expansion failed: ${parsed.error}`);
-      }
-      // Convert legacy format to new format (fallback path)
-      // Ensure nodes have required fields with defaults applied
-      const normalizedLegacyData: DimensionGraph = {
-        nodes: legacyParsed.data.nodes.map(n => ({
-          ...n,
-          tags: n.tags ?? [],
-          selectable: n.selectable ?? true,
-          defaultExpanded: n.defaultExpanded ?? false,
-        })),
-        edges: legacyParsed.data.edges ?? [],
-      };
-      return await processLegacyExpansion(input, session, node, normalizedLegacyData);
+      throw new Error(`Expansion failed: ${parsed.error}`);
     }
+  } else {
+    moves = parsed.data;
   }
 
-  // Process the new moves format
-  // Generate unique IDs to prevent collisions across multiple expansions
-  // LLM-generated IDs (move-{familyId}-{N}) can collide when expanding different nodes from same family
-  // Use parent nodeId + timestamp suffix for guaranteed uniqueness
+  // Generate unique IDs
   const parentSlug = input.nodeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 30);
-  const uniqueSuffix = Date.now().toString(36); // Base36 timestamp for shorter unique suffix
-  
-  const moves = parsed.data.moves.map((m, idx) => ({
-    ...m,
-    // Override LLM-generated ID with a unique one that includes parent nodeId
-    id: `${parentSlug}-${uniqueSuffix}-${idx}`,
-  }));
-  
-  const existingNodeIds = session.nodes.map(n => n.nodeId);
-  const newMoves = moves.filter(m => !existingNodeIds.includes(m.id));
+  const uniqueSuffix = Date.now().toString(36);
 
-  // Layout constants
+  const existingNodeIds = session.nodes.map(n => n.nodeId);
+  const newMoves = moves.map((m, idx) => ({
+    ...m,
+    id: `${parentSlug}-${uniqueSuffix}-${idx}`,
+  })).filter(m => !existingNodeIds.includes(m.id));
+
+  // Layout calculations
   const LEVEL_WIDTH = 480;
-  const NODE_WIDTH = 340; // Card width in pixels
-  const CHARS_PER_LINE = 42; // Approximate chars that fit per line
-  const LINE_HEIGHT = 16; // Pixels per line of text
-  const BASE_NODE_HEIGHT = 120; // Base height for padding, borders, tags
-  const SECTION_PADDING = 28; // Padding per section (Impact, LeadsTo, Tension)
-  const VERTICAL_GAP = 40; // Gap between nodes
-  
-  // Calculate estimated height for each move based on content
-  const calculateNodeHeight = (m: typeof moves[0]) => {
-    const moveLines = Math.ceil((m.move?.length || 0) / CHARS_PER_LINE);
-    const impactLines = Math.ceil((m.impact?.length || 0) / CHARS_PER_LINE);
-    const leadsToLines = Math.ceil((m.leadsTo?.length || 0) / CHARS_PER_LINE);
-    const tensionLines = m.tension ? Math.ceil(m.tension.length / CHARS_PER_LINE) : 0;
-    
-    let height = BASE_NODE_HEIGHT;
-    height += moveLines * LINE_HEIGHT; // Title
-    height += SECTION_PADDING + (impactLines * LINE_HEIGHT); // Impact section
-    height += SECTION_PADDING + (leadsToLines * LINE_HEIGHT); // LeadsTo section
-    if (m.tension) {
-      height += SECTION_PADDING + (tensionLines * LINE_HEIGHT); // Tension section
-    }
-    
-    return Math.max(height, 180); // Minimum height
-  };
-  
+  const NODE_HEIGHT = 180;
   const parentX = node.positionX || 50;
   const parentY = node.positionY || 200;
   const parentDepth = node.depth || 0;
-  
-  // Calculate cumulative Y positions based on each node's estimated height
-  const nodeHeights = newMoves.map(m => calculateNodeHeight(m));
-  const totalHeight = nodeHeights.reduce((sum, h) => sum + h + VERTICAL_GAP, 0) - VERTICAL_GAP;
+
+  const totalHeight = (newMoves.length - 1) * NODE_HEIGHT;
   let currentY = parentY - (totalHeight / 2);
 
-  // Convert moves to nodes for storage with adaptive positioning
-  const nodesToCreate = newMoves.map((m, i) => {
+  const nodesToCreate = newMoves.map((m) => {
     const nodeY = currentY;
-    currentY += nodeHeights[i] + VERTICAL_GAP; // Move to next position
-    
+    currentY += NODE_HEIGHT;
+
     return {
       sessionId: input.sessionId,
       nodeId: m.id,
-      type: 'DIMENSION_OPTION' as const,
-      title: m.move, // The "What if..." statement becomes the title
-      description: m.impact, // Impact becomes the short description
+      type: 'OPERATOR' as const, // Assumption-breaking moves
+      title: m.moveText,
+      description: m.immediateEffect,
       family: node.family || node.title,
-      tags: [m.modifies || 'BEHAVIOR_OVER_TIME', m.challengesPrior ? 'CHALLENGES_PRIOR' : 'BUILDS_ON_PRIOR'].filter((t): t is string => !!t),
+      tags: [m.primaryChange],
       state: 'COLLAPSED' as const,
       selectable: true,
       defaultExpanded: false,
@@ -1036,15 +781,15 @@ Example move format:
       parentNodeId: input.nodeId,
       positionX: parentX + LEVEL_WIDTH,
       positionY: nodeY,
-      // Store full move data in payloadJson for frontend rendering
       payloadJson: {
-        move: m.move,
-        impact: m.impact,
-        leadsTo: m.leadsTo,
-        tension: m.tension,
-        challengesPrior: m.challengesPrior,
-        modifies: m.modifies,
-        isSuggestedMove: true, // Flag to identify new format
+        move: m.moveText,
+        impact: m.immediateEffect,
+        leadsTo: m.newProblemCreated,
+        tension: m.contradictionAddressed,
+        primaryChange: m.primaryChange,
+        newProblemCreated: m.newProblemCreated,
+        contradictionAddressed: m.contradictionAddressed,
+        isSuggestedMove: true,
       },
     };
   });
@@ -1057,37 +802,30 @@ Example move format:
   }));
 
   if (nodesToCreate.length > 0) {
-    await prisma.mindMapNode.createMany({ 
+    await prisma.mindMapNode.createMany({
       data: nodesToCreate,
       skipDuplicates: true,
     });
   }
-  
+
   if (edgesToCreate.length > 0) {
-    await prisma.mindMapEdge.createMany({ 
+    await prisma.mindMapEdge.createMany({
       data: edgesToCreate,
       skipDuplicates: true,
     });
   }
 
-  // Update parent node state
   await prisma.mindMapNode.update({
     where: { id: node.id },
     data: { state: 'EXPANDED' },
   });
 
-  // Fetch and return ALL children of this node (including both new and existing)
-  // This handles the case where a node is re-expanded (e.g., after page refresh)
-  const allChildNodeIds = newMoves.length > 0 
-    ? newMoves.map(m => m.id) 
-    : moves.map(m => m.id);
-    
   const createdNodes = await prisma.mindMapNode.findMany({
     where: {
       sessionId: input.sessionId,
       OR: [
-        { nodeId: { in: allChildNodeIds } },
-        { parentNodeId: input.nodeId }, // Also get any existing children
+        { nodeId: { in: newMoves.map(m => m.id) } },
+        { parentNodeId: input.nodeId },
       ],
     },
   });
@@ -1115,6 +853,8 @@ Example move format:
       state: n.state,
       depth: n.depth,
       payloadJson: n.payloadJson as SuggestedMovePayloadType | Record<string, unknown> | undefined,
+      whyItMatters: (n.payloadJson as any)?.whyItMatters,
+      typicalAssumption: (n.payloadJson as any)?.typicalAssumption,
     })),
     edges: createdEdges.map(e => ({
       from: e.fromNodeId,
@@ -1122,133 +862,14 @@ Example move format:
       relation: e.relation || 'suggests_move',
     })),
   };
+
   return result as DimensionGraph;
 }
 
-/**
- * Fallback processor for legacy DimensionGraph format
- * Used when LLM returns old format instead of SuggestedMovesResponse
- */
-async function processLegacyExpansion(
-  input: ExpandNodeInput,
-  session: any,
-  node: any,
-  data: DimensionGraph
-): Promise<DimensionGraph> {
-  // Generate unique IDs to prevent collisions from LLM-generated IDs
-  // Use parent nodeId + timestamp suffix for guaranteed uniqueness
-  const parentSlug = input.nodeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 30);
-  const uniqueSuffix = Date.now().toString(36); // Base36 timestamp for shorter unique suffix
-  
-  // Override LLM-generated IDs with unique ones
-  const nodesWithUniqueIds = data.nodes.map((n, idx) => ({
-    ...n,
-    id: `${parentSlug}-leg-${uniqueSuffix}-${idx}`,
-  }));
-  
-  const existingNodeIds = session.nodes.map((n: any) => n.nodeId);
-  const newNodes = nodesWithUniqueIds.filter(n => !existingNodeIds.includes(n.id));
-
-  const LEVEL_WIDTH = 480;
-  const NODE_HEIGHT = 450; // Same generous spacing as new format
-  
-  const parentX = node.positionX || 50;
-  const parentY = node.positionY || 200;
-  const parentDepth = node.depth || 0;
-  
-  const totalChildren = newNodes.length;
-  const totalHeight = (totalChildren - 1) * NODE_HEIGHT;
-  const startY = parentY - (totalHeight / 2);
-
-  const nodesToCreate = newNodes.map((n, i) => ({
-    sessionId: input.sessionId,
-    nodeId: n.id,
-    type: n.type as any,
-    title: n.title,
-    description: n.descriptionShort || null,
-    family: n.family || node.family,
-    tags: n.tags || [],
-    state: 'COLLAPSED' as const,
-    selectable: n.selectable !== false,
-    defaultExpanded: n.defaultExpanded || false,
-    depth: parentDepth + 1,
-    parentNodeId: input.nodeId,
-    positionX: parentX + LEVEL_WIDTH,
-    positionY: startY + (i * NODE_HEIGHT),
-  }));
-
-  const edgesToCreate = newNodes.map(n => ({
-    sessionId: input.sessionId,
-    fromNodeId: input.nodeId,
-    toNodeId: n.id,
-    relation: 'contains',
-  }));
-
-  if (nodesToCreate.length > 0) {
-    await prisma.mindMapNode.createMany({ 
-      data: nodesToCreate,
-      skipDuplicates: true,
-    });
-  }
-  
-  if (edgesToCreate.length > 0) {
-    await prisma.mindMapEdge.createMany({ 
-      data: edgesToCreate,
-      skipDuplicates: true,
-    });
-  }
-
-  await prisma.mindMapNode.update({
-    where: { id: node.id },
-    data: { state: 'EXPANDED' },
-  });
-
-  const createdNodes = await prisma.mindMapNode.findMany({
-    where: {
-      sessionId: input.sessionId,
-      nodeId: { in: newNodes.map(n => n.id) },
-    },
-  });
-
-  const createdEdges = await prisma.mindMapEdge.findMany({
-    where: {
-      sessionId: input.sessionId,
-      fromNodeId: input.nodeId,
-    },
-  });
-
-  return {
-    nodes: createdNodes.map(n => ({
-      id: n.nodeId,
-      type: n.type,
-      title: n.title,
-      descriptionShort: n.description || undefined,
-      family: n.family || undefined,
-      selectable: n.selectable,
-      defaultExpanded: n.defaultExpanded,
-      tags: n.tags,
-      parentId: n.parentNodeId || undefined,
-      positionX: n.positionX,
-      positionY: n.positionY,
-      state: n.state,
-      depth: n.depth,
-      payloadJson: n.payloadJson, // Include for consistency (may be null for legacy nodes)
-    })),
-    edges: createdEdges.map(e => ({
-      from: e.fromNodeId,
-      to: e.toNodeId,
-      relation: e.relation || 'contains',
-    })),
-  } as any;
-}
-
 // =============================================================================
-// COMBINE TRAY & IDEA GENERATION
+// COMBINE TRAY
 // =============================================================================
 
-/**
- * Update the combine tray with selected nodes
- */
 export async function updateCombineTray(
   sessionId: string,
   components: string[],
@@ -1287,8 +908,14 @@ export async function updateCombineTray(
   });
 }
 
+// =============================================================================
+// STAGE 5: IDEA_GENERATION (Mechanism-Pure)
+// =============================================================================
+
 /**
- * Generate idea frames from the combine tray
+ * IDEA_GENERATION - Generate patent ideas with EXACTLY ONE causal mechanism.
+ * 
+ * CANONICAL PROMPT - DO NOT MODIFY WITHOUT REVIEW
  */
 export async function generateIdeas(input: GenerateIdeasInput): Promise<IdeaFrame[]> {
   const session = await prisma.ideationSession.findUniqueOrThrow({
@@ -1296,144 +923,67 @@ export async function generateIdeas(input: GenerateIdeasInput): Promise<IdeaFram
     include: { nodes: true, combineTray: true },
   });
 
-  if (!session.normalizationJson || !session.classificationJson) {
-    throw new Error('Session must be normalized and classified');
-  }
-
-  const normalization = session.normalizationJson as InputNormalization;
-  const classification = session.classificationJson as Classification;
+  const groundingContext = session.normalizationJson as SemanticGrounding;
+  const inventiveFraming = (session.classificationJson as any)?.inventiveFraming || {};
 
   // Get selected node details
-  const selectedNodes = session.nodes.filter(n => 
+  const selectedNodes = session.nodes.filter(n =>
     input.recipe.selectedComponents.includes(n.nodeId) ||
     input.recipe.selectedDimensions.includes(n.nodeId) ||
     input.recipe.selectedOperators.includes(n.nodeId)
   );
 
-  const componentDetails = selectedNodes.filter(n => 
-    input.recipe.selectedComponents.includes(n.nodeId)
-  ).map(n => n.title);
+  const dimensionDetails = selectedNodes
+    .filter(n => n.type === 'DIMENSION_FAMILY' || n.type === 'OPERATOR' || n.type === 'DIMENSION_OPTION')
+    .map(n => {
+      const payload = n.payloadJson as any || {};
+      return `${n.title}: ${payload.impact || n.description || 'No description'}`;
+    });
 
-  const dimensionDetails = selectedNodes.filter(n => 
-    input.recipe.selectedDimensions.includes(n.nodeId)
-  ).map(n => `${n.family}: ${n.title}`);
+  const prompt = `ROLE: Patent Idea Generator
 
-  const operatorDetails = selectedNodes.filter(n => 
-    input.recipe.selectedOperators.includes(n.nodeId)
-  ).map(n => `${n.title}: ${n.description}`);
+TASK:
+Generate ${input.recipe.count} patent-worthy ideas.
 
-  // Extract contradiction info if available
-  const contradictionMapping = (normalization as any).contradictionMapping;
-  const contradictions = normalization.technicalContradictions || [];
-  const inventivePrinciples = contradictionMapping?.inventivePrinciples || [];
-  const resolutionStrategies = contradictionMapping?.resolutionStrategies || [];
+EACH IDEA MUST CONTAIN EXACTLY ONE CAUSAL MECHANISM.
 
-  const prompt = `You are a PATENT INVENTION GENERATOR. Your task is to create ${input.recipe.count} PATENT-WORTHY inventions that are NON-OBVIOUS and resolve technical contradictions.
+INVENTION CONTEXT:
+- Core Entity: ${groundingContext?.coreEntity || 'Not specified'}
+- User Intent: ${groundingContext?.userIntent || 'Not specified'}
+- Assumption to Challenge: ${inventiveFraming.assumptionToChallenge || 'None identified'}
+${inventiveFraming.patentableProblemStatement ? `- Problem Statement: ${inventiveFraming.patentableProblemStatement}` : ''}
 
-═══════════════════════════════════════════════════════════════
-INVENTION CONTEXT
-═══════════════════════════════════════════════════════════════
-- Core Entity: ${normalization.coreEntity}
-- Goal: ${normalization.intentGoal}
-- Class: ${classification.dominantClass}
-- Archetype: ${classification.archetype}
-- Constraints: ${normalization.constraints?.join(', ') || 'None'}
-- Forbidden: ${normalization.negativeConstraints?.join(', ') || 'None'}
-${normalization.patentableProblemStatement ? `- Patentable Problem: ${normalization.patentableProblemStatement}` : ''}
+SELECTED DIMENSIONS/MOVES:
+${dimensionDetails.join('\n') || 'None selected - generate broadly'}
 
-═══════════════════════════════════════════════════════════════
-TECHNICAL CONTRADICTIONS TO RESOLVE
-═══════════════════════════════════════════════════════════════
-${contradictions.length > 0 
-  ? contradictions.map((c, i) => `${i + 1}. "${c.parameterToImprove}" ↔ "${c.parameterThatWorsens}": ${c.conflictDescription}`).join('\n')
-  : 'None identified - YOU must find the underlying tradeoff'
-}
+${input.userGuidance ? `USER GUIDANCE (HIGH PRIORITY): ${input.userGuidance}` : ''}
 
-${inventivePrinciples.length > 0 ? `SUGGESTED TRIZ PRINCIPLES: ${inventivePrinciples.join(', ')}` : ''}
-${resolutionStrategies.length > 0 ? `RESOLUTION STRATEGIES: ${resolutionStrategies.map((s: { strategy: string }) => s.strategy).join(', ')}` : ''}
+OUTPUT (VALID JSON ARRAY):
+[
+  {
+    "ideaId": "unique-id",
+    "coreMechanism": "A single sentence describing the ONE primary inventive mechanism (REQUIRED)",
+    "inventiveLeap": "The non-obvious insight (REQUIRED)",
+    "eliminatedAssumption": "What traditional assumption is eliminated",
+    "contradictionResolved": "Which contradiction this resolves",
+    "whyNotObvious": "Why a skilled person would NOT arrive at this (REQUIRED)",
+    "mechanismBoundaryTest": {
+      "whatItDoesNotSolve": "Explicit non-goals",
+      "outOfScope": "Areas outside scope"
+    },
+    "title": "Short title for display",
+    "problem": "Problem being solved",
+    "principle": "One-liner core principle"
+  }
+]
 
-═══════════════════════════════════════════════════════════════
-SELECTED BUILDING BLOCKS
-═══════════════════════════════════════════════════════════════
-COMPONENTS: ${componentDetails.join(', ') || 'Use your judgment'}
-DIMENSIONS: ${dimensionDetails.join('; ') || 'Explore broadly'}
-OPERATORS: ${operatorDetails.join('; ') || 'Apply appropriate operators'}
+RULE:
+If more than ONE causal mechanism is required → discard and regenerate.
 
-═══════════════════════════════════════════════════════════════
-GENERATION INTENT: ${input.recipe.recipeIntent}
-═══════════════════════════════════════════════════════════════
-${input.recipe.recipeIntent === 'DIVERGENT' ? '→ Generate diverse, creative ideas with cross-domain analogies' : ''}
-${input.recipe.recipeIntent === 'CONVERGENT' ? '→ Focus on practical, implementable ideas' : ''}
-${input.recipe.recipeIntent === 'RISK_REDUCTION' ? '→ Focus on safety and reliability improvements' : ''}
-${input.recipe.recipeIntent === 'COST_REDUCTION' ? '→ Focus on cost-effective solutions' : ''}
-${input.userGuidance?.trim() ? `
-═══════════════════════════════════════════════════════════════
-⚡ USER GUIDANCE (HIGH PRIORITY - MUST HONOR)
-═══════════════════════════════════════════════════════════════
-The user has provided specific guidance for idea generation:
-"${input.userGuidance.trim()}"
-
-MANDATORY REQUIREMENTS:
-- You MUST incorporate the user's guidance into ALL generated ideas
-- If user mentions a specific approach, analogy, or constraint, apply it directly
-- User guidance takes precedence over other generation parameters
-- Frame ideas that explicitly address what the user asked for
-- If user guidance conflicts with selected dimensions, find creative resolutions
-` : ''}
-
-═══════════════════════════════════════════════════════════════
-SCOPE CONTROL (CRITICAL)
-═══════════════════════════════════════════════════════════════
-Each invention MUST be centered around exactly ONE primary inventive mechanism.
-- One mechanism = one physical principle, material behavior, structural configuration, or signal pathway.
-- Additional elements (feedback, control, adaptation, UX, algorithms) may be included ONLY if they directly support the primary mechanism.
-- Any feedback, haptics, UI, skill inference, or algorithmic adaptation MUST be framed as a dependent or optional feature and MUST NOT appear as a primary claim hook.
-- If an idea contains multiple independent inventive mechanisms, REDUCE it to the strongest one and demote others to optional or dependent aspects.
-═══════════════════════════════════════════════════════════════
-MANDATORY REQUIREMENTS FOR PATENT-WORTHY IDEAS
-═══════════════════════════════════════════════════════════════
-Each idea MUST include:
-
-0. coreMechanism: A single sentence describing the ONE primary inventive mechanism.
-   - All other fields (inventiveLeap, eliminatedComponent, claimHooks, etc.) must directly relate to this coreMechanism.
-1. inventiveLeap: The non-obvious insight (what would surprise an expert)
-2. whyNotObvious: Why a skilled person would NOT arrive at this solution
-3. analogySource:
-   - A distant domain that INSPIRED the idea
-   - The analogy must map to a specific FUNCTION or MECHANISM
-   - Do NOT rely on analogy alone for novelty; structural or functional differences must be explicit
-   - Bad: "using steel instead of aluminum" (same domain)
-   - Good: "using biological cell division patterns for manufacturing"
-4. eliminatedComponent: What traditional element is REMOVED or INVERTED
-5. contradictionResolved: Which tradeoff this solves
-6. resolutionStrategy: HOW the contradiction is resolved (separation, inversion, etc.)
-
-═══════════════════════════════════════════════════════════════
-FORBIDDEN PATTERNS (Ideas with these will be rejected)
-═══════════════════════════════════════════════════════════════
-❌ ADDITIVE COMBINATIONS: "Add sensor + AI + cloud" (just stacking)
-❌ PARAMETER TWEAKS: "Make it bigger/smaller/faster" (no structure change)
-❌ OBVIOUS SUBSTITUTIONS: "Use plastic instead of metal" (known swap)
-❌ SAME-DOMAIN COMBINATIONS: All elements from one field
-❌ PREDICTABLE OUTCOMES: Results anyone would expect
-
-═══════════════════════════════════════════════════════════════
-CLAIM HOOK FORMAT
-═══════════════════════════════════════════════════════════════
-✅ USE: "configured to [function] by [unexpected mechanism]"
-✅ USE: "wherein [component] achieves [result] through [novel approach]"
-❌ AVOID: "includes A and B" (just listing elements)
-❌ AVOID: "comprises" without functional language
-
-LIMIT: Provide at most 2–3 claim hooks per idea.
-The first claim hook must correspond to the primary inventive mechanism.
-Additional claim hooks must be clearly dependent or optional.
-
-Generate exactly ${input.recipe.count} invention ideas as a JSON array.
-Schema: ${getSchemaDescription('IdeaFrame')}
-
-Return ONLY the JSON array (no other text):
-[{idea1}, {idea2}, ...]`;
+FORBIDDEN:
+- Additive mechanisms (add sensor + add AI + add cloud)
+- Multiple independent mechanisms in one idea
+- Vague mechanisms like "optimize" or "improve"`;
 
   const { response } = await callLLM(
     prompt,
@@ -1442,20 +992,37 @@ Return ONLY the JSON array (no other text):
     input.requestHeaders,
   );
 
-  // Parse the array of ideas
   let ideas: IdeaFrame[];
   try {
     const cleaned = response.trim();
     const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
     const jsonStr = jsonMatch ? jsonMatch[1].trim() : cleaned;
-    
-    // Find array bounds
+
     const firstBracket = jsonStr.indexOf('[');
     const lastBracket = jsonStr.lastIndexOf(']');
     const arrayStr = jsonStr.slice(firstBracket, lastBracket + 1);
-    
+
     const parsed = JSON.parse(arrayStr);
-    ideas = parsed.map((idea: any) => IdeaFrameSchema.parse(idea));
+    ideas = parsed.map((idea: any) => ({
+      ...idea,
+      ideaId: idea.ideaId || `idea-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      coreMechanism: idea.coreMechanism || idea.principle || '',
+      inventiveLeap: idea.inventiveLeap || '',
+      whyNotObvious: idea.whyNotObvious || '',
+      title: idea.title || idea.coreMechanism?.slice(0, 100) || 'Untitled Idea',
+      problem: idea.problem || groundingContext?.userIntent || '',
+      principle: idea.principle || idea.coreMechanism || '',
+      classLabels: idea.classLabels || [],
+      components: idea.components || [],
+      mechanismSteps: idea.mechanismSteps || [],
+      constraintsSatisfied: idea.constraintsSatisfied || [],
+      operatorsUsed: idea.operatorsUsed || [],
+      dimensionsUsed: idea.dimensionsUsed || [],
+      variants: idea.variants || [],
+      claimHooks: idea.claimHooks || [],
+      riskNotes: idea.riskNotes || [],
+      searchQueries: idea.searchQueries || [],
+    }));
   } catch (e) {
     console.error('Failed to parse ideas:', e);
     throw new Error('Failed to generate valid ideas');
@@ -1471,7 +1038,7 @@ Return ONLY the JSON array (no other text):
           title: idea.title,
           problem: idea.problem,
           principle: idea.principle,
-          technicalEffect: idea.technicalEffect,
+          technicalEffect: idea.coreMechanism, // Map coreMechanism to technicalEffect for display
           classLabels: idea.classLabels,
           operatorsUsed: idea.operatorsUsed,
           dimensionsUsed: idea.dimensionsUsed,
@@ -1482,7 +1049,6 @@ Return ONLY the JSON array (no other text):
     })
   );
 
-  // Update session status
   await prisma.ideationSession.update({
     where: { id: input.sessionId },
     data: { status: 'REVIEWING' },
@@ -1492,19 +1058,16 @@ Return ONLY the JSON array (no other text):
 }
 
 // =============================================================================
-// NOVELTY SEARCH & PRESSURE GATE
+// STAGE 6: PRELIMINARY_NOVELTY_ASSESSMENT (LLM-Only, No Prior Art)
 // =============================================================================
 
 /**
- * Generate cache key for search query
- */
-function getSearchCacheKey(query: string, provider: string): string {
-  const normalized = query.toLowerCase().trim().replace(/\s+/g, ' ');
-  return crypto.createHash('sha256').update(`${provider}:${normalized}`).digest('hex');
-}
-
-/**
- * Check novelty for an idea frame
+ * PRELIMINARY_NOVELTY_ASSESSMENT - LLM-only assessment of conceptual originality.
+ * 
+ * IMPORTANT: This is NOT a legal novelty determination.
+ * No patent databases are searched. No clearance is implied.
+ * 
+ * CANONICAL PROMPT - DO NOT MODIFY WITHOUT REVIEW
  */
 export async function checkNovelty(input: NoveltyCheckInput): Promise<NoveltyGate> {
   const ideaFrame = await prisma.ideaFrame.findUniqueOrThrow({
@@ -1513,325 +1076,185 @@ export async function checkNovelty(input: NoveltyCheckInput): Promise<NoveltyGat
   });
 
   const idea = ideaFrame.ideaFrameJson as IdeaFrame;
-  const queries = (idea.searchQueries || []).slice(0, 3); // Limit to 3 queries for cost
 
-  // Check cache first
-  const results: NoveltyGate['results'] = [];
-  
-  // Handle case with no search queries
-  if (queries.length === 0) {
-    console.warn('No search queries available for novelty check');
-  }
-  
-  for (const query of queries) {
-    const cacheKey = getSearchCacheKey(query, 'serpapi_patents');
-    
-    // Check cache
-    const cached = await prisma.ideationSearchCache.findUnique({
-      where: { cacheKey },
-    });
+  const prompt = `ROLE: Examiner Simulation Agent
 
-    if (cached && new Date(cached.expiresAt) > new Date()) {
-      // Use cached results - ensure it's an array
-      const cachedResults = Array.isArray(cached.resultJson) ? cached.resultJson : [];
-      if (cachedResults.length > 0) {
-        results.push(...cachedResults.slice(0, 5).map((r: any) => ({
-          source: 'Google Patents (cached)',
-          title: r?.title || 'Unknown',
-          snippet: r?.snippet || undefined,
-          url: r?.link || undefined,
-          publicationNumber: r?.publication_number || r?.patent_id || undefined,
-          assignee: r?.assignee || undefined,
-          filingDate: r?.filing_date || r?.priority_date || undefined,
-          similarityScore: undefined,
-          whyRelevant: 'Matched search query',
-        })));
-      }
-      
-      // Update hit count
-      await prisma.ideationSearchCache.update({
-        where: { cacheKey },
-        data: { hitCount: { increment: 1 } },
-      });
-    } else {
-      // Perform search
-      try {
-        const searchResult = await serpApiProvider.searchPatents({
-          q: query,
-          num: 10,
-        });
+IMPORTANT:
+This is a PRELIMINARY NOVELTY ASSESSMENT.
+No patent databases are available.
 
-        if (searchResult.organic_results) {
-          // Cache results
-          await prisma.ideationSearchCache.upsert({
-            where: { cacheKey },
-            create: {
-              cacheKey,
-              provider: 'serpapi_patents',
-              resultJson: searchResult.organic_results,
-              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-            },
-            update: {
-              resultJson: searchResult.organic_results,
-              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            },
-          });
+INPUT:
+${JSON.stringify({
+    coreMechanism: idea.coreMechanism,
+    inventiveLeap: idea.inventiveLeap,
+    whyNotObvious: idea.whyNotObvious,
+    eliminatedAssumption: idea.eliminatedAssumption,
+    contradictionResolved: idea.contradictionResolved,
+    title: idea.title,
+    problem: idea.problem,
+    principle: idea.principle,
+  }, null, 2)}
 
-          const organicResults = Array.isArray(searchResult.organic_results) ? searchResult.organic_results : [];
-          results.push(...organicResults.slice(0, 5).map((r: any) => ({
-            source: 'Google Patents',
-            title: r?.title || 'Unknown',
-            snippet: r?.snippet || undefined,
-            url: r?.link || undefined,
-            publicationNumber: r?.publication_number || r?.patent_id || undefined,
-            assignee: r?.assignee || undefined,
-            filingDate: r?.filing_date || r?.priority_date || undefined,
-            similarityScore: undefined,
-            whyRelevant: 'Matched search query',
-          })));
-        }
+TASK:
+Assess conceptual originality and novelty risk.
 
-        // Store evidence
-        await prisma.evidenceResult.create({
-          data: {
-            sessionId: input.sessionId,
-            ideaFrameId: input.ideaFrameId,
-            provider: 'serpapi_patents',
-            query,
-            queryHash: cacheKey,
-            rawJson: searchResult as any,
-            parsedJson: results as any,
-            resultCount: results.length,
-          },
-        });
-      } catch (e) {
-        console.error('Search failed:', e);
-      }
-    }
-  }
+OUTPUT (VALID JSON):
+${getSchemaDescription('PreliminaryNoveltyAssessment')}
 
-  // Use LLM to assess novelty with enhanced feedback loop
-  const session = ideaFrame.session;
-  const prompt = `You are a PATENT EXAMINER conducting a novelty and non-obviousness assessment. Your goal is to determine if this invention would survive USPTO examination.
-
-═══════════════════════════════════════════════════════════════
-INVENTION UNDER REVIEW
-═══════════════════════════════════════════════════════════════
-- Title: ${idea.title}
-- Problem: ${idea.problem}
-- Principle: ${idea.principle}
-- Technical Effect: ${idea.technicalEffect}
-${idea.inventiveLeap ? `- Claimed Inventive Leap: ${idea.inventiveLeap}` : ''}
-${idea.whyNotObvious ? `- Why Not Obvious: ${idea.whyNotObvious}` : ''}
-${idea.analogySource ? `- Analogy Source: ${idea.analogySource}` : ''}
-${idea.eliminatedComponent ? `- Eliminated Component: ${idea.eliminatedComponent}` : ''}
-
-═══════════════════════════════════════════════════════════════
-PRIOR ART SEARCH RESULTS (${results.length} patents analyzed)
-═══════════════════════════════════════════════════════════════
-${results.map((r, i) => `${i + 1}. [${r.publicationNumber || 'Unknown'}] ${r.title}${r.assignee ? ` (${r.assignee})` : ''}\n   ${r.snippet || 'No snippet'}`).join('\n\n')}
-
-Return ONLY valid JSON:
-${getSchemaDescription('NoveltyGate')}
-
-═══════════════════════════════════════════════════════════════
-ASSESSMENT CRITERIA
-═══════════════════════════════════════════════════════════════
-
-1. noveltyScore (0-100):
-   - 0-30: OBVIOUS - A PHOSITA would arrive at this with routine experimentation
-   - 31-50: MARGINAL - Some prior art teaches this, needs differentiation
-   - 51-70: NON-OBVIOUS - Unexpected combination or result
-   - 71-100: HIGHLY INVENTIVE - Clear inventive leap, distant analogy
-
-2. obviousnessFlags - Mark ALL that apply:
-   - COMBINATIONAL: Just adding known elements without synergy
-   - SAME_DOMAIN: All prior art from same technical field
-   - PARAMETER_TWEAK: Only changing values, not structure
-   - OBVIOUS_SUBSTITUTION: Well-known material/component swap
-   - PREDICTABLE_RESULT: Expected outcome from this combination
-
-3. phositaTest: Write a sentence explaining why a Person Having Ordinary Skill In The Art would or would NOT find this obvious
-   - Example: "A mechanical engineer in 2024 would NOT think to use origami folding for crash absorption because..."
-
-4. IF noveltyScore < 60, MUST provide mutationInstructions:
-   - action: What type of change to make (MUTATE_DIMENSION, ADD_ANALOGY, INVERT_APPROACH, etc.)
-   - specifics: Detailed instruction (e.g., "Replace material dimension with quantum superposition analogy")
-   - retainElements: What's worth keeping from the original idea
-   - suggestedAnalogy: A DISTANT domain to draw from (biology, economics, game theory, etc.)
-
-5. suggestedIterations: List 2-3 specific ways to increase novelty:
-   - "Invert the [X] to achieve opposite effect"
-   - "Apply [biological process] analogy to [mechanism]"
-   - "Eliminate [traditional component] entirely"
-
-6. closestPriorArt (REQUIRED): Identify 2-4 most relevant patents from the search results:
-   - publicationNumber: The patent number (e.g., "US1234567B1")
-   - title: Patent title
-   - relevanceScore: 0-100 how closely it matches the invention
-   - overlappingFeatures: Array of features that overlap
-   - differentiatingFactors: Array of how the invention differs
-   - remark: Brief 1-2 sentence analysis
-
-7. priorArtSummary (REQUIRED): A 2-3 sentence summary explaining:
-   - The general landscape of prior art found
-   - Key differentiating factors of the invention
-   - Why it is/isn't novel compared to existing patents
-
-8. patentsAnalyzed: Set to ${results.length}
-
-═══════════════════════════════════════════════════════════════
-RECOMMENDED ACTIONS
-═══════════════════════════════════════════════════════════════
-- KEEP: noveltyScore ≥ 60, proceed to patent drafting
-- MUTATE_OPERATOR: Try different TRIZ operator
-- MUTATE_DIMENSION: Explore different dimension family
-- NARROW_MICRO_PROBLEM: Focus on more specific sub-problem
-- ASK_USER_QUESTION: Need clarification to differentiate`;
+RULES:
+- Do NOT claim legal novelty
+- Do NOT reference patents
+- Prefer conservative judgments
+- Focus on CONCEPTUAL originality, not legal status
+- Consider what a reasonable examiner would likely object to`;
 
   const { response } = await callLLM(
     prompt,
     'IDEATION_NOVELTY',
-    session.id,
+    ideaFrame.session.id,
     input.requestHeaders,
   );
 
-  const parsed = safeParseJson(response, NoveltyGateSchema);
-  
-  console.log('📊 Novelty assessment - LLM response parsed:', parsed.success ? 'SUCCESS' : 'FAILED');
+  const parsed = safeParseJson(response, PreliminaryNoveltyAssessmentSchema);
+
   if (!parsed.success) {
-    console.log('⚠️ Parse error details:', (parsed as any).error);
-  }
-  
-  if (!parsed.success) {
-    // Return default assessment with all required fields
+    // Return default assessment
     const fallback: NoveltyGate = {
-      query: queries.join(' | '),
-      results: results,
+      query: '',
+      results: [],
       conceptSaturation: 'MEDIUM',
-      solutionSaturation: results.length > 5 ? 'HIGH' : 'LOW',
-      noveltyScore: results.length > 5 ? 40 : 70,
-      recommendedAction: results.length > 5 ? 'MUTATE_OPERATOR' : 'KEEP',
-      reasoning: 'Auto-assessed based on result count',
-      // Prior art analysis
-      patentsAnalyzed: results.length,
-      closestPriorArt: results.length > 0 
-        ? results.slice(0, 3).map(r => ({
-            publicationNumber: r.publicationNumber || 'Unknown',
-            title: r.title || 'Unknown Patent',
-            relevanceScore: 50,
-            overlappingFeatures: ['Technical domain match'],
-            differentiatingFactors: ['Specific implementation may differ'],
-            remark: 'Potentially relevant based on title/snippet match. Manual review recommended.',
-          }))
-        : [],
-      priorArtSummary: results.length > 0
-        ? `Analyzed ${results.length} patents from patent databases. The search returned results in similar technical domains. Further detailed analysis recommended to confirm novelty.`
-        : 'No prior art patents found in the search. This could indicate high novelty or may require alternative search terms.',
-      // Enhanced feedback loop fields
-      obviousnessFlags: results.length > 5 ? ['SAME_DOMAIN'] : [],
-      suggestedIterations: results.length > 5 
-        ? ['Try a more distant analogy', 'Eliminate a traditional component', 'Invert the approach']
-        : [],
+      solutionSaturation: 'MEDIUM',
+      noveltyScore: 50,
+      recommendedAction: 'KEEP',
+      reasoning: 'Assessment could not be completed',
+      originalityStrength: 'MEDIUM',
+      noveltyRiskLevel: 'MODERATE',
+      likelyExaminerObjection: 'Unable to assess',
+      redundancyRisk: 'Unknown',
+      strongestNovelAspect: idea.inventiveLeap || 'Not identified',
+      weakestNovelAspect: 'Not identified',
+      improvementDirections: [],
+      closestPriorArt: [],
+      obviousnessFlags: [],
+      suggestedIterations: [],
     };
-    
-    // IMPORTANT: Save fallback to database too!
-    console.log('🔄 Using fallback novelty assessment (LLM parse failed):', parsed.success === false ? 'parse error' : 'validation error');
+
     await prisma.ideaFrame.update({
       where: { id: input.ideaFrameId },
       data: {
         noveltyScore: fallback.noveltyScore,
         noveltySummaryJson: fallback as any,
-        conceptSaturation: fallback.conceptSaturation,
-        solutionSaturation: fallback.solutionSaturation,
       },
     });
-    
+
     return fallback;
   }
 
-  // Merge LLM response with search results (LLM won't return the full results array)
-  const finalResult: NoveltyGate = {
-    // Include required fields from parsed data
-    query: queries.join(' | '),
-    noveltyScore: parsed.data.noveltyScore,
-    conceptSaturation: parsed.data.conceptSaturation,
-    solutionSaturation: parsed.data.solutionSaturation,
-    recommendedAction: parsed.data.recommendedAction,
+  // Map preliminary assessment to NoveltyGate format for backward compatibility
+  const assessment = parsed.data;
 
-    // Include optional fields with fallbacks
-    reasoning: parsed.data.reasoning,
-    patentsAnalyzed: results.length,
-    priorArtSummary: parsed.data.priorArtSummary || (results.length > 0
-      ? `Analyzed ${results.length} patents from patent databases. ${parsed.data.reasoning || 'Further review recommended.'}`
-      : 'No prior art patents found in the search.'),
-    mutationInstructions: parsed.data.mutationInstructions ? {
-      ...parsed.data.mutationInstructions,
-      retainElements: parsed.data.mutationInstructions.retainElements || [],
-    } : undefined,
-    phositaTest: parsed.data.phositaTest,
+  // Convert originality strength to numeric score
+  const scoreMap = { 'HIGH': 80, 'MEDIUM': 50, 'LOW': 25 };
+  const noveltyScore = scoreMap[assessment.originalityStrength] || 50;
 
-    // Always include the actual search results
-    results: results,
+  const result: NoveltyGate = {
+    query: '',
+    results: [],
+    conceptSaturation: assessment.originalityStrength === 'LOW' ? 'HIGH' : assessment.originalityStrength === 'HIGH' ? 'LOW' : 'MEDIUM',
+    solutionSaturation: assessment.noveltyRiskLevel === 'HIGH' ? 'HIGH' : assessment.noveltyRiskLevel === 'LOW' ? 'LOW' : 'MEDIUM',
+    noveltyScore,
+    recommendedAction: noveltyScore >= 60 ? 'KEEP' : 'MUTATE_DIMENSION',
+    reasoning: `Originality: ${assessment.originalityStrength}, Risk: ${assessment.noveltyRiskLevel}`,
 
-    // Ensure closestPriorArt is always an array with required fields
-    closestPriorArt: parsed.data.closestPriorArt && parsed.data.closestPriorArt.length > 0
-      ? parsed.data.closestPriorArt.map(item => ({
-          publicationNumber: item.publicationNumber || 'Unknown',
-          title: item.title || 'Unknown Patent',
-          relevanceScore: item.relevanceScore || 50,
-          overlappingFeatures: item.overlappingFeatures || ['Technical domain match'],
-          differentiatingFactors: item.differentiatingFactors || ['Specific implementation may differ'],
-          remark: item.remark || 'Requires manual review',
-        }))
-      : results.length > 0
-        ? results.slice(0, 3).map(r => ({
-            publicationNumber: r.publicationNumber || 'Unknown',
-            title: r.title || 'Unknown Patent',
-            relevanceScore: 50,
-            overlappingFeatures: ['Technical domain match'],
-            differentiatingFactors: ['Specific implementation may differ'],
-            remark: 'Potentially relevant based on title/snippet match. Manual review recommended.',
-          }))
-        : [],
+    // New fields from preliminary assessment
+    originalityStrength: assessment.originalityStrength,
+    noveltyRiskLevel: assessment.noveltyRiskLevel,
+    likelyExaminerObjection: assessment.likelyExaminerObjection,
+    redundancyRisk: assessment.redundancyRisk,
+    strongestNovelAspect: assessment.strongestNovelAspect,
+    weakestNovelAspect: assessment.weakestNovelAspect,
+    improvementDirections: assessment.improvementDirections ?? [],
 
-    // Ensure obviousnessFlags is always an array
-    obviousnessFlags: parsed.data.obviousnessFlags || [],
-
-    // Ensure suggestedIterations is always an array
-    suggestedIterations: parsed.data.suggestedIterations || [],
+    // Legacy fields (empty - no prior art search)
+    patentsAnalyzed: 0,
+    closestPriorArt: [],
+    priorArtSummary: 'This is a preliminary assessment. Perform exhaustive prior-art search before filing.',
+    obviousnessFlags: [],
+    suggestedIterations: assessment.improvementDirections ?? [],
   };
 
-  // Update idea frame with novelty info
-  console.log('💾 Saving novelty assessment to database...', {
-    ideaFrameId: input.ideaFrameId,
-    noveltyScore: finalResult.noveltyScore,
-    patentsAnalyzed: finalResult.patentsAnalyzed,
-    closestPriorArtCount: finalResult.closestPriorArt?.length || 0,
-    hasPriorArtSummary: !!finalResult.priorArtSummary,
-  });
-  
   await prisma.ideaFrame.update({
     where: { id: input.ideaFrameId },
     data: {
-      noveltyScore: finalResult.noveltyScore,
-      noveltySummaryJson: finalResult as any,
-      conceptSaturation: finalResult.conceptSaturation,
-      solutionSaturation: finalResult.solutionSaturation,
+      noveltyScore: result.noveltyScore,
+      noveltySummaryJson: result as any,
+      conceptSaturation: result.conceptSaturation,
+      solutionSaturation: result.solutionSaturation,
     },
   });
 
-  console.log('✅ Novelty assessment saved successfully');
-  return finalResult;
+  return result;
+}
+
+// =============================================================================
+// ALIAS FUNCTIONS FOR API ROUTES
+// =============================================================================
+
+/**
+ * generateMechanismPureIdeas - Alias for generateIdeas (SRS Section 3.6)
+ * 
+ * Each idea MUST contain exactly ONE causal mechanism.
+ */
+export async function generateMechanismPureIdeas(input: GenerateIdeasInput): Promise<IdeaFrame[]> {
+  return generateIdeas(input);
+}
+
+/**
+ * preliminaryNoveltyAssessment - Alias for checkNovelty (SRS Section 3.7)
+ * 
+ * IMPORTANT: This is a PRELIMINARY assessment only.
+ * No patent databases are searched. No clearance is implied.
+ */
+export async function preliminaryNoveltyAssessment(input: NoveltyCheckInput): Promise<NoveltyGate> {
+  return checkNovelty(input);
+}
+
+// =============================================================================
+// LEGACY: CONTRADICTION MAPPING (Kept for backward compatibility)
+// =============================================================================
+
+export async function mapContradictions(
+  sessionId: string,
+  requestHeaders: Record<string, string>
+): Promise<any> {
+  // Redirect to inventive framing
+  return inventiveFraming(sessionId, requestHeaders);
+}
+
+// =============================================================================
+// LEGACY: OBVIOUSNESS FILTER (DEPRECATED - Returns pass-through)
+// =============================================================================
+
+export async function checkObviousness(
+  sessionId: string,
+  selectedDimensions: string[],
+  requestHeaders: Record<string, string>
+): Promise<any> {
+  // Per SRS: No obviousness gating logic
+  // Return a pass-through result
+  return {
+    combinationNovelty: 70,
+    obviousnessFlags: [],
+    dimensionQualityScores: [],
+    suggestedAnalogySources: [],
+    shouldProceed: true,
+  };
 }
 
 // =============================================================================
 // EXPORT TO IDEA BANK
 // =============================================================================
 
-/**
- * Export selected idea frames to the Idea Bank
- */
 export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<string[]> {
   const ideaFrames = await prisma.ideaFrame.findMany({
     where: {
@@ -1846,19 +1269,18 @@ export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<st
   for (const frame of ideaFrames) {
     const idea = frame.ideaFrameJson as IdeaFrame;
 
-    // Create IdeaBankIdea
     const ideaBankIdea = await prisma.ideaBankIdea.create({
       data: {
         title: idea.title,
         description: `${idea.problem}\n\n${idea.principle}`,
-        abstract: idea.technicalEffect,
+        abstract: idea.coreMechanism || idea.technicalEffect || '',
         domainTags: idea.classLabels,
         technicalField: frame.classLabels[0] || 'General',
         noveltyScore: frame.noveltyScore ? frame.noveltyScore / 100 : null,
         status: 'PUBLIC',
         generatedBy: 'ideation-engine',
         keyFeatures: idea.components,
-        potentialApplications: idea.variants.map(v => v.title),
+        potentialApplications: idea.variants?.map(v => v.title) || [],
         createdBy: input.userId,
         tenantId: input.tenantId,
         publishedAt: new Date(),
@@ -1867,7 +1289,6 @@ export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<st
 
     createdIds.push(ideaBankIdea.id);
 
-    // Update idea frame with export info
     await prisma.ideaFrame.update({
       where: { id: frame.id },
       data: {
@@ -1878,7 +1299,6 @@ export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<st
     });
   }
 
-  // Log export
   if (ideaFrames.length > 0) {
     await prisma.ideationHistory.create({
       data: {
@@ -1897,9 +1317,6 @@ export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<st
 // NODE OPERATIONS
 // =============================================================================
 
-/**
- * Update node state (expand/collapse/hide/select)
- */
 export async function updateNodeState(
   sessionId: string,
   nodeId: string,
@@ -1919,9 +1336,6 @@ export async function updateNodeState(
   });
 }
 
-/**
- * Update node position (for React Flow drag)
- */
 export async function updateNodePosition(
   sessionId: string,
   nodeId: string,
@@ -1942,11 +1356,7 @@ export async function updateNodePosition(
   });
 }
 
-/**
- * Undo last hidden/removed nodes
- */
 export async function undoNodeChanges(sessionId: string) {
-  // Get recently hidden/removed nodes
   const hiddenNodes = await prisma.mindMapNode.findMany({
     where: {
       sessionId,
@@ -1956,7 +1366,6 @@ export async function undoNodeChanges(sessionId: string) {
     take: 10,
   });
 
-  // Restore them to collapsed state
   await prisma.mindMapNode.updateMany({
     where: {
       id: { in: hiddenNodes.map(n => n.id) },
@@ -1971,9 +1380,6 @@ export async function undoNodeChanges(sessionId: string) {
 // IDEA FRAME OPERATIONS
 // =============================================================================
 
-/**
- * Update idea frame status
- */
 export async function updateIdeaStatus(
   ideaFrameId: string,
   status: 'DRAFT' | 'SHORTLISTED' | 'REJECTED' | 'ARCHIVED',
@@ -1988,9 +1394,6 @@ export async function updateIdeaStatus(
   });
 }
 
-/**
- * Rate an idea frame
- */
 export async function rateIdea(ideaFrameId: string, rating: number) {
   if (rating < 1 || rating > 5) {
     throw new Error('Rating must be between 1 and 5');
@@ -2006,9 +1409,6 @@ export async function rateIdea(ideaFrameId: string, rating: number) {
 // SESSION CLEANUP
 // =============================================================================
 
-/**
- * Archive a session
- */
 export async function archiveSession(sessionId: string) {
   return prisma.ideationSession.update({
     where: { id: sessionId },
@@ -2019,13 +1419,21 @@ export async function archiveSession(sessionId: string) {
   });
 }
 
-/**
- * Delete a session and all related data
- */
 export async function deleteSession(sessionId: string) {
-  // Cascade delete handles related records
   return prisma.ideationSession.delete({
     where: { id: sessionId },
   });
 }
 
+// =============================================================================
+// LEGACY EXPORTS (For backward compatibility)
+// =============================================================================
+
+export function getApplicableDimensions(): any[] {
+  // Per SRS: No fixed dimension families
+  return [];
+}
+
+export function getApplicableOperators(): TrizOperator[] {
+  return TRIZ_OPERATORS.slice(0, 10);
+}

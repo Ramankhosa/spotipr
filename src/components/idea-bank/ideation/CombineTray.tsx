@@ -48,18 +48,10 @@ interface CombineTrayProps {
   availableOperators: TrizOperator[]
   onGenerate: (count: number, intent: string, selectedOperators: string[], buckets?: IdeaBucket[], userGuidance?: string) => void
   onClear: () => void
-  onRemoveNode?: (nodeId: string) => void  // NEW: Remove a single dimension from selection
+  onRemoveNode?: (nodeId: string) => void
   loading: boolean
-  // Obviousness check states
-  checkingObviousness?: boolean
-  obviousnessWarning?: {
-    score: number
-    flags: string[]
-    wildCard?: any
-    analogySuggestions?: string[]
-    message: string
-  } | null
-  onForceGenerate?: (count: number, intent: string, selectedOperators: string[], buckets?: IdeaBucket[], userGuidance?: string) => void
+  // Single mechanism validation warning (SRS Section 3.6)
+  mechanismWarning?: string | null
 }
 
 type RecipeIntent = 'DIVERGENT' | 'CONVERGENT' | 'RISK_REDUCTION' | 'COST_REDUCTION'
@@ -128,9 +120,7 @@ export default function CombineTray({
   onClear,
   onRemoveNode,
   loading,
-  checkingObviousness = false,
-  obviousnessWarning,
-  onForceGenerate,
+  mechanismWarning,
 }: CombineTrayProps) {
   const [ideaCount, setIdeaCount] = useState(3)
   const [intent, setIntent] = useState<RecipeIntent>('DIVERGENT')
@@ -726,36 +716,23 @@ export default function CombineTray({
         )}
       </div>
 
-      {/* Obviousness Warning */}
-      {obviousnessWarning && (
+      {/* Mechanism Validation Warning (SRS Section 3.6) */}
+      {mechanismWarning && (
         <div className="p-3 border-t border-amber-200 bg-amber-50">
-          <div className="flex items-start gap-2 mb-2">
+          <div className="flex items-start gap-2">
             <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-xs font-medium text-amber-800">
-                Combination Novelty: {obviousnessWarning.score}/100
+                Single Mechanism Required
               </p>
               <p className="text-[10px] text-amber-700 mt-1">
-                {obviousnessWarning.message}
+                {mechanismWarning}
               </p>
-              {obviousnessWarning.wildCard && (
-                <p className="text-[10px] text-amber-700 mt-1">
-                  <span className="font-medium">Suggested wildcard:</span> {obviousnessWarning.wildCard.title || 'Add an unexpected dimension'}
-                </p>
-              )}
+              <p className="text-[10px] text-amber-600 mt-1 italic">
+                Ideas with multiple mechanisms will be discarded during generation.
+              </p>
             </div>
           </div>
-          {onForceGenerate && (
-            <Button
-              onClick={() => onForceGenerate(ideaCount, intent, Array.from(selectedOperators), useBuckets ? buckets : undefined, userGuidance.trim() || undefined)}
-              variant="outline"
-              size="sm"
-              className="w-full text-amber-700 border-amber-300 hover:bg-amber-100"
-            >
-              <Zap className="w-3 h-3 mr-1" />
-              Generate Anyway
-            </Button>
-          )}
         </div>
       )}
 
@@ -763,18 +740,13 @@ export default function CombineTray({
       <div className="p-3 border-t border-slate-200 bg-white">
         <Button
           onClick={handleGenerate}
-          disabled={!canGenerate || loading || checkingObviousness}
-          className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-lg"
+          disabled={!canGenerate || loading}
+          className="w-full bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 text-white shadow-lg"
         >
-          {checkingObviousness ? (
+          {loading ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Checking novelty...
-            </>
-          ) : loading ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Generating...
+              Generating Mechanism-Pure Ideas...
             </>
           ) : (
             <>
@@ -789,13 +761,19 @@ export default function CombineTray({
         </Button>
         {!canGenerate && (
           <p className="text-[10px] text-center text-slate-400 mt-2">
-            Select dimensions from the mind map first
+            Select dimensions from the Invention Map first
           </p>
         )}
         {userGuidance && canGenerate && !loading && (
-          <p className="text-[10px] text-center text-blue-500 mt-1.5 flex items-center justify-center gap-1">
+          <p className="text-[10px] text-center text-violet-500 mt-1.5 flex items-center justify-center gap-1">
             <MessageSquare className="w-3 h-3" />
             AI will follow your guidance
+          </p>
+        )}
+        {/* SRS reminder: Each idea must contain exactly ONE causal mechanism */}
+        {canGenerate && !loading && (
+          <p className="text-[9px] text-center text-slate-400 mt-1">
+            Each generated idea will contain exactly one causal mechanism
           </p>
         )}
       </div>

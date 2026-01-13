@@ -1,7 +1,10 @@
 /**
- * Novelty Check API
+ * Preliminary Novelty Assessment API (SRS Section 3.7)
  * 
- * POST - Run novelty check on an idea frame
+ * POST - Run LLM-only preliminary novelty assessment on an idea frame
+ * 
+ * IMPORTANT: This is a PRELIMINARY assessment only.
+ * NO patent databases are searched. NO legal novelty is claimed.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -65,7 +68,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       requestHeaders[key] = value;
     });
 
-    const noveltyGate = await IdeationService.checkNovelty({
+    // Run preliminary novelty assessment (LLM-only, no prior art search)
+    const noveltyAssessment = await IdeationService.preliminaryNoveltyAssessment({
       sessionId,
       ideaFrameId,
       requestHeaders,
@@ -73,14 +77,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({
       success: true,
-      noveltyGate,
-      recommendation: noveltyGate.recommendedAction,
-      isNovel: noveltyGate.noveltyScore >= 60,
+      noveltyAssessment,
+      // NOTE: This does NOT claim legal novelty per SRS
+      disclaimer: 'This is a preliminary novelty assessment. Perform exhaustive prior-art search before filing.',
     });
   } catch (error) {
-    console.error('Failed to check novelty:', error);
+    console.error('Failed to assess novelty:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to check novelty' },
+      { error: error instanceof Error ? error.message : 'Failed to assess novelty' },
       { status: 500 }
     );
   }
