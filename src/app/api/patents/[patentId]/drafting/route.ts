@@ -3032,7 +3032,7 @@ async function handleGetExportPreview(user: any, patentId: string, data: any) {
 // Whitelist of allowed single-line skinparam keys
 // Extended to support canonical patent diagram styles (nodesep, ranksep, thickness, padding, etc.)
 // EXPLICITLY BANNED: FontColor, Style (except PackageTitleFontStyle), class/component/node skinparams
-const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
+const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|componentBackgroundColor|packageBackgroundColor|activityBackgroundColor|participantBackgroundColor|actorBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
 
 // Explicitly banned skinparam patterns (these are stripped even if they match other patterns)
 const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
@@ -3083,8 +3083,13 @@ const SEQUENCE_MAX_MESSAGES = 12
 
 // F: FIXED SKINPARAM BLOCK (Pre-injected, LLM never generates skinparams)
 // This removes an entire failure class where LLM generates invalid skinparams.
-const FIXED_SKINPARAM_BLOCK = `skinparam backgroundColor white
-skinparam rectangleBackgroundColor white
+const FIXED_SKINPARAM_BLOCK = `skinparam backgroundColor transparent
+skinparam rectangleBackgroundColor transparent
+skinparam componentBackgroundColor transparent
+skinparam packageBackgroundColor transparent
+skinparam activityBackgroundColor transparent
+skinparam participantBackgroundColor transparent
+skinparam actorBackgroundColor transparent
 skinparam monochrome true
 skinparam shadowing false
 skinparam roundcorner 6
@@ -3557,8 +3562,11 @@ function validatePlantUmlStructure(code: string): { ok: boolean; errors: PlantUm
     // Note: This replaces the separate activity_flow checks below to avoid duplicate errors
     const hasStart = lines.some(line => /^\s*start\s*$/i.test(line))
     const hasStop = lines.some(line => /^\s*(stop|end)\s*$/i.test(line))
-    const actionCount = lines.filter(line => /^:.*;\s*$/.test(line.trim())).length
-    
+    const actionLines = lines
+      .map((line, idx) => ({ line, idx }))
+      .filter(item => /^:.*;\s*$/.test(item.line.trim()))
+    const actionCount = actionLines.length
+
     if (!hasStart) {
       errors.push({ type: 'min_content', message: 'Activity diagram must have "start"' })
     }
@@ -3567,6 +3575,15 @@ function validatePlantUmlStructure(code: string): { ok: boolean; errors: PlantUm
     }
     if (actionCount < 3) {
       errors.push({ type: 'min_content', message: `Activity diagram needs at least 3 action steps (found ${actionCount})` })
+    }
+    for (const item of actionLines) {
+      if (!/\(\s*\d{1,3}\s*\)/.test(item.line)) {
+        errors.push({
+          type: 'missing_numeral',
+          message: 'Activity action must include a component numeral in parentheses, e.g., ":Sense input (100);"',
+          line: item.idx + 1
+        })
+      }
     }
   }
   
@@ -5986,21 +6003,21 @@ P200 -right-> M300 : data
     syntaxGuide: `Use activity diagram syntax for method/process claims.
 - Start: start
 - End: stop
-- Actions: :Action description (numeral);
+- Actions: :Action description (numeral); (numeral required for every step)
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "processor (200)" not "processor 200"
 - Decisions: if (condition?) then (yes) ... else (no) ... endif
 - Parallel: fork ... fork again ... end fork
 - Notes: Do NOT use "note" elements`,
     exampleCode: `@startuml
 start
-:Receive input data;
+:Receive input data (100);
 :Process data in processor (200);
 if (Valid data?) then (yes)
   :Store in memory (300);
-  :Generate output;
+  :Generate output (400);
 else (no)
-  :Log error;
-  :Return error code;
+  :Log error (500);
+  :Return error code (600);
 endif
 stop
 @enduml`
@@ -6973,12 +6990,11 @@ ALLOWED CONSTRUCTS ONLY
 ─────────────────────────────────────────────────────────────────────────────────
 @startuml / @enduml
 rectangle "Name (XXX)" as ALIAS
-package "Group Name" { }
 participant "Name (XXX)" as ALIAS
 --> (solid arrow for data/control)
-..> (dashed arrow for power/utility)
+..> (dotted arrow for power supply only; no labels)
 start / stop (ACTIVITY only)
-:Action text; (ACTIVITY only)
+:Action text (numeral); (ACTIVITY only)
 
 ─────────────────────────────────────────────────────────────────────────────────
 SKINPARAM HANDLING (CRITICAL)
@@ -6989,10 +7005,10 @@ Do NOT generate ANY skinparam lines. The system injects them automatically.
 STRUCTURAL RULES
 ─────────────────────────────────────────────────────────────────────────────────
 1. ORIENTATION: Use "top to bottom direction" as DEFAULT.
-2. SYSTEM BOUNDARY: Wrap all components in one outer rectangle.
-3. SUBSYSTEM GROUPING: Use max 3 packages for logical grouping.
-4. REFERENCE NUMERALS: Always use parentheses: "Controller (100)"
-5. ARROWS: Simple connections only. No labels or 1-3 word labels max.
+2. REFERENCE NUMERALS: Always use parentheses: "Controller (100)"
+3. ACTIVITY STEPS: Every :Action line must include a component numeral in parentheses.
+4. ARROWS: Solid arrows for data/control; dotted arrows (..>) for power supply only.
+5. LABELS: No labels on power lines; other labels max 1-3 words.
 6. ONE @startuml, ONE @enduml per diagram.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -7006,19 +7022,15 @@ EXAMPLE: Block Diagram (Correct - Linear, No Logic)
 @startuml
 top to bottom direction
 
-rectangle "System (100)" as SYS {
-  package "Input" {
-    rectangle "Sensor (110)" as SENS
-  }
-  package "Processing" {
-    rectangle "Controller (200)" as CTRL
-  }
-  package "Output" {
-    rectangle "Actuator (300)" as ACT
-  }
-  SENS --> CTRL
-  CTRL --> ACT
-}
+rectangle "Sensor (110)" as SENS
+rectangle "Controller (200)" as CTRL
+rectangle "Actuator (300)" as ACT
+rectangle "Power Supply (500)" as PS
+SENS --> CTRL
+CTRL --> ACT
+PS -down..-> SENS
+PS -down..-> CTRL
+PS -down..-> ACT
 @enduml
 
 ─────────────────────────────────────────────────────────────────────────────────
@@ -8241,8 +8253,13 @@ CANONICAL STYLE DEFAULTS (Apply unless user explicitly overrides)
 ═══════════════════════════════════════════════════════════════════════════════
 When modifying the diagram, APPLY these canonical skinparam settings UNLESS user explicitly requests different styles:
 
-skinparam backgroundColor white
-skinparam rectangleBackgroundColor white
+skinparam backgroundColor transparent
+skinparam rectangleBackgroundColor transparent
+skinparam componentBackgroundColor transparent
+skinparam packageBackgroundColor transparent
+skinparam activityBackgroundColor transparent
+skinparam participantBackgroundColor transparent
+skinparam actorBackgroundColor transparent
 skinparam monochrome true
 skinparam shadowing false
 skinparam roundcorner 6
@@ -8263,8 +8280,9 @@ Default direction: top to bottom direction (use left to right only for very simp
 - All connectors should be orthogonal (skinparam linetype ortho) unless user requests otherwise.
 - Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- Dotted arrows (..>) = power supply only (no "power" labels).
+- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
+- Activity steps: Every :Action line must include a component numeral in parentheses.
 - Nesting depth max = 2 levels.
 
 **HELPER NODES ALLOWED:**
@@ -8327,8 +8345,13 @@ CANONICAL STYLE (MANDATORY)
 ═══════════════════════════════════════════════════════════════════════════════
 Your diagram MUST include these skinparam settings:
 
-skinparam backgroundColor white
-skinparam rectangleBackgroundColor white
+skinparam backgroundColor transparent
+skinparam rectangleBackgroundColor transparent
+skinparam componentBackgroundColor transparent
+skinparam packageBackgroundColor transparent
+skinparam activityBackgroundColor transparent
+skinparam participantBackgroundColor transparent
+skinparam actorBackgroundColor transparent
 skinparam monochrome true
 skinparam shadowing false
 skinparam roundcorner 6
@@ -8351,8 +8374,9 @@ PATENT FIGURE SEMANTICS (STRICT)
 - All connectors must be orthogonal (skinparam linetype ortho is mandatory).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- Dotted arrows (..>) = power supply only (no "power" labels).
+- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
+- Activity steps: Every :Action line must include a component numeral in parentheses.
 - Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8528,8 +8552,13 @@ CANONICAL STYLE (MANDATORY)
 ═══════════════════════════════════════════════════════════════════════════════
 Your diagram MUST include these skinparam settings:
 
-skinparam backgroundColor white
-skinparam rectangleBackgroundColor white
+skinparam backgroundColor transparent
+skinparam rectangleBackgroundColor transparent
+skinparam componentBackgroundColor transparent
+skinparam packageBackgroundColor transparent
+skinparam activityBackgroundColor transparent
+skinparam participantBackgroundColor transparent
+skinparam actorBackgroundColor transparent
 skinparam monochrome true
 skinparam shadowing false
 skinparam roundcorner 6
@@ -8552,8 +8581,9 @@ PATENT FIGURE SEMANTICS (STRICT)
 - All connectors must be orthogonal (skinparam linetype ortho is mandatory).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- Dotted arrows (..>) = power supply only (no "power" labels).
+- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
+- Activity steps: Every :Action line must include a component numeral in parentheses.
 - Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8721,8 +8751,13 @@ CANONICAL STYLE (MANDATORY FOR EACH DIAGRAM)
 ═══════════════════════════════════════════════════════════════════════════════
 Each diagram MUST include these skinparam settings:
 
-skinparam backgroundColor white
-skinparam rectangleBackgroundColor white
+skinparam backgroundColor transparent
+skinparam rectangleBackgroundColor transparent
+skinparam componentBackgroundColor transparent
+skinparam packageBackgroundColor transparent
+skinparam activityBackgroundColor transparent
+skinparam participantBackgroundColor transparent
+skinparam actorBackgroundColor transparent
 skinparam monochrome true
 skinparam shadowing false
 skinparam roundcorner 6
@@ -8745,8 +8780,9 @@ PATENT FIGURE SEMANTICS (STRICT)
 - All connectors must be orthogonal (skinparam linetype ortho is mandatory).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- Dotted arrows (..>) = power supply only (no "power" labels).
+- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
+- Activity steps: Every :Action line must include a component numeral in parentheses.
 - Nesting depth max = 2 levels.
 
 ═══════════════════════════════════════════════════════════════════════════════

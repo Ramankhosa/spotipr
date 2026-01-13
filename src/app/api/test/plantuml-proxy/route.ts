@@ -5,10 +5,10 @@ import crypto from 'crypto'
 import plantumlEncoder from 'plantuml-encoder'
 
 // Whitelist of allowed single-line skinparam keys (same as main route.ts)
-const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
+const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|componentBackgroundColor|packageBackgroundColor|activityBackgroundColor|participantBackgroundColor|actorBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
 
 // Explicitly banned skinparam patterns
-const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(BackgroundColor|FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
+const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SKINPARAM BLOCK HANDLING - ATOMIC BLOCK PROCESSING
@@ -113,7 +113,7 @@ function cleanForRendering(code: string): string {
       
       // Filter banned properties even inside allowed blocks
       if (!BANNED_SKINPARAM_PATTERNS.test(trimmed) && 
-          !/^\s*(BackgroundColor|FontColor)\b/i.test(trimmed)) {
+          !/^\s*FontColor\b/i.test(trimmed)) {
         result.push(line)
       }
       
