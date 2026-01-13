@@ -49,9 +49,9 @@ import {
   type Classification,
   type NoveltyGate,
 } from './schemas';
-import type {
-  IdeationSession,
-  MindMapNode,
+import type { 
+  IdeationSession, 
+  MindMapNode, 
   IdeaFrame as PrismaIdeaFrame,
   Prisma,
 } from '@prisma/client';
@@ -100,6 +100,8 @@ export interface ExportToIdeaBankInput {
   ideaFrameIds: string[];
   userId: string;
   tenantId: string;
+  // User-selected improvement suggestions to include in export
+  selectedSuggestions?: Record<string, string[]>;
 }
 
 // =============================================================================
@@ -283,7 +285,7 @@ RULES:
   );
 
   const parsed = safeParseJson(response, SemanticGroundingSchema);
-
+  
   if (!parsed.success) {
     throw new Error(`Semantic grounding failed: ${parsed.error}`);
   }
@@ -362,7 +364,7 @@ RULES:
   );
 
   const parsed = safeParseJson(response, InventiveFramingSchema);
-
+  
   if (!parsed.success) {
     // Return empty framing if parsing fails - don't block the pipeline
     const fallback: InventiveFraming = {
@@ -453,7 +455,7 @@ RULES:
   );
 
   const parsed = safeParseJson(response, DimensionDiscoverySchema);
-
+  
   if (!parsed.success) {
     throw new Error(`Dimension discovery failed: ${parsed.error}`);
   }
@@ -499,7 +501,7 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
   const edgesToCreate: Prisma.MindMapEdgeCreateManyInput[] = [];
 
   const LEVEL_WIDTH = 480;
-  const NODE_HEIGHT = 200;
+  const NODE_HEIGHT = 390; // Large spacing (340 + 50px gap) to prevent overlap
   const START_X = 100;
   const START_Y = 100;
 
@@ -523,7 +525,7 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
   // Create dimension nodes from discovered dimensions
   primaryDimensions.forEach((dim, idx) => {
     const yPos = START_Y + (idx * NODE_HEIGHT);
-
+    
     nodesToCreate.push({
       sessionId,
       nodeId: dim.dimensionId,
@@ -570,14 +572,14 @@ export async function initializeDimensions(sessionId: string): Promise<MindMapNo
   });
 
   if (nodesToCreate.length > 0) {
-    await prisma.mindMapNode.createMany({
+    await prisma.mindMapNode.createMany({ 
       data: nodesToCreate,
       skipDuplicates: true,
     });
   }
-
+  
   if (edgesToCreate.length > 0) {
-    await prisma.mindMapEdge.createMany({
+    await prisma.mindMapEdge.createMany({ 
       data: edgesToCreate,
       skipDuplicates: true,
     });
@@ -653,14 +655,14 @@ export async function expandDimensionNode(input: ExpandNodeInput): Promise<Dimen
 
   const { selectedMoves, hasContext } = await getSelectedDimensionsContext(input.sessionId);
 
-  const contextSection = hasContext
+  const contextSection = hasContext 
     ? `
 PREVIOUSLY SELECTED MOVES (Consider for context):
 ${selectedMoves.map((m, i) => `${i + 1}. [${m.family}] ${m.title} → ${m.impact}`).join('\n')}
 `
     : '';
 
-  const userInputSection = input.userInput?.trim()
+  const userInputSection = input.userInput?.trim() 
     ? `
 ⚡ USER DIRECTION (HIGH PRIORITY - MUST ADDRESS):
 "${input.userInput.trim()}"
@@ -690,7 +692,7 @@ OUTPUT (VALID JSON ARRAY):
 [
   {
     "moveText": "What if we...",
-    "primaryChange": "REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY",
+    "primaryChange": "REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY | REPLACE | COMBINE | SIMPLIFY",
     "immediateEffect": "what happens immediately",
     "newProblemCreated": "what new problem this creates",
     "contradictionAddressed": "which tension this addresses (optional)"
@@ -715,7 +717,7 @@ Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
   // Try to parse as array of moves
   const arraySchema = z.array(z.object({
     moveText: z.string(),
-    primaryChange: z.enum(['REMOVE', 'INVERT', 'DECOUPLE', 'RELOCATE', 'DELAY']),
+    primaryChange: z.enum(['REMOVE', 'INVERT', 'DECOUPLE', 'RELOCATE', 'DELAY', 'REPLACE', 'COMBINE', 'SIMPLIFY']),
     immediateEffect: z.string(),
     newProblemCreated: z.string(),
     contradictionAddressed: z.string().optional(),
@@ -723,7 +725,7 @@ Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
 
   let moves: z.infer<typeof arraySchema>;
   const parsed = safeParseJson(response, arraySchema);
-
+  
   if (!parsed.success) {
     // Fallback to legacy format
     const legacyParsed = safeParseJson(response, SuggestedMovesResponseSchema);
@@ -736,8 +738,8 @@ Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
         contradictionAddressed: m.tension,
       }));
     } else {
-      throw new Error(`Expansion failed: ${parsed.error}`);
-    }
+        throw new Error(`Expansion failed: ${parsed.error}`);
+      }
   } else {
     moves = parsed.data;
   }
@@ -745,31 +747,31 @@ Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
   // Generate unique IDs
   const parentSlug = input.nodeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 30);
   const uniqueSuffix = Date.now().toString(36);
-
+  
   const existingNodeIds = session.nodes.map(n => n.nodeId);
   const newMoves = moves.map((m, idx) => ({
     ...m,
     id: `${parentSlug}-${uniqueSuffix}-${idx}`,
   })).filter(m => !existingNodeIds.includes(m.id));
-
+  
   // Layout calculations
   const LEVEL_WIDTH = 480;
-  const NODE_HEIGHT = 180;
+  const NODE_HEIGHT = 430; // Large spacing (380 + 50px gap) to prevent overlap
   const parentX = node.positionX || 50;
   const parentY = node.positionY || 200;
   const parentDepth = node.depth || 0;
-
+  
   const totalHeight = (newMoves.length - 1) * NODE_HEIGHT;
   let currentY = parentY - (totalHeight / 2);
 
   const nodesToCreate = newMoves.map((m) => {
     const nodeY = currentY;
     currentY += NODE_HEIGHT;
-
+    
     return {
       sessionId: input.sessionId,
       nodeId: m.id,
-      type: 'OPERATOR' as const, // Assumption-breaking moves
+      type: 'DIMENSION_OPTION' as const, // Assumption-breaking moves (uses DimensionNode for proper formatting)
       title: m.moveText,
       description: m.immediateEffect,
       family: node.family || node.title,
@@ -802,14 +804,14 @@ Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
   }));
 
   if (nodesToCreate.length > 0) {
-    await prisma.mindMapNode.createMany({
+    await prisma.mindMapNode.createMany({ 
       data: nodesToCreate,
       skipDuplicates: true,
     });
   }
-
+  
   if (edgesToCreate.length > 0) {
-    await prisma.mindMapEdge.createMany({
+    await prisma.mindMapEdge.createMany({ 
       data: edgesToCreate,
       skipDuplicates: true,
     });
@@ -819,7 +821,7 @@ Each move must represent a STRUCTURAL CHANGE, not an incremental improvement.`;
     where: { id: node.id },
     data: { state: 'EXPANDED' },
   });
-
+    
   const createdNodes = await prisma.mindMapNode.findMany({
     where: {
       sessionId: input.sessionId,
@@ -927,7 +929,7 @@ export async function generateIdeas(input: GenerateIdeasInput): Promise<IdeaFram
   const inventiveFraming = (session.classificationJson as any)?.inventiveFraming || {};
 
   // Get selected node details
-  const selectedNodes = session.nodes.filter(n =>
+  const selectedNodes = session.nodes.filter(n => 
     input.recipe.selectedComponents.includes(n.nodeId) ||
     input.recipe.selectedDimensions.includes(n.nodeId) ||
     input.recipe.selectedOperators.includes(n.nodeId)
@@ -997,11 +999,11 @@ FORBIDDEN:
     const cleaned = response.trim();
     const jsonMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
     const jsonStr = jsonMatch ? jsonMatch[1].trim() : cleaned;
-
+    
     const firstBracket = jsonStr.indexOf('[');
     const lastBracket = jsonStr.lastIndexOf(']');
     const arrayStr = jsonStr.slice(firstBracket, lastBracket + 1);
-
+    
     const parsed = JSON.parse(arrayStr);
     ideas = parsed.map((idea: any) => ({
       ...idea,
@@ -1077,13 +1079,22 @@ export async function checkNovelty(input: NoveltyCheckInput): Promise<NoveltyGat
 
   const idea = ideaFrame.ideaFrameJson as IdeaFrame;
 
-  const prompt = `ROLE: Examiner Simulation Agent
+  // Get the grounding context for problem domain understanding
+  const groundingContext = ideaFrame.session.normalizationJson as any || {};
+  
+  const prompt = `ROLE: Examiner Simulation Agent & Invention Advisor
 
 IMPORTANT:
 This is a PRELIMINARY NOVELTY ASSESSMENT.
 No patent databases are available.
 
-INPUT:
+PROBLEM DOMAIN CONTEXT:
+- Core Problem: ${groundingContext.userIntent || idea.problem || 'Not specified'}
+- Core Entity: ${groundingContext.coreEntity || 'Not specified'}
+- Constraints: ${groundingContext.explicitConstraints?.join(', ') || 'None specified'}
+- Assumptions: ${groundingContext.implicitAssumptions?.join(', ') || 'None specified'}
+
+IDEA BEING ASSESSED:
 ${JSON.stringify({
     coreMechanism: idea.coreMechanism,
     inventiveLeap: idea.inventiveLeap,
@@ -1096,7 +1107,17 @@ ${JSON.stringify({
   }, null, 2)}
 
 TASK:
-Assess conceptual originality and novelty risk.
+1. Assess conceptual originality and novelty risk
+2. Provide HOLISTIC improvement directions that focus on the PROBLEM DOMAIN, not just the specific solution
+
+For improvementDirections, generate 4-6 suggestions that:
+- Address the CORE PROBLEM from different angles
+- Consider alternative technical approaches within the problem domain
+- Suggest complementary mechanisms that could strengthen the invention
+- Identify opportunities to broaden or narrow scope strategically
+- Focus on practical enhancements the inventor can act upon
+
+Each suggestion should be a complete, actionable idea statement (not a generic tip).
 
 OUTPUT (VALID JSON):
 ${getSchemaDescription('PreliminaryNoveltyAssessment')}
@@ -1105,8 +1126,9 @@ RULES:
 - Do NOT claim legal novelty
 - Do NOT reference patents
 - Prefer conservative judgments
-- Focus on CONCEPTUAL originality, not legal status
-- Consider what a reasonable examiner would likely object to`;
+- Focus on CONCEPTUAL originality
+- improvementDirections should be HOLISTIC ideas considering the full problem domain
+- Each improvement direction should be specific enough to be actionable`;
 
   const { response } = await callLLM(
     prompt,
@@ -1116,7 +1138,7 @@ RULES:
   );
 
   const parsed = safeParseJson(response, PreliminaryNoveltyAssessmentSchema);
-
+  
   if (!parsed.success) {
     // Return default assessment
     const fallback: NoveltyGate = {
@@ -1146,7 +1168,7 @@ RULES:
         noveltySummaryJson: fallback as any,
       },
     });
-
+    
     return fallback;
   }
 
@@ -1182,7 +1204,7 @@ RULES:
     obviousnessFlags: [],
     suggestedIterations: assessment.improvementDirections ?? [],
   };
-
+  
   await prisma.ideaFrame.update({
     where: { id: input.ideaFrameId },
     data: {
@@ -1268,19 +1290,53 @@ export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<st
 
   for (const frame of ideaFrames) {
     const idea = frame.ideaFrameJson as IdeaFrame;
+    const noveltyData = frame.noveltySummaryJson as any;
+    
+    // Build description with core mechanism, inventive leap, and selected suggestions
+    let description = `Core Mechanism:\n${idea.coreMechanism || idea.principle || ''}\n\n`;
+    description += `Inventive Leap:\n${idea.inventiveLeap || ''}\n\n`;
+    description += `Why Non-Obvious:\n${idea.whyNotObvious || ''}\n\n`;
+    
+    if (idea.eliminatedAssumption) {
+      description += `Eliminated Assumption:\n${idea.eliminatedAssumption}\n\n`;
+    }
+    
+    // Include user-selected improvement suggestions if any
+    const selectedForThisIdea = input.selectedSuggestions?.[frame.id] || [];
+    if (selectedForThisIdea.length > 0) {
+      description += `Selected Improvement Directions:\n`;
+      selectedForThisIdea.forEach((suggestion, idx) => {
+        description += `${idx + 1}. ${suggestion}\n`;
+      });
+      description += '\n';
+    }
+    
+    // Include preliminary assessment summary if available
+    if (noveltyData?.originalityStrength) {
+      description += `Preliminary Assessment:\n`;
+      description += `- Originality: ${noveltyData.originalityStrength}\n`;
+      description += `- Risk Level: ${noveltyData.noveltyRiskLevel}\n`;
+      if (noveltyData.strongestNovelAspect) {
+        description += `- Strongest Aspect: ${noveltyData.strongestNovelAspect}\n`;
+      }
+    }
 
+    // potentialApplications should contain actual applications/uses of the invention, NOT improvement suggestions
+    // Improvement suggestions are assessment feedback and stay in the description only
+    const actualApplications = idea.variants?.map(v => v.title).filter(Boolean) || [];
+    
     const ideaBankIdea = await prisma.ideaBankIdea.create({
       data: {
-        title: idea.title,
-        description: `${idea.problem}\n\n${idea.principle}`,
+        title: idea.title || idea.coreMechanism?.slice(0, 100) || 'Untitled Idea',
+        description: description.trim(),
         abstract: idea.coreMechanism || idea.technicalEffect || '',
         domainTags: idea.classLabels,
         technicalField: frame.classLabels[0] || 'General',
         noveltyScore: frame.noveltyScore ? frame.noveltyScore / 100 : null,
         status: 'PUBLIC',
         generatedBy: 'ideation-engine',
-        keyFeatures: idea.components,
-        potentialApplications: idea.variants?.map(v => v.title) || [],
+        keyFeatures: idea.components || [],
+        potentialApplications: actualApplications, // Only actual applications, not improvement suggestions
         createdBy: input.userId,
         tenantId: input.tenantId,
         publishedAt: new Date(),

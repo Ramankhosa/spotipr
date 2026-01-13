@@ -25,7 +25,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const { sessionId } = await params;
     const body = await request.json();
-    const { ideaFrameIds } = body;
+    const { ideaFrameIds, selectedSuggestions } = body;
 
     if (!Array.isArray(ideaFrameIds) || ideaFrameIds.length === 0) {
       return NextResponse.json(
@@ -33,6 +33,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         { status: 400 }
       );
     }
+    
+    // selectedSuggestions is optional: Record<ideaId, string[]> of improvement directions user selected
 
     const user = await prisma.user.findUnique({
       where: { id: authResult.user.id },
@@ -64,6 +66,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       ideaFrameIds,
       userId: user.id,
       tenantId: user.tenantId,
+      selectedSuggestions: selectedSuggestions || {},
     });
 
     return NextResponse.json({

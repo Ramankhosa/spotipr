@@ -67,14 +67,15 @@ const TRIAL_STAGE_MODELS: Record<string, string> = {
   'DIAGRAM_FLOWCHART':                  'gemini-2.5-flash-lite',
   'DIAGRAM_SEQUENCE':                   'gemini-2.5-flash-lite',
   'DIAGRAM_BLOCK':                      'gemini-2.5-flash-lite',
-  // IDEATION stages - Use Pro for heavy reasoning, Flash Lite for lighter tasks
-  'IDEATION_NORMALIZE':                 'gemini-2.5-flash-lite',
-  'IDEATION_CLASSIFY':                  'gemini-2.5-flash-lite',
-  'IDEATION_CONTRADICTION_MAPPING':     'gemini-2.5-pro',
-  'IDEATION_EXPAND':                    'gemini-2.5-flash-lite',
-  'IDEATION_OBVIOUSNESS_FILTER':        'gemini-2.5-pro',
-  'IDEATION_GENERATE':                  'gemini-2.5-pro',
-  'IDEATION_NOVELTY':                   'gemini-2.5-pro',
+  // IDEATION stages - NEW PIPELINE (SRS-compliant)
+  // Pipeline: SEED → SEMANTIC_GROUNDING → INVENTIVE_FRAMING → DIMENSION_DISCOVERY → EXPANSION → IDEA_GENERATION → NOVELTY
+  'IDEATION_NORMALIZE':                 'gemini-2.5-flash-lite',  // Semantic Grounding
+  'IDEATION_CLASSIFY':                  'gemini-2.5-flash-lite',  // Inventive Framing
+  'IDEATION_CONTRADICTION_MAPPING':     'gemini-2.5-flash-lite',  // LEGACY - no longer called
+  'IDEATION_EXPAND':                    'gemini-2.5-flash-lite',  // Dimension Discovery & Expansion
+  'IDEATION_OBVIOUSNESS_FILTER':        'gemini-2.5-flash-lite',  // LEGACY - no longer called
+  'IDEATION_GENERATE':                  'gemini-2.5-pro',         // Mechanism-Pure Idea Generation
+  'IDEATION_NOVELTY':                   'gemini-2.5-pro',         // Preliminary Novelty Assessment (LLM-only)
 }
 
 // Token limits per stage (from seed-llm-models.js)
@@ -116,14 +117,14 @@ const TOKEN_LIMITS: Record<string, { maxTokensIn: number; maxTokensOut: number }
   'DIAGRAM_FLOWCHART':                  { maxTokensIn: 30000,  maxTokensOut: 8192 },
   'DIAGRAM_SEQUENCE':                   { maxTokensIn: 30000,  maxTokensOut: 8192 },
   'DIAGRAM_BLOCK':                      { maxTokensIn: 30000,  maxTokensOut: 8192 },
-  // IDEATION stages
-  'IDEATION_NORMALIZE':                 { maxTokensIn: 20000,  maxTokensOut: 8192 },
-  'IDEATION_CLASSIFY':                  { maxTokensIn: 20000,  maxTokensOut: 8192 },
-  'IDEATION_CONTRADICTION_MAPPING':     { maxTokensIn: 30000,  maxTokensOut: 8192 },
-  'IDEATION_EXPAND':                    { maxTokensIn: 30000,  maxTokensOut: 8192 },
-  'IDEATION_OBVIOUSNESS_FILTER':        { maxTokensIn: 30000,  maxTokensOut: 8192 },
-  'IDEATION_GENERATE':                  { maxTokensIn: 40000,  maxTokensOut: 16000 },
-  'IDEATION_NOVELTY':                   { maxTokensIn: 50000,  maxTokensOut: 16000 },
+  // IDEATION stages - NEW PIPELINE
+  'IDEATION_NORMALIZE':                 { maxTokensIn: 20000,  maxTokensOut: 8192 },   // Semantic Grounding
+  'IDEATION_CLASSIFY':                  { maxTokensIn: 20000,  maxTokensOut: 8192 },   // Inventive Framing
+  'IDEATION_CONTRADICTION_MAPPING':     { maxTokensIn: 30000,  maxTokensOut: 8192 },   // LEGACY
+  'IDEATION_EXPAND':                    { maxTokensIn: 30000,  maxTokensOut: 8192 },   // Dimension Discovery & Expansion
+  'IDEATION_OBVIOUSNESS_FILTER':        { maxTokensIn: 30000,  maxTokensOut: 8192 },   // LEGACY
+  'IDEATION_GENERATE':                  { maxTokensIn: 40000,  maxTokensOut: 16000 },  // Mechanism-Pure Ideas
+  'IDEATION_NOVELTY':                   { maxTokensIn: 50000,  maxTokensOut: 16000 },  // LLM-only Novelty
 }
 
 async function main() {

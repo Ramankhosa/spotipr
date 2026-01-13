@@ -2,7 +2,7 @@
 
 import { memo } from 'react'
 import { Handle, Position, NodeProps } from '@xyflow/react'
-import { Zap, Square, CheckSquare } from 'lucide-react'
+import { Square, CheckSquare } from 'lucide-react'
 
 interface OperatorNodeData {
   title: string
@@ -19,20 +19,20 @@ function OperatorNode({ data, selected }: NodeProps) {
   return (
     <div
       className={`
-        px-3 py-2.5 rounded-xl shadow-md border min-w-44 max-w-52
+        px-3 py-2.5 rounded-xl shadow-md border w-[340px]
         transition-all duration-200 cursor-pointer
         ${isSelected
-          ? 'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-500 shadow-xl shadow-amber-300/50 ring-2 ring-amber-300 animate-pulse-subtle'
-          : 'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 hover:border-amber-400 hover:shadow-lg'
+          ? 'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-500 shadow-xl shadow-blue-300/50 ring-2 ring-blue-300'
+          : 'bg-gradient-to-br from-slate-50 to-gray-50 border-slate-200 hover:border-blue-400 hover:shadow-lg'
         }
       `}
     >
-      {/* Left handle - connects from seed */}
+      {/* Left handle - connects from parent */}
       <Handle
         type="target"
         position={Position.Left}
         className={`!w-3 !h-3 !border-2 !border-white transition-all ${
-          isSelected ? '!bg-amber-600 !scale-125' : '!bg-amber-500'
+          isSelected ? '!bg-blue-600 !scale-125' : '!bg-slate-400'
         }`}
       />
       {/* Right handle - for potential extensions */}
@@ -40,7 +40,7 @@ function OperatorNode({ data, selected }: NodeProps) {
         type="source"
         position={Position.Right}
         className={`!w-3 !h-3 !border-2 !border-white transition-all ${
-          isSelected ? '!bg-amber-600 !scale-125' : '!bg-amber-500'
+          isSelected ? '!bg-blue-600 !scale-125' : '!bg-slate-400'
         }`}
       />
       
@@ -55,8 +55,8 @@ function OperatorNode({ data, selected }: NodeProps) {
             flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center
             transition-all duration-200 hover:scale-110
             ${isSelected 
-              ? 'bg-amber-500 text-white shadow-md' 
-              : 'bg-amber-100 text-amber-400 hover:bg-amber-200 hover:text-amber-600'
+              ? 'bg-blue-500 text-white shadow-md' 
+              : 'bg-slate-100 text-slate-400 hover:bg-blue-100 hover:text-blue-600'
             }
           `}
           title={isSelected ? 'Click to deselect' : 'Click to select for idea generation'}
@@ -68,31 +68,25 @@ function OperatorNode({ data, selected }: NodeProps) {
           )}
         </button>
         
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <div className="flex-shrink-0 w-5 h-5 rounded bg-amber-200 flex items-center justify-center">
-              <Zap className="w-3 h-3 text-amber-700" />
-            </div>
-            <span className={`font-semibold text-sm truncate ${
-              isSelected ? 'text-amber-700' : 'text-slate-800'
-            }`}>
-              {nodeData.title}
-            </span>
-          </div>
+        <div className="flex-1">
+          {/* Title - full text visible, no truncation */}
+          <h4 className={`font-semibold text-sm leading-snug ${
+            isSelected ? 'text-blue-700' : 'text-slate-800'
+          }`}>
+            {nodeData.title}
+          </h4>
           {nodeData.description && (
-            <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-snug">
+            <p className="text-[11px] text-slate-500 mt-1.5 leading-snug">
               {nodeData.description}
             </p>
           )}
-          <div className="flex items-center justify-between mt-2 pt-2 border-t border-amber-100">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-200 text-amber-700 uppercase tracking-wide">
-              <Zap className="w-2.5 h-2.5" />
-              TRIZ Operator
-            </span>
-            <span className="text-[9px] text-slate-400">
-              {isSelected ? '✓ Selected' : ''}
-            </span>
-          </div>
+          {isSelected && (
+            <div className="mt-2 pt-2 border-t border-slate-100">
+              <span className="text-[10px] text-blue-600 font-medium">
+                ✓ Selected for idea generation
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>

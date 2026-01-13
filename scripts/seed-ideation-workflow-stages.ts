@@ -11,55 +11,57 @@ const prisma = new PrismaClient()
 async function main() {
   console.log('🚀 Seeding Ideation workflow stages...')
 
-  // Ideation workflow stages
+  // Ideation workflow stages - NEW PIPELINE (SRS-compliant)
+  // Pipeline: SEED_INPUT → SEMANTIC_GROUNDING → INVENTIVE_FRAMING → 
+  //   DIMENSION_DISCOVERY → DIMENSION_EXPANSION → IDEA_GENERATION → PRELIMINARY_NOVELTY_ASSESSMENT
   const ideationStages = [
     {
       code: 'IDEATION_NORMALIZE',
       displayName: 'Seed Normalization',
       featureCode: 'IDEATION',
-      description: 'Extracts structured information from the seed input (core entity, goal, constraints, unknowns, contradictions)',
+      description: 'Semantic Grounding: understands the idea WITHOUT inventing, reframing, or solving. Extracts core entity, user intent, constraints, assumptions, and clarification questions.',
       sortOrder: 1,
     },
     {
       code: 'IDEATION_CLASSIFY',
       displayName: 'Invention Classification',
       featureCode: 'IDEATION',
-      description: 'Classifies the invention into categories (Product/Method/System/etc.) with multi-label support',
+      description: 'Inventive Framing: identifies genuine inventive tensions ONLY if they exist. Does NOT force TRIZ-style conflicts.',
       sortOrder: 2,
     },
     {
       code: 'IDEATION_CONTRADICTION_MAPPING',
       displayName: 'Contradiction Mapping (Stage 2.5)',
       featureCode: 'IDEATION',
-      description: 'Maps technical contradictions to TRIZ inventive principles and resolution strategies',
+      description: '⚠️ LEGACY - No longer used. Contradiction detection moved to Inventive Framing stage.',
       sortOrder: 3,
     },
     {
       code: 'IDEATION_EXPAND',
       displayName: 'Dimension Expansion',
       featureCode: 'IDEATION',
-      description: 'Expands dimension nodes with specific options based on the invention context',
+      description: 'Dimension Discovery & Expansion: discovers invention-specific dimensions (not from templates) and generates assumption-breaking moves (REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY).',
       sortOrder: 4,
     },
     {
       code: 'IDEATION_OBVIOUSNESS_FILTER',
       displayName: 'Obviousness Filter (Stage 3.5)',
       featureCode: 'IDEATION',
-      description: 'Scores selected dimensions for novelty before generation, suggests wildcards for obvious combinations',
+      description: '⚠️ LEGACY - No longer used. Obviousness gating logic has been removed per SRS.',
       sortOrder: 5,
     },
     {
       code: 'IDEATION_GENERATE',
       displayName: 'Idea Frame Generation',
       featureCode: 'IDEATION',
-      description: 'Generates structured invention ideas (IdeaFrames) from selected components, dimensions, and operators with inventive logic',
+      description: 'Mechanism-Pure Idea Generation: generates patent ideas with EXACTLY ONE causal mechanism. Ideas with multiple mechanisms are rejected.',
       sortOrder: 6,
     },
     {
       code: 'IDEATION_NOVELTY',
       displayName: 'Novelty Assessment',
       featureCode: 'IDEATION',
-      description: 'Analyzes search results to assess novelty, provides mutation instructions for weak ideas',
+      description: 'Preliminary Novelty Assessment (LLM-only): assesses conceptual originality and novelty risk. NO patent databases searched. NO legal novelty claims.',
       sortOrder: 7,
     },
   ]
@@ -175,15 +177,15 @@ async function main() {
   })
   console.log(`\n✅ Feature: ${ideationFeature.code}`)
 
-  // Create ideation tasks
+  // Create ideation tasks - names reflect new SRS pipeline
   const tasks = [
-    { code: 'IDEATION_NORMALIZE', name: 'Seed Normalization' },
-    { code: 'IDEATION_CLASSIFY', name: 'Invention Classification' },
-    { code: 'IDEATION_CONTRADICTION_MAPPING', name: 'Contradiction Mapping' },
-    { code: 'IDEATION_EXPAND', name: 'Dimension Expansion' },
-    { code: 'IDEATION_OBVIOUSNESS_FILTER', name: 'Obviousness Filter' },
-    { code: 'IDEATION_GENERATE', name: 'Idea Frame Generation' },
-    { code: 'IDEATION_NOVELTY', name: 'Novelty Assessment' },
+    { code: 'IDEATION_NORMALIZE', name: 'Semantic Grounding' },
+    { code: 'IDEATION_CLASSIFY', name: 'Inventive Framing' },
+    { code: 'IDEATION_CONTRADICTION_MAPPING', name: 'Contradiction Mapping (LEGACY)' },
+    { code: 'IDEATION_EXPAND', name: 'Dimension Discovery & Expansion' },
+    { code: 'IDEATION_OBVIOUSNESS_FILTER', name: 'Obviousness Filter (LEGACY)' },
+    { code: 'IDEATION_GENERATE', name: 'Mechanism-Pure Idea Generation' },
+    { code: 'IDEATION_NOVELTY', name: 'Preliminary Novelty Assessment' },
   ]
 
   for (const task of tasks) {

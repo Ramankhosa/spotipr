@@ -89,34 +89,36 @@ const NON_LLM_STAGES = [
 // Ideation stage metadata - helps Super Admin choose appropriate models
 // Stages marked as 'lightweight' can use faster, cheaper models (Flash, Mini, Haiku)
 // Stages marked as 'advanced' benefit from more capable models (Pro, Sonnet, GPT-4o)
-const IDEATION_STAGE_INFO: Record<string, { complexity: 'lightweight' | 'advanced'; tip: string }> = {
+// NEW PIPELINE: SEED_INPUT → SEMANTIC_GROUNDING → INVENTIVE_FRAMING → 
+//   DIMENSION_DISCOVERY → DIMENSION_EXPANSION → IDEA_GENERATION → PRELIMINARY_NOVELTY_ASSESSMENT
+const IDEATION_STAGE_INFO: Record<string, { complexity: 'lightweight' | 'advanced' | 'deprecated'; tip: string }> = {
   'IDEATION_NORMALIZE': {
     complexity: 'lightweight',
-    tip: 'Quick structured extraction with contradiction detection - Flash/Mini models work well'
+    tip: '🔍 Semantic Grounding - understands idea without inventing/reframing - Flash/Mini models work well'
   },
   'IDEATION_CLASSIFY': {
     complexity: 'lightweight',
-    tip: 'Simple classification task - Flash/Mini models sufficient'
+    tip: '🎯 Inventive Framing - identifies genuine tensions (not forced TRIZ) - Flash/Mini sufficient'
   },
   'IDEATION_CONTRADICTION_MAPPING': {
-    complexity: 'lightweight',
-    tip: 'Maps contradictions to TRIZ principles - Flash/Mini models sufficient'
+    complexity: 'deprecated',
+    tip: '⚠️ LEGACY - No longer used in new pipeline. Replaced by INVENTIVE_FRAMING stage.'
   },
   'IDEATION_EXPAND': {
     complexity: 'lightweight',
-    tip: 'Dimension expansion - Flash/Mini models handle this well'
+    tip: '🌳 Dimension Discovery & Expansion - generates invention-specific dimensions - Flash/Mini models handle this well'
   },
   'IDEATION_OBVIOUSNESS_FILTER': {
-    complexity: 'lightweight',
-    tip: 'Pre-generation novelty check - Flash/Mini models sufficient'
+    complexity: 'deprecated',
+    tip: '⚠️ LEGACY - No longer used in new pipeline. Obviousness gating removed per SRS.'
   },
   'IDEATION_GENERATE': {
     complexity: 'advanced',
-    tip: 'Complex idea synthesis with inventive logic - Recommend Pro/Sonnet/GPT-4o for quality'
+    tip: '💡 Mechanism-Pure Idea Generation - EXACTLY ONE causal mechanism per idea - Recommend Pro/Sonnet/GPT-4o for quality'
   },
   'IDEATION_NOVELTY': {
     complexity: 'advanced',
-    tip: 'Novelty reasoning with PHOSITA test - Recommend Pro/Sonnet/GPT-4o for accuracy'
+    tip: '🔬 Preliminary Novelty Assessment (LLM-only, no prior art) - conceptual originality check - Recommend Pro/Sonnet/GPT-4o'
   }
 }
 

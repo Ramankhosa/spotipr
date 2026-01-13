@@ -102,6 +102,9 @@ export const PrimaryChangeEnum = z.enum([
   'DECOUPLE',
   'RELOCATE',
   'DELAY',
+  'REPLACE',    // Added: LLMs commonly suggest this action
+  'COMBINE',    // Added: Merge multiple elements
+  'SIMPLIFY',   // Added: Reduce complexity
 ]);
 export type PrimaryChange = z.infer<typeof PrimaryChangeEnum>;
 
@@ -240,10 +243,10 @@ export type DimensionDiscovery = z.infer<typeof DimensionDiscoverySchema>;
  */
 export const AssumptionBreakingMoveSchema = z.object({
   moveText: z.string().min(1).describe('What if we... statement'),
-  primaryChange: PrimaryChangeEnum.describe('Type of change: REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY'),
+  primaryChange: PrimaryChangeEnum.describe('Type of change: REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY | REPLACE | COMBINE | SIMPLIFY'),
   immediateEffect: z.string().describe('What happens immediately when this move is applied'),
   newProblemCreated: z.string().describe('What new problem or constraint this creates'),
-  contradictionAddressed: z.string().optional()
+  contradictionAddressed: z.string().nullable().optional()
     .describe('Which tension or contradiction this move addresses'),
 });
 export type AssumptionBreakingMove = z.infer<typeof AssumptionBreakingMoveSchema>;
@@ -690,7 +693,7 @@ export function getSchemaDescription(schemaName: string): string {
     DimensionExpansion: `[
   {
     "moveText": "What if we...",
-    "primaryChange": "REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY",
+    "primaryChange": "REMOVE | INVERT | DECOUPLE | RELOCATE | DELAY | REPLACE | COMBINE | SIMPLIFY",
     "immediateEffect": "what happens immediately",
     "newProblemCreated": "what new problem this creates",
     "contradictionAddressed": "which tension this addresses"

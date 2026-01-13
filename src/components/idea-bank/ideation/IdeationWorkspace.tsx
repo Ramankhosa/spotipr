@@ -1456,8 +1456,8 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     }
   }
 
-  // Export to idea bank
-  const handleExportToBank = async (ideaFrameIds: string[]) => {
+  // Export to idea bank (with optional selected improvement suggestions)
+  const handleExportToBank = async (ideaFrameIds: string[], selectedSuggestions?: Record<string, string[]>) => {
     if (!currentSession || ideaFrameIds.length === 0) return
 
     try {
@@ -1467,12 +1467,18 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
         },
-        body: JSON.stringify({ ideaFrameIds }),
+        body: JSON.stringify({ 
+          ideaFrameIds,
+          selectedSuggestions: selectedSuggestions || {},
+        }),
       })
 
       if (response.ok) {
         const data = await response.json()
-        alert(`Successfully exported ${data.exportedCount} idea(s) to Idea Bank!`)
+        const suggestionsNote = selectedSuggestions && Object.keys(selectedSuggestions).length > 0
+          ? ' (including selected improvement directions)'
+          : ''
+        alert(`Successfully exported ${data.exportedCount} idea(s) to Idea Bank${suggestionsNote}!`)
         onExportToBank()
       }
     } catch (e) {

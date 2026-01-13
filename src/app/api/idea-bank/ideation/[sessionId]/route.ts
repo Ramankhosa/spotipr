@@ -91,21 +91,44 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       },
       graph: { nodes, edges },
       combineTray: ideationSession.combineTray,
-      ideaFrames: ideationSession.ideaFrames.map(frame => ({
-        id: frame.id,
-        title: frame.title,
-        problem: frame.problem,
-        principle: frame.principle,
-        technicalEffect: frame.technicalEffect,
-        classLabels: frame.classLabels,
-        status: frame.status,
-        noveltyScore: frame.noveltyScore,
-        userRating: frame.userRating,
-        userNotes: frame.userNotes,
-        data: frame.ideaFrameJson,
-        noveltySummary: frame.noveltySummaryJson, // Prior art analysis results
-        createdAt: frame.createdAt,
-      })),
+      ideaFrames: ideationSession.ideaFrames.map(frame => {
+        // Flatten ideaFrameJson so frontend gets coreMechanism, inventiveLeap, etc. directly
+        const ideaData = (frame.ideaFrameJson as any) || {};
+        const noveltyData = (frame.noveltySummaryJson as any) || {};
+        
+        return {
+          id: frame.id,
+          title: frame.title || ideaData.title,
+          problem: frame.problem || ideaData.problem,
+          principle: frame.principle || ideaData.principle,
+          technicalEffect: frame.technicalEffect,
+          classLabels: frame.classLabels,
+          status: frame.status,
+          userRating: frame.userRating,
+          userNotes: frame.userNotes,
+          createdAt: frame.createdAt,
+          // SRS Section 5: Flattened IdeaFrame fields for frontend
+          coreMechanism: ideaData.coreMechanism || frame.technicalEffect || '',
+          inventiveLeap: ideaData.inventiveLeap || '',
+          eliminatedAssumption: ideaData.eliminatedAssumption || '',
+          contradictionResolved: ideaData.contradictionResolved || '',
+          whyNotObvious: ideaData.whyNotObvious || '',
+          mechanismBoundaryTest: ideaData.mechanismBoundaryTest || null,
+          // Novelty assessment (LLM-only, no prior art per SRS)
+          noveltyAssessment: noveltyData.originalityStrength ? {
+            originalityStrength: noveltyData.originalityStrength,
+            noveltyRiskLevel: noveltyData.noveltyRiskLevel,
+            likelyExaminerObjection: noveltyData.likelyExaminerObjection,
+            redundancyRisk: noveltyData.redundancyRisk,
+            strongestNovelAspect: noveltyData.strongestNovelAspect,
+            weakestNovelAspect: noveltyData.weakestNovelAspect,
+            improvementDirections: noveltyData.improvementDirections || [],
+          } : null,
+          // Legacy fields for backward compatibility
+          data: frame.ideaFrameJson,
+          noveltySummary: frame.noveltySummaryJson,
+        };
+      }),
     });
   } catch (error) {
     console.error('Failed to get ideation session:', error);

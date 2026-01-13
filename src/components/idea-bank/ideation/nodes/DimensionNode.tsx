@@ -96,8 +96,7 @@ function DimensionNode({ data, selected }: NodeProps) {
   const isSuggestedMove = isSuggestedMovePayload(payloadData)
   const moveData = isSuggestedMove ? payloadData : null
   
-  // Hover state for showing full description
-  const [isHovered, setIsHovered] = useState(false)
+  // Note: Removed hover expansion - content is shown fully by default
   
   // User input state for dimension exploration
   const [userInput, setUserInput] = useState('')
@@ -136,22 +135,21 @@ function DimensionNode({ data, selected }: NodeProps) {
   }, [])
 
   // Render suggested move format (new context-aware format)
+  // Fixed size - no hover expansion, full content visible by default
   if (isSuggestedMove && moveData) {
     return (
       <div
         onClick={(e) => e.stopPropagation()} // Prevent React Flow from selecting node on click
         onDoubleClick={handleDoubleClick}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
         data-new={isNew ? "true" : undefined}
         className={`
-          group relative rounded-lg transition-all duration-150
-          w-[340px] border-l-4 border border-slate-200
+          group relative rounded-lg
+          w-[380px] border-l-4 border border-slate-200
           ${isSelected
             ? 'bg-blue-50 border-l-blue-500 shadow-md ring-1 ring-blue-300'
             : moveData.challengesPrior
-              ? 'bg-amber-50/50 border-l-amber-500 hover:shadow-sm hover:border-amber-300'
-              : `${familyColor.bg} ${familyColor.border} hover:shadow-sm hover:border-slate-300`
+              ? 'bg-amber-50/50 border-l-amber-500'
+              : `${familyColor.bg} ${familyColor.border}`
           }
         `}
       >
@@ -194,9 +192,9 @@ function DimensionNode({ data, selected }: NodeProps) {
               {isSelected && <Check className="w-3 h-3" />}
             </button>
             
-            <div className="flex-1 min-w-0 pr-8">
-              {/* "What if..." statement - the main move */}
-              <h4 className={`font-semibold text-[13px] leading-tight ${
+            <div className="flex-1 pr-8">
+              {/* "What if..." statement - the main move - full text visible */}
+              <h4 className={`font-semibold text-[13px] leading-snug ${
                 isSelected ? 'text-blue-800' : moveData.challengesPrior ? 'text-amber-800' : familyColor.text
               }`}>
                 {moveData.move}
@@ -213,12 +211,12 @@ function DimensionNode({ data, selected }: NodeProps) {
             </div>
           </div>
           
-          {/* Leads to section */}
+          {/* Leads to section - full content visible */}
           <div className="mt-1.5 flex items-start gap-1.5">
             <Zap className="w-3 h-3 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
               <span className="text-[10px] font-semibold text-blue-700 uppercase tracking-wide">Leads to:</span>
-              <p className={`text-[11px] text-slate-600 leading-snug ${isHovered ? '' : 'line-clamp-2'}`}>
+              <p className="text-[11px] text-slate-600 leading-snug">
                 {moveData.leadsTo}
               </p>
             </div>
@@ -230,7 +228,7 @@ function DimensionNode({ data, selected }: NodeProps) {
               <AlertTriangle className="w-3 h-3 text-amber-600 mt-0.5 flex-shrink-0" />
               <div>
                 <span className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Tension:</span>
-                <p className={`text-[11px] text-amber-700 leading-snug ${isHovered ? '' : 'line-clamp-2'}`}>
+                <p className="text-[11px] text-amber-700 leading-snug">
                   {moveData.tension}
                 </p>
               </div>
@@ -408,19 +406,18 @@ function DimensionNode({ data, selected }: NodeProps) {
   }
 
   // Original dimension node format (for families and legacy options)
+  // Fixed size - no hover expansion, full content visible by default
   return (
     <div
       onClick={(e) => e.stopPropagation()} // Prevent React Flow from selecting node on click
       onDoubleClick={handleDoubleClick}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
       data-new={isNew ? "true" : undefined}
       className={`
-        group relative rounded-lg transition-all duration-150
-        w-[280px] border-l-4 border border-slate-200
+        group relative rounded-lg
+        w-[320px] border-l-4 border border-slate-200
         ${isSelected
           ? 'bg-blue-50 border-l-blue-500 shadow-md ring-1 ring-blue-300'
-          : `${familyColor.bg} ${familyColor.border} hover:shadow-sm hover:border-slate-300`
+          : `${familyColor.bg} ${familyColor.border}`
         }
       `}
     >
@@ -472,12 +469,9 @@ function DimensionNode({ data, selected }: NodeProps) {
               {nodeData.title}
             </h4>
             
-            {/* Description - shows more lines, expands on hover */}
+            {/* Description - full content visible */}
             {nodeData.description && (
-              <p className={`
-                text-[11px] text-slate-600 mt-1 leading-snug
-                ${isHovered ? '' : 'line-clamp-3'}
-              `}>
+              <p className="text-[11px] text-slate-600 mt-1 leading-snug">
                 {nodeData.description}
               </p>
             )}
