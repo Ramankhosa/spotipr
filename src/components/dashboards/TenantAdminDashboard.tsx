@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useTenantView } from '@/lib/tenant-view-context'
+import UserDashboard from './UserDashboard'
 
 interface ATIToken {
   id: string
@@ -44,6 +46,9 @@ interface SignupUser {
 
 export default function TenantAdminDashboard() {
   const { user, logout } = useAuth()
+  const { viewMode, setViewMode } = useTenantView()
+
+  // All hooks must be declared before any conditional returns
   const [tokens, setTokens] = useState<ATIToken[]>([])
   const [teams, setTeams] = useState<TeamOption[]>([])
   const [teamsError, setTeamsError] = useState<string | null>(null)
@@ -75,9 +80,13 @@ export default function TenantAdminDashboard() {
   const [usersError, setUsersError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetchTokens()
-    fetchTeams()
-  }, [])
+    // Only fetch admin data when in admin mode
+    if (viewMode === 'admin') {
+      fetchTokens()
+      fetchTeams()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode])
 
   const fetchTokens = async () => {
     try {
@@ -281,6 +290,12 @@ export default function TenantAdminDashboard() {
     }
   }
 
+  // User Mode - show the UserDashboard (toggle is now in the header)
+  if (viewMode === 'user') {
+    return <UserDashboard />
+  }
+
+  // Admin Mode - show the admin dashboard
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -288,23 +303,17 @@ export default function TenantAdminDashboard() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Tenant Admin Dashboard</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Tenant Admin Dashboard</h1>
               <p className="text-gray-600">Manage ATI tokens and team access for {user?.ati_id}</p>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center gap-4">
               <button
                 onClick={() => window.location.href = '/tenant-admin/analytics'}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                className="inline-flex items-center gap-2 px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
               >
                 📊 Analytics
               </button>
-              <span className="text-sm text-gray-500">Role: {user?.roles?.join(', ') || 'None'}</span>
-              <button
-                onClick={() => logout()}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                Logout
-              </button>
+              <span className="text-sm text-gray-500 hidden md:inline">Role: {user?.roles?.join(', ') || 'None'}</span>
             </div>
           </div>
         </div>

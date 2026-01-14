@@ -3,14 +3,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { useTenantView } from '@/lib/tenant-view-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
+import { Settings, FileText } from 'lucide-react'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
+  const { viewMode, setViewMode } = useTenantView()
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
   const menuTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // Check if user is a tenant admin (OWNER or ADMIN role)
+  const isTenantAdmin = user?.roles?.includes('OWNER') || user?.roles?.includes('ADMIN')
 
   // Close menu function
   const closeMenu = useCallback(() => {
@@ -171,6 +177,32 @@ export default function Header() {
                 >
                   🔍 Search
                 </Link>
+
+                {/* Tenant Admin Mode Toggle - Only show for OWNER/ADMIN roles */}
+                {isTenantAdmin && (
+                  <div className="flex items-center border-l border-gpt-gray-200 pl-3 ml-1">
+                    <button
+                      onClick={() => setViewMode(viewMode === 'user' ? 'admin' : 'user')}
+                      className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border transition-all duration-200 ${
+                        viewMode === 'admin'
+                          ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                          : 'bg-white text-gpt-gray-700 border-gpt-gray-200 hover:bg-gpt-gray-50'
+                      }`}
+                    >
+                      {viewMode === 'admin' ? (
+                        <>
+                          <FileText className="w-4 h-4" />
+                          <span className="hidden sm:inline">User Mode</span>
+                        </>
+                      ) : (
+                        <>
+                          <Settings className="w-4 h-4" />
+                          <span className="hidden sm:inline">Admin Mode</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {/* Compact User Dropdown */}
                 <button

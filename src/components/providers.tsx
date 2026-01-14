@@ -1,11 +1,14 @@
 'use client'
 
 import { AuthProvider } from '@/lib/auth-context'
+import { TenantViewProvider } from '@/lib/tenant-view-context'
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      {children}
+      <TenantViewProvider>
+        {children}
+      </TenantViewProvider>
     </AuthProvider>
   )
 }
