@@ -3031,11 +3031,11 @@ async function handleGetExportPreview(user: any, patentId: string, data: any) {
 
 // Whitelist of allowed single-line skinparam keys
 // Extended to support canonical patent diagram styles (nodesep, ranksep, thickness, padding, etc.)
-// EXPLICITLY BANNED: FontColor, Style (except PackageTitleFontStyle), class/component/node skinparams
-const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|componentBackgroundColor|packageBackgroundColor|activityBackgroundColor|participantBackgroundColor|actorBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
+// EXPLICITLY BANNED: BackgroundColor, FontColor, Style (except PackageTitleFontStyle), class/component/node skinparams
+const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
 
 // Explicitly banned skinparam patterns (these are stripped even if they match other patterns)
-const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
+const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(BackgroundColor|FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SKINPARAM BLOCK HANDLING - ATOMIC BLOCK PROCESSING
@@ -3083,30 +3083,73 @@ const SEQUENCE_MAX_MESSAGES = 12
 
 // F: FIXED SKINPARAM BLOCK (Pre-injected, LLM never generates skinparams)
 // This removes an entire failure class where LLM generates invalid skinparams.
-const FIXED_SKINPARAM_BLOCK = `skinparam backgroundColor transparent
-skinparam rectangleBackgroundColor transparent
-skinparam componentBackgroundColor transparent
-skinparam packageBackgroundColor transparent
-skinparam activityBackgroundColor transparent
-skinparam participantBackgroundColor transparent
-skinparam actorBackgroundColor transparent
-skinparam monochrome true
+const FIXED_SKINPARAM_BLOCK = `skinparam monochrome true
 skinparam shadowing false
-skinparam roundcorner 6
+skinparam roundcorner 10
 skinparam defaultFontName Arial
 skinparam defaultFontSize 14
 skinparam ArrowColor black
 skinparam BorderColor black
 skinparam linetype ortho
-skinparam nodesep 50
-skinparam ranksep 45
-skinparam BorderThickness 1.3
-skinparam PackageBorderThickness 1.3
-skinparam PackageTitleFontStyle bold`
+skinparam nodesep 40
+skinparam ranksep 35`
 
 // E: PLANTUML SAFE SUBSET - Only these constructs are allowed
 // Allowed: @startuml, @enduml, skinparam, rectangle, package, participant, -->, ..>, start, stop, :action;
 // Forbidden: note, box, alt, loop, fork, if, else, endif, repeat, while, switch, title, caption
+
+/**
+ * C4: Extract component labels from PlantUML code
+ * Looks for patterns like "Name (XXX)" or "Name (XXX)" in rectangles, participants, etc.
+ * Returns array of normalized component names (e.g., ["Controller (100)", "Sensor (200)"])
+ */
+function extractComponentLabels(plantuml: string): string[] {
+  const labels: string[] = []
+  
+  // Match patterns in rectangle, participant, actor definitions
+  // Pattern: "Component Name (numeral)" 
+  const labelPattern = /"([^"]+\s*\(\d+\))"/g
+  let match
+  
+  while ((match = labelPattern.exec(plantuml)) !== null) {
+    labels.push(match[1].trim())
+  }
+  
+  return Array.from(new Set(labels)) // Deduplicate
+}
+
+/**
+ * C5: Validate that generated diagram uses only components from include[] list
+ * Returns validation result with any hallucinated (invented) components.
+ */
+function validateIncludeList(
+  plantuml: string, 
+  includeList: string[] | undefined
+): { valid: boolean; hallucinated: string[] } {
+  // If no include list provided, skip validation
+  if (!includeList || includeList.length === 0) {
+    return { valid: true, hallucinated: [] }
+  }
+  
+  // Extract actual labels from the generated PlantUML
+  const usedLabels = extractComponentLabels(plantuml)
+  
+  // Normalize include list for comparison (case-insensitive, trim whitespace)
+  const normalizedInclude = new Set(
+    includeList.map(item => item.trim().toLowerCase())
+  )
+  
+  // Find labels that weren't in the include list (hallucinated components)
+  const hallucinated = usedLabels.filter(label => {
+    const normalized = label.trim().toLowerCase()
+    return !normalizedInclude.has(normalized)
+  })
+  
+  return {
+    valid: hallucinated.length === 0,
+    hallucinated
+  }
+}
 
 /**
  * C3: Check if PlantUML contains forbidden keywords
@@ -3134,6 +3177,10 @@ function containsForbiddenKeywords(plantuml: string): { hasForbidden: boolean; m
 /**
  * C2: Enforce diagram element caps by truncating
  * Returns truncated PlantUML if over cap, original otherwise.
+ * 
+ * BRACE-AWARE: When skipping a rectangle with an opening brace,
+ * we skip all lines until the matching closing brace to prevent
+ * unbalanced braces in the output.
  */
 function enforceDiagramCaps(plantuml: string, diagramType: string): string {
   const caps = DIAGRAM_HARD_CAPS[diagramType.toUpperCase()]
@@ -3145,15 +3192,38 @@ function enforceDiagramCaps(plantuml: string, diagramType: string): string {
   let messageCount = 0
   let participantCount = 0
   
+  // Brace-aware skipping state for BLOCK/FLOW diagrams
+  let skipBraceDepth = 0  // > 0 means we're skipping a braced block
+  
   for (const line of lines) {
     const trimmed = line.trim()
+    
+    // ─────────────────────────────────────────────────────────────────────────
+    // BRACE-AWARE SKIPPING: If we're inside a skipped block, track depth
+    // ─────────────────────────────────────────────────────────────────────────
+    if (skipBraceDepth > 0) {
+      // Count brace changes in this line
+      for (const char of trimmed) {
+        if (char === '{') skipBraceDepth++
+        else if (char === '}') skipBraceDepth--
+      }
+      continue // Skip this line - we're inside a skipped block
+    }
     
     // Count and potentially skip elements based on type
     if (diagramType.toUpperCase() === 'BLOCK' || diagramType.toUpperCase() === 'FLOW') {
       // Count rectangles
       if (/^\s*rectangle\b/i.test(trimmed)) {
         elementCount++
-        if (elementCount > caps.maxElements) continue // Skip excess
+        if (elementCount > caps.maxElements) {
+          // Check if this rectangle opens a brace block
+          const braceChange = countBraceDepthChange(trimmed)
+          if (braceChange > 0) {
+            // This rectangle has an opening brace - enter skip mode
+            skipBraceDepth = braceChange
+          }
+          continue // Skip this rectangle line
+        }
       }
     } else if (diagramType.toUpperCase() === 'ACTIVITY') {
       // Count actions (lines like :Something;)
@@ -3315,7 +3385,7 @@ function cleanForRendering(code: string): string {
       
       // Filter banned properties even inside allowed blocks
       if (!BANNED_SKINPARAM_PATTERNS.test(trimmed) && 
-          !/^\s*FontColor\b/i.test(trimmed)) {
+          !/^\s*(BackgroundColor|FontColor)\b/i.test(trimmed)) {
         result.push(line)
       }
       
@@ -3562,11 +3632,8 @@ function validatePlantUmlStructure(code: string): { ok: boolean; errors: PlantUm
     // Note: This replaces the separate activity_flow checks below to avoid duplicate errors
     const hasStart = lines.some(line => /^\s*start\s*$/i.test(line))
     const hasStop = lines.some(line => /^\s*(stop|end)\s*$/i.test(line))
-    const actionLines = lines
-      .map((line, idx) => ({ line, idx }))
-      .filter(item => /^:.*;\s*$/.test(item.line.trim()))
-    const actionCount = actionLines.length
-
+    const actionCount = lines.filter(line => /^:.*;\s*$/.test(line.trim())).length
+    
     if (!hasStart) {
       errors.push({ type: 'min_content', message: 'Activity diagram must have "start"' })
     }
@@ -3575,15 +3642,6 @@ function validatePlantUmlStructure(code: string): { ok: boolean; errors: PlantUm
     }
     if (actionCount < 3) {
       errors.push({ type: 'min_content', message: `Activity diagram needs at least 3 action steps (found ${actionCount})` })
-    }
-    for (const item of actionLines) {
-      if (!/\(\s*\d{1,3}\s*\)/.test(item.line)) {
-        errors.push({
-          type: 'missing_numeral',
-          message: 'Activity action must include a component numeral in parentheses, e.g., ":Sense input (100);"',
-          line: item.idx + 1
-        })
-      }
     }
   }
   
@@ -3929,7 +3987,7 @@ const getWorkingClaims = (normalized: Record<string, any> = {}) => {
 }
 
 async function handleGenerateClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, jurisdiction, ideaContext, userInstructions } = data
+  const { sessionId, jurisdiction, ideaContext, userInstructions, usePersonaStyle: usePersonaStyleFromData, personaSelection: personaSelectionFromData } = data
 
   if (!sessionId) {
     return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
@@ -4016,14 +4074,18 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     
     // Get writing sample for persona-style consistency (same as drafting stage)
     // OFF by default, user must explicitly enable in UI
-    const usePersonaStyle = (session as any).usePersonaStyle === true
-    const personaSelection = (session as any).personaSelection || undefined
+    // Read from request data (sent from frontend) - not from session
+    const usePersonaStyle = usePersonaStyleFromData === true
+    const personaSelection = personaSelectionFromData || undefined
     let writingSampleBlock = ''
     if (usePersonaStyle && user?.id) {
       try {
         const writingSample = await getWritingSample(user.id, 'claims', activeJurisdiction, personaSelection)
         if (writingSample) {
           writingSampleBlock = buildWritingSampleBlock(writingSample, 'claims')
+          console.log(`[handleGenerateClaims] Writing sample found for claims (persona: ${writingSample.personaName || 'default'})`)
+        } else if (personaSelection?.primaryPersonaId) {
+          console.warn(`[handleGenerateClaims] ⚠️ Persona style enabled but no sample found for claims (jurisdiction: ${activeJurisdiction})`)
         }
       } catch (err) {
         console.warn('[handleGenerateClaims] Failed to get writing sample:', err)
@@ -6003,21 +6065,21 @@ P200 -right-> M300 : data
     syntaxGuide: `Use activity diagram syntax for method/process claims.
 - Start: start
 - End: stop
-- Actions: :Action description (numeral); (numeral required for every step)
+- Actions: :Action description (numeral);
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "processor (200)" not "processor 200"
 - Decisions: if (condition?) then (yes) ... else (no) ... endif
 - Parallel: fork ... fork again ... end fork
 - Notes: Do NOT use "note" elements`,
     exampleCode: `@startuml
 start
-:Receive input data (100);
+:Receive input data;
 :Process data in processor (200);
 if (Valid data?) then (yes)
   :Store in memory (300);
-  :Generate output (400);
+  :Generate output;
 else (no)
-  :Log error (500);
-  :Return error code (600);
+  :Log error;
+  :Return error code;
 endif
 stop
 @enduml`
@@ -6658,7 +6720,7 @@ async function handlePlanAndGenerateDiagramsLLM(
     { 
       sessionId, 
       usePlan: true,  // Use the plan from Stage 1
-      replaceExisting: replaceExisting === true
+      replaceExisting: replaceExisting !== false
     }, 
     requestHeaders
   )
@@ -6990,11 +7052,12 @@ ALLOWED CONSTRUCTS ONLY
 ─────────────────────────────────────────────────────────────────────────────────
 @startuml / @enduml
 rectangle "Name (XXX)" as ALIAS
+package "Group Name" { }
 participant "Name (XXX)" as ALIAS
 --> (solid arrow for data/control)
-..> (dotted arrow for power supply only; no labels)
+..> (dashed arrow for power/utility)
 start / stop (ACTIVITY only)
-:Action text (numeral); (ACTIVITY only)
+:Action text; (ACTIVITY only)
 
 ─────────────────────────────────────────────────────────────────────────────────
 SKINPARAM HANDLING (CRITICAL)
@@ -7002,14 +7065,25 @@ SKINPARAM HANDLING (CRITICAL)
 Do NOT generate ANY skinparam lines. The system injects them automatically.
 
 ─────────────────────────────────────────────────────────────────────────────────
-STRUCTURAL RULES
+STRUCTURAL RULES (TYPE-SPECIFIC)
 ─────────────────────────────────────────────────────────────────────────────────
+UNIVERSAL RULES (ALL DIAGRAM TYPES):
 1. ORIENTATION: Use "top to bottom direction" as DEFAULT.
 2. REFERENCE NUMERALS: Always use parentheses: "Controller (100)"
-3. ACTIVITY STEPS: Every :Action line must include a component numeral in parentheses.
-4. ARROWS: Solid arrows for data/control; dotted arrows (..>) for power supply only.
-5. LABELS: No labels on power lines; other labels max 1-3 words.
-6. ONE @startuml, ONE @enduml per diagram.
+3. ARROWS: Simple connections only. 1-3 word labels max.
+4. ONE @startuml, ONE @enduml per diagram.
+
+BLOCK/FLOW DIAGRAMS ONLY:
+5. SYSTEM BOUNDARY: Wrap all components in one outer rectangle.
+6. SUBSYSTEM GROUPING: Use max 3 packages for logical grouping.
+
+SEQUENCE DIAGRAMS:
+- NO system boundary rectangle (use participant declarations only)
+- NO packages (flat participant list)
+
+ACTIVITY DIAGRAMS:
+- NO system boundary rectangle (just start → actions → stop)
+- NO packages
 
 ═══════════════════════════════════════════════════════════════════════════════
 REFERENCE EXAMPLES (LINEAR ONLY - NO LOGIC)
@@ -7022,15 +7096,19 @@ EXAMPLE: Block Diagram (Correct - Linear, No Logic)
 @startuml
 top to bottom direction
 
-rectangle "Sensor (110)" as SENS
-rectangle "Controller (200)" as CTRL
-rectangle "Actuator (300)" as ACT
-rectangle "Power Supply (500)" as PS
-SENS --> CTRL
-CTRL --> ACT
-PS -down..-> SENS
-PS -down..-> CTRL
-PS -down..-> ACT
+rectangle "System (100)" as SYS {
+  package "Input" {
+    rectangle "Sensor (110)" as SENS
+  }
+  package "Processing" {
+    rectangle "Controller (200)" as CTRL
+  }
+  package "Output" {
+    rectangle "Actuator (300)" as ACT
+  }
+  SENS --> CTRL
+  CTRL --> ACT
+}
 @enduml
 
 ─────────────────────────────────────────────────────────────────────────────────
@@ -7119,7 +7197,7 @@ If in doubt, OMIT rather than add.
     return NextResponse.json({ error: 'Invalid LLM response format' }, { status: 400 })
   }
 
-  const shouldReplace = replaceExisting === true
+  const shouldReplace = replaceExisting !== false
 
   // Optionally clear existing figures before generating new ones
   if (shouldReplace) {
@@ -7171,6 +7249,7 @@ If in doubt, OMIT rather than add.
       // PRODUCTION-SAFE DIAGRAM PROCESSING PIPELINE
       // Step 1: Sanitize (remove unsafe constructs)
       // Step 2: Check forbidden keywords (C3 gate)
+      // Step 2.5: Validate include[] list (C5 - catches hallucinations)
       // Step 3: Inject fixed skinparams (F)
       // Step 4: Enforce element caps (C2)
       // Step 5: Validate structure
@@ -7188,6 +7267,17 @@ If in doubt, OMIT rather than add.
       if (forbiddenCheck.hasForbidden) {
         console.warn(`[DiagramsLLM] FORBIDDEN KEYWORDS detected in "${title}": ${forbiddenCheck.matches.join(', ')}. Skipping diagram.`)
         continue // Skip this diagram - forbidden constructs detected
+      }
+
+      // Step 2.5: C5 INCLUDE LIST VALIDATION (Warning only - catches hallucinations)
+      // Verify that generated diagram uses only components from the planner's include[] list.
+      // If hallucinated components are detected, log a warning but still save the diagram.
+      const plannedFigure = figurePlan?.diagrams?.[i]
+      const includeList = plannedFigure?.include
+      const includeValidation = validateIncludeList(code, includeList)
+      if (!includeValidation.valid) {
+        console.warn(`[DiagramsLLM] Figure "${title}" contains components not in include[] list: ${includeValidation.hallucinated.join(', ')}`)
+        // Note: We still save the diagram but log the warning. This catches subtle hallucinations.
       }
 
       // Step 3: F - INJECT FIXED SKINPARAMS
@@ -7452,8 +7542,9 @@ CONTROLLING SOURCE OF TRUTH: EXISTING PLANTUML DIAGRAMS
 ${existingDiagrams.join('\n')}
 
 CRITICAL: These diagrams define the AUTHORITATIVE structure of the invention.
-- Every entity, label, hierarchy, connection, and interaction shown here is CANON
-- Sketches must NOT contradict, extend, or reinterpret any relationship shown
+- Every entity, label, and explicitly defined physical relationship is CANON
+- Logical or signal interactions in PlantUML do NOT imply physical attachment unless stated
+- Sketches must NOT contradict or extend what is shown
 - Do NOT suggest flowcharts/sequence diagrams (already handled by PlantUML)
 `
   }
@@ -7483,8 +7574,9 @@ STRICT PATENT-DRAFTING CONSTRAINTS (NO EXCEPTIONS)
    that are not explicitly described in the invention facts below.
 
 2. SOURCE OF TRUTH: The PlantUML diagrams (if any) are the controlling authority.
-   Preserve EXACTLY: every entity, label, hierarchy, connection, directionality,
-   and interaction as specified. Do not reinterpret or extend.
+   Preserve EXACTLY: every entity, label, and explicitly defined physical relationship.
+   Logical or signal interactions in PlantUML do not imply physical attachment unless stated.
+   Do not reinterpret or extend.
 
 3. NO CREATIVE FILL-IN: If details are missing or ambiguous, do NOT guess or
    extrapolate. Simply omit that aspect from the sketch suggestion.
@@ -7513,7 +7605,7 @@ VALID SKETCH TYPES (Physical/Visual only):
 ✓ User interface mockups (for software with UI - screens only)
 ✓ Hardware/circuit board physical layouts
 ✓ Mechanical part detail views
-✓ Physical connection views (how parts physically attach)
+✓ Physical connection views (only when attachment mechanism is explicitly described)
 ✓ Perspective drawings, isometric views
 ✓ Installation/deployment physical arrangements
 
@@ -8249,40 +8341,19 @@ MODIFICATION GUIDELINES
    - Preserve existing structure while applying the specific change
 
 ═══════════════════════════════════════════════════════════════════════════════
-CANONICAL STYLE DEFAULTS (Apply unless user explicitly overrides)
+STYLE RULES (SKINPARAMS AUTO-INJECTED)
 ═══════════════════════════════════════════════════════════════════════════════
-When modifying the diagram, APPLY these canonical skinparam settings UNLESS user explicitly requests different styles:
-
-skinparam backgroundColor transparent
-skinparam rectangleBackgroundColor transparent
-skinparam componentBackgroundColor transparent
-skinparam packageBackgroundColor transparent
-skinparam activityBackgroundColor transparent
-skinparam participantBackgroundColor transparent
-skinparam actorBackgroundColor transparent
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 6
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-skinparam nodesep 50
-skinparam ranksep 45
-skinparam BorderThickness 1.3
-skinparam PackageBorderThickness 1.3
-skinparam PackageTitleFontStyle bold
+Do NOT generate any skinparam lines. The system injects them automatically.
+Just focus on the diagram content.
 
 Default direction: top to bottom direction (use left to right only for very simple diagrams ≤3 components)
 
-**PATENT FIGURE SEMANTICS (Apply unless user overrides):**
-- All connectors should be orthogonal (skinparam linetype ortho) unless user requests otherwise.
+**PATENT FIGURE SEMANTICS:**
+- All connectors are orthogonal (handled by system skinparams).
 - Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dotted arrows (..>) = power supply only (no "power" labels).
-- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
-- Activity steps: Every :Action line must include a component numeral in parentheses.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
 - Nesting depth max = 2 levels.
 
 **HELPER NODES ALLOWED:**
@@ -8315,10 +8386,10 @@ TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════════════
 1. ARROW DIRECTIONS: Use "-down->", "-up->", "-left->", "-right->" for layout control.
 2. CONNECTIONS: Always specify both endpoints.
-3. BLOCKS: Close all blocks properly (endif for if, end for start).
+3. BLOCKS: Close all braces properly (every { must have matching }).
 4. STRUCTURE: Exactly ONE @startuml and ONE @enduml per diagram. NO notes.
 5. CONTENT: Use ONLY provided numbered components/numerals. Un-numbered helper nodes (buses) are allowed.
-6. SKINPARAMS: Apply canonical skinparam settings above. If user explicitly requests different styles, follow user's instructions instead.
+6. FORBIDDEN: Do NOT use if/else/endif, alt, loop, fork, repeat, while, switch, note, or box.
 
 Figure title: ${title}
 Output ONLY the modified diagram code (@startuml..@enduml).`
@@ -8341,42 +8412,21 @@ ${numeralsPreview}
 - Helper nodes MUST NOT contain numerals.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CANONICAL STYLE (MANDATORY)
+STYLE RULES (SKINPARAMS AUTO-INJECTED)
 ═══════════════════════════════════════════════════════════════════════════════
-Your diagram MUST include these skinparam settings:
-
-skinparam backgroundColor transparent
-skinparam rectangleBackgroundColor transparent
-skinparam componentBackgroundColor transparent
-skinparam packageBackgroundColor transparent
-skinparam activityBackgroundColor transparent
-skinparam participantBackgroundColor transparent
-skinparam actorBackgroundColor transparent
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 6
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-skinparam nodesep 50
-skinparam ranksep 45
-skinparam BorderThickness 1.3
-skinparam PackageBorderThickness 1.3
-skinparam PackageTitleFontStyle bold
+Do NOT generate any skinparam lines. The system injects them automatically.
+Just focus on the diagram content.
 
 Default direction: top to bottom direction (produces cleaner patent figures)
 
 ═══════════════════════════════════════════════════════════════════════════════
 PATENT FIGURE SEMANTICS (STRICT)
 ═══════════════════════════════════════════════════════════════════════════════
-- All connectors must be orthogonal (skinparam linetype ortho is mandatory).
+- All connectors are orthogonal (handled by system skinparams).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dotted arrows (..>) = power supply only (no "power" labels).
-- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
-- Activity steps: Every :Action line must include a component numeral in parentheses.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
 - Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8411,9 +8461,7 @@ DIAGRAM TECHNICAL REQUIREMENTS
    - CORRECT: 500 --> 600
    - INCORRECT: 500 -- (Dangling connection)
 
-3. BLOCKS: Close all blocks properly.
-   - matching "endif" for every "if"
-   - matching "end" for every "start"
+3. BLOCKS: Close all braces properly (every { must have matching }).
 
 4. STRUCTURE:
    - Exactly ONE @startuml and ONE @enduml per diagram.
@@ -8423,6 +8471,8 @@ DIAGRAM TECHNICAL REQUIREMENTS
    - Use ONLY provided numbered components/numerals.
    - Un-numbered helper nodes (buses) are allowed for routing.
    - NUMERALS MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
+
+6. FORBIDDEN: Do NOT use if/else/endif, alt, loop, fork, repeat, while, switch, note, or box.
 
 Existing title: ${title}
 User instructions: ${instructions || 'none'}
@@ -8548,42 +8598,21 @@ ${numeralsPreview}
 - Helper nodes MUST NOT contain numerals.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CANONICAL STYLE (MANDATORY)
+STYLE RULES (SKINPARAMS AUTO-INJECTED)
 ═══════════════════════════════════════════════════════════════════════════════
-Your diagram MUST include these skinparam settings:
-
-skinparam backgroundColor transparent
-skinparam rectangleBackgroundColor transparent
-skinparam componentBackgroundColor transparent
-skinparam packageBackgroundColor transparent
-skinparam activityBackgroundColor transparent
-skinparam participantBackgroundColor transparent
-skinparam actorBackgroundColor transparent
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 6
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-skinparam nodesep 50
-skinparam ranksep 45
-skinparam BorderThickness 1.3
-skinparam PackageBorderThickness 1.3
-skinparam PackageTitleFontStyle bold
+Do NOT generate any skinparam lines. The system injects them automatically.
+Just focus on the diagram content.
 
 Default direction: top to bottom direction (produces cleaner patent figures)
 
 ═══════════════════════════════════════════════════════════════════════════════
 PATENT FIGURE SEMANTICS (STRICT)
 ═══════════════════════════════════════════════════════════════════════════════
-- All connectors must be orthogonal (skinparam linetype ortho is mandatory).
+- All connectors are orthogonal (handled by system skinparams).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dotted arrows (..>) = power supply only (no "power" labels).
-- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
-- Activity steps: Every :Action line must include a component numeral in parentheses.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
 - Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8751,25 +8780,18 @@ CANONICAL STYLE (MANDATORY FOR EACH DIAGRAM)
 ═══════════════════════════════════════════════════════════════════════════════
 Each diagram MUST include these skinparam settings:
 
-skinparam backgroundColor transparent
-skinparam rectangleBackgroundColor transparent
-skinparam componentBackgroundColor transparent
-skinparam packageBackgroundColor transparent
-skinparam activityBackgroundColor transparent
-skinparam participantBackgroundColor transparent
-skinparam actorBackgroundColor transparent
 skinparam monochrome true
 skinparam shadowing false
-skinparam roundcorner 6
+skinparam roundcorner 10
 skinparam defaultFontName Arial
 skinparam defaultFontSize 14
 skinparam ArrowColor black
 skinparam BorderColor black
 skinparam linetype ortho
-skinparam nodesep 50
-skinparam ranksep 45
-skinparam BorderThickness 1.3
-skinparam PackageBorderThickness 1.3
+skinparam nodesep 40
+skinparam ranksep 35
+skinparam BorderThickness 1.7
+skinparam PackageBorderThickness 1.7
 skinparam PackageTitleFontStyle bold
 
 Default direction: top to bottom direction (produces cleaner patent figures)
@@ -8780,9 +8802,8 @@ PATENT FIGURE SEMANTICS (STRICT)
 - All connectors must be orthogonal (skinparam linetype ortho is mandatory).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
-- Dotted arrows (..>) = power supply only (no "power" labels).
-- Label grammar: Data labels are nouns, control labels are verbs; do not label power connections.
-- Activity steps: Every :Action line must include a component numeral in parentheses.
+- Dashed arrows (..>) = power/utility ONLY.
+- Label grammar: Data labels are nouns, control labels are verbs.
 - Nesting depth max = 2 levels.
 
 ═══════════════════════════════════════════════════════════════════════════════

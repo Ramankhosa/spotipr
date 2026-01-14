@@ -22,6 +22,22 @@ interface ServiceAccess {
   dailyQuota: number | null
 }
 
+interface TeamStats {
+  totals: {
+    patentsDrafted: number
+    noveltySearches: number
+    totalInputTokens: number
+    totalOutputTokens: number
+  }
+  members: Array<{
+    userId: string
+    patentsDrafted: number
+    noveltySearches: number
+    totalInputTokens: number
+    totalOutputTokens: number
+  }>
+}
+
 interface Team {
   id: string
   name: string
@@ -250,7 +266,7 @@ export default function TenantAdminTeamsPage() {
                       className="inline-flex items-center px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
                       title={member.email}
                     >
-                      {member.name || member.email.split('@')[0]}
+                    {member.name || member.email?.split('@')[0] || 'Unknown'}
                       {member.role === 'LEAD' && (
                         <span className="ml-1 text-yellow-500">★</span>
                       )}
@@ -437,6 +453,10 @@ function TeamDetailsModal({
   isAdmin: boolean
 }) {
   const [members, setMembers] = useState<TeamMember[]>(team.members)
+  const [teamStats, setTeamStats] = useState<TeamStats>({
+    totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
+    members: []
+  })
   const [users, setUsers] = useState<any[]>([])
   const [selectedUserId, setSelectedUserId] = useState('')
   const [loading, setLoading] = useState(false)
@@ -461,6 +481,29 @@ function TeamDetailsModal({
     
     fetchUsers()
   }, [token])
+
+  useEffect(() => {
+    const fetchTeamDetails = async () => {
+      if (!token) return
+      try {
+        const res = await fetch(`/api/tenant-admin/teams/${team.id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setMembers(data.members || [])
+          setTeamStats(data.stats || {
+            totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
+            members: []
+          })
+        }
+      } catch (e) {
+        console.error('Failed to fetch team details:', e)
+      }
+    }
+
+    fetchTeamDetails()
+  }, [team.id, token])
 
   const handleAddMember = async () => {
     if (!selectedUserId || !token) return
@@ -494,6 +537,10 @@ function TeamDetailsModal({
       if (memberRes.ok) {
         const data = await memberRes.json()
         setMembers(data.members || [])
+        setTeamStats(data.stats || {
+          totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
+          members: []
+        })
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to add member')
@@ -524,7 +571,17 @@ function TeamDetailsModal({
         throw new Error(data.error || 'Failed to remove member')
       }
       
-      setMembers(prev => prev.filter(m => m.userId !== userId))
+      const memberRes = await fetch(`/api/tenant-admin/teams/${team.id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (memberRes.ok) {
+        const data = await memberRes.json()
+        setMembers(data.members || [])
+        setTeamStats(data.stats || {
+          totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
+          members: []
+        })
+      }
       onUpdate()
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to remove member')
@@ -567,6 +624,13 @@ function TeamDetailsModal({
   // Filter out users who are already members
   const memberUserIds = new Set(members.map(m => m.userId))
   const availableUsers = users.filter(u => !memberUserIds.has(u.id))
+  const getMemberStats = (userId: string) =>
+    teamStats.members.find(m => m.userId === userId) || {
+      patentsDrafted: 0,
+      noveltySearches: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0
+    }
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -581,6 +645,27 @@ function TeamDetailsModal({
           >
             ✕
           </button>
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div className="text-xs text-gray-500 dark:text-gray-400">Patents drafted</div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">
+              {teamStats.totals.patentsDrafted}
+            </div>
+          </div>
+          <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div className="text-xs text-gray-500 dark:text-gray-400">Novelty searches</div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">
+              {teamStats.totals.noveltySearches}
+            </div>
+          </div>
+          <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div className="text-xs text-gray-500 dark:text-gray-400">LLM tokens</div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">
+              {teamStats.totals.totalInputTokens}/{teamStats.totals.totalOutputTokens}
+            </div>
+          </div>
         </div>
         
         {/* Add Member */}
@@ -619,7 +704,7 @@ function TeamDetailsModal({
             Members ({members.length})
           </h4>
           
-          {members.map((member) => (
+        {members.map((member) => (
             <div 
               key={member.id}
               className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
@@ -627,12 +712,12 @@ function TeamDetailsModal({
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
                   <span className="text-sm font-medium text-gray-600 dark:text-gray-300">
-                    {(member.name?.[0] || member.email[0]).toUpperCase()}
+                    {(member.name?.[0] || member.email?.[0] || '?').toUpperCase()}
                   </span>
                 </div>
                 <div>
                   <div className="text-sm font-medium text-gray-900 dark:text-white flex items-center gap-2">
-                    {member.name || member.email.split('@')[0]}
+                    {member.name || member.email?.split('@')[0] || 'Unknown'}
                     {member.role === 'LEAD' && (
                       <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300 rounded">
                         Team Lead
@@ -641,6 +726,12 @@ function TeamDetailsModal({
                   </div>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     {member.email} • {member.userRole}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    {(() => {
+                      const stats = getMemberStats(member.userId)
+                      return `Patents: ${stats.patentsDrafted} • Novelty: ${stats.noveltySearches} • Tokens: ${stats.totalInputTokens}/${stats.totalOutputTokens}`
+                    })()}
                   </div>
                 </div>
               </div>

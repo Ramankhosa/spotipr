@@ -12,6 +12,7 @@ import { prisma } from '@/lib/prisma'
 import type { UserRole } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
+const TEAM_MAX_MEMBERS = Number.parseInt(process.env.TEAM_MAX_MEMBERS || '', 10)
 
 /**
  * GET /api/tenant-admin/teams/[teamId]
@@ -64,6 +65,59 @@ export async function GET(
     const userMembership = team.members.find(m => m.userId === user.sub)
     const isTeamLead = userMembership?.role === 'LEAD'
     const isAdmin = (user.roles || []).some((r: string) => ['OWNER', 'ADMIN'].includes(r))
+
+    const memberIds = team.members.map(m => m.userId)
+    const memberStats: Record<string, { patentsDrafted: number; noveltySearches: number; totalInputTokens: number; totalOutputTokens: number }> = {}
+    memberIds.forEach(id => {
+      memberStats[id] = { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 }
+    })
+
+    if (memberIds.length > 0) {
+      const patentsByUser = await prisma.patent.groupBy({
+        by: ['createdBy'],
+        where: { createdBy: { in: memberIds } },
+        _count: { _all: true }
+      })
+
+      for (const row of patentsByUser) {
+        const stats = memberStats[row.createdBy]
+        if (stats) stats.patentsDrafted = row._count._all
+      }
+
+      const noveltyByUser = await prisma.noveltySearchRun.groupBy({
+        by: ['userId'],
+        where: { userId: { in: memberIds }, status: 'COMPLETED' },
+        _count: { _all: true }
+      })
+
+      for (const row of noveltyByUser) {
+        const stats = row.userId ? memberStats[row.userId] : undefined
+        if (stats) stats.noveltySearches = row._count._all
+      }
+
+      const usageByUser = await prisma.usageLog.groupBy({
+        by: ['userId', 'tenantId', 'status'],
+        where: { userId: { in: memberIds }, tenantId: user.tenant_id, status: 'COMPLETED' },
+        _sum: { inputTokens: true, outputTokens: true }
+      })
+
+      for (const row of usageByUser) {
+        const stats = row.userId ? memberStats[row.userId] : undefined
+        if (!stats) continue
+        stats.totalInputTokens += row._sum.inputTokens || 0
+        stats.totalOutputTokens += row._sum.outputTokens || 0
+      }
+    }
+
+    const totals = Object.values(memberStats).reduce(
+      (acc, stats) => ({
+        patentsDrafted: acc.patentsDrafted + stats.patentsDrafted,
+        noveltySearches: acc.noveltySearches + stats.noveltySearches,
+        totalInputTokens: acc.totalInputTokens + stats.totalInputTokens,
+        totalOutputTokens: acc.totalOutputTokens + stats.totalOutputTokens
+      }),
+      { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 }
+    )
     
     return NextResponse.json({
       team: {
@@ -86,6 +140,13 @@ export async function GET(
         joinedAt: m.joinedAt
       })),
       serviceAccess: team.serviceAccess,
+      stats: {
+        totals,
+        members: Object.entries(memberStats).map(([userId, stats]) => ({
+          userId,
+          ...stats
+        }))
+      },
       permissions: {
         canEdit: isTeamLead || isAdmin,
         canAddMembers: isTeamLead || isAdmin,
@@ -145,23 +206,29 @@ export async function PATCH(
         }
         
         const { name, description, isDefault } = data
-        
-        // If setting as default, unset other defaults
-        if (isDefault && !team.isDefault) {
-          await prisma.team.updateMany({
-            where: { tenantId: user.tenant_id!, isDefault: true },
-            data: { isDefault: false }
-          })
+        const updateData = {
+          ...(name !== undefined && { name: name.trim() }),
+          ...(description !== undefined && { description: description?.trim() || null }),
+          ...(isDefault !== undefined && { isDefault })
         }
         
-        await prisma.team.update({
-          where: { id: teamId },
-          data: {
-            ...(name !== undefined && { name: name.trim() }),
-            ...(description !== undefined && { description: description?.trim() || null }),
-            ...(isDefault !== undefined && { isDefault })
-          }
-        })
+        if (isDefault && !team.isDefault) {
+          await prisma.$transaction(async (tx) => {
+            await tx.team.updateMany({
+              where: { tenantId: user.tenant_id!, isDefault: true },
+              data: { isDefault: false }
+            })
+            await tx.team.update({
+              where: { id: teamId },
+              data: updateData
+            })
+          })
+        } else {
+          await prisma.team.update({
+            where: { id: teamId },
+            data: updateData
+          })
+        }
         
         return NextResponse.json({ success: true })
       }
@@ -191,6 +258,16 @@ export async function PATCH(
         if (existing) {
           return NextResponse.json({ error: 'User is already a team member' }, { status: 400 })
         }
+
+        if (Number.isFinite(TEAM_MAX_MEMBERS) && TEAM_MAX_MEMBERS > 0) {
+          const memberCount = await prisma.teamMember.count({ where: { teamId } })
+          if (memberCount >= TEAM_MAX_MEMBERS) {
+            return NextResponse.json(
+              { error: `Team member limit (${TEAM_MAX_MEMBERS}) reached` },
+              { status: 400 }
+            )
+          }
+        }
         
         await prisma.teamMember.create({
           data: { teamId, userId: targetUserId, role }
@@ -216,6 +293,13 @@ export async function PATCH(
         }
         
         const { userId: targetUserId } = data
+
+        if (targetUserId === user.sub) {
+          return NextResponse.json(
+            { error: 'Users cannot remove themselves from teams' },
+            { status: 400 }
+          )
+        }
         
         // Check if member exists
         const membership = await prisma.teamMember.findUnique({
@@ -375,6 +459,13 @@ export async function DELETE(
     
     if (!team || team.tenantId !== user.tenant_id) {
       return NextResponse.json({ error: 'Team not found' }, { status: 404 })
+    }
+
+    if (team.isDefault) {
+      return NextResponse.json(
+        { error: 'Cannot deactivate default team. Set another team as default first.' },
+        { status: 400 }
+      )
     }
     
     // Soft delete - just deactivate

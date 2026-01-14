@@ -12,6 +12,8 @@ interface ATIToken {
   usage_count: number
   plan_tier: string | null
   notes: string | null
+  assigned_role?: string | null
+  assigned_team_id?: string | null
   created_at: string
   updated_at: string
   tenant: {
@@ -560,6 +562,12 @@ export default function SuperAdminATIDashboard() {
                             )}
                             {token.plan_tier && (
                               <span>Tier: {token.plan_tier}</span>
+                            )}
+                            {token.assigned_role && (
+                              <span>Role: {token.assigned_role}</span>
+                            )}
+                            {token.assigned_team_id && (
+                              <span>Team ID: {token.assigned_team_id}</span>
                             )}
                           </div>
                           {token.expires_at && (

@@ -1068,6 +1068,19 @@ Respond in this exact JSON shape:
                   hasPersonaSelection: !!personaSelection?.primaryPersonaId
                 } 
               })
+            } else if (personaSelection?.primaryPersonaId) {
+              // Persona selected but no sample found for this section - add warning
+              debugSteps.push({
+                step: `writing_sample_missing_${s}`,
+                status: 'warning',
+                meta: {
+                  section: s,
+                  jurisdiction: jurisdictionCode,
+                  personaId: personaSelection.primaryPersonaId,
+                  message: `No writing sample found for "${s}" section in selected persona. Add samples to the persona via the Personas page, or the section will be generated without style mimicry.`
+                }
+              })
+              console.warn(`[DraftingService] ⚠️ Persona style enabled but no sample found for section "${s}" (jurisdiction: ${jurisdictionCode})`)
             }
           } catch (err) {
             console.warn(`[DraftingService] Failed to get writing sample for ${s}:`, err)

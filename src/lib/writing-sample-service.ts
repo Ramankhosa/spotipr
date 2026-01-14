@@ -157,7 +157,7 @@ async function getWritingSampleWithPersona(
       include: { persona: { select: { name: true, createdBy: true } } }
     })
 
-    // Fall back to universal for primary
+    // Fall back to universal for primary persona
     if (!primarySample) {
       primarySample = await prisma.writingSample.findFirst({
         where: {
@@ -170,7 +170,46 @@ async function getWritingSampleWithPersona(
       })
     }
 
+    // If no persona sample found, fall back to user's own samples (without persona linkage)
+    // This provides a graceful degradation when personas don't have all sections populated
     if (!primarySample) {
+      // Try jurisdiction-specific user sample first
+      let userSample = await prisma.writingSample.findFirst({
+        where: {
+          userId,
+          sectionKey,
+          jurisdiction,
+          personaId: null, // Only user's direct samples, not persona-linked
+          isActive: true
+        },
+        include: { persona: { select: { name: true } } }
+      })
+
+      // Fall back to universal user sample
+      if (!userSample) {
+        userSample = await prisma.writingSample.findFirst({
+          where: {
+            userId,
+            sectionKey,
+            jurisdiction: '*',
+            personaId: null,
+            isActive: true
+          },
+          include: { persona: { select: { name: true } } }
+        })
+      }
+
+      if (userSample) {
+        console.log(`[WritingSampleService] Persona sample not found for ${sectionKey}, falling back to user's own sample`)
+        return {
+          sampleText: userSample.sampleText,
+          jurisdiction: userSample.jurisdiction,
+          isUniversal: userSample.jurisdiction === '*',
+          personaName: 'Personal Style (fallback)',
+          personaId: undefined
+        }
+      }
+
       return null
     }
 

@@ -32,6 +32,9 @@ import type { UserRole, ServiceType, TeamRole } from '@prisma/client'
 import { getPatentDraftingQuota } from './patent-drafting-tracker'
 import { checkServiceQuota, getServiceUsage } from './service-usage-tracker'
 
+const TEAM_MAX_MEMBERS = Number.parseInt(process.env.TEAM_MAX_MEMBERS || '', 10)
+const TEAM_MAX_TEAMS = Number.parseInt(process.env.TEAM_MAX_TEAMS || '', 10)
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -242,65 +245,73 @@ export async function createTeam(
   if (existing) {
     return { success: false, error: 'Team with this name already exists' }
   }
-  
-  // If setting as default, unset other defaults first
-  if (isDefault) {
-    await prisma.team.updateMany({
-      where: { tenantId: actorContext.tenantId, isDefault: true },
-      data: { isDefault: false }
+
+  if (Number.isFinite(TEAM_MAX_TEAMS) && TEAM_MAX_TEAMS > 0) {
+    const currentTeams = await prisma.team.count({
+      where: { tenantId: actorContext.tenantId, isActive: true }
     })
+    if (currentTeams >= TEAM_MAX_TEAMS) {
+      return { success: false, error: `Maximum team limit (${TEAM_MAX_TEAMS}) reached` }
+    }
   }
   
-  // Create team
-  const team = await prisma.team.create({
-    data: {
-      tenantId: actorContext.tenantId,
-      name,
-      description,
-      isDefault: isDefault || false,
-      createdBy: actorContext.userId
+  const team = await prisma.$transaction(async (tx) => {
+    if (isDefault) {
+      await tx.team.updateMany({
+        where: { tenantId: actorContext.tenantId, isDefault: true },
+        data: { isDefault: false }
+      })
     }
+
+    const createdTeam = await tx.team.create({
+      data: {
+        tenantId: actorContext.tenantId,
+        name,
+        description,
+        isDefault: isDefault || false,
+        createdBy: actorContext.userId
+      }
+    })
+
+    await tx.teamMember.create({
+      data: {
+        teamId: createdTeam.id,
+        userId: actorContext.userId,
+        role: 'LEAD'
+      }
+    })
+
+    const serviceTypes: ServiceType[] = [
+      'PATENT_DRAFTING',
+      'NOVELTY_SEARCH',
+      'PRIOR_ART_SEARCH',
+      'IDEA_BANK',
+      'PERSONA_SYNC',
+      'DIAGRAM_GENERATION',
+      'PATENT_REVIEW'
+    ]
+
+    await tx.teamServiceAccess.createMany({
+      data: serviceTypes.map(serviceType => ({
+        teamId: createdTeam.id,
+        serviceType,
+        isEnabled: true
+      }))
+    })
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: actorContext.userId,
+        tenantId: actorContext.tenantId,
+        action: 'TEAM_CREATE',
+        resource: `team:${createdTeam.id}`,
+        meta: { name, description, isDefault }
+      }
+    })
+
+    return createdTeam
   })
-  
-  // Add creator as team lead
-  await prisma.teamMember.create({
-    data: {
-      teamId: team.id,
-      userId: actorContext.userId,
-      role: 'LEAD'
-    }
-  })
-  
-  // Create default service access (all enabled)
-  const serviceTypes: ServiceType[] = [
-    'PATENT_DRAFTING',
-    'NOVELTY_SEARCH',
-    'PRIOR_ART_SEARCH',
-    'IDEA_BANK',
-    'PERSONA_SYNC',
-    'DIAGRAM_GENERATION',
-    'PATENT_REVIEW'
-  ]
-  
-  await prisma.teamServiceAccess.createMany({
-    data: serviceTypes.map(serviceType => ({
-      teamId: team.id,
-      serviceType,
-      isEnabled: true
-    }))
-  })
-  
-  // Audit log
-  await prisma.auditLog.create({
-    data: {
-      actorUserId: actorContext.userId,
-      tenantId: actorContext.tenantId,
-      action: 'TEAM_CREATE',
-      resource: `team:${team.id}`,
-      meta: { name, description, isDefault }
-    }
-  })
-  
+
   return { success: true, team }
 }
 
@@ -321,6 +332,10 @@ export async function addTeamMember(
   
   if (!team || team.tenantId !== actorContext.tenantId) {
     return { success: false, error: 'Team not found' }
+  }
+
+  if (userId === actorContext.userId) {
+    return { success: false, error: 'Users cannot remove themselves from teams' }
   }
   
   // Check permission (must be team lead, OWNER, or ADMIN)
@@ -346,6 +361,13 @@ export async function addTeamMember(
   
   if (existingMember) {
     return { success: false, error: 'User is already a team member' }
+  }
+
+  if (Number.isFinite(TEAM_MAX_MEMBERS) && TEAM_MAX_MEMBERS > 0) {
+    const memberCount = await prisma.teamMember.count({ where: { teamId } })
+    if (memberCount >= TEAM_MAX_MEMBERS) {
+      return { success: false, error: `Team member limit (${TEAM_MAX_MEMBERS}) reached` }
+    }
   }
   
   // Add member
@@ -1006,6 +1028,15 @@ export async function autoAssignToDefaultTeam(
 ): Promise<void> {
   let teamId = specificTeamId
   
+  if (teamId) {
+    const specificTeam = await prisma.team.findFirst({
+      where: { id: teamId, tenantId, isActive: true }
+    })
+    if (!specificTeam) {
+      teamId = undefined
+    }
+  }
+
   // If no specific team, find default team
   if (!teamId) {
     const defaultTeam = await prisma.team.findFirst({

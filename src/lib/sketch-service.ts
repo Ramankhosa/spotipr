@@ -337,8 +337,8 @@ ANTI-HALLUCINATION CONSTRAINTS
 OUTPUT REQUIREMENTS
 ═══════════════════════════════════════════════════════════════════════════════
 1. MAIN VIEW: Primary assembled view (orientation based on invention context)
-2. SECONDARY VIEW: Cross-section, exploded, or alternate view showing internal arrangement
-   (Use cross-section if not otherwise specified)
+2. SECONDARY VIEW: Only if it reveals components or physical relationships explicitly stated in the invention.
+   If no internal structure is disclosed or claimed, OMIT the secondary view.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ENFORCEMENT
@@ -351,7 +351,7 @@ COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
 ✔ Only listed components shown (no extras)
 ✔ Numeric labels only (#100, #200, etc.)
-✔ Two views provided (main + secondary)
+✔ Main view provided; secondary view only if explicitly stated internals exist
 ✔ Dashed lines used correctly (internal/hidden only)
 ✔ No forbidden elements present`
 }
@@ -447,7 +447,8 @@ Include: Main assembled view + one secondary view (cross-section, exploded, or a
 REQUIRED VIEWS
 ═══════════════════════════════════════════════════════════════════════════════
 1. MAIN VIEW: Primary assembled view showing the invention's key components and relationships
-2. SECONDARY VIEW (if applicable): Cross-section OR exploded view showing internal arrangement
+2. SECONDARY VIEW: Only if it reveals components or physical relationships explicitly stated.
+   If no internal structure is disclosed, OMIT the secondary view.
 `
   }
 
@@ -457,7 +458,7 @@ COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
 ✔ Only listed components shown (no extras)
 ✔ Numeric labels only (#100, #200, etc.)
-✔ Two views provided (main + secondary)
+✔ Main view provided; secondary view only if explicitly stated internals exist
 ✔ Dashed lines used correctly (internal/hidden only)
 ✔ No forbidden elements present
 
@@ -1688,13 +1689,14 @@ ${context.claims.join('\n')}
 
   if (context.diagramSummaries.length > 0) {
     prompt += `═══════════════════════════════════════════════════════════════════════════════
-CONTROLLING PLANTUML DIAGRAMS (Maintain exact consistency)
+CONTROLLING PLANTUML DIAGRAMS (Maintain consistency)
 ═══════════════════════════════════════════════════════════════════════════════
 ${context.diagramSummaries.join('\n')}
 
-These diagrams define the authoritative relationships between components.
-Your sketch MUST be consistent with these - same components, same connections,
-same hierarchies. Do NOT contradict or extend what is shown.
+These diagrams define the authoritative structure of the invention.
+Preserve EXACTLY: every entity, label, and explicitly defined physical relationship.
+Logical or signal interactions in PlantUML do NOT imply physical attachment unless stated.
+Do NOT contradict or extend what is shown.
 
 `
   }

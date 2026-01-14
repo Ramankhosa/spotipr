@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Sparkles, 
@@ -22,6 +22,23 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import KishoNormalizationLoader from '@/components/ui/kisho-normalization-loader'
+import PersonaManager, { type PersonaSelection } from '@/components/drafting/PersonaManager'
+import { useAuth } from '@/lib/auth-context'
+
+// Tooltip wrapper component for hover explanations
+const Tooltip = ({ children, content, position = 'bottom' }: { children: React.ReactNode; content: string; position?: 'top' | 'bottom' | 'left' | 'right' }) => (
+  <div className="relative group">
+    {children}
+    <div className={`absolute z-50 hidden group-hover:block px-3 py-2 text-xs text-white bg-gray-900 rounded-lg shadow-lg whitespace-normal max-w-xs pointer-events-none
+      ${position === 'bottom' ? 'top-full mt-2 left-1/2 -translate-x-1/2' : ''}
+      ${position === 'top' ? 'bottom-full mb-2 left-1/2 -translate-x-1/2' : ''}
+      ${position === 'left' ? 'right-full mr-2 top-1/2 -translate-y-1/2' : ''}
+      ${position === 'right' ? 'left-full ml-2 top-1/2 -translate-y-1/2' : ''}
+    `}>
+      {content}
+    </div>
+  </div>
+)
 
 interface IdeaEntryStageProps {
   session: any
@@ -57,6 +74,19 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [isGeneratingClaims, setIsGeneratingClaims] = useState(false)
   const [showClaimsSection, setShowClaimsSection] = useState(true)
   const claimsEditorRef = useRef<RichTextEditorRef>(null)
+  const [isEditingClaims, setIsEditingClaims] = useState(false)
+
+  // Persona/Style state for claims generation
+  const [usePersonaStyle, setUsePersonaStyle] = useState(false)
+  const [personaSelection, setPersonaSelection] = useState<PersonaSelection | undefined>(undefined)
+  const [showPersonaManager, setShowPersonaManager] = useState(false)
+  const [showNoPersonasModal, setShowNoPersonasModal] = useState(false)
+  const [personasAvailable, setPersonasAvailable] = useState<{ myCount: number; orgCount: number } | null>(null)
+  const [checkingPersonas, setCheckingPersonas] = useState(false)
+  
+  // Get user auth context for role-based messaging
+  const { token, user } = useAuth()
+  const isAdmin = user?.roles?.some((r: string) => ['OWNER', 'ADMIN'].includes(r))
 
   // Editable fields
   const [problem, setProblem] = useState('')
@@ -150,6 +180,63 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const hasClaims = strippedClaims.length > 0 || claims.length > 0
   const canProceed = !!normalizedData && hasClaims
 
+  // Check for available personas
+  const checkPersonasAvailable = async (): Promise<boolean> => {
+    if (!token) return false
+    
+    setCheckingPersonas(true)
+    try {
+      const res = await fetch('/api/personas', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      if (!res.ok) {
+        console.warn('Failed to fetch personas')
+        return false
+      }
+      
+      const data = await res.json()
+      const myCount = (data.myPersonas || []).length
+      const orgCount = (data.orgPersonas || []).length
+      
+      setPersonasAvailable({ myCount, orgCount })
+      return (myCount + orgCount) > 0
+    } catch (err) {
+      console.error('Error checking personas:', err)
+      return false
+    } finally {
+      setCheckingPersonas(false)
+    }
+  }
+
+  // Handle persona button click - check availability first
+  const handlePersonaButtonClick = async () => {
+    const hasPersonas = await checkPersonasAvailable()
+    if (hasPersonas) {
+      setShowPersonaManager(true)
+    } else {
+      setShowNoPersonasModal(true)
+    }
+  }
+
+  // Handle style toggle - check if personas exist when enabling
+  const handleStyleToggle = async () => {
+    if (!usePersonaStyle) {
+      // Trying to enable style - check if personas available
+      const hasPersonas = await checkPersonasAvailable()
+      if (!hasPersonas) {
+        setShowNoPersonasModal(true)
+        return
+      }
+      // If no persona selected yet, prompt to select one
+      if (!personaSelection?.primaryPersonaId) {
+        setShowPersonaManager(true)
+        return
+      }
+    }
+    setUsePersonaStyle(!usePersonaStyle)
+  }
+
   // Generate claims using jurisdiction-aware rules
   const handleGenerateClaims = async () => {
     if (!session?.id) return
@@ -163,6 +250,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         sessionId: session.id,
         jurisdiction: activeJurisdiction,
         userInstructions: regenerateInstructions.trim() || undefined,
+        // Pass persona style settings for claims generation
+        usePersonaStyle,
+        personaSelection,
         ideaContext: {
           title,
           problem,
@@ -755,6 +845,61 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
               </div>
             </button>
 
+            {/* Persona Style Controls - Always visible when claims section is shown */}
+            {showClaimsDetails && (
+              <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100 flex items-center justify-between">
+                <div className="text-xs text-gray-600">
+                  <span className="font-medium">Writing Style:</span> {usePersonaStyle 
+                    ? (personaSelection?.primaryPersonaName || 'Enabled') 
+                    : 'Off (default style)'}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Tooltip content={usePersonaStyle 
+                    ? "Persona style is ON - Claims will be generated using your selected writing style"
+                    : "Enable to generate claims in your preferred writing style"
+                  } position="bottom">
+                    <div
+                      onClick={handleStyleToggle}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border cursor-pointer transition-colors ${
+                        checkingPersonas ? 'opacity-50 cursor-wait' : ''
+                      } ${
+                        usePersonaStyle 
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-700' 
+                          : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-sm">{checkingPersonas ? '...' : usePersonaStyle ? '✓' : '○'}</span>
+                      <span className="text-xs font-medium">Style</span>
+                    </div>
+                  </Tooltip>
+
+                  <Tooltip content="Select a writing persona (e.g., CSE, Bio, Chemistry) for your claims" position="bottom">
+                    <button
+                      onClick={handlePersonaButtonClick}
+                      disabled={checkingPersonas}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
+                        checkingPersonas ? 'opacity-50 cursor-wait' : ''
+                      } ${
+                        personaSelection?.primaryPersonaName
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span>👤</span>
+                      <span className="font-medium">
+                        {checkingPersonas ? 'Checking...' : personaSelection?.primaryPersonaName || 'Persona'}
+                      </span>
+                      {personaSelection?.secondaryPersonaNames?.length ? (
+                        <span className="text-[10px] bg-indigo-200 text-indigo-700 px-1 rounded">
+                          +{personaSelection.secondaryPersonaNames.length}
+                        </span>
+                      ) : null}
+                    </button>
+                  </Tooltip>
+                </div>
+              </div>
+            )}
+
             <AnimatePresence>
               {showClaimsDetails && (
                 <motion.div
@@ -837,17 +982,88 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                           </div>
                         ) : (
                           <>
-                            <ClaimsEditor
-                              ref={claimsEditorRef}
-                              value={claimsText}
-                              onChange={setClaimsText}
-                              disabled={claimsFrozen}
-                              placeholder="1. A method for... comprising:
+                            {/* Edit Mode Header */}
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-gray-700">
+                                  {isEditingClaims ? 'Editing Claims' : 'Generated Claims'}
+                                </span>
+                                {isEditingClaims && (
+                                  <Badge variant="secondary" className="bg-blue-100 text-blue-700 text-xs">
+                                    <Edit2 className="w-3 h-3 mr-1" />
+                                    Edit Mode
+                                  </Badge>
+                                )}
+                              </div>
+                              
+                              {/* Edit Toggle Button */}
+                              {!claimsFrozen && (
+                                <div className="flex items-center gap-2">
+                                  {!isEditingClaims ? (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setIsEditingClaims(true)}
+                                      className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5 mr-1.5" />
+                                      Edit Claims
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setIsEditingClaims(false)}
+                                      className="text-gray-600"
+                                    >
+                                      <Check className="w-3.5 h-3.5 mr-1.5" />
+                                      Done Editing
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Claims Display/Editor */}
+                            {isEditingClaims ? (
+                              <div className="border-2 border-indigo-200 rounded-lg bg-indigo-50/30">
+                                <div className="px-3 py-2 bg-indigo-100 border-b border-indigo-200 text-xs text-indigo-700 flex items-center gap-2">
+                                  <Edit2 className="w-3 h-3" />
+                                  <span>Make your changes below. Click "Done Editing" when finished, then save or freeze.</span>
+                                </div>
+                                <div className="p-1">
+                                  <ClaimsEditor
+                                    ref={claimsEditorRef}
+                                    value={claimsText}
+                                    onChange={setClaimsText}
+                                    disabled={claimsFrozen}
+                                    placeholder="1. A method for... comprising:
    a) a first step of...
    b) a second step of...
 
 2. The method of claim 1, wherein..."
-                            />
+                                  />
+                                </div>
+                              </div>
+                            ) : (
+                              <div 
+                                className="border border-gray-200 rounded-lg bg-gray-50/50 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/20 transition-colors group"
+                                onClick={() => !claimsFrozen && setIsEditingClaims(true)}
+                              >
+                                <div className="px-4 py-3 prose prose-sm max-w-none">
+                                  <div 
+                                    dangerouslySetInnerHTML={{ __html: claimsText }} 
+                                    className="text-gray-700 [&>p]:mb-3 [&>p:last-child]:mb-0"
+                                  />
+                                </div>
+                                {!claimsFrozen && (
+                                  <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 text-xs text-gray-500 flex items-center gap-1 group-hover:text-indigo-600 group-hover:bg-indigo-50 transition-colors">
+                                    <Edit2 className="w-3 h-3" />
+                                    Click to edit claims
+                                  </div>
+                                )}
+                              </div>
+                            )}
 
                             {/* Action Buttons */}
                             <div className="flex flex-col gap-3 pt-4 border-t border-gray-100">
@@ -978,6 +1194,130 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
           </div>
         </div>
       </div>
+
+      {/* Persona Manager Modal */}
+      {showPersonaManager && (
+        <PersonaManager
+          isOpen={showPersonaManager}
+          onClose={() => setShowPersonaManager(false)}
+          showSelector={true}
+          currentSelection={personaSelection}
+          onSelectPersona={(selection) => {
+            setPersonaSelection(selection)
+            if (selection.primaryPersonaId) {
+              setUsePersonaStyle(true) // Auto-enable style when persona selected
+            }
+          }}
+        />
+      )}
+
+      {/* No Personas Available Modal */}
+      {showNoPersonasModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-violet-50">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-100 rounded-xl">
+                  <AlertCircle className="w-6 h-6 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">No Writing Personas Available</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Create a persona to use your own writing style</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600">
+                Writing personas allow the AI to mimic your preferred drafting style, terminology, and structure 
+                when generating claims and other patent sections.
+              </p>
+
+              <div className="space-y-3">
+                {/* Option 1: Create your own persona */}
+                <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg">✍️</span>
+                    <div>
+                      <h4 className="font-medium text-indigo-900">Create Your Own Persona</h4>
+                      <p className="text-sm text-indigo-700 mt-1">
+                        Go to <strong>Personas</strong> page from the main navigation to create your personal writing style.
+                      </p>
+                      <a 
+                        href="/personas" 
+                        className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                      >
+                        Open Personas Page
+                        <ChevronRight className="w-4 h-4" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Option 2: Use organizational personas (if not admin) */}
+                {!isAdmin && (
+                  <div className="p-4 bg-purple-50 rounded-lg border border-purple-100">
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg">🏢</span>
+                      <div>
+                        <h4 className="font-medium text-purple-900">Use Organization Personas</h4>
+                        <p className="text-sm text-purple-700 mt-1">
+                          Contact your Administrator (OWNER or ADMIN) to create shared organization personas 
+                          that all team members can use.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Admin-specific guidance */}
+                {isAdmin && (
+                  <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-100">
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg">👑</span>
+                      <div>
+                        <h4 className="font-medium text-emerald-900">Create Organization Personas</h4>
+                        <p className="text-sm text-emerald-700 mt-1">
+                          As an Admin, you can create <strong>Organization</strong> personas that will be 
+                          available to all users in your organization. Set visibility to "Organization" when creating.
+                        </p>
+                        <a 
+                          href="/personas" 
+                          className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-emerald-600 hover:text-emerald-800"
+                        >
+                          Create Organization Persona
+                          <ChevronRight className="w-4 h-4" />
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowNoPersonasModal(false)}
+              >
+                Close
+              </Button>
+              <Button
+                onClick={() => {
+                  setShowNoPersonasModal(false)
+                  window.location.href = '/personas'
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                Go to Personas Page
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

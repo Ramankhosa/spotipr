@@ -32,8 +32,8 @@ export default function DashboardPage() {
     return <SuperAdminDashboard />
   }
 
-  // For tenant admins (ADMIN role) - show tenant admin dashboard
-  if (isTenantAdmin && user.roles?.includes('ADMIN')) {
+  // For tenant admins (OWNER or ADMIN role) - show tenant admin dashboard
+  if (isTenantAdmin) {
     return <TenantAdminDashboard />
   }
 

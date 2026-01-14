@@ -12,8 +12,17 @@ interface ATIToken {
   usage_count: number
   plan_tier: string | null
   notes: string | null
+  assigned_role?: string | null
+  assigned_team_id?: string | null
   created_at: string
   updated_at: string
+}
+
+interface TeamOption {
+  id: string
+  name: string
+  isDefault: boolean
+  isActive: boolean
 }
 
 interface SignupUser {
@@ -36,6 +45,8 @@ interface SignupUser {
 export default function TenantAdminDashboard() {
   const { user, logout } = useAuth()
   const [tokens, setTokens] = useState<ATIToken[]>([])
+  const [teams, setTeams] = useState<TeamOption[]>([])
+  const [teamsError, setTeamsError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -44,7 +55,9 @@ export default function TenantAdminDashboard() {
   const [newToken, setNewToken] = useState({
     expires_at: '',
     max_uses: '',
-    notes: ''
+    notes: '',
+    assigned_role: '',
+    assigned_team_id: ''
   })
   const [editingToken, setEditingToken] = useState<ATIToken | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -52,7 +65,9 @@ export default function TenantAdminDashboard() {
     status: '',
     expires_at: '',
     max_uses: '',
-    notes: ''
+    notes: '',
+    assigned_role: '',
+    assigned_team_id: ''
   })
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null)
   const [selectedTokenUsers, setSelectedTokenUsers] = useState<SignupUser[]>([])
@@ -61,6 +76,7 @@ export default function TenantAdminDashboard() {
 
   useEffect(() => {
     fetchTokens()
+    fetchTeams()
   }, [])
 
   const fetchTokens = async () => {
@@ -103,14 +119,16 @@ export default function TenantAdminDashboard() {
         body: JSON.stringify({
           expires_at: newToken.expires_at || undefined,
           max_uses: newToken.max_uses ? parseInt(newToken.max_uses) : undefined,
-          notes: newToken.notes || undefined
+          notes: newToken.notes || undefined,
+          assigned_role: newToken.assigned_role || undefined,
+          assigned_team_id: newToken.assigned_team_id || undefined
         })
       })
 
       if (response.ok) {
         const data = await response.json()
         setCreatedToken(data.token_display_once)
-        setNewToken({ expires_at: '', max_uses: '', notes: '' })
+        setNewToken({ expires_at: '', max_uses: '', notes: '', assigned_role: '', assigned_team_id: '' })
         setShowCreateForm(false)
         fetchTokens()
 
@@ -158,7 +176,9 @@ export default function TenantAdminDashboard() {
       status: token.status,
       expires_at: token.expires_at ? new Date(token.expires_at).toISOString().slice(0, 16) : '',
       max_uses: token.max_uses?.toString() || '',
-      notes: token.notes || ''
+      notes: token.notes || '',
+      assigned_role: token.assigned_role || '',
+      assigned_team_id: token.assigned_team_id || ''
     })
   }
 
@@ -179,13 +199,15 @@ export default function TenantAdminDashboard() {
           status: editForm.status || undefined,
           expires_at: editForm.expires_at || undefined,
           max_uses: editForm.max_uses ? parseInt(editForm.max_uses) : undefined,
-          notes: editForm.notes || undefined
+          notes: editForm.notes || undefined,
+          assigned_role: editForm.assigned_role || null,
+          assigned_team_id: editForm.assigned_team_id || null
         })
       })
 
       if (response.ok) {
         setEditingToken(null)
-        setEditForm({ status: '', expires_at: '', max_uses: '', notes: '' })
+        setEditForm({ status: '', expires_at: '', max_uses: '', notes: '', assigned_role: '', assigned_team_id: '' })
         fetchTokens()
       } else {
         const error = await response.json()
@@ -196,6 +218,30 @@ export default function TenantAdminDashboard() {
       alert('Failed to update token')
     } finally {
       setIsUpdating(false)
+    }
+  }
+
+  const fetchTeams = async () => {
+    try {
+      setTeamsError(null)
+      const response = await fetch('/api/tenant-admin/teams', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setTeams(data.teams || [])
+      } else {
+        const errorData = await response.json().catch(() => ({}))
+        setTeamsError(errorData.error || `Failed to load teams (${response.status})`)
+        setTeams([])
+      }
+    } catch (error) {
+      console.error('Failed to fetch teams:', error)
+      setTeamsError('Network error: Unable to load teams')
+      setTeams([])
     }
   }
 
@@ -504,12 +550,52 @@ export default function TenantAdminDashboard() {
                     />
                   </div>
                 </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="assigned_role" className="block text-sm font-medium text-gray-700">
+                      Assigned Role (Optional)
+                    </label>
+                    <select
+                      id="assigned_role"
+                      value={newToken.assigned_role}
+                      onChange={(e) => setNewToken(prev => ({ ...prev, assigned_role: e.target.value }))}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    >
+                      <option value="">No role override</option>
+                      <option value="ADMIN">Admin</option>
+                      <option value="MANAGER">Manager</option>
+                      <option value="ANALYST">Analyst</option>
+                      <option value="VIEWER">Viewer</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="assigned_team_id" className="block text-sm font-medium text-gray-700">
+                      Assigned Team (Optional)
+                    </label>
+                    <select
+                      id="assigned_team_id"
+                      value={newToken.assigned_team_id}
+                      onChange={(e) => setNewToken(prev => ({ ...prev, assigned_team_id: e.target.value }))}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    >
+                      <option value="">Default team</option>
+                      {teams.filter(team => team.isActive).map(team => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}{team.isDefault ? ' (default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {teamsError && (
+                      <p className="mt-1 text-xs text-red-600">{teamsError}</p>
+                    )}
+                  </div>
+                </div>
                 <div className="flex justify-end space-x-3">
                   <button
                     type="button"
                     onClick={() => {
                       setShowCreateForm(false)
-                      setNewToken({ expires_at: '', max_uses: '', notes: '' })
+                      setNewToken({ expires_at: '', max_uses: '', notes: '', assigned_role: '', assigned_team_id: '' })
                     }}
                     className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                   >
@@ -607,6 +693,46 @@ export default function TenantAdminDashboard() {
                     placeholder="Purpose or recipient"
                   />
                 </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="edit_assigned_role" className="block text-sm font-medium text-gray-700">
+                      Assigned Role (Optional)
+                    </label>
+                    <select
+                      id="edit_assigned_role"
+                      value={editForm.assigned_role}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, assigned_role: e.target.value }))}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    >
+                      <option value="">No role override</option>
+                      <option value="ADMIN">Admin</option>
+                      <option value="MANAGER">Manager</option>
+                      <option value="ANALYST">Analyst</option>
+                      <option value="VIEWER">Viewer</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="edit_assigned_team_id" className="block text-sm font-medium text-gray-700">
+                      Assigned Team (Optional)
+                    </label>
+                    <select
+                      id="edit_assigned_team_id"
+                      value={editForm.assigned_team_id}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, assigned_team_id: e.target.value }))}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    >
+                      <option value="">Default team</option>
+                      {teams.filter(team => team.isActive).map(team => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}{team.isDefault ? ' (default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {teamsError && (
+                      <p className="mt-1 text-xs text-red-600">{teamsError}</p>
+                    )}
+                  </div>
+                </div>
                 <div className="flex justify-end space-x-3">
                   <button
                     type="button"
@@ -671,6 +797,14 @@ export default function TenantAdminDashboard() {
                             {token.plan_tier && (
                               <span>Tier: {token.plan_tier}</span>
                             )}
+                            {token.assigned_role && (
+                              <span>Role: {token.assigned_role}</span>
+                            )}
+                            <span>
+                              Team: {token.assigned_team_id
+                                ? (teams.find(team => team.id === token.assigned_team_id)?.name || 'Unknown team')
+                                : 'Default'}
+                            </span>
                           </div>
                           {token.expires_at && (
                             <div className="mt-1 text-xs text-gray-500">

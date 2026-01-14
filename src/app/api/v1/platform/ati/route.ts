@@ -64,6 +64,8 @@ export async function GET(request: NextRequest) {
       usage_count: token.usageCount,
       plan_tier: token.planTier,
       notes: token.notes,
+      assigned_role: token.assignedRole,
+      assigned_team_id: token.assignedTeamId,
       created_at: token.createdAt.toISOString(),
       updated_at: token.updatedAt.toISOString(),
       ...(token.tenant && {
