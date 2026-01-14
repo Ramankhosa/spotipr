@@ -29,6 +29,7 @@ interface SignupUser {
   first_name: string | null
   last_name: string | null
   roles: string[]
+  status?: string
   created_at: string
   usage_metrics?: {
     patentsDrafted: number
@@ -165,20 +166,12 @@ export default function SuperAdminATIDashboard() {
     }
   }
 
-  const handleViewUsers = async (token: ATIToken) => {
-    if (selectedTokenId === token.id) {
-      setSelectedTokenId(null)
-      setSelectedTokenUsers([])
-      setUsersError(null)
-      return
-    }
-
-    setSelectedTokenId(token.id)
+  const fetchTokenUsers = async (tokenId: string) => {
     setIsLoadingUsers(true)
     setUsersError(null)
 
     try {
-      const response = await fetch(`/api/v1/platform/ati/${token.id}`, {
+      const response = await fetch(`/api/v1/platform/ati/${tokenId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
@@ -198,6 +191,49 @@ export default function SuperAdminATIDashboard() {
       setSelectedTokenUsers([])
     } finally {
       setIsLoadingUsers(false)
+    }
+  }
+
+  const handleViewUsers = async (token: ATIToken) => {
+    if (selectedTokenId === token.id) {
+      setSelectedTokenId(null)
+      setSelectedTokenUsers([])
+      setUsersError(null)
+      return
+    }
+
+    setSelectedTokenId(token.id)
+    await fetchTokenUsers(token.id)
+  }
+
+  const canManageUsers = user?.roles?.includes('SUPER_ADMIN')
+
+  const handleTokenUserStatusToggle = async (targetUser: SignupUser) => {
+    if (!canManageUsers || !selectedTokenId) return
+    if (!confirm(`Are you sure you want to ${targetUser.status === 'ACTIVE' ? 'suspend' : 'activate'} this user?`)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/v1/platform/users/${targetUser.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          status: targetUser.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'
+        })
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || 'Failed to update user status')
+      }
+
+      await fetchTokenUsers(selectedTokenId)
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to update user status')
     }
   }
 
@@ -648,14 +684,15 @@ export default function SuperAdminATIDashboard() {
                         <p className="text-xs text-gray-500">No users have joined using this token yet.</p>
                       ) : (
                         <ul className="space-y-1">
-                          {selectedTokenUsers.map(user => {
-                            const name = [user.first_name, user.last_name].filter(Boolean).join(' ').trim()
-                            const m = user.usage_metrics
+                          {selectedTokenUsers.map(tokenUser => {
+                            const name = [tokenUser.first_name, tokenUser.last_name].filter(Boolean).join(' ').trim()
+                            const m = tokenUser.usage_metrics
+                            const status = tokenUser.status || 'UNKNOWN'
                             return (
-                              <li key={user.id} className="text-xs text-gray-700 flex justify-between">
+                              <li key={tokenUser.id} className="text-xs text-gray-700 flex justify-between gap-3">
                                 <div>
                                   <div>
-                                    {name || user.email} ({user.email})
+                                    {name || tokenUser.email} ({tokenUser.email})
                                   </div>
                                   {m && (
                                     <div className="text-[10px] text-gray-500 mt-0.5">
@@ -664,7 +701,20 @@ export default function SuperAdminATIDashboard() {
                                   )}
                                 </div>
                                 <div className="text-right text-gray-500">
-                                  <div>{new Date(user.created_at).toLocaleDateString()}</div>
+                                  <div>{new Date(tokenUser.created_at).toLocaleDateString()}</div>
+                                  <div className="mt-0.5">{status}</div>
+                                  {canManageUsers && status !== 'UNKNOWN' && (
+                                    <button
+                                      onClick={() => handleTokenUserStatusToggle(tokenUser)}
+                                      className={`mt-1 inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
+                                        status === 'ACTIVE'
+                                          ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                                          : 'bg-green-100 text-green-700 hover:bg-green-200'
+                                      }`}
+                                    >
+                                      {status === 'ACTIVE' ? 'Suspend' : 'Activate'}
+                                    </button>
+                                  )}
                                 </div>
                               </li>
                             )

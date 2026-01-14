@@ -36,6 +36,7 @@ export async function GET(
             firstName: true,
             lastName: true,
             roles: true,
+            status: true,
             createdAt: true
           }
         }
@@ -174,6 +175,7 @@ export async function GET(
         first_name: su.firstName,
         last_name: su.lastName,
         roles: su.roles,
+        status: su.status,
         created_at: su.createdAt.toISOString(),
         usage_metrics: userMetrics[su.id] || {
           patentsDrafted: 0,
