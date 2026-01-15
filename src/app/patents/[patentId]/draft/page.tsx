@@ -363,6 +363,25 @@ export default function PatentDraftingPage() {
           return null;
         }
 
+        // For diagram/figure-related actions, return error details to component instead of setting page error
+        // This allows the component to display specific error messages inline
+        const diagramActions = [
+          'regenerate_diagram_llm', 
+          'generate_diagrams_llm', 
+          'save_plantuml',
+          'add_figure_llm',
+          'add_figures_llm',
+          'fix_plantuml_render',
+          'modify_sketch',
+          'generate_sketch',
+          'generate_sketch_guided',
+          'refine_sketch'
+        ]
+        if (diagramActions.includes(stageData?.action)) {
+          // Return error object so component can display it
+          return { error: message, details: result?.details, code: errorCode }
+        }
+
         // For other errors, set error state instead of throwing to prevent runtime crash
         setError(message);
         return null;
@@ -430,7 +449,10 @@ export default function PatentDraftingPage() {
       return result
     } catch (err) {
       console.error('Stage completion error:', err)
-      throw err
+      // Don't throw - set error state to prevent component crash and redirect
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
+      setError(errorMessage)
+      return null
     }
   }
 

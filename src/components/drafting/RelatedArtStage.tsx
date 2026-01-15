@@ -2078,32 +2078,19 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 {/* Claim Refinement Tab Content */}
                 {activeWorkflowTab === 'claim-refinement' && (
                   <div className="space-y-6">
-                    {/* Skip Option */}
-                    <label className="flex items-center gap-3 p-4 bg-purple-50 rounded-xl border border-purple-100 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={skipClaimRefinement}
-                        onChange={(e) => setSkipClaimRefinement(e.target.checked)}
-                        className="w-4 h-4 rounded border-purple-300 text-purple-600"
-                      />
-                      <div>
-                        <span className="font-medium text-purple-900">Skip Claim Refinement</span>
-                        <p className="text-sm text-purple-700">I'm confident in my claims and want to proceed directly to component planning</p>
-                      </div>
-                    </label>
+                    <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
+                      <h4 className="font-medium text-amber-900 mb-1">⚖️ Purpose: Differentiate Your Claims</h4>
+                      <p className="text-sm text-amber-700">
+                        These patents will be compared against your claims to ensure novelty and non-obviousness.
+                        Recommended: Select high-risk patents (anticipates, obvious) for thorough claim refinement.
+                      </p>
+                      <p className="text-xs text-purple-600 mt-2 italic">
+                        Tip: Use the "Skip Refinement" button below if you're confident in your claims and want to proceed directly.
+                      </p>
+                    </div>
 
-                    {!skipClaimRefinement && (
-                      <>
-                        <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
-                          <h4 className="font-medium text-amber-900 mb-1">⚖️ Purpose: Differentiate Your Claims</h4>
-                          <p className="text-sm text-amber-700">
-                            These patents will be compared against your claims to ensure novelty and non-obviousness.
-                            Recommended: Select high-risk patents (anticipates, obvious) for thorough claim refinement.
-                          </p>
-                        </div>
-
-                        {/* Threat Level Filter Badges */}
-                        {hasAIReview && (
+                    {/* Threat Level Filter Badges */}
+                    {hasAIReview && (
                           <div className="flex flex-wrap items-center gap-3">
                             <span className="text-sm font-medium text-gray-600">Filter by threat:</span>
                             {[
@@ -2411,16 +2398,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           </div>
                         )}
 
-                        {/* Summary */}
-                        <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                          <div className="text-sm font-medium text-gray-700">
-                            {claimRefMode === 'ai' && `${Object.keys(claimRefSelected).length} patents selected for claim comparison`}
-                            {claimRefMode === 'manual' && (claimRefManualText.trim() ? 'Manual prior art text provided' : 'No manual text entered')}
-                            {claimRefMode === 'hybrid' && `${Object.keys(claimRefSelected).length} patents + ${claimRefManualText.trim() ? 'manual text' : 'no manual text'}`}
-                          </div>
-                        </div>
-                      </>
-                    )}
+                    {/* Summary */}
+                    <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                      <div className="text-sm font-medium text-gray-700">
+                        {claimRefMode === 'ai' && `${Object.keys(claimRefSelected).length} patents selected for claim comparison`}
+                        {claimRefMode === 'manual' && (claimRefManualText.trim() ? 'Manual prior art text provided' : 'No manual text entered')}
+                        {claimRefMode === 'hybrid' && `${Object.keys(claimRefSelected).length} patents + ${claimRefManualText.trim() ? 'manual text' : 'no manual text'}`}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2489,6 +2474,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 {savingPriorArt ? 'Saving...' : 'Save Selections'}
               </button>
 
+              {/* Proceed to Claim Refinement Button */}
               <button
                 onClick={async () => {
                   // Build prior art data for drafting
@@ -2516,43 +2502,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         selectedPatents: claimRefPatentsArray,
                         manualText: claimRefManualText
                       },
-                      skipClaimRefinement
+                      skipClaimRefinement: false
                     })
                   } catch (e) {
                     console.error('Failed to save config before proceeding:', e)
-                  }
-
-                  // If skipping claim refinement, go directly to component planner
-                  if (skipClaimRefinement) {
-                    setStatusMessage({
-                      type: 'success',
-                      text: '✓ Skipping Claim Refinement, proceeding to Component Planner...'
-                    })
-
-                    await onComplete({
-                      action: 'set_stage',
-                      sessionId: session?.id,
-                      stage: 'COMPONENT_PLANNER',
-                      priorArtForDrafting: {
-                        mode: priorArtMode,
-                        selectedPatents: priorArtPatentsArray,
-                        manualText: priorArtManualText
-                      },
-                      claimRefinementSkipped: true,
-                      manualPriorArt: priorArtManualText ? {
-                        manualPriorArtText: priorArtManualText,
-                        useOnlyManualPriorArt: priorArtMode === 'manual',
-                        useManualAndAISearch: priorArtMode === 'hybrid'
-                      } : null,
-                      selectedPatents: priorArtPatentsArray,
-                      priorArtConfig: {
-                        useAuto: priorArtMode !== 'manual',
-                        useManual: priorArtMode === 'manual' || priorArtMode === 'hybrid',
-                        skippedClaimRefinement: true
-                      }
-                    })
-                    await onRefresh()
-                    return
                   }
                   
                   // Validate claim refinement selection
@@ -2563,7 +2516,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   if (!hasClaimRef) {
                     setStatusMessage({
                       type: 'warning',
-                      text: '⚠️ Please select patents or provide text for claim refinement, or enable "Skip Claim Refinement".'
+                      text: '⚠️ Please select patents or provide text for claim refinement in the "Claim Refinement" tab.'
                     })
                     setActiveWorkflowTab('claim-refinement')
                     return
@@ -2602,16 +2555,82 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   await onRefresh()
                 }}
                 disabled={!hasAIReview}
-                className={`px-8 py-3 text-sm font-semibold text-white rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all ${
-                  skipClaimRefinement 
-                    ? 'bg-purple-600 hover:bg-purple-700 hover:shadow-purple-200' 
-                    : 'bg-emerald-600 hover:bg-emerald-700 hover:shadow-emerald-200'
-                }`}
+                className="px-8 py-3 text-sm font-semibold text-white rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all bg-emerald-600 hover:bg-emerald-700 hover:shadow-emerald-200"
               >
-                <span>{skipClaimRefinement ? 'Skip to Component Planner' : 'Proceed to Claim Refinement'}</span>
+                <span>Proceed to Claim Refinement</span>
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
+              </button>
+
+              {/* Skip Claim Refinement Button */}
+              <button
+                onClick={async () => {
+                  // Build prior art data for drafting
+                  const priorArtPatentsArray = Object.entries(priorArtSelected).map(
+                    ([patentNumber, patentData]) => ({ patentNumber, ...patentData })
+                  )
+
+                  // Save configuration first
+                  try {
+                    await onComplete({
+                      action: 'save_prior_art_config',
+                      sessionId: session?.id,
+                      priorArtConfig: {
+                        mode: priorArtMode,
+                        selectedPatents: priorArtPatentsArray,
+                        manualText: priorArtManualText
+                      },
+                      claimRefConfig: {
+                        mode: 'ai',
+                        selectedPatents: [],
+                        manualText: ''
+                      },
+                      skipClaimRefinement: true
+                    })
+                  } catch (e) {
+                    console.error('Failed to save config before skipping:', e)
+                  }
+
+                  setStatusMessage({
+                    type: 'success',
+                    text: '✓ Skipping Claim Refinement, using preliminary claims as final...'
+                  })
+
+                  // Freeze preliminary claims as final before skipping
+                  await onComplete({
+                    action: 'set_stage',
+                    sessionId: session?.id,
+                    stage: 'COMPONENT_PLANNER',
+                    priorArtForDrafting: {
+                      mode: priorArtMode,
+                      selectedPatents: priorArtPatentsArray,
+                      manualText: priorArtManualText
+                    },
+                    claimRefinementSkipped: true,
+                    freezePreliminaryClaims: true, // Lock preliminary claims as final
+                    manualPriorArt: priorArtManualText ? {
+                      manualPriorArtText: priorArtManualText,
+                      useOnlyManualPriorArt: priorArtMode === 'manual',
+                      useManualAndAISearch: priorArtMode === 'hybrid'
+                    } : null,
+                    selectedPatents: priorArtPatentsArray,
+                    priorArtConfig: {
+                      useAuto: priorArtMode !== 'manual',
+                      useManual: priorArtMode === 'manual' || priorArtMode === 'hybrid',
+                      skippedClaimRefinement: true
+                    }
+                  })
+                  await onRefresh()
+                }}
+                disabled={!hasAIReview}
+                className="px-6 py-3 text-sm font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+                title="Skip claim refinement and use preliminary claims as final claims for drafting"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                </svg>
+                <span>Skip Refinement</span>
               </button>
             </div>
           </div>

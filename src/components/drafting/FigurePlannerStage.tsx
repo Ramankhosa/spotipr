@@ -1770,9 +1770,9 @@ Now output the JSON array.`
     })
   }, [])
 
-  const runSingleRender = async (figureNo: number, plantumlCode: string, language = 'en') => {
+  const runSingleRender = async (figureNo: number, plantumlCode: string, language = 'en', isAutoFixRetry = false) => {
     const key = getDiagramKey(figureNo, language)
-    setProcessingStatus(prev => ({ ...prev, [key]: intelligentMessages[0] }))
+    setProcessingStatus(prev => ({ ...prev, [key]: isAutoFixRetry ? 'Retrying with fixed code...' : intelligentMessages[0] }))
     setProcessingStep(prev => ({ ...prev, [key]: 0 }))
 
     try {
@@ -1807,7 +1807,38 @@ Now output the JSON array.`
 
       if (!resp.ok) {
         const info = await resp.json().catch(() => ({}))
-        throw new Error(info.error || 'Render failed')
+        const renderError = info.error || info.details || 'Render failed'
+        
+        // AUTO-FIX FEATURE: If this is not already a retry, try to auto-fix via LLM
+        if (!isAutoFixRetry) {
+          console.log(`[AutoFix] Render failed for figure ${figureNo}, attempting auto-fix...`)
+          setProcessingStatus(prev => ({ ...prev, [key]: 'Render failed - attempting auto-fix via AI...' }))
+          
+          try {
+            const fixResp = await onComplete({
+              action: 'fix_plantuml_render',
+              sessionId: session?.id,
+              figureNo,
+              plantumlCode,
+              renderError
+            })
+            
+            if (fixResp?.success && fixResp?.fixedCode) {
+              console.log(`[AutoFix] Successfully fixed code for figure ${figureNo}, retrying render...`)
+              setProcessingStatus(prev => ({ ...prev, [key]: 'Code fixed! Re-rendering...' }))
+              // Refresh to get updated code, then retry render with fixed code
+              await onRefresh()
+              // Retry with fixed code (mark as retry to prevent infinite loop)
+              await runSingleRender(figureNo, fixResp.fixedCode, language, true)
+              return // Exit - the retry will handle completion
+            }
+          } catch (fixError) {
+            console.warn(`[AutoFix] Auto-fix attempt failed for figure ${figureNo}:`, fixError)
+          }
+        }
+        
+        // Auto-fix failed or this is already a retry - throw the original error
+        throw new Error(renderError)
       }
 
       setProcessingStatus(prev => ({ ...prev, [key]: intelligentMessages[2] }))
@@ -1852,6 +1883,10 @@ Now output the JSON array.`
       // Reduced gap between render requests for better responsiveness
       await new Promise(resolve => setTimeout(resolve, 150))
       await runSingleRender(figureNo, plantumlCode, language)
+    }).catch((err) => {
+      // Catch any unhandled errors to prevent queue breakage
+      console.error(`[AutoProcess] Error processing figure ${figureNo}:`, err)
+      // Don't re-throw - let the queue continue for other diagrams
     })
     return renderQueueRef.current
   }
@@ -2404,18 +2439,6 @@ Now output the JSON array.`
                         <Button variant="secondary" size="sm" onClick={() => setExpandedFigNo(figNo)}>
                           <Eye className="w-4 h-4 mr-2" /> Expand
                         </Button>
-                        <Button 
-                          variant="secondary" 
-                          size="sm" 
-                          className="w-full text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
-                          onClick={() => {
-                            const imagePath = editorImageUrl || displayUrl || ''
-                            openImageEditor('diagram', figNo, imagePath, plan?.title || `Figure ${figNo}`, selectedSource.originalImagePath)
-                          }}
-                          title="Edit this image in miniPaint - add/remove labels, erase, draw shapes"
-                        >
-                          <Paintbrush className="w-4 h-4 mr-2" /> Edit
-                        </Button>
                       </div>
                     </>
                   ) : (
@@ -2493,29 +2516,10 @@ Now output the JSON array.`
                   )
                 })()}
 
-                <div className="p-3 bg-white border-t grid grid-cols-4 gap-2">
+                <div className="p-3 bg-white border-t grid grid-cols-3 gap-2">
                   <Button variant="ghost" size="sm" className="w-full" onClick={() => { setModifyFigNo(figNo); setModifyTextSaved('') }}>
                     <Edit2 className="w-4 h-4 mr-2" /> Modify
                   </Button>
-                  {/* Edit Image button - visible when image exists */}
-                  {(renderPreview[diagramKey] || selectedSource.imageFilename) ? (
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="w-full text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
-                      onClick={() => {
-                        const imagePath = editorImageUrl || displayUrl || ''
-                        openImageEditor('diagram', figNo, imagePath, plan?.title || `Figure ${figNo}`, selectedSource.originalImagePath)
-                      }}
-                      title="Edit image in miniPaint - add/remove labels, erase, draw"
-                    >
-                      <Paintbrush className="w-4 h-4 mr-2" /> Edit
-                    </Button>
-                  ) : (
-                    <Button variant="ghost" size="sm" className="w-full" disabled>
-                      <Paintbrush className="w-4 h-4 mr-2 opacity-50" /> Edit
-                    </Button>
-                  )}
                   {/* Translate single diagram button */}
                   <Button 
                     variant="ghost" 
@@ -2591,14 +2595,32 @@ Now output the JSON array.`
                         <div className="flex gap-2">
                           <Button size="sm" className="flex-1" onClick={async () => {
                             setRegeneratingFigure(prev => ({ ...prev, [figNo]: true }))
+                            setError(null) // Clear previous errors
                             try {
                              const resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved })
                               if (resp?.diagramSource?.plantumlCode) {
                                 await onRefresh()
                                 setModifyFigNo(null)
                                 setModifyTextSaved('')
+                                // AUTO-RENDER: Automatically render the new code after successful regeneration
+                                const newCode = resp.diagramSource.plantumlCode
+                                const lang = resp.diagramSource.language || 'en'
+                                console.log(`[AutoRender] Auto-rendering regenerated diagram for figure ${figNo}`)
+                                autoProcessDiagram(figNo, newCode, lang)
+                              } else if (resp?.error) {
+                                // Handle API error response
+                                const errorMsg = resp.details 
+                                  ? `${resp.error}: ${typeof resp.details === 'string' ? resp.details : JSON.stringify(resp.details)}`
+                                  : resp.error
+                                setError(`Diagram modification failed: ${errorMsg}`)
+                              } else if (!resp) {
+                                // Handle null response (error handled by parent, but show something)
+                                setError('Diagram modification failed. Please try again with different instructions.')
                               }
-                            } catch (e) { setError('Failed to modify') } finally {
+                            } catch (e) { 
+                              console.error('Diagram modification error:', e)
+                              setError(e instanceof Error ? `Failed to modify: ${e.message}` : 'Failed to modify diagram') 
+                            } finally {
                               setRegeneratingFigure(prev => ({ ...prev, [figNo]: false }))
                             }
                           }} disabled={!!regeneratingFigure[figNo]}>

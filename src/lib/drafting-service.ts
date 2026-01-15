@@ -120,13 +120,6 @@ export interface ComponentValidationResult {
   errors?: string[];
 }
 
-export interface PlantUMLGenerationResult {
-  success: boolean;
-  plantumlCode?: string;
-  checksum?: string;
-  error?: string;
-}
-
 export interface AnnexureDraftResult {
   success: boolean;
   draft?: {
@@ -2816,106 +2809,6 @@ Use the Super Admin panel to add the missing prompt.
     }
 
     return { valid: true, components: processedComponents };
-  }
-
-  /**
-   * Generate PlantUML code from figure plan and reference map
-   */
-  static async generatePlantUML(
-    figurePlan: any,
-    referenceMap: any,
-    archetype?: string | string[]
-  ): Promise<PlantUMLGenerationResult> {
-    try {
-      const archetypeList = this.normalizeArchetypeList(
-        archetype ?? referenceMap?.inventionType ?? referenceMap?.normalizedData?.inventionType,
-        referenceMap?.fieldOfRelevance
-      )
-      const archetypeLabel = archetypeList.join('+')
-
-      // Build component lookup by numeral
-      const componentLookup: Record<number, any> = {};
-      if (referenceMap?.components) {
-        for (const component of referenceMap.components) {
-          componentLookup[component.numeral] = component;
-        }
-      }
-
-      // Generate PlantUML code
-      let plantumlCode = '@startuml\n';
-
-      // Add title
-      plantumlCode += `title ${figurePlan.title}\n\n`;
-      if (archetypeLabel) {
-        plantumlCode += `caption Archetype: ${archetypeLabel}\n\n`
-      }
-
-      // Add components as rectangles or other shapes
-      if (figurePlan.nodes && Array.isArray(figurePlan.nodes)) {
-        for (const nodeRef of figurePlan.nodes) {
-          const component = componentLookup[nodeRef];
-          if (component) {
-            const shape = this.getShapeForComponent(component.type);
-            plantumlCode += `${shape} "${component.name} (${component.numeral})" as C${component.numeral}\n`;
-          }
-        }
-      }
-
-      plantumlCode += '\n';
-
-      // Add connections
-      if (figurePlan.edges && Array.isArray(figurePlan.edges)) {
-        for (const edge of figurePlan.edges) {
-          const fromComponent = componentLookup[edge.from];
-          const toComponent = componentLookup[edge.to];
-
-          if (fromComponent && toComponent) {
-            const label = edge.label ? ` : ${edge.label}` : '';
-            plantumlCode += `C${fromComponent.numeral} --> C${toComponent.numeral}${label}\n`;
-          }
-        }
-      }
-
-      plantumlCode += '\n@enduml';
-
-      // Generate checksum
-      const checksum = crypto.createHash('sha256').update(plantumlCode).digest('hex');
-
-      return {
-        success: true,
-        plantumlCode,
-        checksum
-      };
-
-    } catch (error) {
-      console.error('PlantUML generation error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Diagram generation failed'
-      };
-    }
-  }
-
-  /**
-   * Get appropriate PlantUML shape for component type
-   */
-  private static getShapeForComponent(type: string): string {
-    const shapeMap: Record<string, string> = {
-      MAIN_CONTROLLER: 'rectangle',
-      SUBSYSTEM: 'rectangle',
-      MODULE: 'component',
-      INTERFACE: 'interface',
-      SENSOR: 'circle',
-      ACTUATOR: 'hexagon',
-      PROCESSOR: 'node',
-      MEMORY: 'database',
-      DISPLAY: 'actor',
-      COMMUNICATION: 'queue',
-      POWER_SUPPLY: 'storage',
-      OTHER: 'rectangle'
-    };
-
-    return shapeMap[type] || 'rectangle';
   }
 
   /**

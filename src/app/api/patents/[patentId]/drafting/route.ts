@@ -652,9 +652,6 @@ export async function POST(
       case 'save_prior_art_config':
         return await handleSavePriorArtConfig(authResult.user, patentId, data);
 
-      case 'generate_plantuml':
-        return await handleGeneratePlantUML(authResult.user, patentId, data);
-
       case 'upload_diagram':
         return await handleUploadDiagram(authResult.user, patentId, data);
 
@@ -719,6 +716,9 @@ export async function POST(
 
       case 'regenerate_diagram_llm':
         return await handleRegenerateDiagramLLM(authResult.user, patentId, data, requestHeaders);
+
+      case 'fix_plantuml_render':
+        return await handleFixPlantUMLRender(authResult.user, patentId, data, requestHeaders);
 
       case 'add_figure_llm':
         return await handleAddFigureLLM(authResult.user, patentId, data, requestHeaders);
@@ -5217,6 +5217,40 @@ async function handleSetStage(user: any, patentId: string, data: any) {
     }
   }
 
+  // Freeze preliminary claims as final when skipping claim refinement
+  // This ensures preliminary claims are locked as the final claims for drafting
+  if (stage === 'COMPONENT_PLANNER' && data.freezePreliminaryClaims && data.claimRefinementSkipped) {
+    const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
+    const claimsSnapshot = getWorkingClaims(normalized)
+    if (claimsSnapshot.html) {
+      const now = new Date().toISOString()
+      const normalizedUpdate: Record<string, any> = {
+        ...normalized,
+        claims: claimsSnapshot.html,
+        claimsStructured: claimsSnapshot.structured,
+        claimsFinal: claimsSnapshot.html,
+        claimsStructuredFinal: claimsSnapshot.structured,
+        claimsApprovedAt: now,
+        claimsApprovedBy: user.id,
+        claimsJurisdiction: normalized.claimsJurisdiction || session.activeJurisdiction || 'US',
+        claimsRefinementSource: {
+          mode: 'SKIPPED_REFINEMENT',
+          usedManualPriorArt: false,
+          autoRunId: null,
+          skipClaimRefinement: true,
+          appliedAt: now
+        }
+      }
+
+      await prisma.ideaRecord.update({
+        where: { sessionId },
+        data: { normalizedData: normalizedUpdate }
+      })
+      
+      console.log('[handleSetStage] Froze preliminary claims as final (skipped claim refinement)')
+    }
+  }
+
   // If user opted to skip prior art/refinement, freeze provisional claims as final and mark config
   if (stage === 'COMPONENT_PLANNER' && (skipPriorArt || useInitialClaimsForDrafting)) {
     const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
@@ -5921,175 +5955,6 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
   return NextResponse.json({ saved: created.length })
 }
 
-async function handleGeneratePlantUML(user: any, patentId: string, data: any) {
-  const { sessionId, figureNo } = data;
-
-  if (!sessionId || !figureNo) {
-    return NextResponse.json(
-      { error: 'Session ID and figure number are required' },
-      { status: 400 }
-    );
-  }
-
-  // Verify session ownership and get figure plan
-  const session = await prisma.draftingSession.findFirst({
-    where: {
-      id: sessionId,
-      patentId,
-      userId: user.id
-    },
-    include: {
-      figurePlans: {
-        where: { figureNo }
-      },
-      referenceMap: true,
-      ideaRecord: true
-    }
-  });
-
-  if (!session || !session!.figurePlans[0]) {
-    return NextResponse.json(
-      { error: 'Session or figure plan not found' },
-      { status: 404 }
-    );
-  }
-
-  // Generate PlantUML code – pass archetype / field as hint if available
-  const ideaNorm = session.ideaRecord?.normalizedData as any
-  const inventionTypeHint = ideaNorm?.inventionType
-  const fieldHint = ideaNorm?.fieldOfRelevance
-  const result = await DraftingService.generatePlantUML(
-    session!.figurePlans[0],
-    session.referenceMap,
-    inventionTypeHint || fieldHint
-  );
-
-  if (!result.success) {
-    return NextResponse.json(
-      { error: result.error },
-      { status: 400 }
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PRODUCTION-SAFE DIAGRAM PROCESSING PIPELINE
-  // PHILOSOPHY: Regenerate, don't repair. If validation fails, reject and ask for regeneration.
-  // ═══════════════════════════════════════════════════════════════════════════
-  
-  // Step 1: Sanitize (removes all skinparams, forbidden constructs)
-  let workingCode = sanitizePlantUML(result.plantumlCode || '')
-  
-  // Step 2: C3 FORBIDDEN KEYWORD GATE
-  const forbiddenCheck = containsForbiddenKeywords(workingCode)
-  if (forbiddenCheck.hasForbidden) {
-    return NextResponse.json(
-      { 
-        error: 'Diagram contains forbidden constructs', 
-        details: `Detected: ${forbiddenCheck.matches.join(', ')}. These are not allowed in patent diagrams.`,
-        action: 'Please regenerate this diagram without if/else, loops, or decision logic.'
-      },
-      { status: 400 }
-    )
-  }
-  
-  // Step 3: F - INJECT FIXED SKINPARAMS
-  workingCode = injectFixedSkinparams(workingCode)
-  
-  // Step 4: Validate structure (no repair - just validate)
-  const validation = validatePlantUmlStructure(workingCode)
-  if (!validation.ok) {
-    return NextResponse.json(
-      { 
-        error: 'Diagram structure validation failed', 
-        details: validation.errors,
-        action: 'Please regenerate this diagram. The current code has structural issues.'
-      },
-      { status: 400 }
-    )
-  }
-
-  // Create or update diagram source with validated code
-  const diagramSource = await prisma.diagramSource.upsert({
-    where: {
-      sessionId_figureNo_language: {
-        sessionId,
-        figureNo,
-        language: 'en'
-      }
-    },
-    update: {
-      plantumlCode: workingCode,
-      checksum: crypto.createHash('sha256').update(workingCode).digest('hex')
-    },
-    create: {
-      sessionId,
-      figureNo,
-      plantumlCode: workingCode,
-      checksum: crypto.createHash('sha256').update(workingCode).digest('hex')
-    }
-  });
-
-  // Generate and save image from PlantUML code
-  // NOTE: REGENERATE-NOT-REPAIR philosophy - if render fails, reject and ask for regeneration
-  if (workingCode) {
-    try {
-      // Clean the PlantUML code for rendering
-      let cleaned = cleanForRendering(workingCode)
-
-      const encoded = plantumlEncoder.encode(cleaned)
-      const base = process.env.PLANTUML_BASE_URL || 'https://www.plantuml.com/plantuml'
-
-      const resp = await fetch(`${base}/png/${encoded}`, {
-        cache: 'no-store',
-        method: 'GET',
-        headers: { 'Accept': 'image/png' }
-      })
-
-      // REGENERATE-NOT-REPAIR: If render fails, reject and ask for regeneration
-      if (!resp.ok) {
-        const failureText = await resp.text().catch(() => '')
-        const txtError = await fetchPlantUmlErrorText(base, encoded)
-        return NextResponse.json(
-          {
-            error: 'Diagram render failed',
-            details: txtError || failureText || `HTTP ${resp.status}`,
-            action: 'Please regenerate this diagram. The PlantUML code has syntax issues that prevent rendering.',
-            figureTitle: session!.figurePlans[0]?.title || `Figure ${figureNo}`,
-            figureDescription: session!.figurePlans[0]?.description || 'No description available'
-          },
-          { status: 502 }
-        )
-      }
-
-      const buf = Buffer.from(await resp.arrayBuffer())
-      const imageChecksum = crypto.createHash('sha256').update(buf).digest('hex')
-
-      // Save image to disk
-      const baseDir = path.join(process.cwd(), 'uploads', 'patents', patentId, 'figures')
-      await fs.mkdir(baseDir, { recursive: true })
-      const filename = `figure_${figureNo}_${Date.now()}.png`
-      const imagePath = path.join(baseDir, filename)
-      await fs.writeFile(imagePath, buf)
-
-      // Update diagram source with image path
-      await prisma.diagramSource.update({
-        where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } },
-        data: {
-          imageFilename: filename,
-          imagePath: imagePath,
-          imageChecksum: imageChecksum,
-          imageUploadedAt: new Date()
-        }
-      })
-    } catch (imageError) {
-      console.warn('Failed to generate/save PlantUML image:', imageError)
-      // Don't fail the whole operation if image generation fails
-    }
-  }
-
-  return NextResponse.json({ diagramSource });
-}
-
 /**
  * Diagram type definitions with syntax guides
  */
@@ -6660,6 +6525,13 @@ SCHEMA RULES:
 - include → list of components WITH NUMERALS (e.g., "Controller (100)") for ALL diagram types
 - count → total number of diagrams
 - CRITICAL: ALL include items MUST have component numerals in parentheses
+- CRITICAL: For FLOW/ACTIVITY, include items describe ACTIONS performed BY registered components
+
+DO NOT INVENT NEW NUMERALS:
+- Use ONLY the reference numerals that EXIST in the COMPONENTS list above
+- Every numeral you use MUST appear in the COMPONENTS list
+- Activity/Flow diagrams reference components that perform actions, not abstract steps
+- If the COMPONENTS list has numerals 100, 200, 300 - use ONLY those numerals
 
 NO OTHER KEYS. NO NESTING. NO EXPLANATIONS.
 
@@ -7149,11 +7021,15 @@ SEQUENCE DIAGRAMS:
 ACTIVITY DIAGRAMS:
 - NO system boundary rectangle (just start → actions → stop)
 - NO packages
+- CRITICAL: Each action step MUST reference a component from the AVAILABLE COMPONENTS list above
+- CRITICAL: Use ONLY numerals that EXIST in the AVAILABLE COMPONENTS list - do NOT invent new ones
+- Each action describes what a REGISTERED component does, not an abstract method step
 
 ═══════════════════════════════════════════════════════════════════════════════
 REFERENCE EXAMPLES (LINEAR ONLY - NO LOGIC)
 ═══════════════════════════════════════════════════════════════════════════════
-⚠️ Use ONLY the components and numerals from the actual invention context.
+⚠️ Use ONLY the components and numerals from the AVAILABLE COMPONENTS list above.
+⚠️ Do NOT invent numerals that don't exist in the component registry.
 
 ─────────────────────────────────────────────────────────────────────────────────
 EXAMPLE: Block Diagram (Correct - Linear, No Logic)
@@ -7177,15 +7053,20 @@ rectangle "System (100)" as SYS {
 @enduml
 
 ─────────────────────────────────────────────────────────────────────────────────
-EXAMPLE: Activity Diagram (Correct - Linear Steps Only)
+EXAMPLE: Activity Diagram (Correct - Uses ONLY registered component numerals)
 ─────────────────────────────────────────────────────────────────────────────────
 @startuml
 start
-:Receive input via sensor (110);
-:Process in controller (200);
-:Activate actuator (300);
+:Receive input via Sensor (110);
+:Process data in Controller (200);
+:Output result via Actuator (300);
 stop
 @enduml
+
+⚠️ WRONG APPROACH (Do NOT do this - inventing numerals not in the component list):
+If your AVAILABLE COMPONENTS list shows: Sensor (110), Controller (200), Actuator (300)
+Then do NOT use numerals like (1000), (1010), (999) that are NOT in that list.
+Every numeral in your activity diagram MUST exist in the AVAILABLE COMPONENTS list above.
 
 ─────────────────────────────────────────────────────────────────────────────────
 EXAMPLE: Sequence Diagram (Correct - Flat, No Nesting)
@@ -8328,6 +8209,85 @@ async function handleGetDiagramTranslations(
     availableLanguages: allLanguages,
     languageLabels: DIAGRAM_LANGUAGE_LABELS
   })
+}
+
+/**
+ * Auto-fix PlantUML render errors via LLM
+ * Called when diagram rendering fails - attempts to fix syntax and return corrected code
+ */
+async function handleFixPlantUMLRender(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const { sessionId, figureNo, plantumlCode, renderError } = data
+  
+  if (!sessionId || !figureNo || !plantumlCode) {
+    return NextResponse.json({ error: 'Session ID, figure number, and PlantUML code are required' }, { status: 400 })
+  }
+
+  // Verify session
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { referenceMap: true, figurePlans: true }
+  })
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  // Get figure info
+  const figurePlan = session.figurePlans?.find((f: any) => f.figureNo === figureNo)
+  const title = figurePlan?.title || `Figure ${figureNo}`
+  const description = (figurePlan as any)?.description || ''
+
+  // Get component numerals for context
+  const componentsRaw = (session.referenceMap as any)?.components
+  const components = Array.isArray(componentsRaw) ? componentsRaw : []
+  const numerals = components.map((c: any) => `${c.name} (${c.numeral || '?'})`)
+
+  // Try to repair the PlantUML code
+  const repairResult = await attemptRepairPlantUml(
+    plantumlCode,
+    [{ type: 'render_error', message: renderError || 'Render failed' }],
+    {
+      figureTitle: title,
+      description,
+      numerals,
+      plantumlErrorText: renderError,
+      requestHeaders
+    }
+  )
+
+  if (repairResult.ok && repairResult.code) {
+    // Save the fixed code to the diagram source
+    const checksum = crypto.createHash('sha256').update(repairResult.code).digest('hex')
+    
+    await prisma.diagramSource.upsert({
+      where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } },
+      update: { 
+        plantumlCode: repairResult.code, 
+        checksum,
+        imageUploadedAt: null, // Clear image since code changed
+        imageFilename: null,
+        imagePath: null
+      },
+      create: { 
+        sessionId, 
+        figureNo, 
+        plantumlCode: repairResult.code, 
+        checksum,
+        language: 'en'
+      }
+    })
+
+    return NextResponse.json({ 
+      success: true, 
+      fixedCode: repairResult.code,
+      message: 'Code fixed successfully - ready for re-render'
+    })
+  }
+
+  return NextResponse.json({ 
+    success: false, 
+    error: 'Could not auto-fix the PlantUML code. Please review and fix manually.',
+    details: repairResult.errors?.map(e => e.message).join(', ')
+  }, { status: 400 })
 }
 
 async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
