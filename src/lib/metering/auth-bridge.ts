@@ -15,19 +15,24 @@ export async function extractTenantContextFromRequest(
   try {
     // If tenant context is passed directly, use it
     if ('tenantContext' in request) {
+      console.log('[AuthBridge] Using direct tenant context')
       return request.tenantContext
     }
 
     // Check if headers exist
     if (!request.headers) {
+      console.error('[AuthBridge] No headers in request')
       return null
     }
 
-    // Extract JWT from Authorization header
-    const authHeader = request.headers['authorization']
+    // Extract JWT from Authorization header (handle case-insensitive)
+    const authHeader = request.headers['authorization'] || request.headers['Authorization']
     if (!authHeader?.startsWith('Bearer ')) {
+      console.error('[AuthBridge] No valid Authorization header found. Available headers:', Object.keys(request.headers).join(', '))
       return null
     }
+    
+    console.log('[AuthBridge] Authorization header found, extracting token...')
 
     const token = authHeader.substring(7)
     let payload = verifyJWT(token) as JWTPayload
@@ -50,8 +55,11 @@ export async function extractTenantContextFromRequest(
     }
 
     if (!payload) {
+      console.error('[AuthBridge] JWT verification failed - no payload')
       return null
     }
+    
+    console.log('[AuthBridge] JWT verified, tenant_id:', payload.tenant_id, 'user_id:', payload.sub)
 
     // If JWT already has tenant_id, try to resolve the plan
     if (payload.tenant_id && payload.ati_id) {

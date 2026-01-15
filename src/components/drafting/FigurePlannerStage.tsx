@@ -1694,7 +1694,14 @@ Now output the JSON array.`
           // In manual AI mode, append to existing figures instead of replacing them
           replaceExisting: false
         })
+        // Handle error responses
         if (!resp) throw new Error('LLM did not return valid figure list')
+        if (resp.error) {
+          const errorMsg = resp.details 
+            ? `${resp.error}: ${typeof resp.details === 'string' ? resp.details : JSON.stringify(resp.details)}`
+            : resp.error
+          throw new Error(errorMsg)
+        }
 
         // Backend already saves figures with correct figure numbers (appended after existing)
         // No need to call handleSavePlantUML - it would overwrite with wrong figure numbers
@@ -1723,8 +1730,18 @@ Now output the JSON array.`
         replaceExisting: replaceExistingDiagrams
       })
 
-      if (!res || !res.success) {
-        throw new Error(res?.error || 'Figure generation failed')
+      // Handle error responses (including API errors that return error object)
+      if (!res) {
+        throw new Error('Figure generation failed - no response received')
+      }
+      if (res.error) {
+        const errorMsg = res.details 
+          ? `${res.error}: ${typeof res.details === 'string' ? res.details : JSON.stringify(res.details)}`
+          : res.error
+        throw new Error(errorMsg)
+      }
+      if (!res.success) {
+        throw new Error(res.message || 'Figure generation failed')
       }
 
       // Log the plan result
@@ -1742,9 +1759,13 @@ Now output the JSON array.`
       setFigures([]) // Clear proposed figures since they're now automatically approved
 
       // Refresh to pull saved plans and sources immediately
+      console.log('[FigurePlanner] Refreshing session to load saved diagrams...')
       await onRefresh()
+      console.log('[FigurePlanner] Session refresh complete')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Generation failed')
+      const errorMessage = e instanceof Error ? e.message : 'Generation failed'
+      console.error('[FigurePlanner] Generation error:', errorMessage, e)
+      setError(errorMessage)
     } finally {
       setIsGenerating(false)
     }

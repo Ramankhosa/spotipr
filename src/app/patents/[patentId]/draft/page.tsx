@@ -367,7 +367,9 @@ export default function PatentDraftingPage() {
         // This allows the component to display specific error messages inline
         const diagramActions = [
           'regenerate_diagram_llm', 
-          'generate_diagrams_llm', 
+          'generate_diagrams_llm',
+          'plan_and_generate_diagrams_llm', // Combined plan+generate action
+          'plan_figures_llm',
           'save_plantuml',
           'add_figure_llm',
           'add_figures_llm',

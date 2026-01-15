@@ -6539,7 +6539,13 @@ Return ONLY the JSON object. No markdown, no commentary.`
 
   // Call LLM for planning
   // Uses same stage code as generation so only ONE admin config is needed
+  console.log('[PlanFiguresLLM] Preparing LLM call for session:', sessionId)
+  console.log('[PlanFiguresLLM] Task code: LLM3_DIAGRAM, Stage: DRAFT_DIAGRAM_GENERATION')
+  console.log('[PlanFiguresLLM] Prompt length:', planningPrompt.length, 'chars')
+  
   const request = { headers: requestHeaders || {} }
+  
+  console.log('[PlanFiguresLLM] Calling llmGateway.executeLLMOperation...')
   const result = await llmGateway.executeLLMOperation(request, {
     taskCode: 'LLM3_DIAGRAM',
     stageCode: 'DRAFT_DIAGRAM_GENERATION', // Same stage as generation - single admin config
@@ -6556,9 +6562,18 @@ Return ONLY the JSON object. No markdown, no commentary.`
     }
   })
 
+  console.log('[PlanFiguresLLM] LLM call completed. Success:', result.success)
+  if (!result.success) {
+    console.error('[PlanFiguresLLM] LLM call FAILED:', result.error?.message || 'Unknown error')
+    console.error('[PlanFiguresLLM] Error code:', (result.error as any)?.code)
+    console.error('[PlanFiguresLLM] Full error:', JSON.stringify(result.error, null, 2))
+  }
+
   if (!result.success || !result.response) {
     return NextResponse.json({ error: result.error?.message || 'LLM planning failed' }, { status: 400 })
   }
+  
+  console.log('[PlanFiguresLLM] LLM response received, output length:', (result.response.output || '').length, 'chars')
 
   // Parse the planning response
   let plan: FigurePlanResult | null = null
@@ -6624,16 +6639,21 @@ async function handlePlanAndGenerateDiagramsLLM(
   const { sessionId, replaceExisting, figureCount } = data
 
   if (!sessionId) {
+    console.error('[PlanAndGenerate] ERROR: No sessionId provided')
     return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
   }
 
-  console.log('[PlanAndGenerate] Starting two-stage figure generation for session:', sessionId)
-  if (figureCount) {
-    console.log('[PlanAndGenerate] User requested figure count:', figureCount)
-  }
+  console.log('[PlanAndGenerate] ========== STARTING FIGURE GENERATION ==========')
+  console.log('[PlanAndGenerate] Session ID:', sessionId)
+  console.log('[PlanAndGenerate] Patent ID:', patentId)
+  console.log('[PlanAndGenerate] User ID:', user?.id)
+  console.log('[PlanAndGenerate] Tenant ID:', user?.tenantId)
+  console.log('[PlanAndGenerate] Figure count requested:', figureCount || 'AI decides')
+  console.log('[PlanAndGenerate] Headers present:', Object.keys(requestHeaders || {}).length > 0 ? 'yes' : 'NO HEADERS!')
 
   // Stage 1: Plan the figures
   // Pass figureCount if user wants to override AI's decision
+  console.log('[PlanAndGenerate] Stage 1: Calling handlePlanFiguresLLM...')
   const planResponse = await handlePlanFiguresLLM(user, patentId, { sessionId, figureCount }, requestHeaders)
   
   // Check if planning succeeded
@@ -7095,6 +7115,8 @@ FINAL CHECK (Before Output)
 If in doubt, OMIT rather than add.
 `
 
+  console.log(`[DiagramsLLM] Starting diagram generation for session ${sessionId}, using plan: ${usePlan ? 'yes' : 'no'}`)
+  
   const request = { headers: requestHeaders || {} }
   const result = await llmGateway.executeLLMOperation(request, {
     taskCode: 'LLM3_DIAGRAM',
@@ -7111,7 +7133,13 @@ If in doubt, OMIT rather than add.
       purpose: 'generate_diagrams_llm'
     }
   })
-  if (!result.success || !result.response) return NextResponse.json({ error: result.error?.message || 'LLM failed' }, { status: 400 })
+  
+  if (!result.success || !result.response) {
+    console.error(`[DiagramsLLM] LLM call failed for session ${sessionId}:`, result.error?.message || 'Unknown error')
+    return NextResponse.json({ error: result.error?.message || 'LLM failed' }, { status: 400 })
+  }
+  
+  console.log(`[DiagramsLLM] LLM call succeeded for session ${sessionId}, response length: ${(result.response.output || '').length} chars`)
 
   // Parse JSON array of figures
   let figures: any[] = []
@@ -7139,7 +7167,19 @@ If in doubt, OMIT rather than add.
         if (Array.isArray(obj?.figures)) figures = obj.figures
       } catch {}
     }
+    
+    // CRITICAL: If no figures were extracted from LLM response, return an error
+    if (!Array.isArray(figures) || figures.length === 0) {
+      console.error('[DiagramsLLM] No valid figures found in LLM response. Raw text (first 500 chars):', text.substring(0, 500))
+      return NextResponse.json({ 
+        error: 'No valid diagrams found in LLM response',
+        details: 'The AI did not return any valid PlantUML diagrams. Please try again.'
+      }, { status: 400 })
+    }
+    
+    console.log(`[DiagramsLLM] Successfully parsed ${figures.length} figures from LLM response`)
   } catch (e) {
+    console.error('[DiagramsLLM] Error parsing LLM response:', e)
     return NextResponse.json({ error: 'Invalid LLM response format' }, { status: 400 })
   }
 

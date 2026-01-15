@@ -60,13 +60,16 @@ export class LLMGateway {
     
     try {
       // 1. Extract tenant context from request (existing metering hierarchy)
+      console.log('[Gateway] Step 1: Extracting tenant context...')
       const tenantContext = await extractTenantContextFromRequest(request)
       if (!tenantContext) {
+        console.error('[Gateway] FAILED: Unable to resolve tenant context')
         return {
           success: false,
           error: new MeteringError('TENANT_UNRESOLVED', 'Unable to resolve tenant context')
         }
       }
+      console.log('[Gateway] Tenant context resolved:', { tenantId: tenantContext.tenantId, userId: tenantContext.userId, planId: tenantContext.planId })
 
       // 2. Ensure we have a reasonable input token estimate if caller did not supply one
       if (typeof llmRequest.inputTokens !== 'number' || llmRequest.inputTokens <= 0) {
@@ -85,9 +88,12 @@ export class LLMGateway {
       }
 
       // 4. Enforce metering policies (Super Admin controlled via Plan Features)
+      console.log('[Gateway] Step 4: Evaluating access policy...')
       try {
         decision = await this.system.policy.evaluateAccess(featureRequest)
+        console.log('[Gateway] Policy evaluation result:', { allowed: decision.allowed, reservationId: decision.reservationId })
       } catch (policyError) {
+        console.error('[Gateway] Policy evaluation FAILED:', policyError instanceof Error ? policyError.message : policyError)
         if (policyError instanceof MeteringError) {
           return {
             success: false,
@@ -99,6 +105,7 @@ export class LLMGateway {
       }
 
       if (!decision.allowed) {
+        console.error('[Gateway] Policy DENIED access:', decision.reason)
         // This shouldn't happen anymore since policy now throws MeteringError
         return {
           success: false,
@@ -208,10 +215,12 @@ export class LLMGateway {
       }
 
       // 8. Route to LLM provider with resolved model or default routing
+      console.log('[Gateway] Step 8: Routing to LLM provider...')
       let response: LLMResponse
       
       if (modelResolution) {
         // Use the resolved model with fallbacks
+        console.log('[Gateway] Using resolved model:', modelResolution.modelCode)
         response = await llmProviderRouter.routeWithModel(
           llmRequest,
           decision,
@@ -220,8 +229,10 @@ export class LLMGateway {
         )
       } else {
         // Fall back to default priority-based routing
+        console.log('[Gateway] Using default priority-based routing')
         response = await llmProviderRouter.routeAndExecute(llmRequest, decision)
       }
+      console.log('[Gateway] LLM call completed, output length:', (response.output || '').length, 'chars')
 
       // 7. Record usage (metering for billing/quotas)
       if (decision.reservationId) {
