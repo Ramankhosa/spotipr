@@ -3217,6 +3217,9 @@ function validateActivityNumerals(plantuml: string): { valid: boolean; missingNu
 /**
  * C3: Check if PlantUML contains forbidden keywords
  * This is the critical post-generation gate that triggers regeneration.
+ * 
+ * IMPORTANT: Only matches keywords used as PlantUML SYNTAX, not inside quoted strings.
+ * Words like "loop" and "switch" can appear in component names/labels.
  */
 function containsForbiddenKeywords(plantuml: string): { hasForbidden: boolean; matches: string[] } {
   const matches: string[] = []
@@ -3224,11 +3227,17 @@ function containsForbiddenKeywords(plantuml: string): { hasForbidden: boolean; m
   
   for (const line of lines) {
     const trimmed = line.trim()
-    // Skip comments and strings (inside quotes)
+    // Skip comments
     if (trimmed.startsWith("'") || trimmed.startsWith('//')) continue
     
-    // Check for forbidden keywords
-    const match = trimmed.match(FORBIDDEN_PLANTUML_KEYWORDS)
+    // Remove all quoted strings from the line before checking for keywords
+    // This prevents matching "Feedback Loop" or "Power Switch" in labels
+    const lineWithoutQuotes = trimmed
+      .replace(/"[^"]*"/g, '""')  // Remove double-quoted strings
+      .replace(/'[^']*'/g, "''")  // Remove single-quoted strings (PlantUML notes)
+    
+    // Check for forbidden keywords only in non-quoted parts
+    const match = lineWithoutQuotes.match(FORBIDDEN_PLANTUML_KEYWORDS)
     if (match) {
       matches.push(match[0])
     }
