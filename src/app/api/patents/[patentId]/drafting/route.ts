@@ -3044,18 +3044,19 @@ const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(BackgroundColor|FontColor|.*Sty
 // If a block header is removed, the ENTIRE block body must be removed.
 // Partial block survival (orphan BorderStyle/BorderThickness lines) is a hard error.
 //
-// ONLY THREE BLOCK TYPES ARE EVER ALLOWED:
-//   1. skinparam rectangle<<optional>> { ... }  (REQUIRES stereotype)
+// ALLOWED BLOCK TYPES (for clean patent diagram styling):
+//   1. skinparam rectangle { ... }
 //   2. skinparam sequence { ... }
 //   3. skinparam activity { ... }
+//   4. skinparam participant { ... }
+//   5. skinparam package { ... }
 //
 // All other skinparam XXX { ... } blocks are FORBIDDEN and removed atomically.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Allowed skinparam block types (STRICT):
-// - rectangle REQUIRES <<optional>> or other stereotype (plain rectangle NOT allowed)
-// - sequence and activity are allowed standalone
-const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity)\s*\{|^skinparam\s+rectangle\s*<<\w+>>\s*\{/i
+// - rectangle, activity, participant, package, sequence are allowed for clean patent diagram styling
+const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity|rectangle|participant|package)\s*\{/i
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PRODUCTION-SAFE DIAGRAM GENERATION CONSTANTS
@@ -3083,16 +3084,30 @@ const SEQUENCE_MAX_MESSAGES = 12
 
 // F: FIXED SKINPARAM BLOCK (Pre-injected, LLM never generates skinparams)
 // This removes an entire failure class where LLM generates invalid skinparams.
-const FIXED_SKINPARAM_BLOCK = `skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 10
+// Uses block-style skinparams for clean white backgrounds on all diagram elements.
+const FIXED_SKINPARAM_BLOCK = `skinparam shadowing false
 skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
+skinparam defaultFontSize 12
+skinparam ArrowColor #000000
 skinparam linetype ortho
-skinparam nodesep 40
-skinparam ranksep 35`
+skinparam nodesep 30
+skinparam ranksep 30
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam package {
+  BackgroundColor #F8F8F8
+  BorderColor #000000
+}
+skinparam activity {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}
+skinparam participant {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+}`
 
 // E: PLANTUML SAFE SUBSET - Only these constructs are allowed
 // Allowed: @startuml, @enduml, skinparam, rectangle, package, participant, -->, ..>, start, stop, :action;
@@ -3100,19 +3115,33 @@ skinparam ranksep 35`
 
 /**
  * C4: Extract component labels from PlantUML code
- * Looks for patterns like "Name (XXX)" or "Name (XXX)" in rectangles, participants, etc.
+ * Looks for patterns like "Name (XXX)" in rectangles, participants, AND activity diagram actions.
  * Returns array of normalized component names (e.g., ["Controller (100)", "Sensor (200)"])
  */
 function extractComponentLabels(plantuml: string): string[] {
   const labels: string[] = []
   
-  // Match patterns in rectangle, participant, actor definitions
+  // Match patterns in rectangle, participant, actor definitions (quoted format)
   // Pattern: "Component Name (numeral)" 
-  const labelPattern = /"([^"]+\s*\(\d+\))"/g
+  const quotedLabelPattern = /"([^"]+\s*\(\d+\))"/g
   let match
   
-  while ((match = labelPattern.exec(plantuml)) !== null) {
+  while ((match = quotedLabelPattern.exec(plantuml)) !== null) {
     labels.push(match[1].trim())
+  }
+  
+  // Match patterns in activity diagram actions
+  // Pattern: :Action text with component (numeral);
+  // This captures the component name and numeral within the action text
+  const activityActionPattern = /:([^;]*\(\d+\)[^;]*);/g
+  while ((match = activityActionPattern.exec(plantuml)) !== null) {
+    // Extract all "word(s) (numeral)" patterns from the action text
+    const actionText = match[1]
+    const numeralPattern = /([A-Za-z][A-Za-z0-9\s]*\s*\(\d+\))/g
+    let numeralMatch
+    while ((numeralMatch = numeralPattern.exec(actionText)) !== null) {
+      labels.push(numeralMatch[1].trim())
+    }
   }
   
   return Array.from(new Set(labels)) // Deduplicate
@@ -3148,6 +3177,40 @@ function validateIncludeList(
   return {
     valid: hallucinated.length === 0,
     hallucinated
+  }
+}
+
+/**
+ * C6: Validate that activity diagrams have component numerals in action steps
+ * Returns validation result with any actions missing numerals.
+ */
+function validateActivityNumerals(plantuml: string): { valid: boolean; missingNumerals: string[] } {
+  const missingNumerals: string[] = []
+  
+  // Check if this is an activity diagram (has start/stop or action syntax)
+  const isActivityDiagram = /\bstart\b|\bstop\b|^:.*;$/m.test(plantuml)
+  if (!isActivityDiagram) {
+    return { valid: true, missingNumerals: [] }
+  }
+  
+  // Extract all action lines (lines starting with : and ending with ;)
+  const lines = plantuml.split(/\r?\n/)
+  for (const line of lines) {
+    const trimmed = line.trim()
+    // Match activity action lines: :Action text;
+    if (/^:.*;\s*$/.test(trimmed)) {
+      // Check if action has at least one numeral in parentheses
+      if (!/\(\d+\)/.test(trimmed)) {
+        // Extract the action text (without : and ;)
+        const actionText = trimmed.replace(/^:/, '').replace(/;\s*$/, '').trim()
+        missingNumerals.push(actionText)
+      }
+    }
+  }
+  
+  return {
+    valid: missingNumerals.length === 0,
+    missingNumerals
   }
 }
 
@@ -3383,9 +3446,10 @@ function cleanForRendering(code: string): string {
     if (inAllowedBlock) {
       braceDepth += countBraceDepthChange(trimmed)
       
-      // Filter banned properties even inside allowed blocks
+      // Allow BackgroundColor and BorderColor inside allowed blocks for clean patent styling
+      // Only filter FontColor and other banned patterns
       if (!BANNED_SKINPARAM_PATTERNS.test(trimmed) && 
-          !/^\s*(BackgroundColor|FontColor)\b/i.test(trimmed)) {
+          !/^\s*(FontColor)\b/i.test(trimmed)) {
         result.push(line)
       }
       
@@ -6072,14 +6136,14 @@ P200 -right-> M300 : data
 - Notes: Do NOT use "note" elements`,
     exampleCode: `@startuml
 start
-:Receive input data;
+:Receive input data via sensor (110);
 :Process data in processor (200);
 if (Valid data?) then (yes)
   :Store in memory (300);
-  :Generate output;
+  :Generate output via display (400);
 else (no)
-  :Log error;
-  :Return error code;
+  :Log error in logger (500);
+  :Return error code via interface (600);
 endif
 stop
 @enduml`
@@ -6370,7 +6434,7 @@ interface FigurePlanItem {
   figure: string         // "FIG. 1", "FIG. 2", etc.
   type: PlanDiagramType  // One of the whitelisted types
   title: string          // Short, patent-style, non-logical
-  include: string[]      // Components (for BLOCK/SEQUENCE) or steps (for FLOW/ACTIVITY)
+  include: string[]      // Components with numerals e.g., "Controller (100)", "Process in sensor (200)"
 }
 
 // Complete figure plan result
@@ -6577,13 +6641,13 @@ OUTPUT FORMAT (MANDATORY - Return valid JSON only)
       "figure": "FIG. 1",
       "type": "BLOCK",
       "title": "System Architecture",
-      "include": ["Component A (100)", "Component B (200)"]
+      "include": ["Controller (100)", "Processor (200)", "Memory (300)"]
     },
     {
       "figure": "FIG. 2",
       "type": "FLOW",
       "title": "Method Overview",
-      "include": ["Step 1", "Step 2", "Step 3"]
+      "include": ["Receive via sensor (110)", "Process in controller (200)", "Output to actuator (300)"]
     }
   ],
   "count": 2
@@ -6593,8 +6657,9 @@ SCHEMA RULES:
 - figure → sequential, starting at FIG. 1
 - type → one of: BLOCK, FLOW, SEQUENCE, ACTIVITY (no other types allowed)
 - title → short, patent-style, non-logical
-- include → list of components (for BLOCK/SEQUENCE) or steps (for FLOW/ACTIVITY)
+- include → list of components WITH NUMERALS (e.g., "Controller (100)") for ALL diagram types
 - count → total number of diagrams
+- CRITICAL: ALL include items MUST have component numerals in parentheses
 
 NO OTHER KEYS. NO NESTING. NO EXPLANATIONS.
 
@@ -7278,6 +7343,13 @@ If in doubt, OMIT rather than add.
       if (!includeValidation.valid) {
         console.warn(`[DiagramsLLM] Figure "${title}" contains components not in include[] list: ${includeValidation.hallucinated.join(', ')}`)
         // Note: We still save the diagram but log the warning. This catches subtle hallucinations.
+      }
+
+      // Step 2.6: C6 ACTIVITY NUMERAL VALIDATION (Warning - catches missing numerals in activity diagrams)
+      const activityValidation = validateActivityNumerals(code)
+      if (!activityValidation.valid) {
+        console.warn(`[DiagramsLLM] Figure "${title}" has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`)
+        // Note: We still save the diagram but log the warning. This catches activity diagrams missing numerals.
       }
 
       // Step 3: F - INJECT FIXED SKINPARAMS
@@ -8334,7 +8406,7 @@ MODIFICATION GUIDELINES
    - RESTRUCTURE: "reorganize", "change the flow", "flip direction" → Restructure as requested
    - STYLE OVERRIDES: If user explicitly requests different skinparams/styles → Apply user's style preferences
    
-   NOTE: Do NOT add colors unless user explicitly requests. Patent diagrams should remain monochrome by default.
+   NOTE: Do NOT add colors unless user explicitly requests. Patent diagrams use black borders on white backgrounds by default.
 
 3. DEFAULT BEHAVIOR (when user does NOT specify style/layout changes):
    - Apply the canonical style settings below
@@ -8515,6 +8587,12 @@ Output ONLY the diagram code (@startuml..@enduml).`
       error: 'Generated diagram contains forbidden constructs',
       details: `Detected: ${forbiddenCheck.matches.join(', ')}. Please try again with instructions that avoid decision logic.`
     }, { status: 400 })
+  }
+  
+  // C6: Validate activity diagrams have numerals (warning only)
+  const activityValidation = validateActivityNumerals(code)
+  if (!activityValidation.valid) {
+    console.warn(`[RegenerateDiagramLLM] Figure ${figureNo} has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`)
   }
   
   // Inject fixed skinparams
@@ -8698,6 +8776,12 @@ Return ONLY diagram code.`
     }, { status: 400 })
   }
   
+  // C6: Validate activity diagrams have numerals (warning only)
+  const activityValidation = validateActivityNumerals(code)
+  if (!activityValidation.valid) {
+    console.warn(`[AddFigureLLM] New figure has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`)
+  }
+  
   // Inject fixed skinparams
   code = injectFixedSkinparams(code)
   
@@ -8776,30 +8860,18 @@ ${numeralsPreview}
 - Helper nodes MUST NOT contain numerals.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CANONICAL STYLE (MANDATORY FOR EACH DIAGRAM)
+CANONICAL STYLE (HANDLED AUTOMATICALLY)
 ═══════════════════════════════════════════════════════════════════════════════
-Each diagram MUST include these skinparam settings:
-
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 10
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-skinparam nodesep 40
-skinparam ranksep 35
-skinparam BorderThickness 1.7
-skinparam PackageBorderThickness 1.7
-skinparam PackageTitleFontStyle bold
+Do NOT include any skinparam settings in your PlantUML code.
+The system will automatically inject the correct skinparams for clean patent-style diagrams
+with white backgrounds, black borders, and proper spacing.
 
 Default direction: top to bottom direction (produces cleaner patent figures)
 
 ═══════════════════════════════════════════════════════════════════════════════
 PATENT FIGURE SEMANTICS (STRICT)
 ═══════════════════════════════════════════════════════════════════════════════
-- All connectors must be orthogonal (skinparam linetype ortho is mandatory).
+- All connectors must be orthogonal (applied automatically via skinparam injection).
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
 - Dashed arrows (..>) = power/utility ONLY.

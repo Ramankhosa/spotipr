@@ -17,16 +17,19 @@ const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(FontColor|.*Style(?!.*PackageTi
 // If a block header is removed, the ENTIRE block body must be removed.
 // Partial block survival (orphan BorderStyle/BorderThickness lines) is a hard error.
 //
-// ONLY THREE BLOCK TYPES ARE EVER ALLOWED:
-//   1. skinparam rectangle<<optional>> { ... }  (REQUIRES stereotype)
+// ALLOWED BLOCK TYPES (for clean patent diagram styling):
+//   1. skinparam rectangle { ... }
 //   2. skinparam sequence { ... }
 //   3. skinparam activity { ... }
+//   4. skinparam participant { ... }
+//   5. skinparam package { ... }
+//
+// All other skinparam XXX { ... } blocks are FORBIDDEN and removed atomically.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Allowed skinparam block types (STRICT):
-// - rectangle REQUIRES <<optional>> or other stereotype (plain rectangle NOT allowed)
-// - sequence and activity are allowed standalone
-const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity)\s*\{|^skinparam\s+rectangle\s*<<\w+>>\s*\{/i
+// - rectangle, activity, participant, package, sequence are allowed for clean patent diagram styling
+const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity|rectangle|participant|package)\s*\{/i
 
 // Detection pattern for ANY skinparam block start
 const SKINPARAM_BLOCK_START = /^skinparam\s+\w+\s*(<<\w+>>)?\s*\{/i
