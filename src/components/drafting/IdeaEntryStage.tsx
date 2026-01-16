@@ -55,6 +55,43 @@ interface Claim {
   category?: 'method' | 'system' | 'apparatus' | 'composition' | 'product'
 }
 
+// Helper function to parse HTML claims content into structured claims array
+// This ensures manual edits in the editor are properly captured in structured format
+const parseClaimsFromHtml = (html: string): Claim[] => {
+  if (!html || html.trim() === '' || html === '<p></p>') return []
+  
+  const claims: Claim[] = []
+  // Split by closing paragraph tags to handle block-level claims
+  const blocks = html.split(/<\/p>/i)
+  
+  blocks.forEach((block) => {
+    // Strip HTML tags and normalize whitespace
+    const plain = block.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!plain) return
+    
+    // Match claim number pattern: "1. claim text" or "1 claim text"
+    const match = plain.match(/^(\d+)\.?\s*(.+)$/)
+    if (match) {
+      const number = Number(match[1])
+      const text = match[2].trim()
+      
+      // Check for dependency references like "The method of claim 1" or "(Claim 1)"
+      const depMatch = text.match(/(?:claim|claims?)\s+(\d+)/i)
+      const dependsOn = depMatch ? Number(depMatch[1]) : undefined
+      
+      claims.push({
+        number,
+        text,
+        type: number === 1 || !dependsOn ? 'independent' : 'dependent',
+        dependsOn: number === 1 ? undefined : dependsOn,
+        category: 'method' // Default category, will be preserved from original if available
+      })
+    }
+  })
+  
+  return claims
+}
+
 export default function IdeaEntryStage({ session, patent, onComplete, onRefresh }: IdeaEntryStageProps) {
   const [normalizedData, setNormalizedData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
@@ -298,16 +335,50 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
     try {
       setError(null)
       const claimsContent = claimsEditorRef.current?.getHTML() || claimsText
+      
+      // CRITICAL: Parse HTML content into structured claims to ensure manual edits are captured
+      // This fixes the bug where manual edits in the editor weren't propagated to ClaimRefinementStage
+      const parsedFromHtml = parseClaimsFromHtml(claimsContent)
+      // Use parsed claims if available, otherwise fall back to existing structured claims
+      const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
 
       await onComplete({
         action: 'save_claims',
         sessionId: session.id,
         claims: claimsContent,
-        claimsStructured: claims.length > 0 ? claims : null
+        claimsStructured: structuredToSave
       })
 
       await onRefresh()
       setDraftSaved(true)
+    } catch (e) {
+      console.error('Failed to save claims:', e)
+      setError('Failed to save claims.')
+    }
+  }
+
+  // Done Editing: Save claims and exit edit mode (unified handler for top and bottom buttons)
+  const handleDoneEditing = async () => {
+    if (!session?.id) return
+    
+    try {
+      setError(null)
+      const claimsContent = claimsEditorRef.current?.getHTML() || claimsText
+      
+      // Parse HTML content into structured claims to ensure manual edits are captured
+      const parsedFromHtml = parseClaimsFromHtml(claimsContent)
+      const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
+
+      await onComplete({
+        action: 'save_claims',
+        sessionId: session.id,
+        claims: claimsContent,
+        claimsStructured: structuredToSave
+      })
+
+      await onRefresh()
+      setDraftSaved(true)
+      setIsEditingClaims(false) // Exit edit mode after saving
     } catch (e) {
       console.error('Failed to save claims:', e)
       setError('Failed to save claims.')
@@ -327,11 +398,15 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         return
       }
 
+      // CRITICAL: Parse HTML content into structured claims to ensure manual edits are captured
+      const parsedFromHtml = parseClaimsFromHtml(claimsContent)
+      const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
+
       await onComplete({
         action: 'freeze_claims',
         sessionId: session.id,
         claims: claimsContent,
-        claimsStructured: claims.length > 0 ? claims : null,
+        claimsStructured: structuredToSave,
         jurisdiction: activeJurisdiction
       })
 
@@ -370,11 +445,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
     if (!claimsContent || claimsContent.trim() === '' || claimsContent === '<p></p>') {
       throw new Error('Please add claims before continuing.')
     }
+    // CRITICAL: Parse HTML content into structured claims to ensure manual edits are captured
+    const parsedFromHtml = parseClaimsFromHtml(claimsContent)
+    const structuredToSave = parsedFromHtml.length > 0 ? parsedFromHtml : (claims.length > 0 ? claims : null)
     await onComplete({
       action: 'save_claims',
       sessionId: session.id,
       claims: claimsContent,
-      claimsStructured: claims.length > 0 ? claims : null
+      claimsStructured: structuredToSave
     })
   }
 
@@ -1013,8 +1091,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      onClick={() => setIsEditingClaims(false)}
-                                      className="text-gray-600"
+                                      onClick={handleDoneEditing}
+                                      className="text-green-600 border-green-200 hover:bg-green-50"
                                     >
                                       <Check className="w-3.5 h-3.5 mr-1.5" />
                                       Done Editing
@@ -1029,7 +1107,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               <div className="border-2 border-indigo-200 rounded-lg bg-indigo-50/30">
                                 <div className="px-3 py-2 bg-indigo-100 border-b border-indigo-200 text-xs text-indigo-700 flex items-center gap-2">
                                   <Edit2 className="w-3 h-3" />
-                                  <span>Make your changes below. Click "Done Editing" when finished, then save or freeze.</span>
+                                  <span>Make your changes below. Click "Done Editing" when finished to save your changes.</span>
                                 </div>
                                 <div className="p-1">
                                   <ClaimsEditor
@@ -1050,10 +1128,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 className="border border-gray-200 rounded-lg bg-gray-50/50 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/20 transition-colors group"
                                 onClick={() => !claimsFrozen && setIsEditingClaims(true)}
                               >
-                                <div className="px-4 py-3 prose prose-sm max-w-none">
+                                {/* Match ClaimsEditor styling: prose prose-sm with text-gray-700 leading-relaxed */}
+                                <div className="px-4 py-3 prose prose-sm max-w-none text-gray-700 leading-relaxed [&>p]:mb-3 [&>p:last-child]:mb-0">
                                   <div 
                                     dangerouslySetInnerHTML={{ __html: claimsText }} 
-                                    className="text-gray-700 [&>p]:mb-3 [&>p:last-child]:mb-0"
                                   />
                                 </div>
                                 {!claimsFrozen && (
@@ -1090,21 +1168,26 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               <div className="flex items-center gap-2">
                                 {!claimsFrozen && (
                                   <>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={handleSaveClaims}
-                                      className={draftSaved ? "bg-green-50 border-green-200 text-green-700" : ""}
-                                    >
-                                      {draftSaved ? (
-                                        <>
-                                          <Check className="w-3.5 h-3.5 mr-1.5 text-green-600" />
-                                          Saved!
-                                        </>
-                                      ) : (
-                                        "Save Draft"
-                                      )}
-                                    </Button>
+                                    {isEditingClaims && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleDoneEditing}
+                                        className={draftSaved ? "bg-green-50 border-green-200 text-green-700" : "text-green-600 border-green-200 hover:bg-green-50"}
+                                      >
+                                        {draftSaved ? (
+                                          <>
+                                            <Check className="w-3.5 h-3.5 mr-1.5 text-green-600" />
+                                            Saved!
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Check className="w-3.5 h-3.5 mr-1.5" />
+                                            Done Editing
+                                          </>
+                                        )}
+                                      </Button>
+                                    )}
                                     <Button
                                       size="sm"
                                       onClick={handleFreezeClaims}

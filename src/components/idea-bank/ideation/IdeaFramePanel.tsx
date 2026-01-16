@@ -54,7 +54,8 @@ interface IdeaFrame {
   whyNotObvious: string
   mechanismBoundaryTest?: {
     whatItDoesNotSolve: string
-    outOfScope: string
+    outOfScope?: string  // Legacy field for backward compatibility
+    failureByDesign?: string  // New field: scenario where invention intentionally fails
   }
   // Preliminary novelty assessment (LLM-only, NO prior art search)
   noveltyAssessment?: NoveltyAssessment
@@ -297,10 +298,17 @@ function FullscreenIdeaModal({
                     <span className="text-xs font-medium text-slate-600 block mb-1">Does NOT Solve:</span>
                     <p className="text-sm text-slate-700">{idea.mechanismBoundaryTest.whatItDoesNotSolve}</p>
                   </div>
-                  <div>
-                    <span className="text-xs font-medium text-slate-600 block mb-1">Out of Scope:</span>
-                    <p className="text-sm text-slate-700">{idea.mechanismBoundaryTest.outOfScope}</p>
-                  </div>
+                  {/* Support both legacy (outOfScope) and new (failureByDesign) fields */}
+                  {(idea.mechanismBoundaryTest.failureByDesign || idea.mechanismBoundaryTest.outOfScope) && (
+                    <div>
+                      <span className="text-xs font-medium text-slate-600 block mb-1">
+                        {idea.mechanismBoundaryTest.failureByDesign ? 'Failure by Design:' : 'Out of Scope:'}
+                      </span>
+                      <p className="text-sm text-slate-700">
+                        {idea.mechanismBoundaryTest.failureByDesign || idea.mechanismBoundaryTest.outOfScope}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </section>
             )}
@@ -554,7 +562,7 @@ Why Non-Obvious: ${idea.whyNotObvious}
 ${idea.mechanismBoundaryTest ? `
 Boundaries:
 - Does NOT solve: ${idea.mechanismBoundaryTest.whatItDoesNotSolve}
-- Out of scope: ${idea.mechanismBoundaryTest.outOfScope}
+${idea.mechanismBoundaryTest.failureByDesign ? `- Failure by design: ${idea.mechanismBoundaryTest.failureByDesign}` : ''}${idea.mechanismBoundaryTest.outOfScope ? `- Out of scope: ${idea.mechanismBoundaryTest.outOfScope}` : ''}
 ` : ''}
 
 ${idea.noveltyAssessment ? `

@@ -815,6 +815,9 @@ export async function POST(
       case 'claim_refinement_apply':
         return await handleClaimRefinementApply(authResult.user, patentId, data);
 
+      case 'add_component_numbers_to_claims':
+        return await handleAddComponentNumbersToClaims(authResult.user, patentId, data, requestHeaders);
+
       case 'set_stage':
         return await handleSetStage(authResult.user, patentId, data);
 
@@ -4840,6 +4843,231 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
     claimsHtml: mergedHtml,
     notes: changeNotes
   })
+}
+
+/**
+ * Add component numbers (reference numerals) to claims
+ * This surgically inserts component numbers at appropriate places in the claim text
+ * without changing the claim substance or structure
+ * 
+ * CLAIMS SOURCE PRIORITY (robust handling):
+ * 1. Uses claims content passed from Annexure Draft UI (generated.claims) - PREFERRED
+ *    This is whatever claims are currently displayed in the draft:
+ *    - Refined claims (if user went through claim refinement stage)
+ *    - Preliminary claims (if user skipped refinement)
+ * 2. Falls back to frozen/source claims from ideaRecord if UI content is empty
+ * 
+ * IMPORTANT: This modifies the draft claims only (AnnexureDraft.claims)
+ * NOT the source claims in ideaRecord.normalizedData
+ * 
+ * LLM Configuration: Uses DRAFT_CLAIM_GENERATION stage for super admin control
+ * (same as claim generation for consistency)
+ */
+async function handleAddComponentNumbersToClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const { sessionId, jurisdiction, claimsContent } = data
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  // Verify ownership and get session with referenceMap and ideaRecord
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { 
+      ideaRecord: true,
+      referenceMap: true
+    }
+  })
+
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  // Get component numbers from referenceMap
+  const components = (session.referenceMap as any)?.components || []
+  if (components.length === 0) {
+    return NextResponse.json({ 
+      error: 'No component numbers available. Please finalize components in the Component Planner stage first.' 
+    }, { status: 400 })
+  }
+
+  // ROBUST CLAIMS SOURCING:
+  // Priority 1: Use claims passed from UI (whatever is displayed in Annexure Draft)
+  // Priority 2: Fall back to frozen/refined claims from ideaRecord
+  let claimsHtml = (claimsContent || '').trim()
+  let claimsSource = 'ui'
+  
+  if (!claimsHtml) {
+    // Fallback: try to get claims from ideaRecord (frozen/refined claims)
+    const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
+    claimsHtml = (
+      normalizedData.claimsFinal || 
+      normalizedData.claims || 
+      normalizedData.claimsProvisional || 
+      ''
+    ).trim()
+    claimsSource = 'ideaRecord'
+    
+    console.log(`[addComponentNumbersToClaims] UI claims empty, falling back to ideaRecord (${claimsHtml ? 'found' : 'not found'})`)
+  }
+  
+  if (!claimsHtml) {
+    return NextResponse.json({ 
+      error: 'No claims text available. Please ensure claims are generated and populated in the draft before adding component numbers.' 
+    }, { status: 400 })
+  }
+  
+  console.log(`[addComponentNumbersToClaims] Using claims from: ${claimsSource}, length: ${claimsHtml.length} chars`)
+
+  // Build component reference list for the LLM
+  const componentList = components
+    .filter((c: any) => c.name && c.numeral)
+    .map((c: any) => `- ${c.name}: (${c.numeral})`)
+    .join('\n')
+
+  // Get effective jurisdiction
+  const effectiveJurisdiction = (jurisdiction || session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
+
+  try {
+    // Build the LLM prompt for adding component numbers
+    const prompt = `You are a patent claim editor specializing in adding reference numerals to patent claims.
+
+Your task is to SURGICALLY add component reference numbers to patent claims WITHOUT changing the claim substance, wording, or structure.
+
+RULES:
+1. Add reference numerals in parentheses immediately after the FIRST occurrence of each component name in each claim
+2. Do NOT change any claim wording, structure, or substance
+3. Do NOT add numbers to components that don't exist in the provided component list
+4. Match component names intelligently (e.g., "controller" matches "main controller", "control unit" matches "controller")
+5. Reference numerals format: component name (numeral), e.g., "processor (200)"
+6. For dependent claims, only add numerals to new components not already numbered in the referenced claim
+7. Preserve all HTML formatting, paragraph tags, and claim numbering exactly as provided
+8. If a component is mentioned multiple times in the same claim, only add the numeral on the FIRST occurrence
+
+COMPONENT REFERENCE LIST:
+${componentList}
+
+CLAIMS TEXT TO MODIFY:
+${claimsHtml}
+
+OUTPUT FORMAT:
+Return ONLY the modified claims text with reference numerals added. No explanations, no JSON wrapping.
+Preserve all HTML tags and formatting exactly as in the input.`
+
+    // Call LLM using the gateway
+    // Uses DRAFT_CLAIM_GENERATION stage (same as claim generation) for super admin LLM control
+    // This ensures component number addition uses the same model as claim generation
+    const request = { headers: requestHeaders || {} }
+    const llmResult = await llmGateway.executeLLMOperation(request, {
+      taskCode: 'LLM2_DRAFT',
+      stageCode: 'DRAFT_CLAIM_GENERATION', // Same as claim generation for super admin control
+      prompt,
+      idempotencyKey: crypto.randomUUID(),
+      inputTokens: Math.ceil(prompt.length / 4),
+      metadata: { purpose: 'add_component_numbers_to_claims', sessionId }
+    })
+
+    if (!llmResult.success || !llmResult.response?.output) {
+      console.error('[addComponentNumbersToClaims] LLM call failed:', llmResult.error)
+      return NextResponse.json({ 
+        error: 'Failed to process claims with component numbers' 
+      }, { status: 500 })
+    }
+
+    const updatedClaims = llmResult.response.output.trim()
+
+    // Get effective jurisdiction for saving
+    const effectiveJur = effectiveJurisdiction
+
+    // Update the AnnexureDraft (draft claims) NOT the ideaRecord (source claims)
+    // This ensures the source claims (frozen/refined) remain unchanged
+    // Only the draft version gets the component numbers added
+    const existingDraft = await prisma.annexureDraft.findFirst({
+      where: { sessionId, jurisdiction: effectiveJur },
+      orderBy: { updatedAt: 'desc' }
+    })
+
+    if (existingDraft) {
+      // Update existing draft with new claims containing component numbers
+      await prisma.annexureDraft.update({
+        where: { id: existingDraft.id },
+        data: { 
+          claims: updatedClaims,
+          updatedAt: new Date()
+        }
+      })
+      console.log(`[addComponentNumbersToClaims] Updated AnnexureDraft ${existingDraft.id} with component-numbered claims`)
+    } else {
+      // No draft exists - create one with just the claims
+      console.log(`[addComponentNumbersToClaims] No existing draft for ${effectiveJur}, claims will be returned to UI only`)
+    }
+
+    // Also track that component numbers were added (metadata only, not modifying source claims)
+    const existingNormalized = (session.ideaRecord?.normalizedData as any) || {}
+    if (!existingNormalized.componentNumbersAddedToClaims) {
+      await prisma.ideaRecord.update({
+        where: { sessionId },
+        data: { 
+          normalizedData: {
+            ...existingNormalized,
+            componentNumbersAddedToClaims: {
+              addedAt: new Date().toISOString(),
+              jurisdiction: effectiveJur,
+              componentsUsed: components.length
+            }
+          }
+        }
+      })
+    }
+
+    console.log(`[addComponentNumbersToClaims] Successfully added component numbers to claims for session ${sessionId}, jurisdiction: ${effectiveJur}`)
+
+    return NextResponse.json({
+      success: true,
+      claims: updatedClaims,
+      componentsUsed: components.length,
+      tokensUsed: llmResult.response?.outputTokens || 0,
+      claimsSource, // 'ui' or 'ideaRecord' - for debugging
+      jurisdiction: effectiveJur,
+      draftUpdated: !!existingDraft
+    })
+
+  } catch (error) {
+    console.error('[addComponentNumbersToClaims] Error:', error)
+    return NextResponse.json({ 
+      error: 'Failed to add component numbers to claims' 
+    }, { status: 500 })
+  }
+}
+
+// Helper function to parse claims from HTML (used by addComponentNumbersToClaims)
+function parseClaimsFromHtml(html: string): Array<{ number: number; text: string; type: string; category: string }> {
+  if (!html || html.trim() === '') return []
+  
+  const claims: Array<{ number: number; text: string; type: string; category: string }> = []
+  const blocks = html.split(/<\/p>/i)
+  
+  blocks.forEach((block) => {
+    const plain = block.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!plain) return
+    
+    const match = plain.match(/^(\d+)\.?\s*(.+)$/)
+    if (match) {
+      const number = Number(match[1])
+      const text = match[2].trim()
+      const depMatch = text.match(/(?:claim|claims?)\s+(\d+)/i)
+      const isDependent = number > 1 && depMatch !== null
+      
+      claims.push({
+        number,
+        text,
+        type: isDependent ? 'dependent' : 'independent',
+        category: isDependent ? 'dependent' : 'independent'
+      })
+    }
+  })
+  
+  return claims
 }
 
 async function handleSetStage(user: any, patentId: string, data: any) {

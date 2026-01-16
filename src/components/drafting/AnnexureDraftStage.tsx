@@ -1704,6 +1704,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [ddUserDataExpanded, setDdUserDataExpanded] = useState(false)
   const DD_USER_DATA_MAX_SIZE = 50 * 1024 // 50KB
 
+  // Add Component Numbers to Claims
+  const [addingComponentNumbers, setAddingComponentNumbers] = useState(false)
+  const [componentNumbersAdded, setComponentNumbersAdded] = useState(false)
+
   // Confirmation modal state for clear/delete actions
   const [confirmationModal, setConfirmationModal] = useState<{
     isOpen: boolean
@@ -2775,6 +2779,72 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       alert(`❌ Translation failed: ${err instanceof Error ? err.message : 'Network error'}. Please try again.`)
     } finally {
       setTranslating(null)
+    }
+  }
+
+  // Add component numbers (reference numerals) to claims
+  // This surgically inserts component numerals from the Component Planner into claims
+  // Uses the claims content currently displayed in the Annexure Draft
+  // (either from refinement stage or preliminary claims, depending on user workflow)
+  const handleAddComponentNumbersToClaims = async () => {
+    if (!session?.id || addingComponentNumbers) return
+    
+    // Check if component numbers are available
+    const components = (session as any)?.referenceMap?.components || []
+    if (components.length === 0) {
+      alert('No component numbers available. Please finalize components in the Component Planner stage first.')
+      return
+    }
+    
+    // Get claims content currently displayed in the Annexure Draft
+    // This automatically uses either refined claims or preliminary claims
+    const claimsContent = generated?.claims || ''
+    if (!claimsContent.trim()) {
+      alert('No claims content available. Claims must be present before adding component numbers.')
+      return
+    }
+    
+    setAddingComponentNumbers(true)
+    setComponentNumbersAdded(false)
+    
+    try {
+      const res = await fetch(`/api/patents/${patent?.id}/drafting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({
+          action: 'add_component_numbers_to_claims',
+          sessionId: session.id,
+          jurisdiction: activeJurisdiction,
+          claimsContent: claimsContent // Pass the actual claims displayed in Annexure
+        })
+      })
+      
+      const data = await res.json()
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to add component numbers')
+      }
+      
+      if (data.success && data.claims) {
+        // Update local state with the new claims containing component numbers
+        setGenerated(prev => ({ ...prev, claims: data.claims }))
+        setComponentNumbersAdded(true)
+        
+        // Also refresh to ensure database is in sync
+        await onRefresh()
+        
+        // Show success with details about what was done
+        const draftNote = data.draftUpdated ? ' Draft saved.' : ''
+        alert(`✅ Successfully added reference numerals from ${data.componentsUsed} components!${draftNote}`)
+      }
+    } catch (err) {
+      console.error('Add component numbers error:', err)
+      alert(`❌ Failed to add component numbers: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setAddingComponentNumbers(false)
     }
   }
 
@@ -4418,6 +4488,65 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                  </svg>
                                </button>
                              </div>
+                          )}
+
+                          {/* Add Component Numbers to Claims - only visible when:
+                              1. We're in the claims section
+                              2. Claims have actual content (not just empty string)
+                              3. Components are available from Component Planner stage */}
+                          {keyName === 'claims' && generated?.claims?.trim() && (session as any)?.referenceMap?.components?.length > 0 && (
+                            <div className="mb-4 p-3 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg">
+                              <div className="flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center flex-shrink-0">
+                                    <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+                                    </svg>
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-medium text-violet-800">Add Component Numbers</p>
+                                    <p className="text-xs text-violet-600">
+                                      {componentNumbersAdded 
+                                        ? '✓ Component numbers have been added to claims' 
+                                        : `Insert reference numerals from ${((session as any)?.referenceMap?.components || []).length} components`
+                                      }
+                                    </p>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={handleAddComponentNumbersToClaims}
+                                  disabled={addingComponentNumbers || componentNumbersAdded}
+                                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                                    addingComponentNumbers 
+                                      ? 'bg-violet-200 text-violet-500 cursor-wait'
+                                      : componentNumbersAdded
+                                        ? 'bg-green-100 text-green-700 cursor-default'
+                                        : 'bg-violet-600 text-white hover:bg-violet-700 shadow-sm'
+                                  }`}
+                                >
+                                  {addingComponentNumbers ? (
+                                    <>
+                                      <span className="animate-spin h-4 w-4 border-2 border-violet-400 border-t-transparent rounded-full"></span>
+                                      Adding...
+                                    </>
+                                  ) : componentNumbersAdded ? (
+                                    <>
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                      </svg>
+                                      Added
+                                    </>
+                                  ) : (
+                                    <>
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                      </svg>
+                                      Add Numbers
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
                           )}
                           
                           {editingKey === keyName ? (

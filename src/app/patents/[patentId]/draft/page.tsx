@@ -593,6 +593,7 @@ export default function PatentDraftingPage() {
           onNext={next ? () => handleNavigateToStage(next) : null}
           previousLabel={prev ? stageLabels[prev] || prev : undefined}
           nextLabel={next ? stageLabels[next] || next : undefined}
+          sidebarCollapsed={sidebarCollapsed}
         />
       )}
 

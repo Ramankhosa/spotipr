@@ -291,10 +291,14 @@ export type SuggestedMovesResponse = z.infer<typeof SuggestedMovesResponseSchema
 
 /**
  * Mechanism boundary test - what the idea does NOT solve
+ * Supports both legacy (outOfScope) and new (failureByDesign) fields for compatibility
  */
 export const MechanismBoundaryTestSchema = z.object({
   whatItDoesNotSolve: z.string().describe('Problems this mechanism explicitly does NOT address'),
-  outOfScope: z.string().describe('Areas considered outside the scope of this invention'),
+  // Legacy field - kept for backward compatibility with existing data
+  outOfScope: z.string().optional().describe('Areas considered outside the scope of this invention'),
+  // New field - scenario where invention intentionally fails
+  failureByDesign: z.string().optional().describe('Scenario where this invention intentionally fails'),
 });
 export type MechanismBoundaryTest = z.infer<typeof MechanismBoundaryTestSchema>;
 
@@ -708,7 +712,8 @@ export function getSchemaDescription(schemaName: string): string {
   "whyNotObvious": "why skilled person wouldn't arrive at this (required)",
   "mechanismBoundaryTest": {
     "whatItDoesNotSolve": "explicit non-goals",
-    "outOfScope": "areas outside scope"
+    "outOfScope": "areas outside scope (legacy)",
+    "failureByDesign": "scenario where invention intentionally fails (new)"
   }
 }`,
     PreliminaryNoveltyAssessment: `{

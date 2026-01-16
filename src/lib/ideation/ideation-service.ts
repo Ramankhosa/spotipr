@@ -942,50 +942,68 @@ export async function generateIdeas(input: GenerateIdeasInput): Promise<IdeaFram
       return `${n.title}: ${payload.impact || n.description || 'No description'}`;
     });
 
-  const prompt = `ROLE: Patent Idea Generator
+  const prompt = `ROLE: Patent Idea Generator (Single-Mechanism, Fusion-Allowed)
 
 TASK:
-Generate ${input.recipe.count} patent-worthy ideas.
+Generate exactly ${input.recipe.count} patent-worthy invention ideas.
 
-EACH IDEA MUST CONTAIN EXACTLY ONE CAUSAL MECHANISM.
+CORE RULE:
+Each idea must be based on exactly ONE causal mechanism.
+
+A causal mechanism means:
+• One indivisible transformation from initial state to final state
+• Governed by one physical, logical, or procedural principle
+• Not decomposable into sequential steps
+
+You are not designing a system.
+You are identifying one inventive lever.
+
+DIMENSION FUSION RULE:
+Multiple dimensions may be used ONLY if they fuse into one indivisible
+causal transformation.
+If the mechanism can be explained as steps or chains, it is invalid.
 
 INVENTION CONTEXT:
-- Core Entity: ${groundingContext?.coreEntity || 'Not specified'}
-- User Intent: ${groundingContext?.userIntent || 'Not specified'}
-- Assumption to Challenge: ${inventiveFraming.assumptionToChallenge || 'None identified'}
-${inventiveFraming.patentableProblemStatement ? `- Problem Statement: ${inventiveFraming.patentableProblemStatement}` : ''}
+Core Entity: ${groundingContext?.coreEntity || 'Not specified'}
+User Intent: ${groundingContext?.userIntent || 'Not specified'}
+Assumption to Challenge: ${inventiveFraming.assumptionToChallenge || 'None identified'}
+${inventiveFraming.patentableProblemStatement
+  ? `Problem Statement: ${inventiveFraming.patentableProblemStatement}`
+  : ''}
 
-SELECTED DIMENSIONS/MOVES:
-${dimensionDetails.join('\n') || 'None selected - generate broadly'}
+SELECTED DIMENSIONS (CONTEXT ONLY):
+${dimensionDetails.join('\n') || 'No dimensions selected'}
 
-${input.userGuidance ? `USER GUIDANCE (HIGH PRIORITY): ${input.userGuidance}` : ''}
+${input.userGuidance
+  ? `USER GUIDANCE (HIGHEST PRIORITY): ${input.userGuidance}`
+  : ''}
 
-OUTPUT (VALID JSON ARRAY):
+INTERNAL CHECK (DO NOT OUTPUT):
+If more than one transformation, trigger, or subsystem is required,
+discard and regenerate.
+
+OUTPUT (VALID JSON ARRAY ONLY):
 [
   {
     "ideaId": "unique-id",
-    "coreMechanism": "A single sentence describing the ONE primary inventive mechanism (REQUIRED)",
-    "inventiveLeap": "The non-obvious insight (REQUIRED)",
-    "eliminatedAssumption": "What traditional assumption is eliminated",
-    "contradictionResolved": "Which contradiction this resolves",
-    "whyNotObvious": "Why a skilled person would NOT arrive at this (REQUIRED)",
+    "coreMechanism": "One sentence. One transformation. No sequencing.",
+    "inventiveLeap": "The non-obvious insight enabling the mechanism.",
+    "eliminatedAssumption": "Traditional belief made unnecessary.",
+    "contradictionResolved": "X without sacrificing Y.",
+    "whyNotObvious": "Why a skilled person would not arrive at this.",
     "mechanismBoundaryTest": {
-      "whatItDoesNotSolve": "Explicit non-goals",
-      "outOfScope": "Areas outside scope"
+      "whatItDoesNotSolve": "Explicit non-goals.",
+      "failureByDesign": "Scenario where this invention intentionally fails."
     },
-    "title": "Short title for display",
-    "problem": "Problem being solved",
-    "principle": "One-liner core principle"
+    "title": "Short invention title",
+    "problem": "Problem caused by the eliminated assumption",
+    "principle": "One-line causal principle"
   }
 ]
 
-RULE:
-If more than ONE causal mechanism is required → discard and regenerate.
-
 FORBIDDEN:
-- Additive mechanisms (add sensor + add AI + add cloud)
-- Multiple independent mechanisms in one idea
-- Vague mechanisms like "optimize" or "improve"`;
+Additive logic, sequential steps, control loops, optimization language,
+system architecture descriptions.`;
 
   const { response } = await callLLM(
     prompt,

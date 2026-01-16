@@ -125,7 +125,8 @@ interface IdeaFrame {
   whyNotObvious: string
   mechanismBoundaryTest?: {
     whatItDoesNotSolve: string
-    outOfScope: string
+    outOfScope?: string  // Legacy field for backward compatibility
+    failureByDesign?: string  // New field: scenario where invention intentionally fails
   }
   // Preliminary novelty assessment (LLM-only, NO prior art)
   noveltyAssessment?: {
@@ -1269,13 +1270,13 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
   }
 
   // Validate single-mechanism constraint (SRS Section 3.6)
-  // If selection implies multiple mechanisms, show validation warning
+  // Block generation if too many dimensions selected
   const validateSingleMechanism = (selectedDimensions: string[]): boolean => {
-    // Simple validation: too many unrelated dimensions may imply multiple mechanisms
-    // Real validation happens during generation and will reject multi-mechanism ideas
     if (selectedDimensions.length > 6) {
-      setMechanismWarning('Warning: Too many dimensions selected. Generated ideas must contain exactly ONE causal mechanism. Consider reducing selection.')
-      return true // Still allow, but warn
+      // Set warning for CombineTray inline display
+      setMechanismWarning('Too many dimensions selected (max 6). Please reduce your selection.')
+      setError('Too many dimensions selected (max 6). Please reduce your selection to generate ideas with a single causal mechanism.')
+      return false // Block generation
     }
     setMechanismWarning(null)
     return true
@@ -1298,10 +1299,14 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
       (n.data as any)?.type === 'DIMENSION_FAMILY' || (n.data as any)?.type === 'DIMENSION_OPTION'
     ).map(n => n.id)
 
-    const allDimensions = [...dimensions, ...Array.from(selectedNodes)]
+    // Combine dimensions and other selected nodes, deduplicating to avoid false warnings
+    // Previously this created duplicates when dimension nodes were selected (counted twice)
+    const allDimensions = Array.from(new Set([...dimensions, ...Array.from(selectedNodes)]))
 
-    // Validate single-mechanism constraint
-    validateSingleMechanism(allDimensions)
+    // Validate single-mechanism constraint - block if too many dimensions
+    if (!validateSingleMechanism(allDimensions)) {
+      return // Stop generation if validation fails
+    }
 
     setStage('generating')
     setLoading(true)
@@ -2366,7 +2371,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
           >
             <IdeaFramePanel
               ideas={ideaFrames}
-              onSelectIdea={setSelectedIdea}
+              onSelectIdea={(idea) => setSelectedIdea(idea)}
               onAssessNovelty={handlePreliminaryAssessment}
               onExport={handleExportToBank}
               onClose={() => setShowIdeaPanel(false)}
@@ -2408,47 +2413,6 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
         )}
       </AnimatePresence>
 
-      {/* Mechanism Warning Modal */}
-      <AnimatePresence>
-        {mechanismWarning && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-            onClick={() => setMechanismWarning(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center">
-                  <AlertCircle className="w-6 h-6 text-amber-600" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">Single Mechanism Required</h3>
-                  <p className="text-sm text-slate-500">Ideas must contain exactly one causal mechanism</p>
-                </div>
-              </div>
-
-              <p className="text-sm text-slate-600 mb-4">
-                {mechanismWarning}
-              </p>
-
-              <Button
-                onClick={() => setMechanismWarning(null)}
-                className="w-full bg-violet-500 hover:bg-violet-600 text-white"
-              >
-                Understood
-              </Button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Inventive Framing Insight Panel (replaces Contradiction Panel) */}
       {inventiveFraming && inventiveFraming.technicalContradictions?.length > 0 && (

@@ -17,6 +17,7 @@ interface FloatingStageButtonsProps {
   previousLabel?: string
   nextLabel?: string
   disabled?: boolean
+  sidebarCollapsed?: boolean
 }
 
 export default function FloatingStageButtons({
@@ -24,7 +25,8 @@ export default function FloatingStageButtons({
   onNext,
   previousLabel = 'Previous Stage',
   nextLabel = 'Next Stage',
-  disabled = false
+  disabled = false,
+  sidebarCollapsed = false
 }: FloatingStageButtonsProps) {
   const [hoveredButton, setHoveredButton] = useState<'prev' | 'next' | null>(null)
   const [isNavigating, setIsNavigating] = useState(false)
@@ -54,8 +56,8 @@ export default function FloatingStageButtons({
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
-            className="fixed left-0 top-1/2 -translate-y-1/2 z-40"
-            style={{ marginLeft: '288px' }} // Account for sidebar width (72 = w-72 in tailwind = 18rem = 288px)
+            className="fixed left-0 top-1/2 -translate-y-1/2 z-40 transition-[margin] duration-300"
+            style={{ marginLeft: sidebarCollapsed ? '64px' : '288px' }} // Account for sidebar width (collapsed: w-16 = 64px, expanded: w-72 = 288px)
           >
             <motion.button
               onClick={() => handleNavigation('prev')}
