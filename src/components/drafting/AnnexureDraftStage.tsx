@@ -249,7 +249,7 @@ function ValidationPanel({
     if (!msg) msg = CELEBRATION_MESSAGES[0] // Ultimate fallback
 
     return msg
-  }, [])
+  }, [CELEBRATION_MESSAGES])
 
   // Numerical validation state
   const [numericIssues, setNumericIssues] = useState<ValidationIssue[]>([])

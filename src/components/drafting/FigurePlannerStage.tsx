@@ -586,6 +586,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
   // Track which figures have been queued for rendering to prevent duplicate calls (language-aware)
   const queuedForRenderRef = useRef<Set<string>>(new Set())
+  // Track figures that have already had an auto-fix attempt (prevents infinite LLM loops)
+  // This ref is NEVER cleared by useEffects - only manually by user clicking "Retry Render"
+  const autoFixAttemptedRef = useRef<Set<string>>(new Set())
   const renderAbortControllersRef = useRef<Record<string, AbortController | null>>({})
   const uploadQueueRef = useRef<Promise<void>>(Promise.resolve())
   const [uploadingByKey, setUploadingByKey] = useState<Record<string, boolean>>({})
@@ -1830,9 +1833,15 @@ Now output the JSON array.`
         const info = await resp.json().catch(() => ({}))
         const renderError = info.error || info.details || 'Render failed'
         
-        // AUTO-FIX FEATURE: If this is not already a retry, try to auto-fix via LLM
-        if (!isAutoFixRetry) {
-          console.log(`[AutoFix] Render failed for figure ${figureNo}, attempting auto-fix...`)
+        // AUTO-FIX FEATURE: Attempt auto-fix via LLM ONLY ONCE per figure
+        // Check both isAutoFixRetry flag AND autoFixAttemptedRef to prevent infinite loops
+        // The ref persists across re-renders and is only cleared by manual "Retry Render" click
+        const hasAttemptedAutoFix = autoFixAttemptedRef.current.has(key)
+        
+        if (!isAutoFixRetry && !hasAttemptedAutoFix) {
+          console.log(`[AutoFix] Render failed for figure ${figureNo}, attempting ONE auto-fix via LLM...`)
+          // Mark as attempted BEFORE the LLM call to prevent race conditions from useEffect triggers
+          autoFixAttemptedRef.current.add(key)
           setProcessingStatus(prev => ({ ...prev, [key]: 'Render failed - attempting auto-fix via AI...' }))
           
           try {
@@ -1845,20 +1854,27 @@ Now output the JSON array.`
             })
             
             if (fixResp?.success && fixResp?.fixedCode) {
-              console.log(`[AutoFix] Successfully fixed code for figure ${figureNo}, retrying render...`)
+              console.log(`[AutoFix] Successfully got fixed code for figure ${figureNo}, retrying render...`)
               setProcessingStatus(prev => ({ ...prev, [key]: 'Code fixed! Re-rendering...' }))
-              // Refresh to get updated code, then retry render with fixed code
+              // Refresh to get updated code in diagramSources
               await onRefresh()
-              // Retry with fixed code (mark as retry to prevent infinite loop)
+              // Retry with fixed code (mark as retry to prevent duplicate auto-fix attempts)
+              // Note: autoFixAttemptedRef already has this key, so even if useEffect triggers,
+              // it won't attempt another LLM call
               await runSingleRender(figureNo, fixResp.fixedCode, language, true)
               return // Exit - the retry will handle completion
+            } else {
+              // LLM fix failed to produce valid code - mark as failed immediately
+              console.warn(`[AutoFix] LLM did not return valid fixed code for figure ${figureNo}`)
             }
           } catch (fixError) {
             console.warn(`[AutoFix] Auto-fix attempt failed for figure ${figureNo}:`, fixError)
           }
+        } else if (hasAttemptedAutoFix) {
+          console.log(`[AutoFix] Skipping auto-fix for figure ${figureNo} - already attempted once`)
         }
         
-        // Auto-fix failed or this is already a retry - throw the original error
+        // Auto-fix failed, already attempted, or this is a retry - throw the original error
         throw new Error(renderError)
       }
 
@@ -2484,6 +2500,8 @@ Now output the JSON array.`
                               setProcessingStatus(prev => ({ ...prev, [diagramKey]: '' }))
                               setProcessingStep(prev => ({ ...prev, [diagramKey]: 0 }))
                               queuedForRenderRef.current.delete(diagramKey) // Allow re-queueing
+                              // Clear auto-fix attempted flag so user can try auto-fix again on manual retry
+                              autoFixAttemptedRef.current.delete(diagramKey)
                               autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en')
                             }}
                           >
@@ -2497,6 +2515,8 @@ Now output the JSON array.`
                         <p className="text-sm text-gray-500 mb-4">Code ready for processing</p>
                         <Button size="sm" onClick={() => {
                           queuedForRenderRef.current.delete(diagramKey) // Ensure it can be queued
+                          // Clear auto-fix attempted flag so user-initiated render can try auto-fix
+                          autoFixAttemptedRef.current.delete(diagramKey)
                           autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en')
                         }}>
                           <RefreshCw className="w-4 h-4 mr-2" /> Render Image
@@ -2626,7 +2646,11 @@ Now output the JSON array.`
                                 // AUTO-RENDER: Automatically render the new code after successful regeneration
                                 const newCode = resp.diagramSource.plantumlCode
                                 const lang = resp.diagramSource.language || 'en'
+                                const diagramKey = getDiagramKey(figNo, lang)
                                 console.log(`[AutoRender] Auto-rendering regenerated diagram for figure ${figNo}`)
+                                // Clear auto-fix flag since this is fresh regenerated code - allow one auto-fix attempt
+                                autoFixAttemptedRef.current.delete(diagramKey)
+                                queuedForRenderRef.current.delete(diagramKey)
                                 autoProcessDiagram(figNo, newCode, lang)
                               } else if (resp?.error) {
                                 // Handle API error response

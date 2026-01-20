@@ -836,7 +836,7 @@ export default function SuperAdminDashboard() {
             <div className="p-6 space-y-4">
               <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                 <p className="text-sm text-emerald-300">
-                  Tenant "{createdTokenInfo.tenantName}" has been created successfully!
+                  Tenant &quot;{createdTokenInfo.tenantName}&quot; has been created successfully!
                 </p>
               </div>
 

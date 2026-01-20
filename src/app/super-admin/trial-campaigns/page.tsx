@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -1055,16 +1055,12 @@ function CampaignInvites({ campaign, onUpdate }: { campaign: Campaign; onUpdate:
   const [isSending, setIsSending] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
-  useEffect(() => {
-    fetchInvites()
-  }, [campaign.id, statusFilter])
-
-  const fetchInvites = async () => {
+  const fetchInvites = useCallback(async () => {
     setIsLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter !== 'all') params.set('status', statusFilter)
-      
+
       const response = await fetch(`/api/v1/platform/trial-campaigns/${campaign.id}/invites?${params}`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
       })
@@ -1077,7 +1073,11 @@ function CampaignInvites({ campaign, onUpdate }: { campaign: Campaign; onUpdate:
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [statusFilter, campaign.id])
+
+  useEffect(() => {
+    fetchInvites()
+  }, [campaign.id, statusFilter, fetchInvites])
 
   const handleSendSelected = async () => {
     if (selectedIds.size === 0) return
@@ -1507,11 +1507,7 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
   const [summary, setSummary] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    fetchUsers()
-  }, [campaign.id])
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const response = await fetch(`/api/v1/platform/trial-campaigns/${campaign.id}/users`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
@@ -1526,7 +1522,11 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [campaign.id])
+
+  useEffect(() => {
+    fetchUsers()
+  }, [campaign.id, fetchUsers])
 
   const getEngagementColor = (score: number) => {
     if (score >= 70) return 'text-green-600 bg-green-100'
@@ -1695,11 +1695,7 @@ function CampaignAnalytics({ campaign }: { campaign: Campaign }) {
   const [analytics, setAnalytics] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    fetchAnalytics()
-  }, [campaign.id])
-
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = useCallback(async () => {
     try {
       const response = await fetch(`/api/v1/platform/trial-campaigns/${campaign.id}/analytics`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
@@ -1712,7 +1708,11 @@ function CampaignAnalytics({ campaign }: { campaign: Campaign }) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [campaign.id])
+
+  useEffect(() => {
+    fetchAnalytics()
+  }, [campaign.id, fetchAnalytics])
 
   // Export analytics to CSV
   const exportAnalyticsCSV = () => {

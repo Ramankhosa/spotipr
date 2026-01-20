@@ -229,7 +229,7 @@ export default function LLMConfigPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [selectedPlan])
 
   useEffect(() => {
     if (!user) {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useMemo, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
@@ -102,31 +102,51 @@ function NewPatentDraftPageContent() {
   // ============================================================================
   
   // Selected country objects
-  const selectedCountryObjects = selectedCodes.map(code => availableCountries.find(c => c.code === code)).filter(Boolean) as CountryOption[]
-  
+  const selectedCountryObjects = useMemo(() =>
+    selectedCodes.map(code => availableCountries.find(c => c.code === code)).filter(Boolean) as CountryOption[],
+    [selectedCodes, availableCountries]
+  )
+
   // Get unique languages across all selected jurisdictions (union)
-  const allLanguagesSet = new Set<string>()
-  selectedCountryObjects.forEach(country => {
-    (country.languages || []).forEach(lang => allLanguagesSet.add(lang))
-  })
-  const allLanguages = Array.from(allLanguagesSet)
+  const allLanguages = useMemo(() => {
+    const allLanguagesSet = new Set<string>()
+    selectedCountryObjects.forEach(country => {
+      (country.languages || []).forEach(lang => allLanguagesSet.add(lang))
+    })
+    return Array.from(allLanguagesSet)
+  }, [selectedCountryObjects])
 
   // Get common languages (intersection - supported by ALL selected jurisdictions)
-  const commonLanguages = selectedCountryObjects.length > 0
-    ? allLanguages.filter(lang => selectedCountryObjects.every(c => (c.languages || []).includes(lang)))
-    : []
+  const commonLanguages = useMemo(() =>
+    selectedCountryObjects.length > 0
+      ? allLanguages.filter(lang => selectedCountryObjects.every(c => (c.languages || []).includes(lang)))
+      : [],
+    [selectedCountryObjects, allLanguages]
+  )
 
   // Check if all jurisdictions support English
-  const allSupportEnglish = selectedCountryObjects.every(c => (c.languages || []).includes('en'))
-  
+  const allSupportEnglish = useMemo(() =>
+    selectedCountryObjects.every(c => (c.languages || []).includes('en')),
+    [selectedCountryObjects]
+  )
+
   // Check if there are non-English languages available
-  const hasNonEnglishLanguages = allLanguages.some(lang => lang !== 'en')
-  
+  const hasNonEnglishLanguages = useMemo(() =>
+    allLanguages.some(lang => lang !== 'en'),
+    [allLanguages]
+  )
+
   // Check if common language mode is available (at least one shared language)
-  const canUseCommonMode = commonLanguages.length > 0 || selectedCodes.length <= 1
-  
+  const canUseCommonMode = useMemo(() =>
+    commonLanguages.length > 0 || selectedCodes.length <= 1,
+    [commonLanguages, selectedCodes.length]
+  )
+
   // Determine if we're in a multi-jurisdiction scenario
-  const isMultiJurisdiction = selectedCodes.length > 1
+  const isMultiJurisdiction = useMemo(() =>
+    selectedCodes.length > 1,
+    [selectedCodes.length]
+  )
 
   // ============================================================================
   // LANGUAGE CONFIGURATION EFFECT

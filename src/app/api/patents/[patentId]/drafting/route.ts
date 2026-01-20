@@ -3548,6 +3548,148 @@ function cleanForRendering(code: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// stripFigureCaptionAndBoundary - Remove figure numbers, captions, and outer boundaries
+// ═══════════════════════════════════════════════════════════════════════════════
+// DETERMINISTIC STRIPPING:
+// 1. Removes `title` and `caption` lines (ALL diagram types)
+// 2. Removes outermost `rectangle "..." { ... }` boundary wrapper (BLOCK diagrams only)
+//    - This catches both "Fig. X Title" and general title wrappers like "Iron Apparatus"
+//    - SAFETY: Only removes if the rectangle has NO connections (arrows) to/from it
+// 3. Preserves all inner diagram content (nested rectangles, packages, etc.)
+// ═══════════════════════════════════════════════════════════════════════════════
+function stripFigureCaptionAndBoundary(input: string): string {
+  const lines = input.split(/\r?\n/)
+  const result: string[] = []
+  
+  // Pattern to detect outer boundary rectangle wrapper (BLOCK DIAGRAMS)
+  // Matches ANY rectangle with a quoted label that opens a block:
+  // - rectangle "Fig. 1 Title" {
+  // - rectangle "Iron Apparatus" {
+  // - rectangle "System Overview" {
+  // Does NOT match rectangles with content on same line (those are inline elements)
+  const outerBoundaryStartPattern = /^\s*rectangle\s+["']([^"']+)["']\s*\{?\s*$/i
+  
+  // Detect diagram type to apply correct stripping rules
+  const isBlockDiagram = lines.some(line => /^\s*rectangle\b/i.test(line.trim()))
+  const isSequenceDiagram = lines.some(line => /^\s*(participant|actor)\b/i.test(line.trim()))
+  const isActivityDiagram = lines.some(line => /^\s*(start|stop|:.*;\s*)$/i.test(line.trim()))
+  
+  // Track if we're inside the outer figure boundary (BLOCK DIAGRAMS ONLY)
+  let inOuterBoundary = false
+  let outerBoundaryDepth = 0
+  let outerBoundaryStartLine = -1
+  let outerBoundaryBraceLine = -1  // Track the line with opening brace if separate
+  let outerBoundaryLabel = ''      // Store the label to check for connections
+  
+  // First pass: detect if there's an outer boundary wrapper (BLOCK DIAGRAMS ONLY)
+  // We only strip the FIRST/OUTERMOST rectangle that wraps everything
+  if (isBlockDiagram && !isSequenceDiagram && !isActivityDiagram) {
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim()
+      
+      // Skip @startuml line
+      if (/^@startuml/i.test(trimmed)) continue
+      // Skip empty lines
+      if (!trimmed) continue
+      // Skip skinparam lines
+      if (/^\s*skinparam\b/i.test(trimmed)) continue
+      // Skip title/caption lines
+      if (/^\s*(title|caption)\b/i.test(trimmed)) continue
+      
+      // First non-trivial line - check if it's an outer boundary wrapper
+      const boundaryMatch = trimmed.match(outerBoundaryStartPattern)
+      if (boundaryMatch) {
+        outerBoundaryLabel = boundaryMatch[1] // Extract the label text
+        
+        // SAFETY CHECK: Verify this rectangle is NOT connected to any other nodes
+        // If it has arrows to/from it, it's part of the diagram design - don't strip
+        const labelEscaped = outerBoundaryLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const connectionPattern = new RegExp(
+          `(["']${labelEscaped}["']|\\b${labelEscaped}\\b)\\s*(--|->|<-|-->|<--|~>|<~|\\.\\.>|<\\.\\.)|` +
+          `(--|->|<-|-->|<--|~>|<~|\\.\\.>|<\\.\\.)\\s*(["']${labelEscaped}["']|\\b${labelEscaped}\\b)`,
+          'i'
+        )
+        
+        const hasConnections = lines.some(line => connectionPattern.test(line))
+        
+        if (hasConnections) {
+          // This rectangle is connected to other nodes - it's part of the design, don't strip
+          console.log(`[stripFigureCaptionAndBoundary] Keeping outer rectangle "${outerBoundaryLabel}" - has connections`)
+          break
+        }
+        
+        outerBoundaryStartLine = i
+        // Check if brace is on this line or next line
+        if (!trimmed.includes('{')) {
+          // Look ahead for the opening brace
+          for (let j = i + 1; j < lines.length; j++) {
+            const nextTrimmed = lines[j].trim()
+            if (nextTrimmed === '{') {
+              outerBoundaryBraceLine = j
+              break
+            }
+            if (nextTrimmed) break // Non-empty line that's not {
+          }
+        }
+      }
+      break
+    }
+  }
+  
+  // Second pass: process lines
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    
+    // ─────────────────────────────────────────────────────────────────────────
+    // RULE 1: Strip title/caption lines (ALL diagram types)
+    // ─────────────────────────────────────────────────────────────────────────
+    if (/^\s*(title|caption)\b/i.test(trimmed)) {
+      // Always strip title/caption - they're forbidden anyway
+      continue
+    }
+    
+    // ─────────────────────────────────────────────────────────────────────────
+    // RULE 2: Handle outer boundary rectangle (BLOCK DIAGRAMS ONLY)
+    // ─────────────────────────────────────────────────────────────────────────
+    if (outerBoundaryStartLine >= 0 && i === outerBoundaryStartLine) {
+      // This is the outer boundary start line - skip it
+      inOuterBoundary = true
+      outerBoundaryDepth = trimmed.includes('{') ? 1 : 0
+      continue
+    }
+    
+    // Skip the separate brace line if it exists
+    if (outerBoundaryBraceLine >= 0 && i === outerBoundaryBraceLine) {
+      outerBoundaryDepth = 1
+      continue
+    }
+    
+    // Track brace depth when inside outer boundary
+    if (inOuterBoundary) {
+      const openBraces = (trimmed.match(/\{/g) || []).length
+      const closeBraces = (trimmed.match(/\}/g) || []).length
+      outerBoundaryDepth += openBraces - closeBraces
+      
+      // Check if this is the closing brace of the outer boundary
+      if (outerBoundaryDepth <= 0) {
+        inOuterBoundary = false
+        // If line is ONLY the closing brace, skip it
+        if (trimmed === '}') {
+          continue
+        }
+        // Otherwise keep the line (content + brace on same line edge case)
+      }
+    }
+    
+    // Keep the line
+    result.push(line)
+  }
+  
+  return result.join('\n')
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // sanitizePlantUML - PRODUCTION-SAFE Sanitization
 // ═══════════════════════════════════════════════════════════════════════════════
 // CRITICAL CHANGE (Rule F): LLM NEVER generates skinparams anymore.
@@ -3559,11 +3701,16 @@ function cleanForRendering(code: string): string {
 // - title/caption (forbidden per Rule B)
 // - note/box (forbidden per Rule B)
 // - Incomplete connection lines
+// - Figure captions and outer boundaries (via stripFigureCaptionAndBoundary)
 // ═══════════════════════════════════════════════════════════════════════════════
 function sanitizePlantUML(input: string): string {
   const match = input.match(/@startuml[\s\S]*?@enduml/)
   const block = match ? match[0] : input
-  const lines = block.split(/\r?\n/)
+  
+  // STEP 0: Strip figure captions and outer boundaries FIRST (deterministic)
+  const strippedBlock = stripFigureCaptionAndBoundary(block)
+  
+  const lines = strippedBlock.split(/\r?\n/)
   const result: string[] = []
   
   // Block tracking state for skinparam blocks
@@ -6213,15 +6360,16 @@ const DIAGRAM_TYPES: Record<DiagramType, DiagramTypeInfo> = {
     syntaxGuide: `Use rectangle, component, or package elements connected with arrows.
 - Define components: rectangle "Name (numeral)" as Alias or component "Name (numeral)" as Alias
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "Controller (100)" not "Controller 100"
-- Connect components: A --> B or A -down-> B
-- Group related items: package "Group" { ... }`,
+- Connect components: A --> B or A -down-> B (NO labels on arrows - labels cause visual clutter)
+- Group related items: package "Group" { ... }
+- FORBIDDEN: Do NOT add labels/text after arrows (e.g., NO "A --> B : label")`,
     exampleCode: `@startuml
 rectangle "Controller (100)" as C100
 rectangle "Processor (200)" as P200
 rectangle "Memory (300)" as M300
 
-C100 -down-> P200 : control signals
-P200 -right-> M300 : data
+C100 -down-> P200
+P200 -right-> M300
 @enduml`
   },
   activity: {
@@ -6229,24 +6377,20 @@ P200 -right-> M300 : data
     name: 'Activity/Flowchart Diagram',
     description: 'Shows method steps, process flow, and decision points',
     syntaxGuide: `Use activity diagram syntax for method/process claims.
+- CRITICAL: Do NOT use rectangles for flow/method diagrams. Use ONLY activity syntax (:action;).
+- Do NOT wrap flow steps in rectangle blocks - this causes rendering issues.
 - Start: start
 - End: stop
 - Actions: :Action description (numeral);
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "processor (200)" not "processor 200"
-- Decisions: if (condition?) then (yes) ... else (no) ... endif
-- Parallel: fork ... fork again ... end fork
-- Notes: Do NOT use "note" elements`,
+- Flow arrows are automatic between actions - do NOT add explicit arrows between steps
+- Notes: Do NOT use "note" elements, "rectangle", or "package" in activity diagrams`,
     exampleCode: `@startuml
 start
 :Receive input data via sensor (110);
 :Process data in processor (200);
-if (Valid data?) then (yes)
-  :Store in memory (300);
-  :Generate output via display (400);
-else (no)
-  :Log error in logger (500);
-  :Return error code via interface (600);
-endif
+:Store in memory (300);
+:Generate output via display (400);
 stop
 @enduml`
   },
@@ -6257,22 +6401,22 @@ stop
     syntaxGuide: `Use sequence diagram syntax for communication protocols.
 - Participants: participant "Name (numeral)" as Alias
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "Client (100)" not "Client 100"
-- Messages: A -> B : message or A --> B : async message
-- Return: A <-- B : response
+- Messages: A -> B or A --> B (keep labels SHORT or omit entirely to avoid clutter)
+- Return: A <-- B
 - Activation: activate A ... deactivate A
-- Groups: group Label ... end`,
+- FORBIDDEN: Long arrow labels that cause visual overlap`,
     exampleCode: `@startuml
 participant "Client (100)" as C
 participant "Server (200)" as S
 participant "Database (300)" as D
 
-C -> S : Request
+C -> S
 activate S
-S -> D : Query
+S -> D
 activate D
-D --> S : Result
+D --> S
 deactivate D
-S --> C : Response
+S --> C
 deactivate S
 @enduml`
   },
@@ -6285,7 +6429,7 @@ deactivate S
 - Final state: StateName --> [*]
 - States: state "Description (numeral)" as StateName
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "Idle State (100)" not "Idle State 100"
-- Transitions: StateA --> StateB : trigger`,
+- Transitions: StateA --> StateB (NO labels - labels cause visual clutter and overlap)`,
     exampleCode: `@startuml
 [*] --> Idle
 
@@ -6293,9 +6437,9 @@ state "Idle State (100)" as Idle
 state "Processing (200)" as Proc
 state "Complete (300)" as Done
 
-Idle --> Proc : start
-Proc --> Done : success
-Proc --> Idle : error
+Idle --> Proc
+Proc --> Done
+Proc --> Idle
 Done --> [*]
 @enduml`
   }
@@ -7047,27 +7191,28 @@ ${d.figure}: ${d.title}
 DIAGRAM TYPES — STRICT BEHAVIOR
 ═══════════════════════════════════════════════════════════════════════════════
 
+CRITICAL: NO ARROW LABELS - Do NOT add text/labels after arrows (e.g., NO "A --> B : label").
+Arrow labels cause visual clutter and overlap. The diagram structure shows relationships.
+
 BLOCK:
 - Use rectangle + optional package only
 - Max 10 components
-- Simple arrows only (-->, ..>)
+- Simple arrows only (-->, ..>) with NO labels
 - No cycles unless physically obvious
 
-FLOW:
-- Rectangles + arrows only
-- Linear sequence only
-- Max 8 steps
-- No branching
-
-ACTIVITY:
-- start → linear actions → stop
-- Max 8 actions
-- No conditions or forks
+FLOW/ACTIVITY (Method/Process diagrams):
+- CRITICAL: Use activity syntax ONLY (:action;), NOT rectangles
+- Do NOT use rectangle blocks for flow steps - this causes rendering failures
+- Format: start → :action (numeral); → :action (numeral); → stop
+- Max 8 action steps
+- No conditions, forks, or branching
+- Arrows are automatic between actions - do NOT add explicit --> between steps
 
 SEQUENCE:
 - participant + messages only
 - Max 5 participants, 12 messages
 - Flat only (no box, no alt, no loop)
+- NO arrow labels - just A -> B, not A -> B : message
 
 ═══════════════════════════════════════════════════════════════════════════════
 STYLE (APPLIED TO EVERY DIAGRAM — DO NOT GENERATE SKINPARAMS)
@@ -7326,17 +7471,17 @@ Then do NOT use numerals like (1000), (1010), (999) that are NOT in that list.
 Every numeral in your activity diagram MUST exist in the AVAILABLE COMPONENTS list above.
 
 ─────────────────────────────────────────────────────────────────────────────────
-EXAMPLE: Sequence Diagram (Correct - Flat, No Nesting)
+EXAMPLE: Sequence Diagram (Correct - Flat, No Labels)
 ─────────────────────────────────────────────────────────────────────────────────
 @startuml
 participant "User (900)" as U
 participant "Controller (200)" as C
 participant "Sensor (110)" as S
 
-U -> C : request
-C -> S : query
-S --> C : data
-C --> U : response
+U -> C
+C -> S
+S --> C
+C --> U
 @enduml
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -7345,6 +7490,7 @@ FINAL CHECK (Before Output)
 ✓ No if/else/endif, alt, loop, fork, repeat, while, switch
 ✓ No note, box, title, caption
 ✓ No skinparam lines (system injects them)
+✓ No arrow labels (NO "A --> B : label" - just "A --> B")
 ✓ Only uses components from include[] list
 ✓ One @startuml and one @enduml
 ✓ Linear flow only - no branching
@@ -8662,7 +8808,7 @@ Default direction: top to bottom direction (use left to right only for very simp
 - Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
 - Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- NO ARROW LABELS: Do not add text after arrows (e.g., NO "A --> B : label") - labels cause overlap and clutter.
 - Nesting depth max = 2 levels.
 
 **HELPER NODES ALLOWED:**
@@ -8735,7 +8881,7 @@ PATENT FIGURE SEMANTICS (STRICT)
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
 - Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- NO ARROW LABELS: Do not add text after arrows (e.g., NO "A --> B : label") - labels cause overlap and clutter.
 - Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8927,7 +9073,7 @@ PATENT FIGURE SEMANTICS (STRICT)
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
 - Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- NO ARROW LABELS: Do not add text after arrows (e.g., NO "A --> B : label") - labels cause overlap and clutter.
 - Nesting depth max = 2 levels (System → Subsystem → Components).
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -9112,7 +9258,7 @@ PATENT FIGURE SEMANTICS (STRICT)
 - No arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
 - Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- NO ARROW LABELS: Do not add text after arrows (e.g., NO "A --> B : label") - labels cause overlap and clutter.
 - Nesting depth max = 2 levels.
 
 ═══════════════════════════════════════════════════════════════════════════════
