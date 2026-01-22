@@ -113,6 +113,12 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const claimsEditorRef = useRef<RichTextEditorRef>(null)
   const [isEditingClaims, setIsEditingClaims] = useState(false)
 
+  // Patent Type state (decided pre-claims, stored on session - NOT normalizedData)
+  const [patentType, setPatentType] = useState<'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null>(null)
+  
+  // User Claim Remarks (influences claim drafting, NOT patent type)
+  const [userClaimRemarks, setUserClaimRemarks] = useState('')
+
   // Persona/Style state for claims generation
   const [usePersonaStyle, setUsePersonaStyle] = useState(false)
   const [personaSelection, setPersonaSelection] = useState<PersonaSelection | undefined>(undefined)
@@ -204,7 +210,19 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       setClaimsFrozen(true)
       setClaimsFrozenAt(normalizedData.claimsApprovedAt)
     }
+    
+    // Load user claim remarks from normalizedData
+    if (normalizedData.userClaimRemarks) {
+      setUserClaimRemarks(normalizedData.userClaimRemarks)
+    }
   }, [session])
+
+  // Load patent type from session (stored on session, NOT normalizedData)
+  useEffect(() => {
+    if (session?.patentTypePrimary) {
+      setPatentType(session.patentTypePrimary as any)
+    }
+  }, [session?.patentTypePrimary])
 
   // Reset draft saved state when claims content changes
   useEffect(() => {
@@ -287,6 +305,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         sessionId: session.id,
         jurisdiction: activeJurisdiction,
         userInstructions: regenerateInstructions.trim() || undefined,
+        userClaimRemarks: userClaimRemarks.trim() || undefined, // User remarks for claim drafting
         // Pass persona style settings for claims generation
         usePersonaStyle,
         personaSelection,
@@ -315,6 +334,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         } else if (typeof response.claims === 'string') {
           setClaimsText(response.claims)
         }
+      }
+      
+      // Update patent type from response (decided during claim generation)
+      if (response?.patentType) {
+        setPatentType(response.patentType as any)
       }
 
       await onRefresh()
@@ -923,14 +947,32 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
               </div>
             </button>
 
-            {/* Persona Style Controls - Always visible when claims section is shown */}
+            {/* Patent Type Badge + Persona Style Controls */}
             {showClaimsDetails && (
-              <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100 flex items-center justify-between">
-                <div className="text-xs text-gray-600">
-                  <span className="font-medium">Writing Style:</span> {usePersonaStyle 
-                    ? (personaSelection?.primaryPersonaName || 'Enabled') 
-                    : 'Off (default style)'}
+              <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100">
+                {/* Row 1: Patent Type Badge (read-only, authoritative) */}
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-gray-600">Detected Patent Type:</span>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${
+                      patentType === 'PRODUCT' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                      patentType === 'SYSTEM' ? 'bg-purple-100 text-purple-800 border border-purple-200' :
+                      patentType === 'PROCESS' ? 'bg-green-100 text-green-800 border border-green-200' :
+                      patentType === 'COMPOSITION' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                      'bg-gray-100 text-gray-600 border border-gray-200'
+                    }`}>
+                      {patentType || '—'}
+                    </span>
+                  </div>
                 </div>
+                
+                {/* Row 2: Writing Style Controls */}
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-gray-600">
+                    <span className="font-medium">Writing Style:</span> {usePersonaStyle 
+                      ? (personaSelection?.primaryPersonaName || 'Enabled') 
+                      : 'Off (default style)'}
+                  </div>
                 <div className="flex items-center gap-2">
                   <Tooltip content={usePersonaStyle 
                     ? "Persona style is ON - Claims will be generated using your selected writing style"
@@ -974,6 +1016,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                       ) : null}
                     </button>
                   </Tooltip>
+                </div>
                 </div>
               </div>
             )}
@@ -1033,20 +1076,45 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                   {/* Claims Editor */}
                   <div className="p-6">
                     {!claimsText && !isGeneratingClaims ? (
-                      <div className="text-center py-8">
-                        <Scale className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                        <p className="text-gray-600 mb-4">No claims generated yet.</p>
-                        <Button
-                          onClick={handleGenerateClaims}
-                          className="bg-amber-600 hover:bg-amber-700 text-white"
-                          disabled={!normalizedData}
-                        >
-                          <Sparkles className="w-4 h-4 mr-2" />
-                          Generate Claims for {activeJurisdiction}
-                        </Button>
-                        <p className="text-xs text-gray-500 mt-3">
-                          Claims will be generated using {activeJurisdiction} patent office rules
-                        </p>
+                      <div className="py-6">
+                        <div className="text-center mb-6">
+                          <Scale className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                          <p className="text-gray-600">No claims generated yet.</p>
+                        </div>
+                        
+                        {/* User Remarks Textarea */}
+                        <div className="max-w-lg mx-auto mb-6">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Lightbulb className="w-4 h-4 text-amber-500" />
+                            <span className="text-sm text-gray-600">
+                              Add remarks to guide claim drafting (optional)
+                            </span>
+                          </div>
+                          <textarea
+                            value={userClaimRemarks}
+                            onChange={(e) => setUserClaimRemarks(e.target.value)}
+                            placeholder="Any specific emphasis, exclusions, embodiments, or scope preferences for claim drafting?"
+                            className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 resize-none"
+                            rows={3}
+                          />
+                          <p className="text-[11px] text-gray-400 mt-1">
+                            These remarks influence scope and emphasis, not the patent type.
+                          </p>
+                        </div>
+                        
+                        <div className="text-center">
+                          <Button
+                            onClick={handleGenerateClaims}
+                            className="bg-amber-600 hover:bg-amber-700 text-white"
+                            disabled={!normalizedData}
+                          >
+                            <Sparkles className="w-4 h-4 mr-2" />
+                            Generate Claims for {activeJurisdiction}
+                          </Button>
+                          <p className="text-xs text-gray-500 mt-3">
+                            Claims will be generated using {activeJurisdiction} patent office rules
+                          </p>
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-4">

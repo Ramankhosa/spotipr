@@ -1735,6 +1735,13 @@ model DraftingSession {
   figureSequence          Json?
   figureSequenceFinalized Boolean @default(false) @map("figure_sequence_finalized")
 
+  // Patent Type Decision (separate from idea normalization - decided pre-claims)
+  // Stores: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
+  patentTypePrimary       String?   @map("patent_type_primary")
+  patentTypeDecidedAt     DateTime? @map("patent_type_decided_at")
+  patentTypeFrozenAt      DateTime? @map("patent_type_frozen_at")
+  patentTypeComponentsHash String?  @map("patent_type_components_hash")
+
   @@map("drafting_sessions")
 }
 

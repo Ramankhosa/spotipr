@@ -4210,7 +4210,15 @@ const getWorkingClaims = (normalized: Record<string, any> = {}) => {
 }
 
 async function handleGenerateClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, jurisdiction, ideaContext, userInstructions, usePersonaStyle: usePersonaStyleFromData, personaSelection: personaSelectionFromData } = data
+  const { 
+    sessionId, 
+    jurisdiction, 
+    ideaContext, 
+    userInstructions, 
+    usePersonaStyle: usePersonaStyleFromData, 
+    personaSelection: personaSelectionFromData,
+    userClaimRemarks  // User remarks for claim generation (influences drafting, not patent type)
+  } = data
 
   if (!sessionId) {
     return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
@@ -4230,6 +4238,65 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
   const existingNormalized = (session.ideaRecord?.normalizedData as any) || {}
   if (existingNormalized.claimsApprovedAt) {
     return NextResponse.json({ error: 'Claims are frozen. Unfreeze to regenerate.' }, { status: 400 })
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // PATENT TYPE DECISION - Dedicated pre-claims step (NOT part of idea normalization)
+  // ═══════════════════════════════════════════════════════════════════════════════
+  const components = existingNormalized.components || []
+  const logic = existingNormalized.logic || ''
+  const currentContextHash = DraftingService.generatePatentTypeContextHash(components, logic)
+  
+  // Re-decision policy: only re-decide if components/logic changed OR no previous decision
+  let patentTypePrimary = (session as any).patentTypePrimary
+  const storedContextHash = (session as any).patentTypeComponentsHash
+  const shouldRedecide = !patentTypePrimary || (storedContextHash && storedContextHash !== currentContextHash)
+  
+  if (shouldRedecide) {
+    console.log(`[handleGenerateClaims] Deciding patent type (${!patentTypePrimary ? 'first decision' : 'context changed'})`)
+    
+    const patentTypeDecision = await DraftingService.decidePatentType(
+      {
+        components,
+        logic,
+        inputs: existingNormalized.inputs,
+        outputs: existingNormalized.outputs,
+        objectives: existingNormalized.objectives
+      },
+      user.tenantId,
+      requestHeaders
+    )
+    
+    patentTypePrimary = patentTypeDecision.primary
+    
+    // Store decision on session (NOT in normalizedData - separation of concerns)
+    await prisma.draftingSession.update({
+      where: { id: sessionId },
+      data: {
+        patentTypePrimary,
+        patentTypeDecidedAt: new Date(),
+        patentTypeComponentsHash: currentContextHash
+      }
+    })
+    
+    console.log(`[handleGenerateClaims] Patent type decided: ${patentTypePrimary}`)
+  } else {
+    console.log(`[handleGenerateClaims] Using existing patent type: ${patentTypePrimary}`)
+  }
+  
+  // Save userClaimRemarks if provided (stored in normalizedData - this is descriptive, not decisional)
+  if (userClaimRemarks !== undefined) {
+    await prisma.ideaRecord.update({
+      where: { sessionId },
+      data: {
+        normalizedData: {
+          ...existingNormalized,
+          userClaimRemarks: (userClaimRemarks || '').trim()
+        }
+      }
+    })
+    // Update local copy
+    existingNormalized.userClaimRemarks = (userClaimRemarks || '').trim()
   }
 
   try {
@@ -4420,14 +4487,36 @@ ${componentsList ? `Key Components:\n${componentsList}` : ''}
 ${context.bestMethod ? `Best Method: ${context.bestMethod}` : ''}
 ${context.abstract ? `Abstract: ${context.abstract}` : ''}
 
+═══════════════════════════════════════════════════════════════════════════════
+PATENT TYPE ENFORCEMENT (MANDATORY - DO NOT DEVIATE)
+═══════════════════════════════════════════════════════════════════════════════
+Detected Patent Type: ${patentTypePrimary}
+
+The FIRST independent claim (Claim 1) MUST be a ${
+  patentTypePrimary === 'PRODUCT' ? 'product or device' :
+  patentTypePrimary === 'SYSTEM' ? 'system or apparatus' :
+  patentTypePrimary === 'PROCESS' ? 'method' :
+  patentTypePrimary === 'COMPOSITION' ? 'composition or formulation' :
+  'system or apparatus'
+} claim.
+
+This is non-negotiable. The category of Claim 1 must match the patent type.
+═══════════════════════════════════════════════════════════════════════════════
+
+${existingNormalized.userClaimRemarks ? `
+USER REMARKS (consider for scope/emphasis, NOT for patent type):
+${existingNormalized.userClaimRemarks}
+` : ''}
+
 CLAIM GENERATION REQUIREMENTS:
 1. Generate a comprehensive claim set appropriate for this invention's complexity
-2. Include at least 1 independent method claim AND 1 independent system/apparatus claim
-3. Add 2-5 dependent claims per independent claim based on technical depth
-4. Each claim must be complete, self-contained, and properly numbered
-5. Maintain strict antecedent basis throughout all claims
-6. Reference components by name consistently
-7. Protect the core innovation and key variations
+2. The FIRST independent claim MUST match the patent type above
+3. Include additional independent claims of other categories if appropriate
+4. Add 2-5 dependent claims per independent claim based on technical depth
+5. Each claim must be complete, self-contained, and properly numbered
+6. Maintain strict antecedent basis throughout all claims
+7. Reference components by name consistently
+8. Protect the core innovation and key variations
 
 OUTPUT FORMAT:
 Return a JSON object with this structure:
@@ -4515,6 +4604,7 @@ Return ONLY the JSON object, no markdown fencing or explanation.`
       claims: generatedClaims,
       claimsHtml,
       jurisdiction: activeJurisdiction,
+      patentType: patentTypePrimary, // Return patent type for UI display
       tokensUsed: (llmResult.response?.outputTokens || 0) + Math.ceil(prompt.length / 4)
     })
 
@@ -4590,6 +4680,9 @@ async function handleFreezeClaims(user: any, patentId: string, data: any) {
 
   const existingNormalized = (session.ideaRecord?.normalizedData as any) || {}
   
+  // Get current patent type from session (will be frozen alongside claims)
+  const patentTypePrimary = (session as any).patentTypePrimary
+  
   // Validate claims content
   const claimsContent = claims || existingNormalized.claims || existingNormalized.claimsFinal || existingNormalized.claimsProvisional
   if (!claimsContent || (typeof claimsContent === 'string' && claimsContent.trim() === '')) {
@@ -4636,10 +4729,21 @@ async function handleFreezeClaims(user: any, patentId: string, data: any) {
     data: { normalizedData: updatedNormalized }
   })
 
+  // Freeze patent type alongside claims (locked together)
+  if (patentTypePrimary) {
+    await prisma.draftingSession.update({
+      where: { id: sessionId },
+      data: {
+        patentTypeFrozenAt: new Date()
+      }
+    })
+  }
+
   return NextResponse.json({
     success: true,
     frozenAt: updatedNormalized.claimsApprovedAt,
-    jurisdiction: updatedNormalized.claimsJurisdiction
+    jurisdiction: updatedNormalized.claimsJurisdiction,
+    patentType: patentTypePrimary // Return frozen patent type
   })
 }
 

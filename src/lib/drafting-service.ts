@@ -660,6 +660,144 @@ Respond in this exact JSON shape:
     }
   }
 
+  /**
+   * Decide patent type using a focused, single-purpose LLM prompt.
+   * 
+   * ARCHITECTURE NOTE:
+   * - This is NOT part of idea normalization (descriptive)
+   * - This is a DECISIONAL step that runs immediately before claim generation
+   * - Returns ONE value. No confidence. No reasoning. No fallback heuristics.
+   * - Stored on DraftingSession, NOT in normalizedData
+   */
+  static async decidePatentType(
+    context: {
+      components: any[];
+      logic: string;
+      inputs?: string;
+      outputs?: string;
+      objectives?: string;
+    },
+    tenantId?: string,
+    requestHeaders?: Record<string, string>
+  ): Promise<{ primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' }> {
+    
+    const componentsList = (context.components || [])
+      .map((c: any) => `- ${c.name}: ${c.description || ''}`)
+      .join('\n');
+
+    const prompt = `You are a patent attorney determining the PRIMARY claim type for an invention.
+
+CONTEXT:
+Components:
+${componentsList || 'Not specified'}
+
+Technical Logic:
+${context.logic || 'Not specified'}
+
+${context.inputs ? `Inputs: ${context.inputs}` : ''}
+${context.outputs ? `Outputs: ${context.outputs}` : ''}
+${context.objectives ? `Objectives: ${context.objectives}` : ''}
+
+TASK:
+Decide the single best primary patent type for the FIRST independent claim.
+
+OPTIONS (pick exactly one):
+- PRODUCT: Physical device, article of manufacture, tangible thing
+- SYSTEM: Multi-component apparatus, networked arrangement, integrated assembly
+- PROCESS: Method, steps, procedure, technique
+- COMPOSITION: Chemical compound, formulation, material, mixture
+
+RULES:
+- Decide where the inventive step primarily resides (structure, interaction, steps, or composition)
+- When in doubt between PRODUCT and SYSTEM: choose SYSTEM if 3+ interacting components
+- Choose PRODUCT only if the novelty resides in a single physical article rather than interactions
+- If it's primarily steps/operations → PROCESS
+- If it's a substance/material → COMPOSITION
+
+OUTPUT:
+Return ONLY one word: PRODUCT, SYSTEM, PROCESS, or COMPOSITION
+No explanation. No alternatives. Just the word.`;
+
+    try {
+      const request = { headers: requestHeaders || {} };
+      const result = await llmGateway.executeLLMOperation(request, {
+        taskCode: 'LLM2_DRAFT',
+        stageCode: 'DRAFT_IDEA_ENTRY', // Same stage code as normalization
+        prompt,
+        parameters: { 
+          tenantId, 
+          temperature: 0.0,  // Deterministic
+          maxTokens: 10      // We only need one word
+        },
+        idempotencyKey: crypto.randomUUID()
+      });
+
+      if (!result.success || !result.response?.output) {
+        // Intelligent fallback based on context (not just SYSTEM)
+        console.warn('[decidePatentType] LLM failed, using context-based fallback');
+        return this.patentTypeFallback(context);
+      }
+
+      const output = result.response.output.trim().toUpperCase();
+      
+      // Validate output is one of the allowed values
+      const validTypes = ['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const;
+      if (validTypes.includes(output as any)) {
+        console.log(`[decidePatentType] Decided: ${output}`);
+        return { primary: output as typeof validTypes[number] };
+      }
+
+      // If LLM returned something unexpected, use fallback
+      console.warn(`[decidePatentType] Unexpected LLM output: "${output}", using fallback`);
+      return this.patentTypeFallback(context);
+      
+    } catch (error) {
+      console.error('[decidePatentType] Error:', error);
+      return this.patentTypeFallback(context);
+    }
+  }
+
+  /**
+   * Context-aware fallback for patent type when LLM fails.
+   * Not heuristics for normal operation - only for error recovery.
+   */
+  private static patentTypeFallback(context: {
+    components: any[];
+    logic: string;
+    inputs?: string;
+    outputs?: string;
+  }): { primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' } {
+    const componentCount = (context.components || []).length;
+    const logicLower = (context.logic || '').toLowerCase();
+    
+    // Check for composition indicators first (most specific)
+    if (/\b(composition|formulation|compound|mixture|substance|polymer|solution|pharmaceutical|drug|chemical)\b/i.test(logicLower)) {
+      return { primary: 'COMPOSITION' };
+    }
+    
+    // Check for clear process indicators
+    if (/\b(method|process|steps?|procedure|preparing|manufacturing|synthesizing)\b/i.test(logicLower) && componentCount < 2) {
+      return { primary: 'PROCESS' };
+    }
+    
+    // If we have multiple components, likely a system
+    if (componentCount >= 2) {
+      return { primary: 'SYSTEM' };
+    }
+    
+    // Default to SYSTEM as safest general default
+    return { primary: 'SYSTEM' };
+  }
+
+  /**
+   * Generate hash of components + logic to detect changes for re-decision policy.
+   */
+  static generatePatentTypeContextHash(components: any[], logic: string): string {
+    const componentNames = (components || []).map((c: any) => c.name || '').sort().join('|');
+    const content = `${componentNames}::${(logic || '').substring(0, 500)}`;
+    return crypto.createHash('md5').update(content).digest('hex');
+  }
+
   // New: Generate specific annexure sections with guardrails and debug steps
   static async generateSections(
     session: any,
