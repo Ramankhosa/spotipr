@@ -15,8 +15,34 @@ interface Component {
   type: string
   description: string
   numeral?: number
+  referenceLabel?: string
   range?: string
+  sequence?: number
 }
+
+type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'
+type PatentTypePrimary = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
+
+const NUMBERING_STYLES: { value: NumberingStyle; label: string; description: string; example: string }[] = [
+  { 
+    value: 'NUMERIC_BUCKET', 
+    label: 'Numeric (100, 200...)', 
+    description: 'For SYSTEM/PRODUCT patents - hierarchical component numbering',
+    example: 'Controller (100), Processor (200), Memory (300)'
+  },
+  { 
+    value: 'STEP_LABEL', 
+    label: 'Step Labels (S100, S200...)', 
+    description: 'For PROCESS patents - sequential method step labels',
+    example: 'Receive Input (S100), Process Data (S200), Output Result (S300)'
+  },
+  { 
+    value: 'CONSTITUENT_LABEL', 
+    label: 'Constituent ((a), (b)...)', 
+    description: 'For COMPOSITION patents - alphabetical formulation labels',
+    example: 'Active Agent (a), Carrier (b), Stabilizer (c)'
+  }
+]
 
 const COMPONENT_TYPES = [
   { value: 'MAIN_CONTROLLER', label: 'Main Controller (100s)' },
@@ -34,13 +60,29 @@ const COMPONENT_TYPES = [
 ]
 
 export default function ComponentPlannerStage({ session, patent, onComplete, onRefresh }: ComponentPlannerStageProps) {
+  // Helper to extract components array from referenceMap (handles both nested and direct array formats)
+  const extractComponentsFromReferenceMap = (referenceMap: any): any[] => {
+    if (!referenceMap?.components) return []
+    // Handle nested structure: { components: { components: [...], numberingStyle: '...' } }
+    if (referenceMap.components.components && Array.isArray(referenceMap.components.components)) {
+      return referenceMap.components.components
+    }
+    // Handle direct array structure: { components: [...] }
+    if (Array.isArray(referenceMap.components)) {
+      return referenceMap.components
+    }
+    return []
+  }
+
   // Initialize components from referenceMap if available, otherwise from idea record
   const getInitialComponents = () => {
     const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
     
-    if (session?.referenceMap?.components) {
+    // Try referenceMap first
+    const refMapComponents = extractComponentsFromReferenceMap(session?.referenceMap)
+    if (refMapComponents.length > 0) {
       // Normalize existing components from referenceMap
-      return session.referenceMap.components.map((comp: any) => ({
+      return refMapComponents.map((comp: any) => ({
         ...comp,
         type: validTypes.includes(comp.type) ? comp.type : 'OTHER',
         description: comp.description || ''
@@ -48,8 +90,9 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     }
 
     // Convert idea record components to component planner format
-    if (session?.ideaRecord?.components) {
-      return session.ideaRecord.components.map((comp: any, index: number) => {
+    const ideaComponents = session?.ideaRecord?.components
+    if (Array.isArray(ideaComponents) && ideaComponents.length > 0) {
+      return ideaComponents.map((comp: any, index: number) => {
         const normalizedType = validTypes.includes(comp.type) ? comp.type : 'OTHER';
         return {
           id: comp.name?.toLowerCase().replace(/\s+/g, '_') || `component_${index}`,
@@ -71,6 +114,30 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   const [error, setError] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
   const [showRanges, setShowRanges] = useState(false)
+  
+  // Patent type and numbering style state
+  const patentTypePrimary = session?.patentTypePrimary as PatentTypePrimary | null
+  const archetype = (() => {
+    const types = session?.ideaRecord?.normalizedData?.inventionType
+    if (Array.isArray(types)) return types.join('+')
+    return types || 'GENERAL'
+  })()
+  
+  // Derive default numbering style from patent type
+  const deriveDefaultNumberingStyle = (): NumberingStyle => {
+    if (!patentTypePrimary) return 'NUMERIC_BUCKET'
+    switch (patentTypePrimary) {
+      case 'PROCESS': return 'STEP_LABEL'
+      case 'COMPOSITION': return 'CONSTITUENT_LABEL'
+      default: return 'NUMERIC_BUCKET'
+    }
+  }
+  
+  // User can override numbering style
+  const [numberingStyleOverride, setNumberingStyleOverride] = useState<NumberingStyle | null>(
+    session?.referenceMap?.numberingStyle || null
+  )
+  const effectiveNumberingStyle = numberingStyleOverride || deriveDefaultNumberingStyle()
 
   const addComponent = () => {
     const newComponent: Component = {
@@ -161,16 +228,19 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         return;
       }
 
-      console.log('Sending components for validation:', validComponents);
+      console.log('Sending components for validation:', validComponents, 'numberingStyle:', numberingStyleOverride);
 
       const result = await onComplete({
         action: 'update_component_map',
         sessionId: session?.id,
-        components: validComponents
+        components: validComponents,
+        numberingStyleOverride: numberingStyleOverride // Pass user override if set
       })
 
       if (result.referenceMap) {
-        setComponents(result.referenceMap.components)
+        // Extract components array from response (handles nested structure)
+        const comps = extractComponentsFromReferenceMap(result.referenceMap)
+        setComponents(comps)
         setValidationErrors([])
       }
     } catch (err) {
@@ -210,8 +280,10 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           id: comp.id,
           name: comp.name.trim(),
           type: comp.type,
-          description: comp.description.trim(),
+          description: (comp.description || '').trim(),
           numeral: comp.numeral,
+          referenceLabel: comp.referenceLabel, // Include manual reference label
+          sequence: comp.sequence, // Include sequence for ordering
           // @ts-ignore parent linkage
           parentId: (comp as any).parentId
         }));
@@ -225,10 +297,13 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       const result = await onComplete({
         action: 'update_component_map',
         sessionId: session?.id,
-        components: validComponents
+        components: validComponents,
+        numberingStyleOverride: numberingStyleOverride // Pass user override if set
       })
       if (result.referenceMap) {
-        setComponents(result.referenceMap.components)
+        // Extract components array from response (handles nested structure)
+        const comps = extractComponentsFromReferenceMap(result.referenceMap)
+        setComponents(comps)
         setValidationErrors([])
       }
     } catch (err) {
@@ -315,21 +390,63 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
         <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min={1}
-            max={999}
-            value={node.numeral ?? ''}
-            onChange={(e) => {
-              const num = e.target.value === '' ? undefined : Number(e.target.value)
-              updateComponent(node.id, { numeral: Number.isNaN(num) ? undefined : num })
-            }}
-            placeholder="e.g., 101"
-            className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
-          />
-          {node.numeral && (
-             <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700 border border-green-100">
-              #{node.numeral}
+          {/* Manual reference label input - adapts to numbering style */}
+          {effectiveNumberingStyle === 'NUMERIC_BUCKET' ? (
+            <input
+              type="number"
+              min={1}
+              max={999}
+              value={node.numeral ?? ''}
+              onChange={(e) => {
+                const num = e.target.value === '' ? undefined : Number(e.target.value)
+                const numVal = Number.isNaN(num) ? undefined : num
+                updateComponent(node.id, { 
+                  numeral: numVal,
+                  referenceLabel: numVal ? String(numVal) : undefined
+                })
+              }}
+              placeholder="e.g., 101"
+              className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+            />
+          ) : effectiveNumberingStyle === 'STEP_LABEL' ? (
+            <input
+              type="text"
+              value={node.referenceLabel ?? ''}
+              onChange={(e) => {
+                const val = e.target.value.trim()
+                updateComponent(node.id, { 
+                  referenceLabel: val || undefined,
+                  // Extract numeric part if present (e.g., S100 -> 100)
+                  numeral: val.match(/\d+/) ? parseInt(val.match(/\d+/)![0]) : undefined
+                })
+              }}
+              placeholder="e.g., S100"
+              className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-purple-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500/20 transition-all"
+            />
+          ) : (
+            <input
+              type="text"
+              value={node.referenceLabel ?? ''}
+              onChange={(e) => {
+                const val = e.target.value.trim()
+                updateComponent(node.id, { 
+                  referenceLabel: val || undefined,
+                  // For constituent labels like (a), (b), etc.
+                  sequence: val.match(/[a-z]/i) ? val.toLowerCase().charCodeAt(val.match(/[a-z]/i)!.index || 0) - 96 : undefined
+                })
+              }}
+              placeholder="e.g., (a)"
+              className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-amber-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 transition-all"
+            />
+          )}
+          {/* Display the assigned label badge */}
+          {(node.referenceLabel || node.numeral) && (
+             <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
+               effectiveNumberingStyle === 'STEP_LABEL' ? 'bg-purple-50 text-purple-700 border border-purple-100' :
+               effectiveNumberingStyle === 'CONSTITUENT_LABEL' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
+               'bg-green-50 text-green-700 border border-green-100'
+             }`}>
+              {node.referenceLabel || `#${node.numeral}`}
              </span>
           )}
         </div>
@@ -365,16 +482,66 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Component Planning</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Define invention components and assign reference numerals.
+            Define invention components and assign reference labels.
           </p>
+          {/* Patent Type + Archetype Badges */}
+          <div className="flex items-center gap-2 mt-2">
+            {patentTypePrimary && (
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                patentTypePrimary === 'SYSTEM' ? 'bg-blue-100 text-blue-800' :
+                patentTypePrimary === 'PRODUCT' ? 'bg-green-100 text-green-800' :
+                patentTypePrimary === 'PROCESS' ? 'bg-purple-100 text-purple-800' :
+                patentTypePrimary === 'COMPOSITION' ? 'bg-amber-100 text-amber-800' :
+                'bg-gray-100 text-gray-800'
+              }`}>
+                Patent Type: {patentTypePrimary}
+              </span>
+            )}
+            {(patentTypePrimary === 'SYSTEM' || patentTypePrimary === 'PRODUCT') && archetype !== 'GENERAL' && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                Archetype: {archetype}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center space-x-3">
           <button
             onClick={() => setShowRanges(!showRanges)}
             className={`text-sm font-medium px-3 py-1.5 rounded-md border transition-colors ${showRanges ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
           >
-            Numeral Guide
+            Label Guide
           </button>
+        </div>
+      </div>
+
+      {/* Numbering Style Selector */}
+      <div className="mb-6 bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-medium text-gray-900">Reference Label Style</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {patentTypePrimary 
+                ? `Auto-detected from patent type: ${patentTypePrimary}` 
+                : 'Select labeling format for your components'}
+            </p>
+          </div>
+          <select
+            value={numberingStyleOverride || deriveDefaultNumberingStyle()}
+            onChange={(e) => setNumberingStyleOverride(e.target.value as NumberingStyle)}
+            className="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
+          >
+            {NUMBERING_STYLES.map((style) => (
+              <option key={style.value} value={style.value}>
+                {style.label} {style.value === deriveDefaultNumberingStyle() && !numberingStyleOverride ? '(Auto)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="mt-2 text-xs text-gray-500">
+          {NUMBERING_STYLES.find(s => s.value === effectiveNumberingStyle)?.description}
+          <span className="block mt-1 font-mono text-indigo-600">
+            Example: {NUMBERING_STYLES.find(s => s.value === effectiveNumberingStyle)?.example}
+          </span>
         </div>
       </div>
 
@@ -436,6 +603,26 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         </div>
       )}
 
+      {/* Assignment Mode Help */}
+      <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+        <div className="flex items-start gap-3">
+          <svg className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div className="text-sm text-blue-800">
+            <p className="font-medium mb-1">Reference Label Assignment</p>
+            <ul className="text-xs text-blue-700 space-y-0.5">
+              <li><strong>Manual:</strong> Type directly in the Reference column ({
+                effectiveNumberingStyle === 'NUMERIC_BUCKET' ? 'e.g., 100, 101, 200' :
+                effectiveNumberingStyle === 'STEP_LABEL' ? 'e.g., S100, S200, S300' :
+                'e.g., (a), (b), (c)'
+              })</li>
+              <li><strong>Auto Assign:</strong> Click the button below to automatically assign based on the selected style</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       {/* Components Table Card */}
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden mb-8">
         <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50">
@@ -465,7 +652,10 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                   Description
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider w-[15%]">
-                  Numeral
+                  <div className="flex items-center gap-1">
+                    <span>Reference</span>
+                    <span className="normal-case font-normal text-gray-300" title="Enter manually or use Auto Assign">(manual/auto)</span>
+                  </div>
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider w-[5%]">
                   
@@ -515,9 +705,9 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-gray-200">
         <div className="text-sm text-gray-500">
           <span className="font-medium text-gray-900">{components.length}</span> components defined
-          {components.filter(c => c.numeral).length > 0 && (
+          {components.filter(c => c.referenceLabel || c.numeral).length > 0 && (
             <span className="ml-1 text-gray-400">
-              ({components.filter(c => c.numeral).length} assigned)
+              ({components.filter(c => c.referenceLabel || c.numeral).length} with labels)
             </span>
           )}
         </div>

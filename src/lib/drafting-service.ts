@@ -114,10 +114,77 @@ export interface IdeaNormalizationResult {
   error?: string;
 }
 
+// ============================================================================
+// NUMBERING STYLE DEFINITIONS (Patent-Type-Based)
+// ============================================================================
+export type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL';
+export type PatentTypePrimary = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION';
+export type InventionArchetype = 'MECHANICAL' | 'ELECTRICAL' | 'SOFTWARE' | 'CHEMICAL' | 'BIO' | 'GENERAL';
+
+/**
+ * Derives the numbering style from the patent type
+ * SYSTEM/PRODUCT -> NUMERIC_BUCKET (100, 200, 300...)
+ * PROCESS -> STEP_LABEL (S100, S200, S300...)
+ * COMPOSITION -> CONSTITUENT_LABEL ((a), (b), (c)...)
+ */
+export function deriveNumberingStyle(patentType: PatentTypePrimary | null | undefined): NumberingStyle {
+  if (!patentType) return 'NUMERIC_BUCKET'; // Default
+  switch (patentType) {
+    case 'PROCESS':
+      return 'STEP_LABEL';
+    case 'COMPOSITION':
+      return 'CONSTITUENT_LABEL';
+    case 'PRODUCT':
+    case 'SYSTEM':
+    default:
+      return 'NUMERIC_BUCKET';
+  }
+}
+
+/**
+ * Generates a referenceLabel based on numbering style
+ * NUMERIC_BUCKET: "200" (string of numeral)
+ * STEP_LABEL: "S100", "S200"
+ * CONSTITUENT_LABEL: "(a)", "(b)", "(c)"
+ */
+export function generateReferenceLabel(
+  index: number, 
+  numberingStyle: NumberingStyle, 
+  numeral?: number
+): string {
+  switch (numberingStyle) {
+    case 'STEP_LABEL':
+      // S100, S200, S300... (steps use S prefix + 100-based blocks)
+      const stepNumber = (index + 1) * 100;
+      return `S${stepNumber}`;
+    case 'CONSTITUENT_LABEL':
+      // (a), (b), (c)... (constituents use lowercase letters)
+      const letter = String.fromCharCode(97 + index); // 'a' is 97
+      return `(${letter})`;
+    case 'NUMERIC_BUCKET':
+    default:
+      // Use provided numeral or fall back to index-based
+      return numeral !== undefined ? String(numeral) : String((index + 1) * 100);
+  }
+}
+
+export interface ProcessedComponent {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  numeral?: number;           // Only for SYSTEM/PRODUCT (NUMERIC_BUCKET)
+  referenceLabel: string;     // Always present - universal display-safe identifier
+  range?: string;             // Only for NUMERIC_BUCKET
+  parentId?: string;
+  sequence?: number;          // Explicit ordering (for PROCESS/COMPOSITION)
+}
+
 export interface ComponentValidationResult {
   valid: boolean;
-  components?: any;
+  components?: ProcessedComponent[];
   errors?: string[];
+  numberingStyle?: NumberingStyle;
 }
 
 export interface AnnexureDraftResult {
@@ -798,6 +865,118 @@ No explanation. No alternatives. Just the word.`;
     return crypto.createHash('md5').update(content).digest('hex');
   }
 
+  /**
+   * Classify patent type from raw idea text (before component extraction).
+   * Used during Stage 0 normalization to run patent type classification in parallel.
+   * This allows patent type to be available immediately when user enters Stage 1,
+   * without waiting for claim generation to trigger classification.
+   */
+  static async decidePatentTypeFromRawIdea(
+    rawIdea: string,
+    title: string,
+    areaOfInvention?: string,
+    tenantId?: string,
+    requestHeaders?: Record<string, string>
+  ): Promise<{ primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' }> {
+    
+    const prompt = `You are a patent attorney determining the PRIMARY claim type for an invention based on its description.
+
+INVENTION TITLE:
+${title}
+
+${areaOfInvention ? `AREA/FIELD: ${areaOfInvention}` : ''}
+
+INVENTION DESCRIPTION:
+${rawIdea.substring(0, 3000)} ${rawIdea.length > 3000 ? '...[truncated]' : ''}
+
+TASK:
+Decide the single best primary patent type for drafting the FIRST independent claim.
+
+OPTIONS (pick exactly one):
+- PRODUCT: Physical device, article of manufacture, tangible standalone thing
+- SYSTEM: Multi-component apparatus, networked arrangement, integrated assembly with interacting parts
+- PROCESS: Method, steps, procedure, technique, workflow
+- COMPOSITION: Chemical compound, formulation, material, mixture, pharmaceutical
+
+DECISION GUIDE:
+1. COMPOSITION: Choose if the invention IS a new substance, material, drug, chemical, formulation, or mixture
+2. PROCESS: Choose if the inventive novelty lies in HOW something is done (steps, procedure, method)
+3. PRODUCT: Choose if it's a single tangible article/device where novelty is in its structure
+4. SYSTEM: Choose if it involves multiple interacting components working together
+
+When uncertain between PRODUCT vs SYSTEM: prefer SYSTEM if the description mentions multiple distinct parts that interact.
+When uncertain between PROCESS vs SYSTEM: prefer PROCESS if the focus is on steps/operations.
+
+OUTPUT:
+Return ONLY one word: PRODUCT, SYSTEM, PROCESS, or COMPOSITION
+No explanation. No alternatives. Just the word.`;
+
+    try {
+      const request = { headers: requestHeaders || {} };
+      const result = await llmGateway.executeLLMOperation(request, {
+        taskCode: 'LLM2_DRAFT',
+        stageCode: 'DRAFT_IDEA_ENTRY', // Same stage code as normalization
+        prompt,
+        parameters: { 
+          tenantId, 
+          temperature: 0.0,  // Deterministic
+          maxTokens: 10      // We only need one word
+        },
+        idempotencyKey: crypto.randomUUID()
+      });
+
+      if (!result.success || !result.response?.output) {
+        console.warn('[decidePatentTypeFromRawIdea] LLM failed, using text-based fallback');
+        return this.patentTypeFallbackFromText(rawIdea, title);
+      }
+
+      const output = result.response.output.trim().toUpperCase();
+      
+      // Validate output is one of the allowed values
+      const validTypes = ['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const;
+      if (validTypes.includes(output as any)) {
+        console.log(`[decidePatentTypeFromRawIdea] Decided: ${output}`);
+        return { primary: output as typeof validTypes[number] };
+      }
+
+      // If LLM returned something unexpected, use fallback
+      console.warn(`[decidePatentTypeFromRawIdea] Unexpected LLM output: "${output}", using fallback`);
+      return this.patentTypeFallbackFromText(rawIdea, title);
+      
+    } catch (error) {
+      console.error('[decidePatentTypeFromRawIdea] Error:', error);
+      return this.patentTypeFallbackFromText(rawIdea, title);
+    }
+  }
+
+  /**
+   * Text-based fallback for patent type when raw idea LLM classification fails.
+   */
+  private static patentTypeFallbackFromText(
+    rawIdea: string,
+    title: string
+  ): { primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' } {
+    const text = `${title} ${rawIdea}`.toLowerCase();
+    
+    // Check for composition indicators first (most specific)
+    if (/\b(composition|formulation|compound|mixture|substance|polymer|solution|pharmaceutical|drug|chemical|reagent|catalyst|alloy)\b/.test(text)) {
+      return { primary: 'COMPOSITION' };
+    }
+    
+    // Check for clear process indicators
+    if (/\b(method|process|steps?|procedure|preparing|manufacturing|synthesizing|treating|detecting|measuring|analyzing)\b/.test(text)) {
+      return { primary: 'PROCESS' };
+    }
+    
+    // Check for system indicators
+    if (/\b(system|apparatus|arrangement|assembly|network|platform|infrastructure|integrated|comprises?.*and.*and)\b/.test(text)) {
+      return { primary: 'SYSTEM' };
+    }
+    
+    // Default to SYSTEM as safest general default
+    return { primary: 'SYSTEM' };
+  }
+
   // New: Generate specific annexure sections with guardrails and debug steps
   static async generateSections(
     session: any,
@@ -814,6 +993,11 @@ No explanation. No alternatives. Just the word.`;
       // Step: gather context
       const idea = session.ideaRecord || {}
       const referenceMap = session.referenceMap || { components: [] }
+      // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+      const rawRefMapComponents = referenceMap.components as any
+      const refMapComponentsArray = Array.isArray(rawRefMapComponents) 
+        ? rawRefMapComponents 
+        : (rawRefMapComponents?.components && Array.isArray(rawRefMapComponents.components) ? rawRefMapComponents.components : [])
       const jurisdictionCode = (jurisdiction || (session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'IN').toUpperCase()
       let countryProfile: any = await getCountryProfile(jurisdictionCode)
       if (preferredLanguage) {
@@ -1091,7 +1275,7 @@ No explanation. No alternatives. Just the word.`;
         status: 'ok',
         meta: {
           ideaLoaded: !!idea,
-          componentsCount: referenceMap.components?.length || 0,
+          componentsCount: refMapComponentsArray.length,
           figuresCount: figures.length,
           figuresBreakdown: figures.map(f => ({ figureNo: f.figureNo, title: f.title, type: f.type })),
           manualPriorArtProvided: !!manualPriorArt,
@@ -1118,11 +1302,13 @@ No explanation. No alternatives. Just the word.`;
       })
 
       // Build a concise invention-basics bundle (no claims) for sections that need context
-      const componentsList = Array.isArray(referenceMap?.components)
-        ? referenceMap.components
+      // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+      const componentsList = refMapComponentsArray.length > 0
+        ? refMapComponentsArray
             .map((c: any) => {
               const name = c?.name || c?.label || ''
-              const num = c?.numeral ? ` (${c.numeral})` : ''
+              const label = c?.referenceLabel || c?.numeral
+              const num = label ? ` (${label})` : ''
               return name ? `${name}${num}` : ''
             })
             .filter(Boolean)
@@ -1233,7 +1419,7 @@ No explanation. No alternatives. Just the word.`;
         // ══════════════════════════════════════════════════════════════════════════════
         const hasPriorArt = !!(payload.manualPriorArt?.manualPriorArtText || (payload.selectedPriorArtPatents && payload.selectedPriorArtPatents.length > 0))
         const hasFigures = !!(figures && figures.length > 0)
-        const hasComponents = !!(referenceMap?.components && referenceMap.components.length > 0)
+        const hasComponents = refMapComponentsArray.length > 0
         
         const missingContextWarnings: string[] = []
         
@@ -1831,14 +2017,21 @@ No explanation. No alternatives. Just the word.`;
   private static buildContextBlock(sectionKey: string, payload: any, ctx: SectionPromptContext): string {
     const { idea, referenceMap, figures, approved } = payload
     
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawRefMapComp = referenceMap?.components as any
+    const componentsList = Array.isArray(rawRefMapComp) 
+      ? rawRefMapComp 
+      : (rawRefMapComp?.components && Array.isArray(rawRefMapComp.components) ? rawRefMapComp.components : [])
+    
     // Admin-controlled flags - SINGLE SOURCE OF TRUTH
     const ctxReqs = ctx?.contextRequirements
     const shouldInjectComponents = ctxReqs?.requiresComponents === true
     const shouldInjectFigures = ctxReqs?.requiresFigures === true
     
     // Build context strings (only if admin flag allows)
+    // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
     const numerals = shouldInjectComponents 
-      ? (referenceMap?.components || []).map((c: any) => `${c.name} (${c.numeral})`).join(', ')
+      ? componentsList.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral})`).join(', ')
       : ''
     const figs = shouldInjectFigures
       ? (figures || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
@@ -1890,6 +2083,12 @@ No explanation. No alternatives. Just the word.`;
   private static buildSectionPrompt(section: string, payload: any, ctx: SectionPromptContext): string {
     const { idea, referenceMap, figures, approved, instructions, manualPriorArt, selectedPriorArtPatents } = payload
 
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawRefMapComp2 = referenceMap?.components as any
+    const componentsList2 = Array.isArray(rawRefMapComp2) 
+      ? rawRefMapComp2 
+      : (rawRefMapComp2?.components && Array.isArray(rawRefMapComp2.components) ? rawRefMapComp2.components : [])
+
     // Priority: 1. Manually confirmed types (array/string) -> 2. Normalized data -> 3. Auto-detected (regex)
     const archetypeList = this.normalizeArchetypeList(
       idea?.inventionType ?? idea?.normalizedData?.inventionType,
@@ -1897,7 +2096,8 @@ No explanation. No alternatives. Just the word.`;
     )
     const archetype = archetypeList.join('+') || 'GENERAL'
 
-    const numerals = (referenceMap?.components || []).map((c: any) => `${c.name} (${c.numeral})`).join(', ')
+    // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+    const numeralsContext = componentsList2.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral})`).join(', ')
     const figs = (figures || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
     const instr = (instructions && instructions[section]) ? String(instructions[section]) : 'none'
 
@@ -1933,12 +2133,12 @@ No explanation. No alternatives. Just the word.`;
         '{{KEY_EMBODIMENTS}}': '', // Omit if not available
         '{{FIGURE_LIST}}': figs || '',
         '{{FULL_DISCLOSURE_TEXT}}': idea?.description || idea?.detailedDescription || '',
-        '{{ELEMENT_MAP}}': numerals || '',
+        '{{ELEMENT_MAP}}': numeralsContext || '',
         '{{PREFERRED_PARAMS}}': '', // Omit if not available
         '{{BEST_EXAMPLE}}': '', // Omit if not available
         '{{USE_CASES}}': (idea?.useCases || idea?.applications || []).join('; ') || '',
         '{{NOVELTY_POINT}}': idea?.noveltyPoint || '',
-        '{{ELEMENT_LIST}}': numerals || '',
+        '{{ELEMENT_LIST}}': numeralsContext || '',
         '{{FULL_DRAFT_TEXT}}': '' // Omit if not available
       }
 
@@ -2062,7 +2262,7 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       // SECTION-SPECIFIC CONTEXT (figures, components, prior art - unchanged)
       // ══════════════════════════════════════════════════════════════════════════════
-      const numeralsContext = numerals ? `Reference numerals: ${numerals}` : ''
+      const numeralsContextBlock = numeralsContext ? `Reference numerals: ${numeralsContext}` : ''
       const figuresContext = figs ? `Figures: ${figs}` : ''
       
       // ══════════════════════════════════════════════════════════════════════════════
@@ -2124,7 +2324,7 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       const hasFigures = !!(figures && figures.length > 0)
       const hasPriorArt = !!(payload.manualPriorArt?.manualPriorArtText || (payload.selectedPriorArtPatents && payload.selectedPriorArtPatents.length > 0))
-      const hasComponents = !!(referenceMap?.components && referenceMap.components.length > 0)
+      const hasComponents = componentsList2.length > 0
       const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents)
       
       // Extract base, top-up, and user prompts
@@ -2521,6 +2721,12 @@ Use the Super Admin panel to add the missing prompt.
     approvedTitle?: string,
     ctx?: { sectionChecks?: any[]; claimsRules?: any }
   ): { ok: boolean; reason?: string } {
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawGuardrailComps = referenceMap?.components as any
+    const guardrailComps = Array.isArray(rawGuardrailComps) 
+      ? rawGuardrailComps 
+      : (rawGuardrailComps?.components && Array.isArray(rawGuardrailComps.components) ? rawGuardrailComps.components : [])
+    
     const fallbackMax: Record<string, number> = {
       title: 15,
       abstract: 150,
@@ -2599,25 +2805,27 @@ Use the Super Admin panel to add the missing prompt.
     }
     if (section === 'listOfNumerals') {
       // Only check numerals if components have been declared
-      const declaredComponents = referenceMap?.components || []
-      if (declaredComponents.length > 0) {
-        const allowed = new Set(declaredComponents.map((c:any)=>c.numeral))
-      const refs = Array.from(text.matchAll(/\((\d{2,3})\)/g)).map(m=>parseInt(m[1],10))
-      if (refs.some(n=>!allowed.has(n))) return { ok: false, reason: 'List includes undeclared numeral' }
+      if (guardrailComps.length > 0) {
+        // Support all numbering styles: numeric (100), step labels (S100), constituent labels ((a))
+        const allowed = new Set(guardrailComps.map((c:any) => String(c.referenceLabel || c.numeral)))
+        // Match patterns: (100), (S100), (a), (b), etc.
+        const refs = Array.from(text.matchAll(/\(([S]?\d{2,3}|[a-z])\)/gi)).map(m => m[1])
+        if (refs.some(r => !allowed.has(r) && !allowed.has(`(${r})`))) return { ok: false, reason: 'List includes undeclared reference label' }
       }
     }
     if (section === 'detailedDescription') {
-      // Enforce: no undeclared numerals
+      // Enforce: no undeclared numerals/labels
       // Figure reference validation removed - now handled through separate LLM review
-      const declaredComponents = referenceMap?.components || []
 
-      // Only check numerals if there are declared components
-      if (declaredComponents.length > 0) {
-        const allowedNums = new Set(declaredComponents.map((c:any)=>c.numeral))
-      const usedNums = Array.from(text.matchAll(/\((\d{2,3})\)/g)).map(m=>parseInt(m[1],10))
-      if (usedNums.some(n=>!allowedNums.has(n))) {
-        return { ok: false, reason: 'Detailed Description uses undeclared numeral' }
-      }
+      // Only check if there are declared components
+      if (guardrailComps.length > 0) {
+        // Support all numbering styles: numeric (100), step labels (S100), constituent labels ((a))
+        const allowedLabels = new Set(guardrailComps.map((c:any) => String(c.referenceLabel || c.numeral)))
+        // Match patterns: (100), (S100), (a), (b), etc.
+        const usedLabels = Array.from(text.matchAll(/\(([S]?\d{2,3}|[a-z])\)/gi)).map(m => m[1])
+        if (usedLabels.some(l => !allowedLabels.has(l) && !allowedLabels.has(`(${l})`))) {
+          return { ok: false, reason: 'Detailed Description uses undeclared reference label' }
+        }
       }
     }
     if (section === 'industrialApplicability') {
@@ -2732,6 +2940,12 @@ Use the Super Admin panel to add the missing prompt.
 
   private static getFallbackContent(section: string, payload: any): string {
     const { idea, referenceMap } = payload
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawFallbackComps = referenceMap?.components as any
+    const fallbackComps = Array.isArray(rawFallbackComps) 
+      ? rawFallbackComps 
+      : (rawFallbackComps?.components && Array.isArray(rawFallbackComps.components) ? rawFallbackComps.components : [])
+    
     switch (section) {
       case 'title':
         return idea?.title || 'Patent Invention'
@@ -2765,7 +2979,8 @@ Use the Super Admin panel to add the missing prompt.
       case 'claims':
         return '1. A system comprising: components as described.'
       case 'listOfNumerals':
-        const nums = (referenceMap?.components || []).map((c: any) => `( ${c.numeral} ) G ${c.name}`).join('\n')
+        // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+        const nums = fallbackComps.map((c: any) => `( ${c.referenceLabel || c.numeral} ) G ${c.name}`).join('\n')
         return nums || '(100) G Main component'
       default:
         return 'Content not available.'
@@ -2773,11 +2988,24 @@ Use the Super Admin panel to add the missing prompt.
   }
 
   /**
-   * Validate and process component map with numeral assignment
+   * Validate and process component map with numeral/label assignment
+   * 
+   * Patent-Type-Based Numbering:
+   * - SYSTEM/PRODUCT: NUMERIC_BUCKET (100, 200, 300... hierarchical)
+   * - PROCESS: STEP_LABEL (S100, S200, S300... sequential)
+   * - COMPOSITION: CONSTITUENT_LABEL ((a), (b), (c)... alphabetical)
+   * 
+   * @param components - Array of components to validate
+   * @param patentTypePrimary - Patent type (determines numbering style)
+   * @param userNumberingStyleOverride - Optional user override for numbering style
    */
-  static validateComponentMap(components: any[]): ComponentValidationResult {
+  static validateComponentMap(
+    components: any[],
+    patentTypePrimary?: PatentTypePrimary | null,
+    userNumberingStyleOverride?: NumberingStyle | null
+  ): ComponentValidationResult {
     const errors: string[] = [];
-    const processedComponents: any[] = [];
+    const processedComponents: ProcessedComponent[] = [];
 
     if (!Array.isArray(components) || components.length === 0) {
       return { valid: false, errors: ['Components array is required and cannot be empty'] };
@@ -2787,10 +3015,14 @@ Use the Super Admin panel to add the missing prompt.
       return { valid: false, errors: ['Maximum 100 components allowed'] };
     }
 
-    // Build tree by parentId (optional)
-    type Comp = { id?: string; name: string; description?: string; parentId?: string };
+    // Determine numbering style: user override > patent type > default
+    const numberingStyle: NumberingStyle = userNumberingStyleOverride || deriveNumberingStyle(patentTypePrimary);
+
+    // Build tree by parentId (optional) - primarily used for NUMERIC_BUCKET
+    type Comp = { id?: string; name: string; description?: string; parentId?: string; sequence?: number };
     const nodes: Record<string, any> = {};
     const roots: any[] = [];
+    const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
 
     for (const comp of components as Comp[]) {
       if (!comp.id || typeof comp.id !== 'string') {
@@ -2811,7 +3043,6 @@ Use the Super Admin panel to add the missing prompt.
       }
       const id = comp.id;
       const componentType = (comp as any).type;
-      const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
 
       if (componentType && !validTypes.includes(componentType)) {
         errors.push(`Component ${id} has invalid type '${componentType}' - must be one of: ${validTypes.join(', ')}`);
@@ -2825,11 +3056,12 @@ Use the Super Admin panel to add the missing prompt.
         parentId: (comp as any).parentId || null,
         numeral: typeof (comp as any).numeral === 'number' ? (comp as any).numeral : undefined,
         type: componentType || 'OTHER',
+        sequence: typeof comp.sequence === 'number' ? comp.sequence : undefined,
         children: []
       };
     }
 
-    // Link children
+    // Link children (for NUMERIC_BUCKET hierarchical numbering)
     Object.values(nodes).forEach((n: any) => {
       if (n.parentId) {
         if (n.parentId === n.id) {
@@ -2846,7 +3078,7 @@ Use the Super Admin panel to add the missing prompt.
 
     // Check for circular references
     const detectCycle = (nodeId: string, visited: Set<string> = new Set()): boolean => {
-      if (visited.has(nodeId)) return true; // Cycle detected
+      if (visited.has(nodeId)) return true;
       visited.add(nodeId);
       const node = nodes[nodeId];
       if (node && node.children) {
@@ -2864,89 +3096,171 @@ Use the Super Admin panel to add the missing prompt.
       }
     }
 
-    // Assign numerals in 100-blocks per root to avoid overlap; respect user-supplied numerals when unique/valid
-    const usedNumerals = new Set<number>();
-    let rootIndex = 1; // 100, 200, ... 900
+    // =========================================================================
+    // NUMBERING STYLE DISPATCH
+    // =========================================================================
+    
+    if (numberingStyle === 'NUMERIC_BUCKET') {
+      // SYSTEM/PRODUCT: Assign numerals in 100-blocks per root hierarchically
+      const usedNumerals = new Set<number>();
+      let rootIndex = 1;
 
-    const assignBlock = (node: any, base: number) => {
-      let cursor = base;
+      const assignBlock = (node: any, base: number) => {
+        let cursor = base;
 
-      const dfs = (n: any) => {
-        if (cursor > base + 99) {
-          errors.push(`Too many subcomponents under root block ${base}`);
-          return;
-        }
-        // Respect user-supplied numeral if valid and unique
-        if (typeof n.numeral === 'number') {
-          if (n.numeral < 1 || n.numeral > 999) {
-            errors.push(`Component ${n.id} has invalid numeral ${n.numeral} - must be between 1 and 999`);
-          } else if (usedNumerals.has(n.numeral)) {
-            errors.push(`Duplicate numeral ${n.numeral} detected for component ${n.id}`);
-          } else {
-            usedNumerals.add(n.numeral);
-            cursor = Math.max(cursor, n.numeral + 1);
-          }
-        } else {
-          // Assign numeral automatically
-          while (usedNumerals.has(cursor) && cursor <= base + 99) cursor++;
+        const dfs = (n: any) => {
           if (cursor > base + 99) {
-            errors.push(`Cannot assign numeral to component ${n.id} - block ${base} is full`);
+            errors.push(`Too many subcomponents under root block ${base}`);
             return;
           }
-          n.numeral = cursor;
-          usedNumerals.add(cursor);
-          cursor++;
-        }
-        // Children
-        if (Array.isArray(n.children) && n.children.length > 0) {
-          // Stable order
-          n.children.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
-          n.children.forEach((c: any) => dfs(c));
-        }
+          // Respect user-supplied numeral if valid and unique
+          if (typeof n.numeral === 'number') {
+            if (n.numeral < 1 || n.numeral > 999) {
+              errors.push(`Component ${n.id} has invalid numeral ${n.numeral} - must be between 1 and 999`);
+            } else if (usedNumerals.has(n.numeral)) {
+              errors.push(`Duplicate numeral ${n.numeral} detected for component ${n.id}`);
+            } else {
+              usedNumerals.add(n.numeral);
+              cursor = Math.max(cursor, n.numeral + 1);
+            }
+          } else {
+            // Assign numeral automatically
+            while (usedNumerals.has(cursor) && cursor <= base + 99) cursor++;
+            if (cursor > base + 99) {
+              errors.push(`Cannot assign numeral to component ${n.id} - block ${base} is full`);
+              return;
+            }
+            n.numeral = cursor;
+            usedNumerals.add(cursor);
+            cursor++;
+          }
+          // Children - use sequence field if available, else stable name sort
+          if (Array.isArray(n.children) && n.children.length > 0) {
+            n.children.sort((a: any, b: any) => {
+              if (a.sequence !== undefined && b.sequence !== undefined) {
+                return a.sequence - b.sequence;
+              }
+              return (a.name || '').localeCompare(b.name || '');
+            });
+            n.children.forEach((c: any) => dfs(c));
+          }
+        };
+
+        dfs(node);
       };
 
-      dfs(node);
-    };
-
-    // Sort roots by name for stability, assign blocks 100..900
-    roots.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    for (const root of roots) {
-      let base = rootIndex * 100;
-      if (base > 900) {
-        // Fallback: find next free block within 100..999
-        base = 100;
-        while (base <= 900 && Array.from({ length: 100 }).some((_, i) => usedNumerals.has(base + i))) {
-          base += 100;
+      // Sort roots by sequence if available, else by name for stability
+      roots.sort((a, b) => {
+        if (a.sequence !== undefined && b.sequence !== undefined) {
+          return a.sequence - b.sequence;
         }
-        if (base > 900) {
-          errors.push('No available 100-blocks remain for numbering');
-          break;
-        }
-      }
-      assignBlock(root, base);
-      rootIndex++;
-    }
-
-    // Flatten back into processed list
-    const collect = (n: any) => {
-      processedComponents.push({
-        id: n.id,
-        name: n.name,
-        type: n.type || 'OTHER',
-        description: n.description,
-        numeral: n.numeral,
-        range: `${Math.floor(n.numeral / 100) * 100}s`,
-        parentId: n.parentId || undefined
+        return (a.name || '').localeCompare(b.name || '');
       });
-      n.children?.forEach((c: any) => collect(c));
-    };
-    roots.forEach((r) => collect(r));
+
+      for (const root of roots) {
+        let base = rootIndex * 100;
+        if (base > 900) {
+          base = 100;
+          while (base <= 900 && Array.from({ length: 100 }).some((_, i) => usedNumerals.has(base + i))) {
+            base += 100;
+          }
+          if (base > 900) {
+            errors.push('No available 100-blocks remain for numbering');
+            break;
+          }
+        }
+        assignBlock(root, base);
+        rootIndex++;
+      }
+
+      // Flatten back into processed list with referenceLabel
+      const collect = (n: any) => {
+        processedComponents.push({
+          id: n.id,
+          name: n.name,
+          type: n.type || 'OTHER',
+          description: n.description,
+          numeral: n.numeral,
+          referenceLabel: String(n.numeral), // NUMERIC_BUCKET: referenceLabel = numeral string
+          range: `${Math.floor(n.numeral / 100) * 100}s`,
+          parentId: n.parentId || undefined,
+          sequence: n.sequence
+        });
+        n.children?.forEach((c: any) => collect(c));
+      };
+      roots.forEach((r) => collect(r));
+
+    } else if (numberingStyle === 'STEP_LABEL') {
+      // PROCESS: Sequential S100, S200, S300... based on process ordering
+      // Use sequence field if available, else insertion order
+      const flatList = Object.values(nodes).sort((a: any, b: any) => {
+        if (a.sequence !== undefined && b.sequence !== undefined) {
+          return a.sequence - b.sequence;
+        }
+        // Fallback: roots first, then children (ignore hierarchy for PROCESS)
+        return 0;
+      });
+
+      flatList.forEach((n: any, idx: number) => {
+        const stepNumber = (idx + 1) * 100;
+        const referenceLabel = `S${stepNumber}`;
+        
+        processedComponents.push({
+          id: n.id,
+          name: n.name,
+          type: n.type || 'OTHER',
+          description: n.description,
+          numeral: undefined, // No numeric numeral for PROCESS
+          referenceLabel,
+          range: undefined,
+          parentId: n.parentId || undefined,
+          sequence: idx + 1
+        });
+      });
+
+    } else if (numberingStyle === 'CONSTITUENT_LABEL') {
+      // COMPOSITION: Alphabetical (a), (b), (c)... based on meaningful order
+      // Use sequence field if available; try to detect "active agent" for first position
+      const flatList = Object.values(nodes);
+      
+      // Sort: active agents first (if detectable), then by sequence, then alphabetically
+      flatList.sort((a: any, b: any) => {
+        // Priority 1: Explicit sequence
+        if (a.sequence !== undefined && b.sequence !== undefined) {
+          return a.sequence - b.sequence;
+        }
+        // Priority 2: Active agent detection (common pharma/chemical naming)
+        const aIsActive = /\b(active|agent|API|drug|compound)\b/i.test(a.name);
+        const bIsActive = /\b(active|agent|API|drug|compound)\b/i.test(b.name);
+        if (aIsActive && !bIsActive) return -1;
+        if (!aIsActive && bIsActive) return 1;
+        // Priority 3: Alphabetical
+        return (a.name || '').localeCompare(b.name || '');
+      });
+
+      flatList.forEach((n: any, idx: number) => {
+        const letter = String.fromCharCode(97 + idx); // 'a' = 97
+        const referenceLabel = `(${letter})`;
+        
+        processedComponents.push({
+          id: n.id,
+          name: n.name,
+          type: n.type || 'OTHER',
+          description: n.description,
+          numeral: undefined, // No numeric numeral for COMPOSITION
+          referenceLabel,
+          range: undefined,
+          parentId: n.parentId || undefined,
+          sequence: idx + 1
+        });
+      });
+    }
 
     if (errors.length > 0) {
       return { valid: false, errors };
     }
 
-    return { valid: true, components: processedComponents };
+    return { valid: true, components: processedComponents, numberingStyle };
   }
 
   /**
@@ -3204,7 +3518,11 @@ Use the Super Admin panel to add the missing prompt.
     sourceJurisdiction?: string
   ): Promise<string> {
     const idea = session.ideaRecord;
-    const components: any[] = session.referenceMap?.components || [];
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawRefMapComps = session.referenceMap?.components as any
+    const components: any[] = Array.isArray(rawRefMapComps) 
+      ? rawRefMapComps 
+      : (rawRefMapComps?.components && Array.isArray(rawRefMapComps.components) ? rawRefMapComps.components : [])
     
     // Build figures list - use finalized sequence if available
     let figures: Array<{ figureNo: number; title: string; description?: string }> = []
@@ -3355,7 +3673,7 @@ INVENTION CONTEXT:
 ${idea.title ? `Title: ${idea.title}` : ''}
 ${idea.problem ? `Problem: ${idea.problem}` : ''}
 ${idea.objectives ? `Objectives: ${idea.objectives}` : ''}
-${components.length > 0 ? `Components: ${components.map(c => `${c.name} (${c.numeral})`).join(', ')}` : ''}
+${components.length > 0 ? `Components: ${components.map(c => `${c.name} (${c.referenceLabel || c.numeral})`).join(', ')}` : ''}
 ${idea.logic ? `Logic: ${idea.logic}` : ''}
 ${figures.length > 0 ? `Figures: ${figures.map(f => `Fig.${f.figureNo}: ${f.title}`).join(', ')}` : ''}
 ${priorArtSelections.length > 0 ? `Prior art for context (approved - ALL ${priorArtSelections.length} patents): ${priorArtSelections.map(p=>`${p.patentNumber}${p.title?`: ${p.title}`:''}`).join(' | ')}` : ''}
@@ -3449,11 +3767,15 @@ OUTPUT FORMAT:
       }
 
       // Check against reference map
+      // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+      const rawRefMapComps2 = session.referenceMap?.components as any
+      const refMapComps2 = Array.isArray(rawRefMapComps2) 
+        ? rawRefMapComps2 
+        : (rawRefMapComps2?.components && Array.isArray(rawRefMapComps2.components) ? rawRefMapComps2.components : [])
+      
       const referenceNumerals = new Set<number>();
-      if (session.referenceMap?.components) {
-        for (const component of session.referenceMap.components) {
-          referenceNumerals.add(component.numeral);
-        }
+      for (const component of refMapComps2) {
+        referenceNumerals.add(component.numeral);
       }
 
       // Find missing and unused numerals
@@ -3647,19 +3969,27 @@ OUTPUT FORMAT:
       if (!iaStarts || iaLen < 50) { report.hasIssues = true; report.complianceScore -= 5 }
     }
 
-    // P0: Numeral integrity expanded (treat only three-digit numerals 100G999 as reference numerals)
-    const numRegex = /\((\d{3})\)/g
-    const used = new Map<number, number>()
+    // P0: Reference label integrity (supports all numbering styles: numeric, step labels, constituent labels)
+    // Support all numbering styles: numeric (100), step labels (S100), constituent labels ((a))
+    const used = new Map<string, number>()
     const fullText = textNorm([
       title, fieldOfInvention, background, summary, normalizedLines.join('\n'), detailed, bestMethod, claims, industrial, numeralsList
     ].join('\n'))
+    // Match patterns: (100), (S100), (a), (b), etc.
+    const labelRegex = /\(([S]?\d{2,3}|[a-z])\)/gi
     let m: RegExpExecArray | null
-    while ((m = numRegex.exec(fullText)) !== null) {
-      const n = parseInt(m[1],10); used.set(n,(used.get(n)||0)+1)
+    while ((m = labelRegex.exec(fullText)) !== null) {
+      const label = m[1]; used.set(label, (used.get(label) || 0) + 1)
     }
-    const declared = new Set<number>((session.referenceMap?.components||[]).map((c:any)=>c.numeral))
-    const declaredNotUsed: number[] = []; declared.forEach(n=>{ if(!used.has(n)) declaredNotUsed.push(n) })
-    const usedNotDeclared: number[] = []; used.forEach((_,n)=>{ if(!declared.has(n)) usedNotDeclared.push(n) })
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawRefMapComps3 = session.referenceMap?.components as any
+    const refMapComps3 = Array.isArray(rawRefMapComps3) 
+      ? rawRefMapComps3 
+      : (rawRefMapComps3?.components && Array.isArray(rawRefMapComps3.components) ? rawRefMapComps3.components : [])
+    // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+    const declared = new Set<string>(refMapComps3.map((c:any) => String(c.referenceLabel || c.numeral)))
+    const declaredNotUsed: string[] = []; declared.forEach(n => { if (!used.has(n) && !used.has(n.replace(/[()]/g, ''))) declaredNotUsed.push(n) })
+    const usedNotDeclared: string[] = []; used.forEach((_, n) => { if (!declared.has(n) && !declared.has(`(${n})`)) usedNotDeclared.push(n) })
     // Repeated mentions of the same numeral across the specification are expected; do not treat as an error here.
     const duplicates: number[] = []
     report.numerals = { declaredNotUsed, usedNotDeclared, duplicates, styleViolations: 0 }

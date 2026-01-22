@@ -244,13 +244,22 @@ export async function buildSketchContextBundle(
 
   // 2. Key Components from Reference Map
   if (flags.useComponents && session?.referenceMap) {
-    const refMap = session.referenceMap.components as any
-    if (Array.isArray(refMap)) {
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const refMapRaw = session.referenceMap.components as any
+    const refMap = Array.isArray(refMapRaw) 
+      ? refMapRaw 
+      : (refMapRaw?.components && Array.isArray(refMapRaw.components) ? refMapRaw.components : [])
+    
+    if (refMap.length > 0) {
       bundle.keyComponents = refMap.map((c: any) => c.name || c.label || c.component).filter(Boolean)
-      // Build reference numerals map
+      // Build reference numerals map - use referenceLabel (universal across all patent types)
+      // For NUMERIC_BUCKET: referenceLabel = "100", "200", etc.
+      // For STEP_LABEL: referenceLabel = "S100", "S200", etc.
+      // For CONSTITUENT_LABEL: referenceLabel = "(a)", "(b)", "(c)", etc.
       refMap.forEach((c: any) => {
-        if (c.numeral && (c.name || c.label)) {
-          bundle.referenceNumerals[c.numeral] = c.name || c.label
+        const label = c.referenceLabel || (c.numeral !== undefined ? String(c.numeral) : null)
+        if (label && (c.name || c.label)) {
+          bundle.referenceNumerals[label] = c.name || c.label
         }
       })
     }
@@ -403,10 +412,10 @@ ${context.keyComponents.map((c, i) => `- ${c}`).join('\n')}
   }
 
   if (Object.keys(context.referenceNumerals).length > 0) {
-    prompt += `REFERENCE NUMERALS (use ONLY these numbers as labels):
-${Object.entries(context.referenceNumerals).map(([num, name]) => `${num} → ${name}`).join('\n')}
+    prompt += `REFERENCE LABELS (use ONLY these as labels):
+${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} → ${name}`).join('\n')}
 
-IMPORTANT: In the drawing, use ONLY the numeric labels (#100, #200, etc. or as per component numbering provided), NOT the component names.
+IMPORTANT: In the drawing, use ONLY the reference labels shown above (100/200 for products, S100/S200 for processes, (a)/(b) for compositions), NOT the component names.
 `
   }
 
@@ -555,10 +564,10 @@ ${context.keyComponents.map((c, i) => `- ${c}`).join('\n')}
   }
 
   if (Object.keys(context.referenceNumerals).length > 0) {
-    prompt += `OFFICIAL REFERENCE NUMERALS (replace any text labels with these):
-${Object.entries(context.referenceNumerals).map(([num, name]) => `${num} → ${name}`).join('\n')}
+    prompt += `OFFICIAL REFERENCE LABELS (replace any text labels with these):
+${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} → ${name}`).join('\n')}
 
-CRITICAL: Convert ALL text labels in the uploaded sketch to numeric-only labels.
+CRITICAL: Convert ALL text labels in the uploaded sketch to the reference labels shown above.
 `
   }
 
@@ -630,8 +639,8 @@ ${context.ideaSummary}
 `
 
   if (Object.keys(context.referenceNumerals).length > 0) {
-    prompt += `REFERENCE NUMERALS (use ONLY these numeric labels):
-${Object.entries(context.referenceNumerals).map(([num, name]) => `${num} → ${name}`).join('\n')}
+    prompt += `REFERENCE LABELS (use ONLY these labels):
+${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} → ${name}`).join('\n')}
 
 `
   }
@@ -1665,14 +1674,14 @@ Do NOT add sub-components, internal parts, or details not listed above.
 
   if (Object.keys(context.referenceNumerals).length > 0) {
     prompt += `═══════════════════════════════════════════════════════════════════════════════
-OFFICIAL REFERENCE NUMERALS (Use EXACTLY these labels)
+OFFICIAL REFERENCE LABELS (Use EXACTLY these labels)
 ═══════════════════════════════════════════════════════════════════════════════
-${Object.entries(context.referenceNumerals).map(([num, name]) => `${num} → ${name}`).join('\n')}
+${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} → ${name}`).join('\n')}
 
 LABELING RULES:
-• Use ONLY the numeric labels shown above (e.g., 100, 200, 300)
+• Use ONLY the reference labels shown above (e.g., 100/200 for products, S100/S200 for processes, (a)/(b) for compositions)
 • NO text labels, part names, or descriptions in the drawing
-• NO invented numerals for unlisted components
+• NO invented labels for unlisted components
 • Each label must point to exactly the component it represents
 
 `

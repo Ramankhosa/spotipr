@@ -115,6 +115,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
   // Patent Type state (decided pre-claims, stored on session - NOT normalizedData)
   const [patentType, setPatentType] = useState<'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null>(null)
+  const [isUpdatingPatentType, setIsUpdatingPatentType] = useState(false)
+  const [showPatentTypeDropdown, setShowPatentTypeDropdown] = useState(false)
   
   // User Claim Remarks (influences claim drafting, NOT patent type)
   const [userClaimRemarks, setUserClaimRemarks] = useState('')
@@ -223,6 +225,31 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       setPatentType(session.patentTypePrimary as any)
     }
   }, [session?.patentTypePrimary])
+
+  // Close patent type dropdown when clicking outside or pressing Escape
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showPatentTypeDropdown) {
+        const target = event.target as HTMLElement
+        if (!target.closest('[data-patent-type-dropdown]')) {
+          setShowPatentTypeDropdown(false)
+        }
+      }
+    }
+    
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && showPatentTypeDropdown) {
+        setShowPatentTypeDropdown(false)
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [showPatentTypeDropdown])
 
   // Reset draft saved state when claims content changes
   useEffect(() => {
@@ -349,6 +376,31 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       setError('Failed to generate claims. Please try again.')
     } finally {
       setIsGeneratingClaims(false)
+    }
+  }
+
+  // Handle patent type manual override
+  const handleUpdatePatentType = async (newType: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION') => {
+    if (!session?.id || newType === patentType) return
+    
+    try {
+      setIsUpdatingPatentType(true)
+      setError(null)
+      
+      await onComplete({
+        action: 'update_patent_type',
+        sessionId: session.id,
+        patentType: newType
+      })
+      
+      setPatentType(newType)
+      setShowPatentTypeDropdown(false)
+      await onRefresh()
+    } catch (e) {
+      console.error('Failed to update patent type:', e)
+      setError('Failed to update patent type. Please try again.')
+    } finally {
+      setIsUpdatingPatentType(false)
     }
   }
 
@@ -826,29 +878,147 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         )}
                       </div>
 
-                      {/* Key Components */}
+                      {/* Key Components - Editable */}
                       <div>
-                        <h4 className="text-sm font-medium text-gray-900 mb-1.5">
-                          Key Components <span className="text-gray-400 font-normal text-xs">({components?.length || 0})</span>
-                        </h4>
-                        {components?.length > 0 ? (
-                          <div className="grid grid-cols-2 gap-2">
-                            {components.slice(0, 6).map((comp: any, idx: number) => (
-                              <div key={idx} className="p-2 bg-gray-50 rounded border border-gray-100 text-xs">
-                                <span className="font-medium text-gray-900">{comp.name}</span>
-                                {comp.type && (
-                                  <span className="text-gray-500 ml-1">({comp.type})</span>
-                                )}
-                              </div>
-                            ))}
-                            {components.length > 6 && (
-                              <div className="p-2 text-xs text-gray-500">
-                                +{components.length - 6} more...
+                        <div className="flex items-center justify-between mb-1.5">
+                          <h4 className="text-sm font-medium text-gray-900">
+                            Key Components <span className="text-gray-400 font-normal text-xs">({components?.length || 0})</span>
+                          </h4>
+                          {isEditing && (
+                            <button
+                              onClick={() => setComponents([...(components || []), { name: '', type: 'OTHER', description: '' }])}
+                              className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                            >
+                              <span className="text-lg leading-none">+</span> Add Component
+                            </button>
+                          )}
+                        </div>
+                        
+                        {isEditing ? (
+                          // Editable components list
+                          <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                            {components?.length > 0 ? (
+                              components.map((comp: any, idx: number) => (
+                                <div key={idx} className="p-3 bg-gray-50 rounded-lg border border-gray-200 space-y-2">
+                                  <div className="flex items-start gap-2">
+                                    <div className="flex-1 space-y-2">
+                                      {/* Component Name */}
+                                      <div>
+                                        <label className="block text-[10px] font-medium text-gray-500 mb-0.5">
+                                          Name {!(comp.name?.trim()) && <span className="text-red-500">*</span>}
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={comp.name || ''}
+                                          onChange={(e) => {
+                                            const updated = [...(components || [])]
+                                            updated[idx] = { ...updated[idx], name: e.target.value }
+                                            setComponents(updated)
+                                          }}
+                                          className={`w-full px-2 py-1.5 text-sm border rounded-md focus:ring-indigo-500 focus:border-indigo-500 ${
+                                            !(comp.name?.trim()) ? 'border-red-300 bg-red-50' : 'border-gray-300'
+                                          }`}
+                                          placeholder="Component name (required)"
+                                        />
+                                        {!(comp.name?.trim()) && (
+                                          <p className="text-[10px] text-red-500 mt-0.5">Empty names will be removed on save</p>
+                                        )}
+                                      </div>
+                                      
+                                      {/* Component Type */}
+                                      <div>
+                                        <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Type</label>
+                                        <select
+                                          value={comp.type || 'OTHER'}
+                                          onChange={(e) => {
+                                            const updated = [...(components || [])]
+                                            updated[idx] = { ...updated[idx], type: e.target.value }
+                                            setComponents(updated)
+                                          }}
+                                          className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                                        >
+                                          <option value="MAIN_CONTROLLER">Main Controller</option>
+                                          <option value="SUBSYSTEM">Subsystem</option>
+                                          <option value="MODULE">Module</option>
+                                          <option value="INTERFACE">Interface</option>
+                                          <option value="SENSOR">Sensor</option>
+                                          <option value="ACTUATOR">Actuator</option>
+                                          <option value="PROCESSOR">Processor</option>
+                                          <option value="MEMORY">Memory</option>
+                                          <option value="DISPLAY">Display</option>
+                                          <option value="COMMUNICATION">Communication</option>
+                                          <option value="POWER_SUPPLY">Power Supply</option>
+                                          <option value="OTHER">Other</option>
+                                        </select>
+                                      </div>
+                                      
+                                      {/* Component Description */}
+                                      <div>
+                                        <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Description</label>
+                                        <textarea
+                                          value={comp.description || ''}
+                                          onChange={(e) => {
+                                            const updated = [...(components || [])]
+                                            updated[idx] = { ...updated[idx], description: e.target.value }
+                                            setComponents(updated)
+                                          }}
+                                          rows={2}
+                                          className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                                          placeholder="Technical role/function"
+                                        />
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Remove Button */}
+                                    <button
+                                      onClick={() => {
+                                        const updated = (components || []).filter((_, i) => i !== idx)
+                                        setComponents(updated)
+                                      }}
+                                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                      title="Remove component"
+                                    >
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-center py-4 text-sm text-gray-500">
+                                No components. Click "Add Component" to add one.
                               </div>
                             )}
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-500 italic">No components identified</p>
+                          // Read-only display
+                          components?.length > 0 ? (
+                            <div className="grid grid-cols-2 gap-2">
+                              {components.slice(0, 6).map((comp: any, idx: number) => (
+                                <div key={idx} className="p-2 bg-gray-50 rounded border border-gray-100 text-xs">
+                                  <span className="font-medium text-gray-900">{comp.name}</span>
+                                  {comp.type && (
+                                    <span className="text-gray-500 ml-1">({comp.type})</span>
+                                  )}
+                                </div>
+                              ))}
+                              {components.length > 6 && (
+                                <div className="p-2 text-xs text-gray-500">
+                                  +{components.length - 6} more...
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">No components identified</p>
+                          )
+                        )}
+                        
+                        {/* Edit hint when not editing */}
+                        {!isEditing && components?.length > 0 && (
+                          <p className="text-[10px] text-gray-400 mt-2">
+                            Click "Edit" above to rename, modify, or remove components
+                          </p>
                         )}
                       </div>
 
@@ -892,14 +1062,26 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         <Button
                           onClick={async () => {
                             try {
+                              // Filter out empty/invalid components before saving
+                              const validComponents = (components || [])
+                                .filter((c: any) => c && typeof c.name === 'string' && c.name.trim().length > 0)
+                                .map((c: any) => ({
+                                  ...c,
+                                  name: c.name.trim() // Trim whitespace from names
+                                }))
+                              
                               await onComplete({
                                 action: 'update_idea_record',
                                 sessionId: session?.id,
                                 patch: {
-                                  problem, objectives, logic, bestMethod, components,
+                                  problem, objectives, logic, bestMethod, 
+                                  components: validComponents,
                                   searchQuery, abstract: abstractText, cpcCodes, ipcCodes
                                 }
                               })
+                              
+                              // Update local state with cleaned components
+                              setComponents(validComponents)
                               setIsEditing(false)
                               onRefresh()
                             } catch (err) {
@@ -950,20 +1132,90 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
             {/* Patent Type Badge + Persona Style Controls */}
             {showClaimsDetails && (
               <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100">
-                {/* Row 1: Patent Type Badge (read-only, authoritative) */}
+                {/* Row 1: Patent Type (editable with dropdown) */}
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-gray-600">Detected Patent Type:</span>
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${
-                      patentType === 'PRODUCT' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
-                      patentType === 'SYSTEM' ? 'bg-purple-100 text-purple-800 border border-purple-200' :
-                      patentType === 'PROCESS' ? 'bg-green-100 text-green-800 border border-green-200' :
-                      patentType === 'COMPOSITION' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
-                      'bg-gray-100 text-gray-600 border border-gray-200'
-                    }`}>
-                      {patentType || '—'}
-                    </span>
+                    <span className="text-xs font-medium text-gray-600">Invention Type:</span>
+                    <div className="relative" data-patent-type-dropdown>
+                      <Tooltip content="Click to change the invention type if the AI classification is incorrect" position="bottom">
+                        <button
+                          onClick={() => setShowPatentTypeDropdown(!showPatentTypeDropdown)}
+                          disabled={isUpdatingPatentType || claimsFrozen}
+                          className={`text-xs font-bold px-2.5 py-1 rounded-md flex items-center gap-1.5 transition-all ${
+                            isUpdatingPatentType ? 'opacity-50 cursor-wait' :
+                            claimsFrozen ? 'cursor-not-allowed opacity-70' :
+                            'cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-indigo-300'
+                          } ${
+                            patentType === 'PRODUCT' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                            patentType === 'SYSTEM' ? 'bg-purple-100 text-purple-800 border border-purple-200' :
+                            patentType === 'PROCESS' ? 'bg-green-100 text-green-800 border border-green-200' :
+                            patentType === 'COMPOSITION' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                            'bg-gray-100 text-gray-600 border border-gray-200'
+                          }`}
+                        >
+                          {isUpdatingPatentType ? (
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                          ) : (
+                            patentType || 'Not classified'
+                          )}
+                          {!claimsFrozen && !isUpdatingPatentType && (
+                            <ChevronDown className={`w-3 h-3 transition-transform ${showPatentTypeDropdown ? 'rotate-180' : ''}`} />
+                          )}
+                        </button>
+                      </Tooltip>
+                      
+                      {/* Dropdown Menu */}
+                      <AnimatePresence>
+                        {showPatentTypeDropdown && !claimsFrozen && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -4 }}
+                            transition={{ duration: 0.15 }}
+                            className="absolute left-0 top-full mt-1 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[160px]"
+                          >
+                            {(['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const).map((type) => (
+                              <button
+                                key={type}
+                                onClick={() => handleUpdatePatentType(type)}
+                                disabled={isUpdatingPatentType}
+                                className={`w-full px-3 py-2 text-left text-xs font-medium flex items-center gap-2 transition-colors ${
+                                  patentType === type 
+                                    ? 'bg-indigo-50 text-indigo-700' 
+                                    : 'hover:bg-gray-50 text-gray-700'
+                                }`}
+                              >
+                                <span className={`w-2 h-2 rounded-full ${
+                                  type === 'PRODUCT' ? 'bg-blue-500' :
+                                  type === 'SYSTEM' ? 'bg-purple-500' :
+                                  type === 'PROCESS' ? 'bg-green-500' :
+                                  'bg-amber-500'
+                                }`} />
+                                <span>{type}</span>
+                                {patentType === type && (
+                                  <Check className="w-3 h-3 ml-auto text-indigo-600" />
+                                )}
+                              </button>
+                            ))}
+                            <div className="border-t border-gray-100 mt-1 pt-1 px-3 py-2">
+                              <p className="text-[10px] text-gray-500 leading-relaxed">
+                                <strong>PRODUCT:</strong> Single device/article<br/>
+                                <strong>SYSTEM:</strong> Multi-component setup<br/>
+                                <strong>PROCESS:</strong> Method/steps<br/>
+                                <strong>COMPOSITION:</strong> Chemical/material
+                              </p>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    {!patentType && normalizedData && (
+                      <span className="text-[10px] text-gray-400">(Classifying...)</span>
+                    )}
                   </div>
+                  {!claimsFrozen && (
+                    <span className="text-[10px] text-gray-400">Click to override</span>
+                  )}
                 </div>
                 
                 {/* Row 2: Writing Style Controls */}

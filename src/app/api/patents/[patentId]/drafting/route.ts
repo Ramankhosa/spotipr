@@ -796,6 +796,10 @@ export async function POST(
       case 'update_idea_record':
         return await handleUpdateIdeaRecord(authResult.user, patentId, data);
 
+      // Manual patent type override (Stage 1)
+      case 'update_patent_type':
+        return await handleUpdatePatentType(authResult.user, patentId, data);
+
       // Claims generation and management (Stage 1)
       case 'generate_claims':
         return await handleGenerateClaims(authResult.user, patentId, data, requestHeaders);
@@ -3184,8 +3188,12 @@ function validateIncludeList(
 }
 
 /**
- * C6: Validate that activity diagrams have component numerals in action steps
- * Returns validation result with any actions missing numerals.
+ * C6: Validate that activity diagrams have reference labels in action steps
+ * Supports all numbering styles:
+ * - NUMERIC_BUCKET: (100), (200), (300)...
+ * - STEP_LABEL: (S100), (S200), (S300)...
+ * - CONSTITUENT_LABEL: (a), (b), (c)...
+ * Returns validation result with any actions missing reference labels.
  */
 function validateActivityNumerals(plantuml: string): { valid: boolean; missingNumerals: string[] } {
   const missingNumerals: string[] = []
@@ -3196,14 +3204,20 @@ function validateActivityNumerals(plantuml: string): { valid: boolean; missingNu
     return { valid: true, missingNumerals: [] }
   }
   
+  // Pattern to match any valid reference label format:
+  // - Numeric: (100), (200), (300)...
+  // - Step labels: (S100), (S200), (S300)...
+  // - Constituent labels: (a), (b), (c)...
+  const validReferenceLabelPattern = /\((\d+|S\d+|[a-z])\)/i
+  
   // Extract all action lines (lines starting with : and ending with ;)
   const lines = plantuml.split(/\r?\n/)
   for (const line of lines) {
     const trimmed = line.trim()
     // Match activity action lines: :Action text;
     if (/^:.*;\s*$/.test(trimmed)) {
-      // Check if action has at least one numeral in parentheses
-      if (!/\(\d+\)/.test(trimmed)) {
+      // Check if action has at least one valid reference label in parentheses
+      if (!validReferenceLabelPattern.test(trimmed)) {
         // Extract the action text (without : and ;)
         const actionText = trimmed.replace(/^:/, '').replace(/;\s*$/, '').trim()
         missingNumerals.push(actionText)
@@ -4170,6 +4184,96 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
 }
 
 // ============================================================================
+// HELPER: Extract components array from referenceMap
+// ============================================================================
+// The referenceMap.components field stores { components: [...], numberingStyle: '...' }
+// This helper safely extracts the actual components array
+function extractComponentsArray(referenceMap: any): any[] {
+  if (!referenceMap?.components) return []
+  // Handle nested structure: { components: { components: [...], numberingStyle: '...' } }
+  if (referenceMap.components.components && Array.isArray(referenceMap.components.components)) {
+    return referenceMap.components.components
+  }
+  // Handle direct array structure: { components: [...] }
+  if (Array.isArray(referenceMap.components)) {
+    return referenceMap.components
+  }
+  return []
+}
+
+// ============================================================================
+// PATENT TYPE MANUAL OVERRIDE (Stage 1)
+// ============================================================================
+
+/**
+ * Handler for manual patent type override.
+ * Allows users to correct the LLM-classified invention type (PRODUCT, SYSTEM, PROCESS, COMPOSITION).
+ * The patent type is stored on the DraftingSession, not in normalizedData.
+ */
+async function handleUpdatePatentType(user: any, patentId: string, data: any) {
+  const { sessionId, patentType } = data;
+
+  if (!sessionId) {
+    return NextResponse.json(
+      { error: 'Session ID is required' },
+      { status: 400 }
+    );
+  }
+
+  // Validate patent type
+  const validTypes = ['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const;
+  if (!patentType || !validTypes.includes(patentType)) {
+    return NextResponse.json(
+      { error: `Invalid patent type. Must be one of: ${validTypes.join(', ')}` },
+      { status: 400 }
+    );
+  }
+
+  // Verify session ownership
+  const session = await prisma.draftingSession.findFirst({
+    where: {
+      id: sessionId,
+      patentId,
+      userId: user.id
+    },
+    include: { ideaRecord: true }
+  });
+
+  if (!session) {
+    return NextResponse.json(
+      { error: 'Session not found or access denied' },
+      { status: 404 }
+    );
+  }
+
+  // Update the patent type on the session
+  // Mark as manually overridden so we don't re-classify on component changes
+  const existingNormalized = (session.ideaRecord?.normalizedData as any) || {};
+  const components = existingNormalized.components || [];
+  const logic = existingNormalized.logic || '';
+  
+  const updatedSession = await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: {
+      patentTypePrimary: patentType,
+      patentTypeDecidedAt: new Date(),
+      // Store current context hash - manual override should persist even if components change
+      patentTypeComponentsHash: DraftingService.generatePatentTypeContextHash(components, logic),
+      // Mark as manually overridden (store in metadata or a flag field if available)
+      // For now, we just update the type - the fact that it's manually set is implied
+    }
+  });
+
+  console.log(`[handleUpdatePatentType] Patent type manually updated to: ${patentType} for session: ${sessionId}`);
+
+  return NextResponse.json({
+    success: true,
+    patentTypePrimary: patentType,
+    message: `Patent type updated to ${patentType}`
+  });
+}
+
+// ============================================================================
 // CLAIMS GENERATION AND MANAGEMENT HANDLERS (Stage 1)
 // ============================================================================
 
@@ -4394,9 +4498,9 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       abstract: idea.abstract
     }
 
-    // Format components for the prompt
+    // Format components for the prompt (supports all numbering styles: 100/200, S100/S200, (a)/(b))
     const componentsList = Array.isArray(context.components)
-      ? context.components.map((c: any) => `- ${c.name}${c.type ? ` (${c.type})` : ''}${c.numeral ? ` (${c.numeral})` : ''}`).join('\n')
+      ? context.components.map((c: any) => `- ${c.name}${c.type ? ` (${c.type})` : ''}${(c.referenceLabel || c.numeral) ? ` (${c.referenceLabel || c.numeral})` : ''}`).join('\n')
       : ''
 
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
@@ -4508,11 +4612,16 @@ USER REMARKS (consider for scope/emphasis, NOT for patent type):
 ${existingNormalized.userClaimRemarks}
 ` : ''}
 
+${patentTypePrimary === 'COMPOSITION' ? `
+COMPOSITION-SPECIFIC DEPENDENT CLAIM GUIDANCE:
+Include dependent claims that narrow ingredient ranges and specify preferred weight percentages or ratios where supported by the invention context.
+` : ''}
+
 CLAIM GENERATION REQUIREMENTS:
 1. Generate a comprehensive claim set appropriate for this invention's complexity
 2. The FIRST independent claim MUST match the patent type above
-3. Include additional independent claims of other categories if appropriate
-4. Add 2-5 dependent claims per independent claim based on technical depth
+3. Generate exactly ONE independent claim (Claim 1). Generate dependent claims only.
+4. Add 6-12 dependent claims total (or fewer if context is thin)
 5. Each claim must be complete, self-contained, and properly numbered
 6. Maintain strict antecedent basis throughout all claims
 7. Reference components by name consistently
@@ -4832,12 +4941,14 @@ async function handleClaimRefinementPreview(user: any, patentId: string, data: a
     abstract: session.ideaRecord?.abstract || ''
   }
 
-  const componentsFromReference = Array.isArray((session.referenceMap as any)?.components) ? (session.referenceMap as any).components : []
+  const componentsFromReference = extractComponentsArray(session.referenceMap)
   const componentsFromIdea = Array.isArray(session.ideaRecord?.components) ? session.ideaRecord.components : []
   const componentList = (componentsFromReference.length > 0 ? componentsFromReference : componentsFromIdea)
     .map((c: any, idx: number) => {
       const name = c?.name || c?.title || c?.component || `Component ${idx + 1}`
-      const numeral = c?.numeral ? ` (#${c.numeral})` : ''
+      // Use referenceLabel (universal) or numeral (legacy) - supports 100/200, S100/S200, (a)/(b) formats
+      const label = c?.referenceLabel || c?.numeral
+      const numeral = label ? ` (#${label})` : ''
       const desc = c?.description ? `: ${c.description}` : ''
       return `- ${name}${numeral}${desc}`
     })
@@ -5135,7 +5246,7 @@ async function handleAddComponentNumbersToClaims(user: any, patentId: string, da
   }
 
   // Get component numbers from referenceMap
-  const components = (session.referenceMap as any)?.components || []
+  const components = extractComponentsArray(session.referenceMap)
   if (components.length === 0) {
     return NextResponse.json({ 
       error: 'No component numbers available. Please finalize components in the Component Planner stage first.' 
@@ -5170,10 +5281,10 @@ async function handleAddComponentNumbersToClaims(user: any, patentId: string, da
   
   console.log(`[addComponentNumbersToClaims] Using claims from: ${claimsSource}, length: ${claimsHtml.length} chars`)
 
-  // Build component reference list for the LLM
+  // Build component reference list for the LLM (supports all numbering styles: 100/200, S100/S200, (a)/(b))
   const componentList = components
-    .filter((c: any) => c.name && c.numeral)
-    .map((c: any) => `- ${c.name}: (${c.numeral})`)
+    .filter((c: any) => c.name && (c.referenceLabel || c.numeral))
+    .map((c: any) => `- ${c.name}: (${c.referenceLabel || c.numeral})`)
     .join('\n')
 
   // Get effective jurisdiction
@@ -5910,7 +6021,32 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   // Use LLM to normalize the idea
   console.log('Starting idea normalization for patent:', patentId, 'session:', sessionId);
 
-  const result = await DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, allowRefine);
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // PARALLEL EXECUTION: Run normalization and patent type classification together
+  // This decouples patent type classification from claim generation for better UX
+  // ═══════════════════════════════════════════════════════════════════════════════
+  const [result, patentTypeResult] = await Promise.all([
+    DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, allowRefine),
+    // Patent type classification runs in parallel - uses raw idea context
+    (async () => {
+      try {
+        // We can't use extracted components yet (they come from normalization)
+        // So we ask the LLM to classify based on raw idea text
+        const classificationResult = await DraftingService.decidePatentTypeFromRawIdea(
+          rawIdea,
+          title,
+          areaOfInvention,
+          user.tenantId,
+          requestHeaders
+        );
+        console.log(`[handleNormalizeIdea] Patent type classified in parallel: ${classificationResult.primary}`);
+        return classificationResult;
+      } catch (err) {
+        console.warn('[handleNormalizeIdea] Patent type classification failed, will retry with components:', err);
+        return null; // Will be re-classified with components if this fails
+      }
+    })()
+  ]);
 
   if (!result.success) {
     console.error('Idea normalization failed:', result.error);
@@ -5921,6 +6057,28 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   }
 
   console.log('Idea normalization successful');
+
+  // If parallel classification failed, try again with extracted components
+  let patentTypePrimary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null = patentTypeResult?.primary || null;
+  if (!patentTypePrimary && result.extractedFields?.components) {
+    try {
+      const fallbackDecision = await DraftingService.decidePatentType(
+        {
+          components: result.extractedFields.components,
+          logic: result.extractedFields?.logic || '',
+          inputs: result.extractedFields?.inputs,
+          outputs: result.extractedFields?.outputs,
+          objectives: result.extractedFields?.objectives
+        },
+        user.tenantId,
+        requestHeaders
+      );
+      patentTypePrimary = fallbackDecision.primary;
+      console.log(`[handleNormalizeIdea] Patent type fallback classified: ${patentTypePrimary}`);
+    } catch (err) {
+      console.warn('[handleNormalizeIdea] Fallback patent type classification also failed:', err);
+    }
+  }
 
   // Create or update idea record
   const ideaRecord = await prisma.ideaRecord.upsert({
@@ -5970,20 +6128,35 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
 
   // Keep session status as IDEA_ENTRY so user sees Stage 1 first
   // Status will be updated to COMPONENT_PLANNER when they proceed from Stage 1
+  // Also store the patent type classification (decided in parallel with normalization)
+  const sessionUpdateData: any = { status: 'IDEA_ENTRY' };
+  
+  if (patentTypePrimary) {
+    // Store patent type on session (NOT in normalizedData - separation of concerns)
+    sessionUpdateData.patentTypePrimary = patentTypePrimary;
+    sessionUpdateData.patentTypeDecidedAt = new Date();
+    // Generate context hash from extracted components for change detection
+    const components = result.extractedFields?.components || [];
+    const logic = result.extractedFields?.logic || '';
+    sessionUpdateData.patentTypeComponentsHash = DraftingService.generatePatentTypeContextHash(components, logic);
+    console.log(`[handleNormalizeIdea] Storing patent type: ${patentTypePrimary}`);
+  }
+  
   await prisma.draftingSession.update({
     where: { id: sessionId },
-    data: { status: 'IDEA_ENTRY' }
+    data: sessionUpdateData
   });
 
   return NextResponse.json({
     ideaRecord,
     normalizedData: result.normalizedData,
-    extractedFields: result.extractedFields
+    extractedFields: result.extractedFields,
+    patentTypePrimary // Include in response so UI can show it immediately
   });
 }
 
 async function handleUpdateComponentMap(user: any, patentId: string, data: any) {
-  const { sessionId, components } = data;
+  const { sessionId, components, numberingStyleOverride } = data;
 
   if (!sessionId || !components) {
     return NextResponse.json(
@@ -6008,6 +6181,9 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
     );
   }
 
+  // Get patent type from session for numbering style derivation
+  const patentTypePrimary = (session as any).patentTypePrimary as 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null;
+
   // Pre-process components to normalize before validation
   const normalizedComponents = (components || []).map((comp: any) => {
     const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
@@ -6020,8 +6196,12 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
     };
   });
 
-  // Validate components and assign numerals
-  const validation = DraftingService.validateComponentMap(normalizedComponents);
+  // Validate components and assign reference labels based on patent type + user override
+  const validation = DraftingService.validateComponentMap(
+    normalizedComponents,
+    patentTypePrimary,
+    numberingStyleOverride // User override (if provided)
+  );
 
   if (!validation.valid) {
     console.error('Component map validation failed:', validation.errors);
@@ -6037,17 +6217,25 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
     );
   }
 
-  // Create or update reference map
+  // Create or update reference map with numbering style
+  // Store numberingStyle alongside components in the JSON field (Prisma Json type)
+  const referenceMapJson = {
+    components: validation.components || [],
+    numberingStyle: validation.numberingStyle || 'NUMERIC_BUCKET'
+  };
+  
   const referenceMap = await prisma.referenceMap.upsert({
     where: { sessionId },
     update: {
-      components: validation.components,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      components: referenceMapJson as any,
       isValid: true,
       validationErrors: undefined
     },
     create: {
       sessionId,
-      components: validation.components,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      components: referenceMapJson as any,
       isValid: true
     }
   });
@@ -6055,7 +6243,13 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
   // Note: We don't automatically advance to FIGURE_PLANNER here
   // The user should manually proceed when ready
 
-  return NextResponse.json({ referenceMap });
+  return NextResponse.json({ 
+    referenceMap: {
+      ...referenceMap,
+      components: validation.components, // Return the actual components array
+      numberingStyle: validation.numberingStyle // Include in response for UI
+    }
+  });
 }
 
 async function handleUpdateFigurePlan(user: any, patentId: string, data: any) {
@@ -6446,7 +6640,9 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
 /**
  * Diagram type definitions with syntax guides
  */
-type DiagramType = 'block' | 'activity' | 'sequence' | 'state'
+type DiagramType = 'block' | 'activity' | 'sequence' | 'state' | 'constituent'
+type PatentTypePrimary = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
+type InventionArchetype = 'MECHANICAL' | 'ELECTRICAL' | 'SOFTWARE' | 'CHEMICAL' | 'BIO' | 'GENERAL'
 
 interface DiagramTypeInfo {
   type: DiagramType
@@ -6454,6 +6650,16 @@ interface DiagramTypeInfo {
   description: string
   syntaxGuide: string
   exampleCode: string
+}
+
+/**
+ * Figure plan output from planDiagramTypes
+ */
+interface FigurePlanEntry {
+  figureNo: number
+  type: DiagramType
+  purpose: string
+  reason: string  // Why this diagram type was selected
 }
 
 const DIAGRAM_TYPES: Record<DiagramType, DiagramTypeInfo> = {
@@ -6546,7 +6752,299 @@ Proc --> Done
 Proc --> Idle
 Done --> [*]
 @enduml`
+  },
+  constituent: {
+    type: 'constituent',
+    name: 'Constituent/Formulation Diagram',
+    description: 'Shows composition constituents and their relationships/proportions',
+    syntaxGuide: `Use structured layout for composition/formulation claims.
+- Use packages/rectangles to show constituent groups
+- Show relationships between constituents (not physical connections)
+- Reference labels use (a), (b), (c) format for COMPOSITION patents
+- IMPORTANT: Labels MUST be in parentheses format, e.g., "Active Agent (a)" not "Active Agent a"
+- Show proportions/ratios only if specified in claims`,
+    exampleCode: `@startuml
+package "Formulation" {
+  rectangle "Active Agent (a)" as A
+  rectangle "Carrier (b)" as B
+  rectangle "Stabilizer (c)" as C
+  rectangle "Excipient (d)" as D
+}
+
+A -down-> B : incorporated in
+B -right-> C : combined with
+C -down-> D : mixed with
+@enduml`
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PATENT-TYPE-FIRST DIAGRAM PLANNING (SRS v2)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Priority Order:
+// 1. Patent Type → decides diagram family (block vs activity vs constituent)
+// 2. Archetype → refines diagram subtype + naming (ONLY for SYSTEM/PRODUCT)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ClaimSignals {
+  hasMethodClaims: boolean
+  hasSystemClaims: boolean
+  hasSequenceConcepts: boolean
+  hasStateConcepts: boolean
+  hasPreparationSteps: boolean  // For COMPOSITION
+}
+
+/**
+ * Extract claim signals from claims for diagram planning
+ */
+function extractClaimSignals(
+  claims: Array<{ number: number; type: string; text: string; category?: string }> | null,
+  claimsText: string | null
+): ClaimSignals {
+  const signals: ClaimSignals = {
+    hasMethodClaims: false,
+    hasSystemClaims: false,
+    hasSequenceConcepts: false,
+    hasStateConcepts: false,
+    hasPreparationSteps: false
+  }
+  
+  const methodKeywords = /\b(method|process|step|receiving|transmitting|generating|determining|calculating|storing|retrieving|sending|comparing|validating|executing|performing|operating)\b/i
+  const sequenceKeywords = /\b(sequence|order|first|then|next|subsequently|before|after|prior to|following|response to|in response|message|signal|request|reply|handshake|protocol)\b/i
+  const stateKeywords = /\b(state|mode|transition|idle|active|standby|sleep|wake|on|off|enabled|disabled|triggered|condition)\b/i
+  const preparationKeywords = /\b(preparing|mixing|combining|dissolving|heating|cooling|incubating|reacting|formulating|compounding)\b/i
+  
+  if (claims && claims.length > 0) {
+    for (const claim of claims) {
+      const claimType = (claim.type || '').toLowerCase()
+      const claimCategory = (claim.category || '').toLowerCase()
+      const claimText = claim.text || ''
+      
+      if (claimType === 'method' || claimCategory === 'method' || claimType === 'process') {
+        signals.hasMethodClaims = true
+      }
+      if (claimType === 'system' || claimType === 'apparatus' || claimType === 'device' || claimCategory === 'system') {
+        signals.hasSystemClaims = true
+      }
+      if (sequenceKeywords.test(claimText)) signals.hasSequenceConcepts = true
+      if (stateKeywords.test(claimText)) signals.hasStateConcepts = true
+      if (preparationKeywords.test(claimText)) signals.hasPreparationSteps = true
+    }
+  } else if (claimsText) {
+    signals.hasMethodClaims = methodKeywords.test(claimsText)
+    signals.hasSystemClaims = /\b(system|apparatus|device|comprising|includes|configured to)\b/i.test(claimsText)
+    signals.hasSequenceConcepts = sequenceKeywords.test(claimsText)
+    signals.hasStateConcepts = stateKeywords.test(claimsText)
+    signals.hasPreparationSteps = preparationKeywords.test(claimsText)
+  }
+  
+  return signals
+}
+
+/**
+ * MAIN DIAGRAM PLANNER: Patent-Type-First, Archetype-Enhanced
+ * 
+ * @param patentTypePrimary - Primary patent type (PRODUCT|SYSTEM|PROCESS|COMPOSITION)
+ * @param archetype - Technical archetype (MECHANICAL|ELECTRICAL|SOFTWARE|CHEMICAL|BIO|GENERAL)
+ * @param claimSignals - Extracted signals from claims
+ * @param diagramCount - Number of diagrams to plan (default 5)
+ */
+function planDiagramTypes(
+  patentTypePrimary: PatentTypePrimary | null | undefined,
+  archetype: string,
+  claimSignals: ClaimSignals,
+  diagramCount: number = 5
+): FigurePlanEntry[] {
+  const plans: FigurePlanEntry[] = []
+  
+  // Normalize patent type (default to SYSTEM if not specified)
+  const patentType = patentTypePrimary || 'SYSTEM'
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BASE PLANS BY PATENT TYPE (PRIMARY DRIVER)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  if (patentType === 'PROCESS') {
+    // PROCESS: Activity diagrams primary, block diagram optional for apparatus
+    plans.push({
+      figureNo: 1,
+      type: 'activity',
+      purpose: 'End-to-end method flowchart showing all process steps',
+      reason: 'PROCESS patent type → Activity diagram as primary figure'
+    })
+    
+    if (diagramCount >= 2) {
+      plans.push({
+        figureNo: 2,
+        type: claimSignals.hasSystemClaims ? 'block' : 'activity',
+        purpose: claimSignals.hasSystemClaims 
+          ? 'Apparatus/system used in the method'
+          : 'Expanded sub-flow showing detailed steps',
+        reason: claimSignals.hasSystemClaims 
+          ? 'PROCESS with system claims → Block diagram for apparatus'
+          : 'PROCESS → Additional activity diagram for sub-flow'
+      })
+    }
+    
+    // Fill remaining with activity diagrams
+    for (let i = plans.length; i < diagramCount; i++) {
+      plans.push({
+        figureNo: i + 1,
+        type: 'activity',
+        purpose: `Additional process flow or sub-method detail`,
+        reason: 'PROCESS → Activity diagram baseline'
+      })
+    }
+    
+  } else if (patentType === 'COMPOSITION') {
+    // COMPOSITION: Constituent diagram primary, activity only if preparation steps exist
+    plans.push({
+      figureNo: 1,
+      type: 'constituent',
+      purpose: 'Constituent/formulation diagram showing composition structure',
+      reason: 'COMPOSITION patent type → Constituent diagram as primary figure'
+    })
+    
+    if (diagramCount >= 2 && claimSignals.hasPreparationSteps) {
+      plans.push({
+        figureNo: 2,
+        type: 'activity',
+        purpose: 'Preparation/formulation process flow',
+        reason: 'COMPOSITION with preparation steps → Activity diagram for preparation method'
+      })
+    } else if (diagramCount >= 2) {
+      plans.push({
+        figureNo: 2,
+        type: 'constituent',
+        purpose: 'Detailed constituent relationship or variant formulation',
+        reason: 'COMPOSITION → Additional constituent diagram'
+      })
+    }
+    
+    // Fill remaining with constituent diagrams
+    for (let i = plans.length; i < diagramCount; i++) {
+      plans.push({
+        figureNo: i + 1,
+        type: 'constituent',
+        purpose: `Additional formulation variant or constituent detail`,
+        reason: 'COMPOSITION → Constituent diagram baseline'
+      })
+    }
+    
+  } else {
+    // SYSTEM / PRODUCT: Block diagrams primary, enhanced by archetype
+    plans.push({
+      figureNo: 1,
+      type: 'block',
+      purpose: 'System/product architecture overview',
+      reason: `${patentType} patent type → Block diagram as primary figure`
+    })
+    
+    if (diagramCount >= 2) {
+      plans.push({
+        figureNo: 2,
+        type: 'block',
+        purpose: 'Subsystem or internal component layout',
+        reason: `${patentType} → Block diagram for subsystem detail`
+      })
+    }
+    
+    // ═════════════════════════════════════════════════════════════════════════
+    // ARCHETYPE ENHANCEMENT (ONLY FOR SYSTEM/PRODUCT)
+    // ═════════════════════════════════════════════════════════════════════════
+    
+    if (diagramCount >= 3) {
+      // Fig 3: Activity diagram ONLY if method-heavy signals exist
+      if (claimSignals.hasMethodClaims) {
+        plans.push({
+          figureNo: 3,
+          type: 'activity',
+          purpose: 'Method/process flow for system operation',
+          reason: `${patentType} with method claims → Activity diagram for operational flow`
+        })
+      } else {
+        plans.push({
+          figureNo: 3,
+          type: 'block',
+          purpose: 'Component deep-dive or subsystem detail',
+          reason: `${patentType} → Block diagram for component detail`
+        })
+      }
+    }
+    
+    if (diagramCount >= 4) {
+      // Fig 4: Sequence diagram ONLY if SOFTWARE archetype + interaction signals
+      if (archetype.includes('SOFTWARE') && claimSignals.hasSequenceConcepts) {
+        plans.push({
+          figureNo: 4,
+          type: 'sequence',
+          purpose: 'Message sequence showing component interactions',
+          reason: `${patentType}+SOFTWARE archetype with sequence signals → Sequence diagram`
+        })
+      } else if ((archetype.includes('ELECTRICAL') || archetype.includes('SOFTWARE')) && claimSignals.hasStateConcepts) {
+        // State diagram ONLY if ELECTRICAL/SOFTWARE + state signals
+        plans.push({
+          figureNo: 4,
+          type: 'state',
+          purpose: 'State machine showing operational modes',
+          reason: `${patentType}+${archetype} with state signals → State diagram`
+        })
+      } else if (claimSignals.hasMethodClaims && plans.filter(p => p.type === 'activity').length < 2) {
+        plans.push({
+          figureNo: 4,
+          type: 'activity',
+          purpose: 'Additional method flow or operation sequence',
+          reason: `${patentType} with method claims → Activity diagram`
+        })
+      } else {
+        plans.push({
+          figureNo: 4,
+          type: 'block',
+          purpose: 'Additional component or subsystem detail',
+          reason: `${patentType} → Block diagram baseline`
+        })
+      }
+    }
+    
+    // Fill remaining with block diagrams (PRODUCT+MECHANICAL preference)
+    for (let i = plans.length; i < diagramCount; i++) {
+      plans.push({
+        figureNo: i + 1,
+        type: 'block',
+        purpose: 'Additional component detail or assembly breakdown',
+        reason: `${patentType} → Block diagram baseline (no flowchart spam)`
+      })
+    }
+  }
+  
+  return plans
+}
+
+/**
+ * Get archetype-specific nomenclature tuning (SYSTEM/PRODUCT only)
+ */
+function getArchetypeNomenclature(archetype: string): { styleGuide: string; nomenclature: string } {
+  let styleGuide = 'Use standard UML blocks.'
+  let nomenclature = 'Use standard technical terms.'
+  
+  if (archetype.includes('SOFTWARE')) {
+    styleGuide += ' Use Flowcharts (activity diagrams) or System Blocks (component diagrams).'
+    nomenclature += ' Use: Module, Engine, Database, API, Interface, Server, Client (and similar logical units).'
+  }
+  if (archetype.includes('MECHANICAL')) {
+    styleGuide += ' Use Block Definition Diagrams or Internal Block Diagrams (SysML style) to show physical parts.'
+    nomenclature += ' Use: Housing, Shaft, Assembly, Coupler, Mechanism, Actuator (and similar physical components).'
+  }
+  if (archetype.includes('ELECTRICAL')) {
+    styleGuide += ' Use high-level circuit blocks or signal flow diagrams.'
+    nomenclature += ' Use: Circuit, Terminal, Bus, Transceiver, Node, Sensor (and similar electronic parts).'
+  }
+  if (archetype.includes('BIO') || archetype.includes('CHEMICAL')) {
+    styleGuide += ' Use process flows or reaction schemas.'
+    nomenclature += ' Use: Reagent, Compound, Stage, Phase, Catalyst, Reactor (and similar domain entities).'
+  }
+  
+  return { styleGuide, nomenclature }
 }
 
 /**
@@ -6667,6 +7165,45 @@ function buildDiagramTypeInstructions(diagramTypes: DiagramType[]): string {
   // Add syntax guide for each unique type used
   for (let i = 0; i < uniqueTypes.length; i++) {
     const type = uniqueTypes[i]
+    const info = DIAGRAM_TYPES[type]
+    lines.push('')
+    lines.push(`--- ${info.name.toUpperCase()} ---`)
+    lines.push(info.syntaxGuide)
+    lines.push('')
+    lines.push('Example:')
+    lines.push(info.exampleCode)
+  }
+  
+  return lines.join('\n')
+}
+
+/**
+ * Build diagram-type instructions with planning reasons (Patent-Type-First SRS v2)
+ * Shows why each diagram type was selected for transparency and debugging
+ */
+function buildDiagramTypeInstructionsWithReasons(figurePlans: FigurePlanEntry[]): string {
+  const uniqueTypes = Array.from(new Set(figurePlans.map(fp => fp.type)))
+  const lines: string[] = []
+  
+  lines.push('═══════════════════════════════════════════════════════════════════════════════')
+  lines.push('DIAGRAM TYPE ASSIGNMENTS (Patent-Type-First Planning)')
+  lines.push('═══════════════════════════════════════════════════════════════════════════════')
+  
+  // Show assignment for each figure with purpose and reason
+  figurePlans.forEach((plan) => {
+    const info = DIAGRAM_TYPES[plan.type]
+    lines.push(`Fig.${plan.figureNo}: ${info.name}`)
+    lines.push(`  Purpose: ${plan.purpose}`)
+    lines.push(`  Reason: ${plan.reason}`)
+  })
+  
+  lines.push('')
+  lines.push('═══════════════════════════════════════════════════════════════════════════════')
+  lines.push('SYNTAX GUIDES FOR EACH DIAGRAM TYPE')
+  lines.push('═══════════════════════════════════════════════════════════════════════════════')
+  
+  // Add syntax guide for each unique type used
+  for (const type of uniqueTypes) {
     const info = DIAGRAM_TYPES[type]
     lines.push('')
     lines.push(`--- ${info.name.toUpperCase()} ---`)
@@ -6860,7 +7397,7 @@ async function handlePlanFiguresLLM(
 
   // Extract invention context
   const idea = session.ideaRecord?.normalizedData as any
-  const components = (session.referenceMap as any)?.components || []
+  const components = extractComponentsArray(session.referenceMap)
   const claims = idea?.claimsStructured || []
   const claimsText = idea?.claims || ''
   
@@ -6868,9 +7405,12 @@ async function handlePlanFiguresLLM(
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join(' + ') : 'GENERAL'
 
-  // Build components context
+  // Get patent type for diagram type selection
+  const patentTypePrimary = (session as any).patentTypePrimary as 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null
+
+  // Build components context with referenceLabel (universal across patent types)
   const componentsContext = components.length > 0
-    ? components.map((c: any) => `- ${c.name} (${c.numeral || '?'})${c.description ? ': ' + c.description : ''}`).join('\n')
+    ? components.map((c: any) => `- ${c.name} [ref=${c.referenceLabel || c.numeral || '?'}]${c.description ? ': ' + c.description : ''}`).join('\n')
     : 'No components defined yet.'
 
   // Build claims context
@@ -6902,8 +7442,14 @@ Connections are the generator's job, not yours.
 INVENTION CONTEXT
 ═══════════════════════════════════════════════════════════════════════════════
 TITLE: ${idea?.title || 'Untitled Invention'}
+PATENT TYPE: ${patentTypePrimary || 'SYSTEM'}
 ARCHETYPE: ${archetype}
 JURISDICTION: ${activeJurisdiction}
+
+CRITICAL: The PATENT TYPE determines diagram type selection:
+- COMPOSITION → Use CONSTITUENT diagrams (not BLOCK)
+- PROCESS → Use FLOW or ACTIVITY diagrams
+- SYSTEM/PRODUCT → Use BLOCK or SEQUENCE diagrams
 
 PROBLEM SOLVED:
 ${idea?.problem || 'Not specified'}
@@ -6911,8 +7457,13 @@ ${idea?.problem || 'Not specified'}
 TECHNICAL SOLUTION:
 ${idea?.logic || idea?.objectives || 'Not specified'}
 
-COMPONENTS (with reference numerals):
+COMPONENTS (with reference labels):
 ${componentsContext}
+
+NOTE: Reference labels vary by patent type:
+- SYSTEM/PRODUCT: numeric (100, 200, 300...)
+- PROCESS: step labels (S100, S200, S300...)
+- COMPOSITION: constituent labels ((a), (b), (c)...)
 
 PATENT CLAIMS:
 ${claimsContext}
@@ -6923,10 +7474,16 @@ ALLOWED DIAGRAM TYPES (WHITELIST - Use ONLY these)
 
 You may plan ONLY the following diagram types:
 
-1. BLOCK — System-level architecture (components + subsystems)
-2. FLOW — Method overview using rectangles + arrows only
-3. SEQUENCE — Flat interaction between major subsystems
-4. ACTIVITY — Linear activity steps (no decisions)
+1. BLOCK — System-level architecture (components + subsystems). Use for SYSTEM/PRODUCT patents.
+2. FLOW — Method overview using rectangles + arrows only. Use for PROCESS patents.
+3. SEQUENCE — Flat interaction between major subsystems. Use for SYSTEM patents with interactions.
+4. ACTIVITY — Linear activity steps (no decisions). Use for PROCESS patents.
+5. CONSTITUENT — Formulation/composition diagram showing ingredients/constituents with (a), (b), (c) labels. MANDATORY for COMPOSITION patents.
+
+PATENT TYPE → DIAGRAM TYPE MAPPING:
+- COMPOSITION patents: Use CONSTITUENT type (not BLOCK)
+- PROCESS patents: Use FLOW or ACTIVITY type
+- SYSTEM/PRODUCT patents: Use BLOCK or SEQUENCE type
 
 YOU MUST NOT PLAN:
 - State diagrams
@@ -6957,14 +7514,27 @@ PLANNING RULES (DETERMINISTIC)
 
 ${userRequestedCount 
   ? `The user has requested EXACTLY ${userRequestedCount} diagrams. Plan exactly ${userRequestedCount} diagrams.` 
-  : `1. Always plan FIG. 1 as a BLOCK diagram.
-2. Default to exactly 4 diagrams:
-   - FIG. 1 — BLOCK (system architecture)
-   - FIG. 2 — FLOW (method overview)
-   - FIG. 3 — SEQUENCE (subsystem interaction)
-   - FIG. 4 — ACTIVITY (linear steps)
-3. If the invention is very simple, reduce to 3 diagrams by omitting ACTIVITY.
-4. Never plan more than 4 diagrams unless user explicitly requests more.`}
+  : `DEFAULT DIAGRAM PLANNING (based on patent type):
+
+FOR COMPOSITION/FORMULATION PATENTS (archetype includes CHEMICAL, BIO, or "composition"/"formulation" in claims):
+1. FIG. 1 — CONSTITUENT (composition/formulation overview with ingredients)
+2. FIG. 2 — ACTIVITY (preparation method if described in claims)
+3. FIG. 3 — CONSTITUENT (variant or detailed ingredient relationship)
+   Use (a), (b), (c) reference labels for constituents.
+
+FOR PROCESS/METHOD PATENTS:
+1. FIG. 1 — FLOW (method overview)
+2. FIG. 2 — ACTIVITY (detailed steps)
+3. FIG. 3 — SEQUENCE (if interaction between components exists)
+
+FOR SYSTEM/PRODUCT PATENTS (default):
+1. FIG. 1 — BLOCK (system architecture)
+2. FIG. 2 — FLOW (method overview)
+3. FIG. 3 — SEQUENCE (subsystem interaction)
+4. FIG. 4 — ACTIVITY (linear steps)
+
+If the invention is very simple, reduce to 3 diagrams.
+Never plan more than 4 diagrams unless user explicitly requests more.`}
 
 KEEP DIAGRAMS SMALL:
 - BLOCK: 6–10 major components max
@@ -7005,11 +7575,12 @@ OUTPUT FORMAT (MANDATORY - Return valid JSON only)
 
 SCHEMA RULES:
 - figure → sequential, starting at FIG. 1
-- type → one of: BLOCK, FLOW, SEQUENCE, ACTIVITY (no other types allowed)
+- type → one of: BLOCK, FLOW, SEQUENCE, ACTIVITY, CONSTITUENT
 - title → short, patent-style, non-logical
-- include → list of components WITH NUMERALS (e.g., "Controller (100)") for ALL diagram types
+- include → list of components WITH NUMERALS (e.g., "Controller (100)" or "Active Agent (a)") for ALL diagram types
 - count → total number of diagrams
-- CRITICAL: ALL include items MUST have component numerals in parentheses
+- CRITICAL: ALL include items MUST have component numerals/labels in parentheses
+- CRITICAL: For COMPOSITION patents, use (a), (b), (c) labels, not numeric labels
 - CRITICAL: For FLOW/ACTIVITY, include items describe ACTIONS performed BY registered components
 
 DO NOT INVENT NEW NUMERALS:
@@ -7234,10 +7805,10 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
       }, { status: 400 })
     }
 
-    // Build components context
-    const components = (session.referenceMap as any)?.components || []
+    // Build components context with referenceLabel
+    const components = extractComponentsArray(session.referenceMap)
     const componentsContext = components.length > 0
-      ? components.map((c: any) => `- ${c.name} (${c.numeral || '?'})`).join('\n')
+      ? components.map((c: any) => `- ${c.name} [ref=${c.referenceLabel || c.numeral || '?'}]`).join('\n')
       : 'No components defined.'
 
     // Map diagram types to PlantUML diagram types
@@ -7245,7 +7816,8 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
       'BLOCK': 'block/component diagram',
       'FLOW': 'activity diagram (linear flow, no decisions)',
       'SEQUENCE': 'sequence diagram',
-      'ACTIVITY': 'activity diagram (linear steps only)'
+      'ACTIVITY': 'activity diagram (linear steps only)',
+      'CONSTITUENT': 'constituent/formulation diagram (packages + rectangles for COMPOSITION patents)'
     }
 
     // Build plan-based prompt using PRODUCTION-SAFE template
@@ -7318,6 +7890,20 @@ SEQUENCE:
 - Flat only (no box, no alt, no loop)
 - NO arrow labels - just A -> B, not A -> B : message
 
+CONSTITUENT (Composition/Formulation diagrams):
+- Use rectangles with package/grouping for ingredient categories
+- Reference labels MUST be in parentheses format: "Active Agent (a)", "Carrier (b)"
+- Show relationships between constituents using simple arrows (-->, ..)
+- Max 10 constituents per diagram
+- Do NOT include proportions/percentages unless explicitly in the claims
+- Use vertical or horizontal layouts for clarity
+- Example format:
+  package "Formulation" {
+    rectangle "Active Agent (a)" as A
+    rectangle "Carrier (b)" as B
+  }
+  A --> B
+
 ═══════════════════════════════════════════════════════════════════════════════
 STYLE (APPLIED TO EVERY DIAGRAM — DO NOT GENERATE SKINPARAMS)
 ═══════════════════════════════════════════════════════════════════════════════
@@ -7382,7 +7968,14 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
     'block' // Default to block diagram for multi-diagram generation
   )
 
-  // Determine Diagram Archetype from invention type
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PATENT-TYPE-FIRST DIAGRAM PLANNING (SRS v2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get patent type from session (PRIMARY driver)
+  const patentTypePrimary = (session as any).patentTypePrimary as PatentTypePrimary | null
+  
+  // Determine Diagram Archetype from invention type (SECONDARY enhancer)
   const idea = session.ideaRecord?.normalizedData as any
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
@@ -7402,16 +7995,25 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
   const frozenClaims = idea?.claimsStructured || []
   const claimsText = idea?.claims || ''
   
-  // Analyze claims to determine optimal diagram types for each figure
-  const recommendedDiagramTypes = analyzeClaimsForDiagramTypes(
+  // Extract claim signals for diagram planning
+  const claimSignals = extractClaimSignals(
     frozenClaims.length > 0 ? frozenClaims : null,
-    claimsText || null,
-    diagramCount,
-    archetype
+    claimsText || null
   )
   
-  // Build diagram type instructions
-  const diagramTypeInstructions = buildDiagramTypeInstructions(recommendedDiagramTypes)
+  // Use new patent-type-first diagram planner
+  const figurePlans = planDiagramTypes(
+    patentTypePrimary,
+    archetype,
+    claimSignals,
+    diagramCount
+  )
+  
+  // Extract diagram types from plans for backward compatibility
+  const recommendedDiagramTypes: DiagramType[] = figurePlans.map(fp => fp.type)
+  
+  // Build diagram type instructions with reasoning
+  const diagramTypeInstructions = buildDiagramTypeInstructionsWithReasons(figurePlans)
 
   // Get the primary language for figures/diagrams from session (set in Stage 0)
   const diagramLanguage = getFiguresLanguage(session)
@@ -7433,20 +8035,21 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
   }
   const diagramLanguageLabel = languageLabels[diagramLanguage] || diagramLanguage.toUpperCase()
 
+  // Get archetype-specific styling (ONLY for SYSTEM/PRODUCT)
   let styleGuide = 'Use standard UML blocks.'
   let nomenclature = 'Use standard technical terms.'
-
-  if (archetype.includes('SOFTWARE')) {
-    styleGuide += ' Use Flowcharts (activity diagrams) or System Blocks (component diagrams).'
-    nomenclature += ' Use: Module, Engine, Database, API, Interface, Server, Client (and similar logical units).'
-  }
-  if (archetype.includes('MECHANICAL')) {
-    styleGuide += ' Use Block Definition Diagrams or Internal Block Diagrams (SysML style) to show physical parts.'
-    nomenclature += ' Use: Housing, Shaft, Assembly, Coupler, Mechanism, Actuator (and similar physical components).'
-  }
-  if (archetype.includes('ELECTRICAL')) {
-    styleGuide += ' Use high-level circuit blocks or signal flow diagrams.'
-    nomenclature += ' Use: Circuit, Terminal, Bus, Transceiver, Node, Sensor (and similar electronic parts).'
+  
+  // Archetype enhancement ONLY for SYSTEM/PRODUCT patent types
+  if (patentTypePrimary === 'SYSTEM' || patentTypePrimary === 'PRODUCT' || !patentTypePrimary) {
+    const archetypeStyles = getArchetypeNomenclature(archetype)
+    styleGuide = archetypeStyles.styleGuide
+    nomenclature = archetypeStyles.nomenclature
+  } else if (patentTypePrimary === 'PROCESS') {
+    styleGuide = 'Use activity diagram syntax for method/process flows.'
+    nomenclature = 'Use: Step, Stage, Operation, Input, Output, Decision (and similar process terms).'
+  } else if (patentTypePrimary === 'COMPOSITION') {
+    styleGuide = 'Use structured constituent diagrams for formulation layouts.'
+    nomenclature = 'Use: Constituent, Agent, Carrier, Excipient, Component, Mixture (and similar composition terms).'
   }
   if (archetype.includes('BIO') || archetype.includes('CHEMICAL')) {
     styleGuide += ' Use process flows or reaction schemas.'
@@ -7971,7 +8574,7 @@ async function generateSketchSuggestionsInBackground(
  */
 function buildSketchSuggestionsPrompt(session: any, existingDiagrams?: string[], referenceFigures?: { title: string; description?: string }[], existingSketches?: string[]): string {
   const idea = session.ideaRecord?.normalizedData as any
-  const components = session.referenceMap?.components || []
+  const components = extractComponentsArray(session.referenceMap)
   
   // Extract invention type for intelligent decision making
   const inventionTypes = Array.isArray(idea?.inventionType) 
@@ -7988,9 +8591,9 @@ function buildSketchSuggestionsPrompt(session: any, existingDiagrams?: string[],
     idea?.outputs && `Outputs: ${idea.outputs}`
   ].filter(Boolean).join('\n')
 
-  // Build detailed component list with descriptions
+  // Build detailed component list with descriptions (supports all numbering styles: 100/200, S100/S200, (a)/(b))
   const componentList = components.map((c: any) => {
-    const parts = [`${c.numeral || '?'}: ${c.name}`]
+    const parts = [`${c.referenceLabel || c.numeral || '?'}: ${c.name}`]
     if (c.description) parts.push(`   Description: ${c.description}`)
     if (c.parent) parts.push(`   Parent: ${c.parent}`)
     return parts.join('\n')
@@ -8387,10 +8990,9 @@ async function handleTranslatePlantUML(
   const sourceLabel = DIAGRAM_LANGUAGE_LABELS[sourceLanguage] || sourceLanguage.toUpperCase()
   const targetLabel = DIAGRAM_LANGUAGE_LABELS[targetLanguage] || targetLanguage.toUpperCase()
 
-  // Get reference numerals for context
-  const componentsRaw = (session.referenceMap as any)?.components
-  const components = Array.isArray(componentsRaw) ? componentsRaw : []
-  const numeralsList = components.map((c: any) => `${c.numeral}: ${c.name}`).join('\n')
+  // Get reference labels for context (supports all numbering styles: 100/200, S100/S200, (a)/(b))
+  const components = extractComponentsArray(session.referenceMap)
+  const numeralsList = components.map((c: any) => `${c.referenceLabel || c.numeral || '?'}: ${c.name}`).join('\n')
 
   // Build translation prompt
   const prompt = `You are a technical translator specializing in patent documentation.
@@ -8763,10 +9365,9 @@ async function handleFixPlantUMLRender(user: any, patentId: string, data: any, r
   const title = figurePlan?.title || `Figure ${figureNo}`
   const description = (figurePlan as any)?.description || ''
 
-  // Get component numerals for context
-  const componentsRaw = (session.referenceMap as any)?.components
-  const components = Array.isArray(componentsRaw) ? componentsRaw : []
-  const numerals = components.map((c: any) => `${c.name} (${c.numeral || '?'})`)
+  // Get component reference labels for context (supports all numbering styles: 100/200, S100/S200, (a)/(b))
+  const components = extractComponentsArray(session.referenceMap)
+  const numerals = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`)
 
   // Try to repair the PlantUML code
   const repairResult = await attemptRepairPlantUml(
@@ -8833,9 +9434,8 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
   const diagramConfig = await getDiagramConfig(activeJurisdiction, user.id, sessionId)
   const jurisdictionInstructions = await buildJurisdictionDiagramInstructions(activeJurisdiction, diagramConfig, 'block')
 
-  const componentsRaw = (session.referenceMap as any)?.components
-  const components = Array.isArray(componentsRaw) ? componentsRaw : []
-  const numeralsPreview = components.map((c: any) => `${c.name} (${c.numeral || '?'})`).join(', ')
+  const components = extractComponentsArray(session.referenceMap)
+  const numeralsPreview = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
   const title = session!.figurePlans?.find((f: any) => f.figureNo === figureNo)?.title || `Figure ${figureNo}`
 
   // Determine Diagram Archetype
@@ -9130,9 +9730,8 @@ async function handleAddFigureLLM(user: any, patentId: string, data: any, reques
   const diagramConfig = await getDiagramConfig(activeJurisdiction, user.id, sessionId)
   const jurisdictionInstructions = await buildJurisdictionDiagramInstructions(activeJurisdiction, diagramConfig, 'block')
 
-  const componentsRaw2 = (session.referenceMap as any)?.components
-  const components2 = Array.isArray(componentsRaw2) ? componentsRaw2 : []
-  const numeralsPreview = components2.map((c: any) => `${c.name} (${c.numeral || '?'})`).join(', ')
+  const components2 = extractComponentsArray(session.referenceMap)
+  const numeralsPreview = components2.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
 
   // Determine Diagram Archetype
   const idea = session.ideaRecord?.normalizedData as any
@@ -9315,9 +9914,8 @@ async function handleAddFiguresLLM(user: any, patentId: string, data: any, reque
   const diagramConfig = await getDiagramConfig(activeJurisdiction, user.id, sessionId)
   const jurisdictionInstructions = await buildJurisdictionDiagramInstructions(activeJurisdiction, diagramConfig, 'block')
 
-  const componentsRaw3 = (session.referenceMap as any)?.components
-  const components3 = Array.isArray(componentsRaw3) ? componentsRaw3 : []
-  const numeralsPreview = components3.map((c: any) => `${c.name} (${c.numeral || '?'})`).join(', ')
+  const components3 = extractComponentsArray(session.referenceMap)
+  const numeralsPreview = components3.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
   const existingNames = session!.figurePlans?.map((f: any) => {
     const clean = sanitizeFigureTitleInput(f.title) || `Figure ${f.figureNo}`
     return `Fig.${f.figureNo}: ${clean}`
@@ -10632,7 +11230,7 @@ async function handleAIArrangeFigures(user: any, patentId: string, data: any, re
 
     // Build context for AI
     const ideaData = session.ideaRecord?.normalizedData as any
-    const components = (session.referenceMap as any)?.components || []
+    const components = extractComponentsArray(session.referenceMap)
 
     const figuresList = allFigures.map((f, i) => 
       `${i + 1}. [${f.type.toUpperCase()}] "${f.title}"${f.description ? ` - ${f.description.substring(0, 100)}` : ''}`
@@ -10643,7 +11241,7 @@ const prompt = `You are a patent documentation expert. Arrange these figures in 
 INVENTION CONTEXT:
 ${ideaData?.title ? `Title: ${ideaData.title}` : ''}
 ${ideaData?.problem ? `Problem: ${ideaData.problem}` : ''}
-${components.length > 0 ? `Key Components: ${components.slice(0, 5).map((c: any) => `${c.numeral}: ${c.name}`).join(', ')}` : ''}
+${components.length > 0 ? `Key Components: ${components.slice(0, 5).map((c: any) => `${c.referenceLabel || c.numeral || '?'}: ${c.name}`).join(', ')}` : ''}
 
 FIGURES TO ARRANGE:
 ${figuresList}
@@ -13293,12 +13891,11 @@ async function handleRunAIReview(
   console.log(`[AI Review] Figures: ${figures.length} diagrams (with PlantUML), ${sketches.length} sketches (metadata only)`)
 
   // Get components from reference map
-  const components = Array.isArray((session.referenceMap as any)?.components)
-    ? (session.referenceMap as any).components.map((c: any) => ({
-        name: c.name || '',
-        numeral: c.numeral || ''
-      }))
-    : []
+  const componentsRaw = extractComponentsArray(session.referenceMap)
+  const components = componentsRaw.map((c: any) => ({
+    name: c.name || '',
+    numeral: c.referenceLabel || c.numeral || '' // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+  }))
 
   // Get invention title
   // Prefer the AI-generated draft title; fall back to the original idea title
@@ -13548,7 +14145,8 @@ async function handleApplyAIFix(
   const components = Array.isArray(referenceMap.components) 
     ? referenceMap.components.map((c: any) => ({
         name: c.name || c.label || '',
-        numeral: String(c.numeral || c.referenceNumeral || '')
+        // Use referenceLabel (universal format: 100/200, S100/S200, (a)/(b)) with fallbacks
+        numeral: String(c.referenceLabel || c.numeral || c.referenceNumeral || '')
       })).filter((c: any) => c.name && c.numeral)
     : []
 

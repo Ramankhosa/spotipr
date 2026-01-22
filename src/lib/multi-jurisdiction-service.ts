@@ -1255,7 +1255,11 @@ export async function generateReferenceDraft(
   try {
     const idea = session.ideaRecord || {}
     const referenceMap = session.referenceMap || { components: [] }
-    const components = Array.isArray(referenceMap.components) ? referenceMap.components : []
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawComponents = referenceMap.components as any
+    const components = Array.isArray(rawComponents) 
+      ? rawComponents 
+      : (rawComponents?.components && Array.isArray(rawComponents.components) ? rawComponents.components : [])
     
     // ======================================================================
     // PRIOR ART EXTRACTION - Critical for background and crossReference sections
@@ -2002,7 +2006,11 @@ export async function generateReferenceDraftSection(
   try {
     const idea = session.ideaRecord || {}
     const referenceMap = session.referenceMap || { components: [] }
-    const components = Array.isArray(referenceMap.components) ? referenceMap.components : []
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawComponents2 = referenceMap.components as any
+    const components = Array.isArray(rawComponents2) 
+      ? rawComponents2 
+      : (rawComponents2?.components && Array.isArray(rawComponents2.components) ? rawComponents2.components : [])
     
     // ======================================================================
     // PRIOR ART EXTRACTION - Same logic as generateReferenceDraft

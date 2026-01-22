@@ -249,7 +249,7 @@ export async function GET(request: NextRequest) {
             }
           }
         },
-        orderBy: { createdAt: 'desc' } as any,
+        orderBy: { reservedAt: 'desc' },
         take: limit
       })
 

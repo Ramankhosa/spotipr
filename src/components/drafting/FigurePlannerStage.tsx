@@ -1474,7 +1474,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       if (mode === 'manual' && overrideCount > 0 && overrideList.length > 0) {
         // Build the same rich context and prompt as AI mode, but use user-provided instructions
         const components = session?.referenceMap?.components || []
-        const numeralsPreview = components.map((c: any) => `${c.name} (${c.numeral || '?'})`).join(', ')
+        // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+        const numeralsPreview = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
 
         const drawingRules = countryProfile?.rules?.drawings || {}
         const figureLabelFormat = countryProfile?.profileData?.diagrams?.figureLabelFormat || countryProfile?.profileData?.rules?.drawings?.figureLabelFormat || 'Fig. {number}'

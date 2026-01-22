@@ -153,11 +153,17 @@ export async function POST(
       : null
 
     // Build options from session
+    // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
+    const rawRefMapComponents = session?.referenceMap?.components as any
+    const refMapComponents = Array.isArray(rawRefMapComponents) 
+      ? rawRefMapComponents 
+      : (rawRefMapComponents?.components && Array.isArray(rawRefMapComponents.components) ? rawRefMapComponents.components : [])
+    
     const options = {
       userId: authResult.user.id,
       sessionId: session?.id,
-      referenceNumerals: session?.referenceMap?.components 
-        ? new Set((session.referenceMap.components as any[]).map(c => c.numeral as number))
+      referenceNumerals: refMapComponents.length > 0 
+        ? new Set(refMapComponents.map((c: any) => c.numeral as number))
         : undefined,
       figurePlans: session?.figurePlans?.map(f => ({ figureNo: f.figureNo }))
     }
