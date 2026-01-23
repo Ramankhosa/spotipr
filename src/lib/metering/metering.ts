@@ -190,17 +190,49 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           return { allowed: false, remaining: { monthly: 0, daily: 0 } }
         }
 
-        // Get plan feature limits
-        const planFeature = await prisma.planFeature.findFirst({
+        // Get the feature record to get featureId
+        const feature = await prisma.feature.findUnique({
+          where: { code: request.featureCode }
+        })
+
+        if (!feature) {
+          return { allowed: false, remaining: { monthly: 0, daily: 0 } }
+        }
+
+        // Check for tenant-specific override FIRST (Enterprise customers with negotiated limits)
+        // This allows Enterprise tenants to access features not in their base plan
+        const tenantOverride = await prisma.tenantFeatureOverride.findUnique({
           where: {
-            planId: tenantPlan.plan.id,
-            feature: { code: request.featureCode }
+            tenantId_featureId: {
+              tenantId: request.tenantId,
+              featureId: feature.id
+            }
           }
         })
 
-        if (!planFeature) {
+        // Check if override has expired
+        const overrideValid = tenantOverride && (!tenantOverride.expiresAt || tenantOverride.expiresAt > new Date())
+
+        // Get plan feature limits (may not exist if feature is not in plan)
+        const planFeature = await prisma.planFeature.findFirst({
+          where: {
+            planId: tenantPlan.plan.id,
+            featureId: feature.id
+          }
+        })
+
+        // If no plan feature AND no valid override, deny access
+        if (!planFeature && !overrideValid) {
           return { allowed: false, remaining: { monthly: 0, daily: 0 } }
         }
+
+        // Use override values if valid, otherwise use plan defaults (or 0 if no plan feature)
+        const monthlyQuota = (overrideValid && tenantOverride.monthlyQuota !== null) 
+          ? tenantOverride.monthlyQuota 
+          : (planFeature?.monthlyQuota || 0)
+        const dailyQuota = (overrideValid && tenantOverride.dailyQuota !== null)
+          ? tenantOverride.dailyQuota
+          : (planFeature?.dailyQuota || 0)
 
         // Get current usage
         const monthlyUsage = await this.getCurrentUsage(
@@ -216,8 +248,8 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         )
 
         // Calculate remaining
-        const monthlyRemaining = Math.max(0, (planFeature.monthlyQuota || 0) - monthlyUsage)
-        const dailyRemaining = Math.max(0, (planFeature.dailyQuota || 0) - dailyUsage)
+        const monthlyRemaining = Math.max(0, monthlyQuota - monthlyUsage)
+        const dailyRemaining = Math.max(0, dailyQuota - dailyUsage)
 
         // Check if quota exceeded
         const allowed = monthlyRemaining > 0 && dailyRemaining > 0

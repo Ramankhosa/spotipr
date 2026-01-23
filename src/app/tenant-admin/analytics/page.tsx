@@ -1,38 +1,51 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { UsageAnalytics } from '@/components/analytics/UsageAnalytics'
 import { useAuth } from '@/lib/auth-context'
-import { useEffect } from 'react'
 import { unstable_noStore as noStore } from 'next/cache'
+
+interface TenantStats {
+  userCount: number
+  activeUserCount: number
+  patentsDrafted: number
+  noveltySearches: number
+  ideationSessions: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  planTier: string | null
+}
 
 export default function TenantAdminAnalyticsPage() {
   // Prevent static generation
   noStore()
 
-  const { user, logout } = useAuth()
+  const { user } = useAuth()
   const [tenantInfo, setTenantInfo] = useState<{ id: string; name: string } | null>(null)
+  const [tenantStats, setTenantStats] = useState<TenantStats | null>(null)
+  const [statsLoading, setStatsLoading] = useState(true)
 
-  useEffect(() => {
-    if (!user) {
-      // Redirect to login if not authenticated
-      window.location.href = '/login'
-      return
-    }
-
-    if (!user.roles?.includes('ADMIN')) {
-      // Redirect to appropriate dashboard if not tenant admin
-      window.location.href = '/dashboard'
-      return
-    }
-
-    // Get tenant info from API
-    fetchTenantInfo()
-  }, [user])
-
-  const fetchTenantInfo = async () => {
+  const fetchTenantStats = useCallback(async () => {
     try {
-      // Get tenant info from API
+      setStatsLoading(true)
+      const response = await fetch('/api/tenant-admin/stats', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setTenantStats(data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch tenant stats:', error)
+    } finally {
+      setStatsLoading(false)
+    }
+  }, [])
+
+  const fetchTenantInfo = useCallback(async () => {
+    try {
       const response = await fetch('/api/user/profile', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
@@ -47,8 +60,30 @@ export default function TenantAdminAnalyticsPage() {
     } catch (error) {
       console.error('Failed to fetch tenant info:', error)
     }
-  }
+  }, [])
 
+  // Check if user is tenant admin (OWNER or ADMIN role)
+  const isTenantAdmin = user?.roles?.includes('ADMIN') || user?.roles?.includes('OWNER')
+
+  useEffect(() => {
+    if (!user) {
+      // Redirect to login if not authenticated
+      window.location.href = '/login'
+      return
+    }
+
+    if (!isTenantAdmin) {
+      // Redirect to appropriate dashboard if not tenant admin
+      window.location.href = '/dashboard'
+      return
+    }
+
+    // Get tenant info and stats
+    fetchTenantInfo()
+    fetchTenantStats()
+  }, [user, isTenantAdmin, fetchTenantStats, fetchTenantInfo])
+
+  // Show loading state while checking auth
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -57,7 +92,8 @@ export default function TenantAdminAnalyticsPage() {
     )
   }
 
-  if (!user.roles?.includes('ADMIN')) {
+  // Show access denied if not tenant admin (will redirect in useEffect)
+  if (!isTenantAdmin) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-red-600">Access denied. Tenant admin privileges required.</div>
@@ -76,36 +112,54 @@ export default function TenantAdminAnalyticsPage() {
       </div>
 
       {/* Tenant Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
         <div className="bg-white p-6 rounded-lg shadow border">
           <h3 className="text-sm font-medium text-gray-600 mb-2">Team Members</h3>
-          <div className="text-2xl font-bold text-gray-900">24</div>
+          <div className="text-2xl font-bold text-gray-900">
+            {statsLoading ? '...' : tenantStats?.activeUserCount || 0}
+          </div>
           <p className="text-sm text-gray-500 mt-1">
-            Active users in tenant
+            {tenantStats ? `${tenantStats.userCount} total users` : 'Active users in tenant'}
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow border">
-          <h3 className="text-sm font-medium text-gray-600 mb-2">Current Plan</h3>
-          <div className="text-2xl font-bold text-gray-900">PRO</div>
+          <h3 className="text-sm font-medium text-gray-600 mb-2">Patents Drafted</h3>
+          <div className="text-2xl font-bold text-purple-600">
+            {statsLoading ? '...' : tenantStats?.patentsDrafted || 0}
+          </div>
           <p className="text-sm text-gray-500 mt-1">
-            Monthly token limit: 10,000
+            Total patents created
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow border">
-          <h3 className="text-sm font-medium text-gray-600 mb-2">Plan Expiry</h3>
-          <div className="text-2xl font-bold text-gray-900">45 days</div>
+          <h3 className="text-sm font-medium text-gray-600 mb-2">Novelty Searches</h3>
+          <div className="text-2xl font-bold text-indigo-600">
+            {statsLoading ? '...' : tenantStats?.noveltySearches || 0}
+          </div>
           <p className="text-sm text-gray-500 mt-1">
-            Auto-renews monthly
+            Completed searches
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow border">
-          <h3 className="text-sm font-medium text-gray-600 mb-2">Cost This Month</h3>
-          <div className="text-2xl font-bold text-gray-900">$147.23</div>
+          <h3 className="text-sm font-medium text-gray-600 mb-2">Ideation Sessions</h3>
+          <div className="text-2xl font-bold text-emerald-600">
+            {statsLoading ? '...' : tenantStats?.ideationSessions || 0}
+          </div>
           <p className="text-sm text-gray-500 mt-1">
-            73% of budget used
+            Total idea explorations
+          </p>
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow border">
+          <h3 className="text-sm font-medium text-gray-600 mb-2">LLM Tokens Used</h3>
+          <div className="text-2xl font-bold text-gray-900">
+            {statsLoading ? '...' : ((tenantStats?.totalInputTokens || 0) + (tenantStats?.totalOutputTokens || 0)).toLocaleString()}
+          </div>
+          <p className="text-sm text-gray-500 mt-1">
+            {tenantStats?.planTier ? `Plan: ${tenantStats.planTier}` : 'Input + Output tokens'}
           </p>
         </div>
       </div>

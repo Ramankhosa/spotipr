@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useTenantView } from '@/lib/tenant-view-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
@@ -10,6 +11,7 @@ import { Settings, FileText } from 'lucide-react'
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
   const { viewMode, setViewMode } = useTenantView()
+  const router = useRouter()
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -274,6 +276,17 @@ export default function Header() {
                         <div className="px-3 py-1 text-xs font-semibold text-gpt-gray-500 uppercase">
                           Organization Admin
                         </div>
+                        <button
+                          onClick={() => {
+                            setViewMode('admin')
+                            closeMenu()
+                            router.push('/dashboard')
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                        >
+                          <span>🔑</span>
+                          <span>ATI Tokens</span>
+                        </button>
                         <Link
                           href="/tenant-admin/users"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"

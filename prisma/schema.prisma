@@ -90,6 +90,9 @@ model Tenant {
   // Idea Bank relations
   ideaBankIdeas IdeaBankIdea[]
 
+  // Tenant-specific feature overrides (for Enterprise customers)
+  featureOverrides TenantFeatureOverride[]
+
   // Style Profile relations
   styleProfiles     StyleProfile[]
   styleTrainingJobs StyleTrainingJob[]
@@ -656,10 +659,11 @@ model Feature {
   name String
   unit String // e.g., "calls", "tokens"
 
-  planFeatures PlanFeature[]
-  linkedTasks  Task[]
-  usageMeters  UsageMeter[]
-  usageLogs    UsageLog[]
+  planFeatures    PlanFeature[]
+  tenantOverrides TenantFeatureOverride[]
+  linkedTasks     Task[]
+  usageMeters     UsageMeter[]
+  usageLogs       UsageLog[]
 
   @@map("features")
 }
@@ -682,6 +686,33 @@ model PlanFeature {
 
   @@unique([planId, featureId])
   @@map("plan_features")
+}
+
+// Tenant-specific feature quota overrides (for Enterprise customers with negotiated limits)
+// Super Admin can set custom quotas per tenant that override the plan defaults
+model TenantFeatureOverride {
+  id        String @id @default(cuid())
+  tenantId  String
+  featureId String
+
+  // Custom quotas (NULL = use plan default)
+  monthlyQuota      Int? // Custom monthly completion limit
+  dailyQuota        Int? // Custom daily completion limit
+  monthlyTokenLimit Int? // Custom monthly token limit
+  dailyTokenLimit   Int? // Custom daily token limit
+
+  // Metadata
+  reason    String?  // Business reason for override (e.g., "Enterprise negotiation Q1 2026")
+  createdBy String?  // Super admin who created the override
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expiresAt DateTime? // Optional expiration for time-limited overrides
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureId], references: [id])
+
+  @@unique([tenantId, featureId])
+  @@map("tenant_feature_overrides")
 }
 
 model Task {

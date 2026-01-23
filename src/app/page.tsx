@@ -1,6 +1,7 @@
 import HeroSection from '@/components/home/HeroSection'
 import FeaturesSection from '@/components/home/FeaturesSection'
 import HowItWorksSection from '@/components/home/HowItWorksSection'
+import PricingSection from '@/components/home/PricingSection'
 import TrustSection from '@/components/home/TrustSection'
 import CTAFooter from '@/components/home/CTAFooter'
 import MinimalFooter from '@/components/home/MinimalFooter'
@@ -11,6 +12,7 @@ export default function HomePage() {
       <HeroSection />
       <FeaturesSection />
       <HowItWorksSection />
+      <PricingSection />
       <TrustSection />
       <CTAFooter />
       <MinimalFooter />
