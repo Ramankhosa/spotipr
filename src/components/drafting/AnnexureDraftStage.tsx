@@ -1707,6 +1707,17 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   // Add Component Numbers to Claims
   const [addingComponentNumbers, setAddingComponentNumbers] = useState(false)
   const [componentNumbersAdded, setComponentNumbersAdded] = useState(false)
+  // Helper: safely extract components array from referenceMap (supports nested format)
+  const extractComponentsFromReferenceMap = (referenceMap: any): any[] => {
+    if (!referenceMap?.components) return []
+    if (referenceMap.components.components && Array.isArray(referenceMap.components.components)) {
+      return referenceMap.components.components
+    }
+    if (Array.isArray(referenceMap.components)) {
+      return referenceMap.components
+    }
+    return []
+  }
 
   // Confirmation modal state for clear/delete actions
   const [confirmationModal, setConfirmationModal] = useState<{
@@ -2789,8 +2800,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const handleAddComponentNumbersToClaims = async () => {
     if (!session?.id || addingComponentNumbers) return
     
-    // Check if component numbers are available
-    const components = (session as any)?.referenceMap?.components || []
+    // Check if component numbers are available (handles nested referenceMap storage)
+    const components = extractComponentsFromReferenceMap((session as any)?.referenceMap)
     if (components.length === 0) {
       alert('No component numbers available. Please finalize components in the Component Planner stage first.')
       return
@@ -4494,7 +4505,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               1. We're in the claims section
                               2. Claims have actual content (not just empty string)
                               3. Components are available from Component Planner stage */}
-                          {keyName === 'claims' && generated?.claims?.trim() && (session as any)?.referenceMap?.components?.length > 0 && (
+                            {keyName === 'claims' && generated?.claims?.trim() && extractComponentsFromReferenceMap((session as any)?.referenceMap).length > 0 && (
                             <div className="mb-4 p-3 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg">
                               <div className="flex items-center justify-between gap-4">
                                 <div className="flex items-center gap-2">
@@ -4508,7 +4519,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                     <p className="text-xs text-violet-600">
                                       {componentNumbersAdded 
                                         ? '✓ Component numbers have been added to claims' 
-                                        : `Insert reference numerals from ${((session as any)?.referenceMap?.components || []).length} components`
+                                        : `Insert reference numerals from ${extractComponentsFromReferenceMap((session as any)?.referenceMap).length} components`
                                       }
                                     </p>
                                   </div>

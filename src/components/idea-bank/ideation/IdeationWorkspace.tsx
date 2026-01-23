@@ -45,6 +45,8 @@ import {
   ChevronDown,
   HelpCircle,
   LayoutGrid,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -256,6 +258,10 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
 
   // Combine tray visibility
   const [showTray, setShowTray] = useState(false)
+
+  // Workspace HUD visibility
+  const [showMindMapPanel, setShowMindMapPanel] = useState(true)
+  const [showSelectionPanel, setShowSelectionPanel] = useState(true)
   
   // Streaming ideas for progressive display during generation
   const [streamingIdeas, setStreamingIdeas] = useState<StreamingIdea[]>([])
@@ -2145,157 +2151,218 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
           />
 
           {/* Compact Control Panel */}
-          <Panel position="top-left" className="m-3">
-            <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-slate-200 shadow-lg p-3 w-64">
-              {/* Session Info */}
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-white" />
+          {showMindMapPanel ? (
+            <Panel position="top-left" className="m-3">
+              <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-slate-200 shadow-lg p-3 w-64">
+                {/* Session Info */}
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
+                      <Sparkles className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <span className="text-sm font-semibold text-slate-700">Mind Map</span>
+                      <p className="text-[10px] text-slate-400">{nodes.length} nodes</p>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-sm font-semibold text-slate-700">Mind Map</span>
-                    <p className="text-[10px] text-slate-400">{nodes.length} nodes</p>
-                  </div>
+                  <button
+                    onClick={() => setShowMindMapPanel(false)}
+                    className="text-[10px] text-slate-400 hover:text-slate-600 flex items-center gap-1"
+                    title="Hide toolbar"
+                  >
+                    <EyeOff className="w-3 h-3" />
+                    Hide
+                  </button>
                 </div>
-              </div>
 
-              {/* Status indicator - NO stage names per SRS Section 4.1 */}
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 mb-2">
-                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                <span className="text-sm font-medium text-green-700">
-                  {ideaFrames.length > 0 ? 'Ideas generated' : 'Ready to explore'}
-                </span>
-              </div>
-
-              {/* Invention Archetype (from dimension discovery) */}
-              {currentSession?.primaryDimensions && (
-                <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
-                    {(currentSession as any).inventionArchetype?.replace(/_/g, ' ') || 'Custom Invention'}
+                {/* Status indicator - NO stage names per SRS Section 4.1 */}
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 mb-2">
+                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                  <span className="text-sm font-medium text-green-700">
+                    {ideaFrames.length > 0 ? 'Ideas generated' : 'Ready to explore'}
                   </span>
                 </div>
-              )}
 
-              {/* Quick Actions */}
-              <div className="flex gap-2">
+                {/* Invention Archetype (from dimension discovery) */}
+                {currentSession?.primaryDimensions && (
+                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
+                      {(currentSession as any).inventionArchetype?.replace(/_/g, ' ') || 'Custom Invention'}
+                    </span>
+                  </div>
+                )}
+
+                {/* Quick Actions */}
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleEditSeed}
+                    className="flex-1 text-xs h-8 border-violet-200 text-violet-700 hover:bg-violet-50"
+                  >
+                    <ChevronLeft className="w-3 h-3 mr-1" />
+                    Edit Input
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReset}
+                    className="flex-1 text-xs h-8"
+                  >
+                    <RefreshCw className="w-3 h-3 mr-1" />
+                    New
+                  </Button>
+                </div>
+
+                {/* Auto-Layout Button */}
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleEditSeed}
-                  className="flex-1 text-xs h-8 border-violet-200 text-violet-700 hover:bg-violet-50"
+                  onClick={() => {
+                    autoLayoutNodes()
+                    // Fit view after layout with a delay
+                    setTimeout(() => {
+                      if (reactFlowInstance) {
+                        reactFlowInstance.fitView({ padding: 0.2, duration: 500 })
+                      }
+                    }, 100)
+                  }}
+                  className="w-full text-xs h-8 mt-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
                 >
-                  <ChevronLeft className="w-3 h-3 mr-1" />
-                  Edit Input
+                  <LayoutGrid className="w-3 h-3 mr-1" />
+                  Auto-Layout (Fix Spacing)
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleReset}
-                  className="flex-1 text-xs h-8"
-                >
-                  <RefreshCw className="w-3 h-3 mr-1" />
-                  New
-                </Button>
+
+                {/* Tips */}
+                <div className="mt-2 p-2 bg-slate-50 rounded-lg text-[10px] text-slate-500">
+                  💡 Click to select • Double-click to expand • Press 'l' to auto-layout • Press 'i' for ideas
+                </div>
               </div>
-
-              {/* Auto-Layout Button */}
+            </Panel>
+          ) : (
+            <Panel position="top-left" className="m-3">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  autoLayoutNodes()
-                  // Fit view after layout with a delay
-                  setTimeout(() => {
-                    if (reactFlowInstance) {
-                      reactFlowInstance.fitView({ padding: 0.2, duration: 500 })
-                    }
-                  }, 100)
-                }}
-                className="w-full text-xs h-8 mt-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => setShowMindMapPanel(true)}
+                className="text-xs h-8 bg-white/90"
               >
-                <LayoutGrid className="w-3 h-3 mr-1" />
-                Auto-Layout (Fix Spacing)
+                <Eye className="w-3 h-3 mr-1" />
+                Show Mind Map Panel
               </Button>
-
-              {/* Tips */}
-              <div className="mt-2 p-2 bg-slate-50 rounded-lg text-[10px] text-slate-500">
-                💡 Click to select • Double-click to expand • Press 'l' to auto-layout • Press 'i' for ideas
-              </div>
-            </div>
-          </Panel>
+            </Panel>
+          )}
 
           {/* Selection Panel - Compact floating widget */}
           {(stage === 'exploring' || stage === 'generating' || stage === 'reviewing') && (
-            <Panel position="top-right" className="m-3">
-              <div className={`
-                bg-white/95 backdrop-blur-sm rounded-xl border shadow-lg p-3 w-48
-                transition-all duration-200
-                ${selectedNodes.size > 0 ? 'border-violet-400' : 'border-slate-200'}
-              `}>
-                {/* Selection Count */}
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-slate-700">
-                    {selectedNodes.size > 0 ? `${selectedNodes.size} Selected` : 'No Selection'}
-                  </span>
+            showSelectionPanel ? (
+              <Panel position="top-right" className="m-3">
+                <div className={`
+                  bg-white/95 backdrop-blur-sm rounded-xl border shadow-lg p-3 w-48
+                  transition-all duration-200
+                  ${selectedNodes.size > 0 ? 'border-violet-400' : 'border-slate-200'}
+                `}>
+                  {/* Selection Count */}
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-slate-700">
+                      {selectedNodes.size > 0 ? `${selectedNodes.size} Selected` : 'No Selection'}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {selectedNodes.size > 0 && (
+                        <button
+                          onClick={() => setSelectedNodes(new Set())}
+                          className="text-[10px] text-slate-400 hover:text-slate-600"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setShowSelectionPanel(false)}
+                        className="text-[10px] text-slate-400 hover:text-slate-600 flex items-center gap-1"
+                        title="Hide selection panel"
+                      >
+                        <EyeOff className="w-3 h-3" />
+                        Hide
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Selected Items Preview */}
                   {selectedNodes.size > 0 && (
-                    <button
-                      onClick={() => setSelectedNodes(new Set())}
-                      className="text-[10px] text-slate-400 hover:text-slate-600"
+                    <div className="flex flex-wrap gap-1 mb-2 max-h-16 overflow-y-auto">
+                      {Array.from(selectedNodes).slice(0, 4).map(nodeId => {
+                        const node = nodes.find(n => n.id === nodeId)
+                        return (
+                          <span
+                            key={nodeId}
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 truncate max-w-[70px]"
+                          >
+                            {(node?.data as any)?.title || nodeId}
+                          </span>
+                        )
+                      })}
+                      {selectedNodes.size > 4 && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                          +{selectedNodes.size - 4}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Action Button */}
+                  <Button
+                    onClick={() => setShowTray(true)}
+                    disabled={selectedNodes.size === 0}
+                    className={`w-full h-8 text-xs ${
+                      selectedNodes.size > 0
+                        ? 'bg-violet-500 hover:bg-violet-600 text-white'
+                        : 'bg-slate-100 text-slate-400'
+                    }`}
+                  >
+                    <Sparkles className="w-3 h-3 mr-1" />
+                    {selectedNodes.size > 0 ? 'Generate Ideas' : 'Select Dimensions'}
+                  </Button>
+
+                  {/* Reopen Ideas Panel Button */}
+                  {ideaFrames.length > 0 && !showIdeaPanel && (
+                    <Button
+                      onClick={() => setShowIdeaPanel(true)}
+                      variant="outline"
+                      className="w-full h-8 text-xs mt-2 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300"
                     >
-                      Clear
-                    </button>
+                      <Lightbulb className="w-3 h-3 mr-1 text-emerald-600" />
+                      View Ideas ({ideaFrames.length})
+                    </Button>
                   )}
                 </div>
-                
-                {/* Selected Items Preview */}
-                {selectedNodes.size > 0 && (
-                  <div className="flex flex-wrap gap-1 mb-2 max-h-16 overflow-y-auto">
-                    {Array.from(selectedNodes).slice(0, 4).map(nodeId => {
-                      const node = nodes.find(n => n.id === nodeId)
-                      return (
-                        <span
-                          key={nodeId}
-                          className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 truncate max-w-[70px]"
-                        >
-                          {(node?.data as any)?.title || nodeId}
-                        </span>
-                      )
-                    })}
-                    {selectedNodes.size > 4 && (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
-                        +{selectedNodes.size - 4}
-                      </span>
-                    )}
-                  </div>
-                )}
-                
-                {/* Action Button */}
+              </Panel>
+            ) : (
+              <Panel position="top-right" className="m-3">
                 <Button
-                  onClick={() => setShowTray(true)}
-                  disabled={selectedNodes.size === 0}
-                  className={`w-full h-8 text-xs ${
-                    selectedNodes.size > 0
-                      ? 'bg-violet-500 hover:bg-violet-600 text-white'
-                      : 'bg-slate-100 text-slate-400'
-                  }`}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSelectionPanel(true)}
+                  className="text-xs h-8 bg-white/90"
                 >
-                  <Sparkles className="w-3 h-3 mr-1" />
-                  {selectedNodes.size > 0 ? 'Generate Ideas' : 'Select Dimensions'}
+                  <Eye className="w-3 h-3 mr-1" />
+                  Show Selection Panel
                 </Button>
+              </Panel>
+            )
+          )}
 
-                {/* Reopen Ideas Panel Button */}
-                {ideaFrames.length > 0 && !showIdeaPanel && (
-                  <Button
-                    onClick={() => setShowIdeaPanel(true)}
-                    variant="outline"
-                    className="w-full h-8 text-xs mt-2 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300"
-                  >
-                    <Lightbulb className="w-3 h-3 mr-1 text-emerald-600" />
-                    View Ideas ({ideaFrames.length})
-                  </Button>
-                )}
-              </div>
+          {/* Quick toggle to reopen Idea Recipe when hidden */}
+          {!showTray && (stage === 'exploring' || stage === 'generating' || stage === 'reviewing') && (
+            <Panel position="bottom-right" className="m-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowTray(true)}
+                className="text-xs h-8 bg-white/90"
+              >
+                <Eye className="w-3 h-3 mr-1" />
+                Show Idea Recipe
+              </Button>
             </Panel>
           )}
         </ReactFlow>
@@ -2354,6 +2421,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
               }}
               loading={loading}
               mechanismWarning={mechanismWarning}
+              onClose={() => setShowTray(false)}
             />
           </motion.div>
         )}
@@ -2436,4 +2504,3 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     </div>
   )
 }
-

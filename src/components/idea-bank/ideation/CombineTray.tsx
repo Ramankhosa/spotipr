@@ -21,6 +21,7 @@ import {
   Edit2,
   MessageSquare,
   Brain,
+  EyeOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -44,6 +45,7 @@ interface CombineTrayProps {
   loading: boolean
   // Single mechanism validation warning (SRS Section 3.6)
   mechanismWarning?: string | null
+  onClose?: () => void
 }
 
 type RecipeIntent = 'DIVERGENT' | 'CONVERGENT' | 'RISK_REDUCTION' | 'COST_REDUCTION'
@@ -87,6 +89,7 @@ export default function CombineTray({
   onRemoveNode,
   loading,
   mechanismWarning,
+  onClose,
 }: CombineTrayProps) {
   const [ideaCount, setIdeaCount] = useState(3)
   const [intent, setIntent] = useState<RecipeIntent>('DIVERGENT')
@@ -259,22 +262,34 @@ export default function CombineTray({
             <Brain className="w-4 h-4 text-blue-500" />
             Idea Recipe
           </h3>
-          {totalDimensionsSelected > 0 && (
-            <button
-              onClick={() => {
-                onClear()
-                setBuckets([])
-                setUseBuckets(false)
-                setBucketCounter(1)
-                setUserGuidance('')
-                setShowGuidanceInput(false)
-              }}
-              className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1"
-            >
-              <X className="w-3 h-3" />
-              Clear
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1"
+                title="Hide recipe panel"
+              >
+                <EyeOff className="w-3 h-3" />
+                Hide
+              </button>
+            )}
+            {totalDimensionsSelected > 0 && (
+              <button
+                onClick={() => {
+                  onClear()
+                  setBuckets([])
+                  setUseBuckets(false)
+                  setBucketCounter(1)
+                  setUserGuidance('')
+                  setShowGuidanceInput(false)
+                }}
+                className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1"
+              >
+                <X className="w-3 h-3" />
+                Clear
+              </button>
+            )}
+          </div>
         </div>
         <p className="text-xs text-slate-500">
           {totalDimensionsSelected} dimension{totalDimensionsSelected !== 1 ? 's' : ''} selected

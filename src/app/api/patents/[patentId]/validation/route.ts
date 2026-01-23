@@ -159,12 +159,17 @@ export async function POST(
       ? rawRefMapComponents 
       : (rawRefMapComponents?.components && Array.isArray(rawRefMapComponents.components) ? rawRefMapComponents.components : [])
     
+    const referenceNumerals: number[] = refMapComponents.length > 0
+      ? refMapComponents.map((c: any): number => {
+          const num = Number(c.numeral);
+          return isNaN(num) ? 0 : num;
+        })
+      : []
+
     const options = {
       userId: authResult.user.id,
       sessionId: session?.id,
-      referenceNumerals: refMapComponents.length > 0 
-        ? new Set(refMapComponents.map((c: any) => c.numeral as number))
-        : undefined,
+      referenceNumerals: referenceNumerals.length > 0 ? new Set<number>(referenceNumerals) : undefined,
       figurePlans: session?.figurePlans?.map(f => ({ figureNo: f.figureNo }))
     }
 

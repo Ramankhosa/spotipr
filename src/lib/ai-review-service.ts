@@ -9,6 +9,7 @@
  */
 
 import { llmGateway } from '@/lib/metering'
+import type { NumberingStyle, PatentTypePrimary } from './drafting-service'
 import crypto from 'crypto'
 
 // ============================================================================
@@ -95,6 +96,8 @@ export interface ReviewContext {
     severity: string
     validationLogic?: string
   }>
+  patentTypePrimary?: PatentTypePrimary | null
+  numberingStyle?: NumberingStyle | string
 }
 
 // ============================================================================
@@ -118,6 +121,51 @@ const SECTION_LABELS: Record<string, string> = {
   listOfNumerals: 'List of Reference Numerals'
 }
 
+const NUMBERING_STYLE_NOTES: Record<string, string> = {
+  NUMERIC_BUCKET: 'System/Product numbering: use 100/200/300 buckets; each component keeps its assigned numeral.',
+  STEP_LABEL: 'Process numbering: use step labels (S100, S200, S300) in sequence; never switch to plain numerals.',
+  CONSTITUENT_LABEL: 'Composition numbering: use constituent labels ((a), (b), (c)) for formulation elements; do not use numeric buckets.'
+}
+
+function describeNumberingStyle(style?: NumberingStyle | string): string {
+  if (!style) return 'Not specified'
+  const key = String(style).toUpperCase()
+  return NUMBERING_STYLE_NOTES[key] || key
+}
+
+function normalizeComponentOrder(label?: string): number {
+  const raw = (label || '').trim()
+  if (!raw) return Number.POSITIVE_INFINITY
+  const upper = raw.toUpperCase()
+  // Step labels: S100, S200
+  if (/^S\d+/.test(upper)) {
+    return parseInt(upper.replace(/^S/, ''), 10)
+  }
+  // Constituent labels: (a), (b)
+  const constituent = raw.match(/^\(([A-Za-z])\)$/)
+  if (constituent && constituent[1]) {
+    return constituent[1].toLowerCase().charCodeAt(0) - 96 // a -> 1
+  }
+  const numeric = parseInt(raw, 10)
+  return Number.isNaN(numeric) ? Number.POSITIVE_INFINITY : numeric
+}
+
+function sortComponentsForStyle(
+  components: Array<{ name: string; numeral: string }>,
+  numberingStyle?: NumberingStyle | string
+): Array<{ name: string; numeral: string }> {
+  const preferred = String(numberingStyle || '').toUpperCase()
+  return [...components].sort((a, b) => {
+    const aOrder = normalizeComponentOrder(a.numeral)
+    const bOrder = normalizeComponentOrder(b.numeral)
+    if (aOrder !== bOrder) return aOrder - bOrder
+    if (preferred === 'CONSTITUENT_LABEL') {
+      return a.numeral.localeCompare(b.numeral)
+    }
+    return a.name.localeCompare(b.name)
+  })
+}
+
 // ============================================================================
 // Main Review Function
 // ============================================================================
@@ -132,18 +180,20 @@ export async function runAIReview(
   requestHeaders?: Record<string, string>
 ): Promise<AIReviewResult> {
   try {
-    const { draft, figures, jurisdiction, inventionTitle, components, sketches, sectionLimits, crossValidations } = context
-    
+    const { draft, figures, jurisdiction, inventionTitle, components, sketches, sectionLimits, crossValidations, numberingStyle, patentTypePrimary } = context
+
     // Build comprehensive review prompt with all context
     const prompt = buildReviewPrompt(
-      draft, 
-      figures, 
-      jurisdiction, 
-      inventionTitle, 
+      draft,
+      figures,
+      jurisdiction,
+      inventionTitle,
       components,
       sketches,
       sectionLimits,
-      crossValidations
+      crossValidations,
+      numberingStyle,
+      patentTypePrimary
     )
     
     // Use LLM for review - uses admin-configured model via DRAFT_REVIEW stage
@@ -228,7 +278,9 @@ function buildReviewPrompt(
   components?: Array<{ name: string; numeral: string }>,
   sketches?: Array<{ figureNo: number; title: string; description: string; isIncluded: boolean }>,
   sectionLimits?: Array<{ sectionKey: string; maxWords?: number; minWords?: number; recommendedWords?: number; maxChars?: number; maxCount?: number; maxIndependent?: number; wordLimitMessage?: string; charLimitMessage?: string; legalReference?: string }>,
-  crossValidations?: Array<{ ruleKey: string; sourceSection: string; targetSection: string; ruleName: string; description: string; severity: string; validationLogic?: string }>
+  crossValidations?: Array<{ ruleKey: string; sourceSection: string; targetSection: string; ruleName: string; description: string; severity: string; validationLogic?: string }>,
+  numberingStyle?: NumberingStyle | string,
+  patentTypePrimary?: PatentTypePrimary | string
 ): string {
   // Build sections text - increased limit to 15000 chars per section for comprehensive review
   // Critical sections like claims and detailedDescription need full content for proper analysis
@@ -345,12 +397,18 @@ ${validationDetails}
 set sectionKey to the SECTION THAT NEEDS THE FIX (usually description), not the source section (claims).`
   }
 
-  // Build components reference with grouping
-  let componentsText = 'No components defined'
+  // Build components reference with grouping + numbering style guidance
+  const componentsLines: string[] = []
+  if (patentTypePrimary) componentsLines.push(`Patent Type: ${patentTypePrimary}`)
+  if (numberingStyle) componentsLines.push(`Reference Numbering Style: ${describeNumberingStyle(numberingStyle)}`)
   if (components && components.length > 0) {
-    const sorted = [...components].sort((a, b) => parseInt(a.numeral) - parseInt(b.numeral))
-    componentsText = sorted.map(c => `- ${c.name} (${c.numeral})`).join('\n')
+    const sorted = sortComponentsForStyle(components, numberingStyle)
+    componentsLines.push('Declared Components:')
+    componentsLines.push(...sorted.map(c => `- ${c.name} (${c.numeral})`))
+  } else {
+    componentsLines.push('Declared Components: None provided')
   }
+  const componentsText = componentsLines.join('\n')
 
   // Special handling for REFERENCE (multi-jurisdiction base draft)
   const isReferenceDraft = jurisdiction.toUpperCase() === 'REFERENCE'
@@ -410,37 +468,43 @@ Analyze the draft for the following issues:
    - Check if components shown in PlantUML match declared components above
    - Identify any diagram elements not explained in Detailed Description
    - Verify figure captions accurately describe what PlantUML shows
+   - Respect the declared numbering style for the patent type (NUMERIC_BUCKET: 100/200/300; STEP_LABEL: S100/S200; CONSTITUENT_LABEL: (a)/(b)). Flag any mixing or missing labels.
 
 3. **COMPLETENESS CHECKS**
    - Are all declared components (above) mentioned and explained?
    - Does summary accurately reflect the claims?
    - Is the abstract within typical limits (150 words)?
-   - Are reference numerals used consistently throughout?
+   - Are reference numerals used consistently and in the declared style?
 
-4. **LEGAL/FORMAL ISSUES**
+4. **PATENT-TYPE APPROPRIATENESS**
+   - SYSTEM/PRODUCT: Confirm structural components and interactions are covered and numbered (100/200/300 style).
+   - PROCESS: Confirm step order and dependencies use S-prefixed labels and are fully described.
+   - COMPOSITION: Confirm constituents are labeled (a)/(b)/(c) and composition ratios/roles are covered without mixing numeric labels.
+
+5. **LEGAL/FORMAL ISSUES**
    - Claims properly numbered and dependent claims reference correctly
    - Independent claims are self-contained
    - No indefinite language without proper basis
    - Proper antecedent basis in claims
 
-5. **CLARITY & QUALITY**
+6. **CLARITY & QUALITY**
    - Ambiguous or unclear passages
    - Redundant content between sections
    - Technical accuracy concerns
 ${sectionLimits && sectionLimits.length > 0 ? `
-6. **SECTION LENGTH LIMITS** (CRITICAL - Check against limits above)
+7. **SECTION LENGTH LIMITS** (CRITICAL - Check against limits above)
    - Review each section against the jurisdiction-specific limits provided
    - Flag sections exceeding word/character/claim count limits as ERRORS
    - Note: For claims, check both total count AND independent claim count
 ` : ''}
 ${crossValidations && crossValidations.length > 0 ? `
-7. **CROSS-SECTION CONSISTENCY** (Check rules above)
+8. **CROSS-SECTION CONSISTENCY** (Check rules above)
    - Apply each cross-validation rule listed above
    - For issues like "claim feature missing in description", set sectionKey to 'detailedDescription' (the fix target), NOT 'claims' (the source)
    - The fixPrompt should instruct how to add/modify the TARGET section
 ` : ''}
 ${isReferenceDraft ? `
-8. **REFERENCE DRAFT - TRANSLATION READINESS** (CRITICAL for multi-jurisdiction)
+9. **REFERENCE DRAFT - TRANSLATION READINESS** (CRITICAL for multi-jurisdiction)
    - **Language Neutrality:** Flag any country-specific legal phrases, idioms, or terms that won't translate well
    - **Universal Terminology:** Ensure technical terms are internationally recognized (not US/UK colloquialisms)
    - **Completeness for All Jurisdictions:** Check if all superset sections are properly populated
@@ -973,6 +1037,7 @@ export interface FixContext {
   relatedContent?: Record<string, string>
   figures?: Array<{ figureNo: number; title: string; plantuml: string }>
   components?: Array<{ name: string; numeral: string }>
+  numberingStyle?: NumberingStyle | string
 }
 
 /**
@@ -1006,10 +1071,8 @@ export function buildFixPrompt(
   // Add components reference if available
   if (context?.components && context.components.length > 0) {
     contextBlock += '\n\n═══ DECLARED COMPONENTS ═══\n'
-    contextBlock += context.components
-      .sort((a, b) => parseInt(a.numeral) - parseInt(b.numeral))
-      .map(c => `- ${c.name} (${c.numeral})`)
-      .join('\n')
+    const sorted = sortComponentsForStyle(context.components, context.numberingStyle)
+    contextBlock += sorted.map(c => `- ${c.name} (${c.numeral})`).join('\n')
   }
 
   return `You are a patent text editor performing SURGICAL, MINIMAL revisions. Your task is to fix ONE specific issue while keeping EVERYTHING ELSE exactly as-is.

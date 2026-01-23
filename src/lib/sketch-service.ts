@@ -66,6 +66,8 @@ export interface SketchContextBundle {
   referenceNumerals: Record<string, string>
   inventionType: string
   language: string // Primary language for labels/annotations
+  patentTypePrimary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null // Patent type for numbering style
+  numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL' // Derived numbering style
 }
 
 export interface SketchGenerationResult {
@@ -184,6 +186,16 @@ export async function buildSketchContextBundle(
   flags: SketchContextFlags = { useIdeaSummary: true, useClaims: true, useDiagrams: true, useComponents: true },
   requestedLanguage?: string
 ): Promise<SketchContextBundle> {
+  // Helper to derive numbering style from patent type
+  const deriveNumberingStyle = (patentType: string | null | undefined): 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL' => {
+    if (!patentType) return 'NUMERIC_BUCKET'
+    switch (patentType) {
+      case 'PROCESS': return 'STEP_LABEL'
+      case 'COMPOSITION': return 'CONSTITUENT_LABEL'
+      default: return 'NUMERIC_BUCKET'
+    }
+  }
+
   const bundle: SketchContextBundle = {
     ideaSummary: '',
     keyComponents: [],
@@ -191,7 +203,9 @@ export async function buildSketchContextBundle(
     diagramSummaries: [],
     referenceNumerals: {},
     inventionType: 'GENERAL',
-    language: requestedLanguage || 'en'
+    language: requestedLanguage || 'en',
+    patentTypePrimary: null,
+    numberingStyle: 'NUMERIC_BUCKET'
   }
 
   // Get session with related data
@@ -220,6 +234,20 @@ export async function buildSketchContextBundle(
       if (activeJurisdiction && status?.[activeJurisdiction]?.language) {
         bundle.language = status[activeJurisdiction].language
       }
+    }
+  }
+
+  // Extract patent type and numbering style from session
+  if (session) {
+    const patentType = (session as any).patentTypePrimary as 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null
+    bundle.patentTypePrimary = patentType
+    bundle.numberingStyle = deriveNumberingStyle(patentType)
+    
+    // Also check referenceMap for stored numberingStyle (may have user override)
+    const refMapRaw = session.referenceMap?.components as any
+    const storedStyle = refMapRaw?.numberingStyle
+    if (storedStyle && ['NUMERIC_BUCKET', 'STEP_LABEL', 'CONSTITUENT_LABEL'].includes(storedStyle)) {
+      bundle.numberingStyle = storedStyle
     }
   }
 
@@ -288,10 +316,65 @@ export async function buildSketchContextBundle(
 // === PROMPT BUILDERS ===
 
 /**
+ * Gets the labeling rules text based on numbering style.
+ * Different patent types use different reference label formats.
+ */
+function getLabelingRulesForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'): string {
+  switch (numberingStyle) {
+    case 'STEP_LABEL':
+      return `• Reference labels for PROCESS patents use step format: S100, S200, S300, etc.
+• Use the EXACT reference labels provided in the component list (e.g., S100, S200)
+• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
+• NO part names, titles, or descriptors in the drawing
+• NO figure numbers or "FIG." labels in the drawing
+• Each step/component labeled once per view unless clarity requires repetition
+• Labels must NOT overlap geometry — use leader lines to connect labels to components
+• Place labels clearly near their corresponding components`
+    case 'CONSTITUENT_LABEL':
+      return `• Reference labels for COMPOSITION patents use alphabetical format: (a), (b), (c), etc.
+• Use the EXACT reference labels provided in the component list (e.g., (a), (b), (c))
+• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
+• NO part names, titles, or descriptors in the drawing
+• NO figure numbers or "FIG." labels in the drawing
+• Each constituent/ingredient labeled once per view unless clarity requires repetition
+• Labels must NOT overlap geometry — use leader lines to connect labels to components
+• Place labels clearly near their corresponding components`
+    case 'NUMERIC_BUCKET':
+    default:
+      return `• ONLY numeric reference labels are allowed (#100, #200, #300, etc.)
+• Use the EXACT reference labels provided in the component list
+• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
+• NO part names, titles, or descriptors in the drawing
+• NO figure numbers or "FIG." labels in the drawing
+• Each component labeled once per view unless clarity requires repetition
+• Labels must NOT overlap geometry — use leader lines to connect labels to components
+• Place labels clearly near their corresponding components`
+  }
+}
+
+/**
+ * Gets the compliance checklist text based on numbering style.
+ */
+function getComplianceChecklistForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'): string {
+  const labelExample = numberingStyle === 'STEP_LABEL' 
+    ? 'S100, S200, etc.' 
+    : numberingStyle === 'CONSTITUENT_LABEL' 
+      ? '(a), (b), (c), etc.' 
+      : '#100, #200, etc.'
+  
+  return `✔ Only listed components shown (no extras)
+✔ Reference labels only (${labelExample}) — use exactly the labels from the provided list
+✔ Main view provided; secondary view only if explicitly stated internals exist
+✔ Dashed lines used correctly (internal/hidden only)
+✔ No forbidden elements present`
+}
+
+/**
  * Builds the system role prompt for sketch generation.
  * USPTO/EPO/WIPO-compliant patent line drawing rules with anti-hallucination.
+ * Now patent-type-aware for correct reference label formats.
  */
-function buildSystemPrompt(): string {
+function buildSystemPrompt(numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL' = 'NUMERIC_BUCKET'): string {
   return `SYSTEM ROLE — USPTO/EPO/WIPO Patent Line Drawing Generator
 
 Generate a USPTO/EPO/WIPO-compliant black-and-white line drawing. Follow ALL rules exactly. Do NOT interpret or add detail beyond the invention description.
@@ -309,13 +392,7 @@ DRAWING RULES (STRICT COMPLIANCE)
 ═══════════════════════════════════════════════════════════════════════════════
 LABELING RULES (STRICT — NO EXCEPTIONS)
 ═══════════════════════════════════════════════════════════════════════════════
-• ONLY numeric reference labels are allowed (#100, #200, #300, etc.)
-• NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
-• NO part names, titles, or descriptors in the drawing
-• NO figure numbers or "FIG." labels in the drawing
-• Each component labeled once per view unless clarity requires repetition
-• Labels must NOT overlap geometry — use leader lines to connect labels to components
-• Place labels clearly near their corresponding components
+${getLabelingRulesForStyle(numberingStyle)}
 
 ═══════════════════════════════════════════════════════════════════════════════
 PROHIBITED ELEMENTS (NO EXCEPTIONS)
@@ -358,11 +435,7 @@ If the invention description is too ambiguous to draw, use simplified block diag
 ═══════════════════════════════════════════════════════════════════════════════
 COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
-✔ Only listed components shown (no extras)
-✔ Numeric labels only (#100, #200, etc.)
-✔ Main view provided; secondary view only if explicitly stated internals exist
-✔ Dashed lines used correctly (internal/hidden only)
-✔ No forbidden elements present`
+${getComplianceChecklistForStyle(numberingStyle)}`
 }
 
 /**
@@ -465,11 +538,8 @@ REQUIRED VIEWS
 ═══════════════════════════════════════════════════════════════════════════════
 COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
-✔ Only listed components shown (no extras)
-✔ Numeric labels only (#100, #200, etc.)
+${getComplianceChecklistForStyle(context.numberingStyle)}
 ✔ Main view provided; secondary view only if explicitly stated internals exist
-✔ Dashed lines used correctly (internal/hidden only)
-✔ No forbidden elements present
 
 If ANY rule would be violated, simplify the drawing until compliant.`
 
@@ -502,7 +572,7 @@ INSTRUCTION PRIORITY (when user requests conflict with rules)
 
 EXAMPLES OF WHAT TO IGNORE:
 - User asks for color → Generate black and white only
-- User asks for text labels → Use numeric labels only
+- User asks for text labels → Use reference labels only (${context.numberingStyle === 'STEP_LABEL' ? 'S100, S200...' : context.numberingStyle === 'CONSTITUENT_LABEL' ? '(a), (b), (c)...' : '#100, #200...'})
 - User asks for components not in context → Do not add them
 - User asks for shading/gradients → Use line art only`
 }
@@ -571,13 +641,20 @@ CRITICAL: Convert ALL text labels in the uploaded sketch to the reference labels
 `
   }
 
+  // Get label format description based on numbering style
+  const labelFormatDesc = context.numberingStyle === 'STEP_LABEL' 
+    ? 'step labels (S100, S200, etc.)' 
+    : context.numberingStyle === 'CONSTITUENT_LABEL' 
+      ? 'constituent labels ((a), (b), (c), etc.)' 
+      : 'numeric reference labels (#100, #200, etc.)'
+
   prompt += `═══════════════════════════════════════════════════════════════════════════════
 REFINEMENT TASKS
 ═══════════════════════════════════════════════════════════════════════════════
 1. Extract the structure and layout from the uploaded sketch
 2. Identify components and map them to the official component list
 3. REMOVE any components not in the invention context
-4. REPLACE all text labels with numeric reference labels only
+4. REPLACE all text labels with the official reference labels (${labelFormatDesc})
 5. Convert to clean black-and-white line art (no shading/gradients)
 6. Apply solid lines for visible features, dashed for internal/hidden
 7. Remove any arrows, dimension lines, icons, or decorative elements
@@ -586,9 +663,9 @@ REFINEMENT TASKS
 REFINEMENT RULES
 ═══════════════════════════════════════════════════════════════════════════════
 - Preserve the user's intended LAYOUT and SPATIAL ARRANGEMENT
-- Correct all labels to numeric-only format
-- Remove any non-compliant elements (text, shading, icons)
-- If sketch shows unlisted components → REMOVE them (don't invent numerals)
+- Correct all labels to match the official reference label format provided above
+- Remove any non-compliant elements (text descriptions, shading, icons)
+- If sketch shows unlisted components → REMOVE them (don't invent labels)
 - If sketch is too noisy/unclear → Simplify to core components only
 `
 
@@ -601,12 +678,19 @@ ${userPrompt}
 `
   }
 
+  // Get label example based on numbering style
+  const labelExample = context.numberingStyle === 'STEP_LABEL' 
+    ? 'S100, S200, etc.' 
+    : context.numberingStyle === 'CONSTITUENT_LABEL' 
+      ? '(a), (b), (c), etc.' 
+      : '#100, #200, etc.'
+
   prompt += `
 ═══════════════════════════════════════════════════════════════════════════════
 COMPLIANCE CHECKLIST (Self-verify before output)
 ═══════════════════════════════════════════════════════════════════════════════
 ✔ Only listed components shown (no extras)
-✔ Numeric labels only (#100, #200, etc. or as per component numbering provided)
+✔ Reference labels only (${labelExample}) — use exactly the labels from the provided list
 ✔ Clean line art (no shading, gradients, textures)
 ✔ Dashed lines used correctly (internal/hidden only)
 ✔ No forbidden elements present`
@@ -645,6 +729,13 @@ ${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} →
 `
   }
 
+  // Get label format description based on numbering style
+  const labelFormatDesc = context.numberingStyle === 'STEP_LABEL' 
+    ? 'step labels (S100, S200, etc.)' 
+    : context.numberingStyle === 'CONSTITUENT_LABEL' 
+      ? 'constituent labels ((a), (b), (c), etc.)' 
+      : 'numeric reference labels (#100, #200, etc.)'
+
   prompt += `═══════════════════════════════════════════════════════════════════════════════
 MODIFICATION INSTRUCTIONS
 ═══════════════════════════════════════════════════════════════════════════════
@@ -653,14 +744,14 @@ ${modifyInstructions}
 ═══════════════════════════════════════════════════════════════════════════════
 MODIFICATION RULES
 ═══════════════════════════════════════════════════════════════════════════════
-✓ PRESERVE: Reference numerals from context
+✓ PRESERVE: Reference labels from context (${labelFormatDesc})
 ✓ PRESERVE: Essential invention components
 ✓ APPLY: Only the requested modifications
 ✓ OUTPUT: New clean sketch (not overlay on original)
 
 ✗ DO NOT: Add components not in invention context
 ✗ DO NOT: Remove components essential to the invention
-✗ DO NOT: Add text labels (numeric only)
+✗ DO NOT: Add text labels — use only the official reference labels provided
 ✗ DO NOT: Add shading, gradients, icons, or arrows
 ✗ DO NOT: Misrepresent the invention structure
 
@@ -1049,8 +1140,8 @@ export async function generateSketch(
   })
 
   try {
-    // 6. Build prompts based on mode
-    const systemPrompt = buildSystemPrompt()
+    // 6. Build prompts based on mode (pass numbering style for patent-type-aware labeling)
+    const systemPrompt = buildSystemPrompt(contextBundle.numberingStyle)
     let userPromptFinal: string
 
     switch (mode) {
@@ -1511,8 +1602,8 @@ export async function generateFromSuggestion(
     const preferredModel = modelCandidates[0]
     console.log(`[SketchService] Using model for suggestion: ${preferredModel}`)
 
-    // Build focused prompt using the suggestion's title and description
-    const systemPrompt = buildSystemPrompt()
+    // Build focused prompt using the suggestion's title and description (pass numbering style for patent-type-aware labeling)
+    const systemPrompt = buildSystemPrompt(contextBundle.numberingStyle)
     const userPrompt = buildPromptFromSuggestion(contextBundle, sketch.title, sketch.description || '')
 
     // Store prompt for debugging

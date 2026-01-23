@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300; // 5 minutes - matches novelty-search stage route
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
-import { DraftingService } from '@/lib/drafting-service';
+import { DraftingService, deriveNumberingStyle } from '@/lib/drafting-service';
 import { IdeaBankService } from '@/lib/idea-bank-service';
 import { ideaBankFunnel, type IdeaFunnelInput, type PriorArtAnalysisItem } from '@/lib/idea-bank-funnel';
 import { llmGateway } from '@/lib/metering/gateway';
@@ -3124,13 +3124,24 @@ skinparam participant {
  * C4: Extract component labels from PlantUML code
  * Looks for patterns like "Name (XXX)" in rectangles, participants, AND activity diagram actions.
  * Returns array of normalized component names (e.g., ["Controller (100)", "Sensor (200)"])
+ * 
+ * Supports all numbering styles:
+ * - NUMERIC_BUCKET: "Component (100)", "Component (200)"
+ * - STEP_LABEL: "Action (S100)", "Action (S200)"
+ * - CONSTITUENT_LABEL: "Ingredient (a)", "Ingredient (b)"
  */
 function extractComponentLabels(plantuml: string): string[] {
   const labels: string[] = []
   
+  // Universal reference label pattern supporting all numbering styles:
+  // - Numeric: (100), (200), (300)
+  // - Step labels: (S100), (S200), (S300)
+  // - Constituent labels: (a), (b), (c)
+  const refLabelPattern = /\((?:\d+|S\d+|[a-z])\)/i
+  
   // Match patterns in rectangle, participant, actor definitions (quoted format)
-  // Pattern: "Component Name (numeral)" 
-  const quotedLabelPattern = /"([^"]+\s*\(\d+\))"/g
+  // Pattern: "Component Name (label)" where label is any valid reference format
+  const quotedLabelPattern = /"([^"]+\s*\((?:\d+|S\d+|[a-z])\))"/gi
   let match
   
   while ((match = quotedLabelPattern.exec(plantuml)) !== null) {
@@ -3138,16 +3149,17 @@ function extractComponentLabels(plantuml: string): string[] {
   }
   
   // Match patterns in activity diagram actions
-  // Pattern: :Action text with component (numeral);
-  // This captures the component name and numeral within the action text
-  const activityActionPattern = /:([^;]*\(\d+\)[^;]*);/g
+  // Pattern: :Action text with component (label);
+  // This captures the component name and label within the action text
+  const activityActionPattern = /:([^;]*\((?:\d+|S\d+|[a-z])\)[^;]*);/gi
   while ((match = activityActionPattern.exec(plantuml)) !== null) {
-    // Extract all "word(s) (numeral)" patterns from the action text
+    // Extract all "word(s) (label)" patterns from the action text
     const actionText = match[1]
-    const numeralPattern = /([A-Za-z][A-Za-z0-9\s]*\s*\(\d+\))/g
-    let numeralMatch
-    while ((numeralMatch = numeralPattern.exec(actionText)) !== null) {
-      labels.push(numeralMatch[1].trim())
+    // Match component names followed by any valid reference label format
+    const componentPattern = /([A-Za-z][A-Za-z0-9\s]*\s*\((?:\d+|S\d+|[a-z])\))/gi
+    let componentMatch
+    while ((componentMatch = componentPattern.exec(actionText)) !== null) {
+      labels.push(componentMatch[1].trim())
     }
   }
   
@@ -5245,13 +5257,19 @@ async function handleAddComponentNumbersToClaims(user: any, patentId: string, da
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
 
-  // Get component numbers from referenceMap
-  const components = extractComponentsArray(session.referenceMap)
+  // Get component numbers from referenceMap (handles nested { components, numberingStyle })
+  const referenceMap = session.referenceMap as any
+  const components = extractComponentsArray(referenceMap)
   if (components.length === 0) {
-    return NextResponse.json({ 
-      error: 'No component numbers available. Please finalize components in the Component Planner stage first.' 
+    return NextResponse.json({
+      error: 'No component numbers available. Please finalize components in the Component Planner stage first.'
     }, { status: 400 })
   }
+  const numberingStyle =
+    (referenceMap?.components as any)?.numberingStyle ||
+    (referenceMap as any)?.numberingStyle ||
+    null
+  const patentTypePrimary = (session as any)?.patentTypePrimary || null
 
   // ROBUST CLAIMS SOURCING:
   // Priority 1: Use claims passed from UI (whatever is displayed in Annexure Draft)
@@ -5282,9 +5300,19 @@ async function handleAddComponentNumbersToClaims(user: any, patentId: string, da
   console.log(`[addComponentNumbersToClaims] Using claims from: ${claimsSource}, length: ${claimsHtml.length} chars`)
 
   // Build component reference list for the LLM (supports all numbering styles: 100/200, S100/S200, (a)/(b))
+  const formatLabel = (label: string): string => {
+    const raw = String(label || '').trim()
+    if (!raw) return ''
+    // Avoid double-wrapping constituent labels like "(a)"
+    if (/^\(.*\)$/.test(raw) || (numberingStyle && String(numberingStyle).toUpperCase() === 'CONSTITUENT_LABEL')) {
+      return raw
+    }
+    return `(${raw})`
+  }
+
   const componentList = components
     .filter((c: any) => c.name && (c.referenceLabel || c.numeral))
-    .map((c: any) => `- ${c.name}: (${c.referenceLabel || c.numeral})`)
+    .map((c: any) => `- ${c.name}: ${formatLabel(c.referenceLabel || c.numeral)}`)
     .join('\n')
 
   // Get effective jurisdiction
@@ -5297,11 +5325,14 @@ async function handleAddComponentNumbersToClaims(user: any, patentId: string, da
 Your task is to SURGICALLY add component reference numbers to patent claims WITHOUT changing the claim substance, wording, or structure.
 
 RULES:
-1. Add reference numerals in parentheses immediately after the FIRST occurrence of each component name in each claim
+1. Add reference numerals in parentheses immediately after the FIRST occurrence of each component name in each claim, using the numbering style for this patent type: ${numberingStyle || 'NUMERIC_BUCKET'}.
 2. Do NOT change any claim wording, structure, or substance
 3. Do NOT add numbers to components that don't exist in the provided component list
 4. Match component names intelligently (e.g., "controller" matches "main controller", "control unit" matches "controller")
-5. Reference numerals format: component name (numeral), e.g., "processor (200)"
+5. Reference numerals format by style:
+   - NUMERIC_BUCKET: component name (100, 200, 300... as provided)
+   - STEP_LABEL (PROCESS): component name (S100, S200...) as provided; do NOT convert to plain numbers
+   - CONSTITUENT_LABEL (COMPOSITION): component name ((a), (b), (c)...) as provided
 6. For dependent claims, only add numerals to new components not already numbered in the referenced claim
 7. Preserve all HTML formatting, paragraph tags, and claim numbering exactly as provided
 8. If a component is mentioned multiple times in the same claim, only add the numeral on the FIRST occurrence
@@ -5326,7 +5357,7 @@ Preserve all HTML tags and formatting exactly as in the input.`
       prompt,
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
-      metadata: { purpose: 'add_component_numbers_to_claims', sessionId }
+      metadata: { purpose: 'add_component_numbers_to_claims', sessionId, numberingStyle, patentTypePrimary }
     })
 
     if (!llmResult.success || !llmResult.response?.output) {
@@ -6184,6 +6215,35 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
   // Get patent type from session for numbering style derivation
   const patentTypePrimary = (session as any).patentTypePrimary as 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null;
 
+  // Check for existing referenceMap to detect numbering style mismatch
+  const existingRefMap = await prisma.referenceMap.findUnique({
+    where: { sessionId }
+  });
+  
+  // Detect style mismatch: if patent type changed but components still have old-style labels
+  let styleChangeWarning: string | null = null;
+  if (existingRefMap && !numberingStyleOverride) {
+    const existingMapData = existingRefMap.components as any;
+    const existingStyle = existingMapData?.numberingStyle;
+    const derivedStyle = deriveNumberingStyle(patentTypePrimary);
+    
+    if (existingStyle && existingStyle !== derivedStyle) {
+      // Check if incoming components have labels in the OLD style (not auto-re-assigning)
+      const hasOldStyleLabels = (components || []).some((c: any) => {
+        const label = c.referenceLabel || '';
+        if (existingStyle === 'NUMERIC_BUCKET' && /^\d+$/.test(label)) return true;
+        if (existingStyle === 'STEP_LABEL' && /^S\d+$/i.test(label)) return true;
+        if (existingStyle === 'CONSTITUENT_LABEL' && /^\([a-z]\)$/i.test(label)) return true;
+        return false;
+      });
+      
+      if (hasOldStyleLabels) {
+        styleChangeWarning = `Patent type changed to ${patentTypePrimary} (requires ${derivedStyle} labels) but components have ${existingStyle} labels. Labels will be automatically re-assigned to match the new patent type.`;
+        console.warn(`[ComponentMap] ${styleChangeWarning}`);
+      }
+    }
+  }
+
   // Pre-process components to normalize before validation
   const normalizedComponents = (components || []).map((comp: any) => {
     const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
@@ -6248,7 +6308,13 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
       ...referenceMap,
       components: validation.components, // Return the actual components array
       numberingStyle: validation.numberingStyle // Include in response for UI
-    }
+    },
+    // Include warning if numbering style changed due to patent type change
+    ...(styleChangeWarning ? { 
+      styleChangeWarning,
+      previousStyle: (existingRefMap?.components as any)?.numberingStyle,
+      newStyle: validation.numberingStyle
+    } : {})
   });
 }
 
@@ -6691,8 +6757,11 @@ P200 -right-> M300
 - Do NOT wrap flow steps in rectangle blocks - this causes rendering issues.
 - Start: start
 - End: stop
-- Actions: :Action description (numeral);
-- IMPORTANT: Numerals MUST be in parentheses, e.g., "processor (200)" not "processor 200"
+- Actions: :Action description (ref);
+- Reference format depends on patent type:
+  * SYSTEM/PRODUCT: use numeric refs e.g., "processor (200)"
+  * PROCESS: use step labels e.g., "receive data (S100)"
+- IMPORTANT: References MUST be in parentheses
 - Flow arrows are automatic between actions - do NOT add explicit arrows between steps
 - Notes: Do NOT use "note" elements, "rectangle", or "package" in activity diagrams`,
     exampleCode: `@startuml
@@ -7314,7 +7383,8 @@ async function buildJurisdictionDiagramInstructions(
 
 // Allowed diagram types for planning (whitelist - uppercase)
 // Note: These map to generator DiagramType (lowercase) during code generation
-type PlanDiagramType = 'BLOCK' | 'FLOW' | 'SEQUENCE' | 'ACTIVITY'
+// CONSTITUENT is for COMPOSITION patents (ingredients/formulations with (a), (b), (c) labels)
+type PlanDiagramType = 'BLOCK' | 'FLOW' | 'SEQUENCE' | 'ACTIVITY' | 'CONSTITUENT'
 
 // Single diagram plan item
 interface FigurePlanItem {
@@ -7346,7 +7416,7 @@ function parseFigurePlan(rawPlan: any): FigurePlanResult | null {
     return null
   }
 
-  const validTypes: PlanDiagramType[] = ['BLOCK', 'FLOW', 'SEQUENCE', 'ACTIVITY']
+  const validTypes: PlanDiagramType[] = ['BLOCK', 'FLOW', 'SEQUENCE', 'ACTIVITY', 'CONSTITUENT']
 
   const diagrams: FigurePlanItem[] = rawPlan.diagrams.map((d: any, idx: number) => {
     const rawType = (d.type || 'BLOCK').toUpperCase() as PlanDiagramType
@@ -7583,11 +7653,15 @@ SCHEMA RULES:
 - CRITICAL: For COMPOSITION patents, use (a), (b), (c) labels, not numeric labels
 - CRITICAL: For FLOW/ACTIVITY, include items describe ACTIONS performed BY registered components
 
-DO NOT INVENT NEW NUMERALS:
-- Use ONLY the reference numerals that EXIST in the COMPONENTS list above
-- Every numeral you use MUST appear in the COMPONENTS list
+DO NOT INVENT NEW REFERENCE LABELS:
+- Use ONLY the reference labels that EXIST in the COMPONENTS list above
+- Every label you use MUST appear in the COMPONENTS list
+- Reference label formats vary by patent type:
+  * SYSTEM/PRODUCT: numeric (100, 200, 300...)
+  * PROCESS: step labels (S100, S200, S300...)
+  * COMPOSITION: constituent labels ((a), (b), (c)...)
 - Activity/Flow diagrams reference components that perform actions, not abstract steps
-- If the COMPONENTS list has numerals 100, 200, 300 - use ONLY those numerals
+- If the COMPONENTS list has labels S100, S200, S300 - use ONLY those labels (not numeric)
 
 NO OTHER KEYS. NO NESTING. NO EXPLANATIONS.
 
@@ -7870,16 +7944,24 @@ DIAGRAM TYPES — STRICT BEHAVIOR
 CRITICAL: NO ARROW LABELS - Do NOT add text/labels after arrows (e.g., NO "A --> B : label").
 Arrow labels cause visual clutter and overlap. The diagram structure shows relationships.
 
+REFERENCE LABEL FORMAT (varies by patent type - use EXACTLY as provided in component list):
+- SYSTEM/PRODUCT patents: numeric labels (100), (200), (300)...
+- PROCESS patents: step labels (S100), (S200), (S300)...
+- COMPOSITION patents: constituent labels (a), (b), (c)...
+Use the EXACT referenceLabel from each component in the COMPONENTS list above.
+
 BLOCK:
 - Use rectangle + optional package only
 - Max 10 components
 - Simple arrows only (-->, ..>) with NO labels
 - No cycles unless physically obvious
+- Label format: "Component Name (ref)" where ref matches the component's referenceLabel
 
 FLOW/ACTIVITY (Method/Process diagrams):
 - CRITICAL: Use activity syntax ONLY (:action;), NOT rectangles
 - Do NOT use rectangle blocks for flow steps - this causes rendering failures
-- Format: start → :action (numeral); → :action (numeral); → stop
+- Format: start → :action (ref); → :action (ref); → stop
+- For PROCESS patents, ref will be S100, S200, etc. (use exactly as in component list)
 - Max 8 action steps
 - No conditions, forks, or branching
 - Arrows are automatic between actions - do NOT add explicit --> between steps
@@ -7893,6 +7975,7 @@ SEQUENCE:
 CONSTITUENT (Composition/Formulation diagrams):
 - Use rectangles with package/grouping for ingredient categories
 - Reference labels MUST be in parentheses format: "Active Agent (a)", "Carrier (b)"
+- Use EXACTLY the (a), (b), (c) labels from the COMPONENTS list
 - Show relationships between constituents using simple arrows (-->, ..)
 - Max 10 constituents per diagram
 - Do NOT include proportions/percentages unless explicitly in the claims
@@ -12649,7 +12732,8 @@ async function handleCheckWarnings(user: any, patentId: string, data: any, reque
 
   // Check components availability
   const referenceMap = baseSession.referenceMap as any
-  const hasComponents = !!(referenceMap?.components && Array.isArray(referenceMap.components) && referenceMap.components.length > 0)
+  const components = extractComponentsArray(referenceMap)
+  const hasComponents = components.length > 0
 
   // Get context requirements for each section
   for (const section of sections) {
@@ -13891,11 +13975,17 @@ async function handleRunAIReview(
   console.log(`[AI Review] Figures: ${figures.length} diagrams (with PlantUML), ${sketches.length} sketches (metadata only)`)
 
   // Get components from reference map
-  const componentsRaw = extractComponentsArray(session.referenceMap)
+  const referenceMapData = session.referenceMap as any
+  const componentsRaw = extractComponentsArray(referenceMapData)
   const components = componentsRaw.map((c: any) => ({
     name: c.name || '',
     numeral: c.referenceLabel || c.numeral || '' // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
   }))
+  const numberingStyle =
+    (referenceMapData?.components as any)?.numberingStyle ||
+    (referenceMapData as any)?.numberingStyle ||
+    null
+  const patentTypePrimary = (session as any)?.patentTypePrimary || null
 
   // Get invention title
   // Prefer the AI-generated draft title; fall back to the original idea title
@@ -13961,7 +14051,9 @@ async function handleRunAIReview(
       inventionTitle,
       components,
       sectionLimits,
-      crossValidations
+      crossValidations,
+      numberingStyle,
+      patentTypePrimary
     },
     user.tenantId,
     requestHeaders
@@ -14142,13 +14234,17 @@ async function handleApplyAIFix(
 
   // Extract components from reference map
   const referenceMap = (session as any).referenceMap || {}
-  const components = Array.isArray(referenceMap.components) 
-    ? referenceMap.components.map((c: any) => ({
-        name: c.name || c.label || '',
-        // Use referenceLabel (universal format: 100/200, S100/S200, (a)/(b)) with fallbacks
-        numeral: String(c.referenceLabel || c.numeral || c.referenceNumeral || '')
-      })).filter((c: any) => c.name && c.numeral)
-    : []
+  const components = extractComponentsArray(referenceMap)
+    .map((c: any) => ({
+      name: c.name || c.label || '',
+      // Use referenceLabel (universal format: 100/200, S100/S200, (a)/(b)) with fallbacks
+      numeral: String(c.referenceLabel || c.numeral || c.referenceNumeral || '')
+    }))
+    .filter((c: any) => c.name && c.numeral)
+  const numberingStyle =
+    (referenceMap as any)?.components?.numberingStyle ||
+    (referenceMap as any)?.numberingStyle ||
+    null
 
   // Normalize issue object - extract fixPrompt from metadata if not directly available
   // This handles both original AIReviewIssue format and converted ValidationIssue format
@@ -14168,7 +14264,8 @@ async function handleApplyAIFix(
   const fixPrompt = buildFixPrompt(content, normalizedIssue, {
     relatedContent,
     figures: normalizedIssue.category === 'diagram' ? figures : undefined, // Only include diagrams for diagram-related issues
-    components
+    components,
+    numberingStyle
   })
 
   // Use LLM to regenerate the section with the fix via admin-configured stage

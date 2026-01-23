@@ -3238,10 +3238,33 @@ Use the Super Admin panel to add the missing prompt.
         return (a.name || '').localeCompare(b.name || '');
       });
 
+      // Respect user-provided constituent labels if valid, else auto-assign next available letter
+      const usedLetters = new Set<string>();
+      const labelPattern = /^\([a-z]\)$/i;
+
       flatList.forEach((n: any, idx: number) => {
-        const letter = String.fromCharCode(97 + idx); // 'a' = 97
-        const referenceLabel = `(${letter})`;
-        
+        let referenceLabel: string | undefined;
+
+        // Use user-supplied referenceLabel if it is a single letter in parentheses and not duplicated
+        if (typeof (n as any).referenceLabel === 'string' && labelPattern.test((n as any).referenceLabel.trim())) {
+          const proposed = (n as any).referenceLabel.trim().toLowerCase();
+          if (!usedLetters.has(proposed)) {
+            referenceLabel = proposed;
+            usedLetters.add(proposed);
+          }
+        }
+
+        // Fallback: auto-assign next available letter (a, b, c, ...) skipping any already used
+        if (!referenceLabel) {
+          let autoIdx = 0;
+          while (usedLetters.has(`(${String.fromCharCode(97 + autoIdx)})`) && autoIdx < 26) {
+            autoIdx++;
+          }
+          const letter = String.fromCharCode(97 + autoIdx); // 'a' = 97
+          referenceLabel = `(${letter})`;
+          usedLetters.add(referenceLabel);
+        }
+
         processedComponents.push({
           id: n.id,
           name: n.name,
