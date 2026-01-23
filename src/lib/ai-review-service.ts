@@ -193,7 +193,7 @@ export async function runAIReview(
       sectionLimits,
       crossValidations,
       numberingStyle,
-      patentTypePrimary
+      patentTypePrimary || undefined
     )
     
     // Use LLM for review - uses admin-configured model via DRAFT_REVIEW stage
