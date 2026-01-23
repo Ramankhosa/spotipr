@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-label="PatentNest pipeline overview">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.10"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .card{fill:rgba(2,6,23,0.65);stroke:rgba(14,165,233,0.25);stroke-width:2}
+      .title{fill:#ffffff;font:700 24px system-ui,Segoe UI,Roboto,Arial}
+      .meta{fill:rgba(226,232,240,0.75);font:500 14px system-ui,Segoe UI,Roboto,Arial}
+      .tag{fill:rgba(14,165,233,0.16);stroke:rgba(14,165,233,0.35);stroke-width:1}
+      .tagText{fill:rgba(186,230,253,0.95);font:600 12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:1.6px}
+      .line{stroke:rgba(14,165,233,0.30);stroke-width:3}
+      .dot{fill:#0ea5e9;filter:url(#glow)}
+      .dot2{fill:#22d3ee;filter:url(#glow)}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="520" fill="url(#g)"/>
+  <path d="M0 420C200 360 330 460 540 410C750 360 860 250 1200 290V520H0Z" fill="rgba(14,165,233,0.08)"/>
+
+  <!-- Connector line -->
+  <path class="line" d="M120 260H1080" />
+  <circle class="dot" cx="120" cy="260" r="7"/>
+  <circle class="dot2" cx="1080" cy="260" r="7"/>
+
+  <!-- Step cards -->
+  <g transform="translate(80 90)">
+    <rect class="card" x="0" y="0" rx="18" ry="18" width="260" height="220"/>
+    <rect class="tag" x="22" y="20" rx="12" ry="12" width="112" height="28"/>
+    <text class="tagText" x="36" y="40">PHASE 01</text>
+    <text class="title" x="22" y="88">Structure</text>
+    <text class="meta" x="22" y="118">Normalize idea into</text>
+    <text class="meta" x="22" y="140">components + claim-ready</text>
+    <text class="meta" x="22" y="162">section context.</text>
+    <circle class="dot" cx="40" cy="216" r="6"/>
+  </g>
+
+  <g transform="translate(370 90)">
+    <rect class="card" x="0" y="0" rx="18" ry="18" width="260" height="220"/>
+    <rect class="tag" x="22" y="20" rx="12" ry="12" width="112" height="28"/>
+    <text class="tagText" x="36" y="40">PHASE 02</text>
+    <text class="title" x="22" y="88">Map Novelty</text>
+    <text class="meta" x="22" y="118">Feature-level evidence</text>
+    <text class="meta" x="22" y="140">against prior art.</text>
+    <text class="meta" x="22" y="162">Risk scored, explainable.</text>
+    <circle class="dot" cx="40" cy="216" r="6"/>
+  </g>
+
+  <g transform="translate(660 90)">
+    <rect class="card" x="0" y="0" rx="18" ry="18" width="260" height="220"/>
+    <rect class="tag" x="22" y="20" rx="12" ry="12" width="112" height="28"/>
+    <text class="tagText" x="36" y="40">PHASE 03</text>
+    <text class="title" x="22" y="88">Draft + Validate</text>
+    <text class="meta" x="22" y="118">Generate specs + claims,</text>
+    <text class="meta" x="22" y="140">then check consistency</text>
+    <text class="meta" x="22" y="162">across sections/figures.</text>
+    <circle class="dot" cx="40" cy="216" r="6"/>
+  </g>
+
+  <g transform="translate(950 90)">
+    <rect class="card" x="0" y="0" rx="18" ry="18" width="170" height="220"/>
+    <rect class="tag" x="22" y="20" rx="12" ry="12" width="112" height="28"/>
+    <text class="tagText" x="36" y="40">EXPORT</text>
+    <text class="title" x="22" y="88">Pack</text>
+    <text class="meta" x="22" y="118">Doc + figures</text>
+    <text class="meta" x="22" y="140">jurisdiction-ready.</text>
+    <circle class="dot2" cx="40" cy="216" r="6"/>
+  </g>
+
+  <!-- Dots on the connector aligned with cards -->
+  <circle class="dot" cx="210" cy="260" r="7"/>
+  <circle class="dot" cx="500" cy="260" r="7"/>
+  <circle class="dot" cx="790" cy="260" r="7"/>
+  <circle class="dot2" cx="1035" cy="260" r="7"/>
+</svg>

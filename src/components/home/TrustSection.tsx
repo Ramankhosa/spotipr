@@ -4,27 +4,27 @@ import { motion } from 'framer-motion'
 import { Users, CheckCircle, Globe, Shield, Activity } from 'lucide-react'
 
 const stats = [
-  { label: "Ideas Processed", value: "6,000+", icon: Activity },
-  { label: "Drafting Speed", value: "85%", icon: CheckCircle, suffix: "Faster" },
-  { label: "Global Reach", value: "120+", icon: Globe, suffix: "Countries" },
-  { label: "Enterprise Trust", value: "100%", icon: Shield, suffix: "Secure" },
+  { label: "Novelty Evidence", value: "Mapped", icon: Activity, suffix: "By Feature" },
+  { label: "Draft Quality", value: "Validated", icon: CheckCircle, suffix: "Post-Gen" },
+  { label: "Figures", value: "Planned", icon: Shield, suffix: "Aligned" },
+  { label: "Jurisdictions", value: "Ready", icon: Globe, suffix: "Export Pack" },
 ]
 
 const testimonials = [
   {
-    user: "Dr. Sarah Chen",
-    role: "Lead Researcher, BioTech Inc.",
-    quote: "Feels less like software and more like a sentient legal partner. The novelty analysis was deeper than our manual search."
+    user: "Inventors",
+    role: "Solo & first-time filers",
+    quote: "Get a structured draft and evidence map without stitching together five different tools."
   },
   {
-    user: "James Thorne",
-    role: "Patent Attorney",
-    quote: "I was skeptical, but the claim generation is terrifyingly good. It handles the heavy lifting, allowing me to focus on strategy."
+    user: "Startups",
+    role: "Fast iteration, frequent filings",
+    quote: "Move from idea to a consistent output pack quickly, then refine with validation feedback."
   },
   {
-    user: "Start-Up Hub",
-    role: "Incubator",
-    quote: "PatentNest democratizes IP protection. Our cohort companies are filing 3x faster with higher grant rates."
+    user: "Teams & Firms",
+    role: "Review workflows and scale",
+    quote: "Keep drafting, novelty evidence, and figures aligned across jurisdictions and reviewers."
   }
 ]
 
@@ -66,8 +66,8 @@ export default function TrustSection() {
         {/* Testimonials */}
         <div className="mb-20">
           <div className="text-center mb-16">
-            <h2 className="text-3xl font-bold text-white mb-4">Intelligence Verified</h2>
-            <p className="text-ai-graphite-400">Transmission logs from the innovation frontier.</p>
+            <h2 className="text-3xl font-bold text-white mb-4">Confidence, Built In</h2>
+            <p className="text-ai-graphite-400">Designed to produce outputs that are easier to review, defend, and ship.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -95,13 +95,8 @@ export default function TrustSection() {
           </div>
         </div>
 
-        {/* Partner Logos (Text representation for now) */}
-        <div className="flex flex-wrap justify-center gap-12 items-center opacity-30 hover:opacity-60 transition-opacity duration-500">
-           {['MIT Research', 'Stanford BioDesign', 'TechStars', 'YCombinator Alumni'].map((partner, i) => (
-             <span key={i} className="text-xl font-bold font-mono text-white uppercase tracking-wider">
-               {partner}
-             </span>
-           ))}
+        <div className="mt-10 text-center text-xs text-ai-graphite-500 font-mono uppercase tracking-widest">
+          Output pack: Draft + Claims + Evidence Map + Figures + Validation
         </div>
 
       </div>

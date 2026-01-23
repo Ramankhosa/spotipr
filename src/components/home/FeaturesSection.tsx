@@ -12,38 +12,38 @@ import {
 
 const features = [
   {
-    title: "Semantic Novelty Search",
-    description: "Our AI understands concepts, not just keywords. Discover prior art that truly matters with deep semantic analysis.",
+    title: "Evidence-Backed Novelty Mapping",
+    description: "Feature-level coverage (present/partial/absent) with evidence excerpts, so novelty decisions are explainable.",
     icon: Search,
     color: "from-blue-400 to-cyan-400"
   },
   {
-    title: "AI-Assisted Drafting",
-    description: "Generate attorney-grade patent drafts with structured claims, detailed descriptions, and figures in minutes.",
+    title: "Jurisdiction-Aware Drafting",
+    description: "Generate structured sections and claims with prompts, rules, and formatting aligned to how filings are actually reviewed.",
     icon: PenTool,
     color: "from-emerald-400 to-teal-400"
   },
   {
-    title: "Prior Art Intelligence",
-    description: "Layered insights reveal your invention's whitespace. See exactly where your idea stands out against existing patents.",
+    title: "Idea Bank Funnel",
+    description: "Turn prior-art analysis into vetted invention directions, then route the best ideas straight into drafting or search.",
     icon: Lightbulb,
     color: "from-yellow-400 to-amber-400"
   },
   {
-    title: "Modular Workflow",
-    description: "Fluidly move from rough idea to polished disclosure. Our non-linear pipeline adapts to your thought process.",
+    title: "Integrated Figures Workflow",
+    description: "Figure planning and generation stays aligned with the draft, keeping descriptions, numerals, and figures in sync.",
     icon: Workflow,
     color: "from-purple-400 to-pink-400"
   },
   {
-    title: "Global Jurisdiction Ready",
-    description: "One click formatting for USPTO, EPO, IPO, and PCT standards. Draft locally, protect globally.",
+    title: "Multi-Jurisdiction Ready",
+    description: "Create a reference draft and translate sections for target jurisdictions with figure compatibility in mind.",
     icon: Globe,
     color: "from-indigo-400 to-blue-400"
   },
   {
-    title: "Military-Grade Security",
-    description: "Your IP is encrypted at rest and in transit. Enterprise-grade security infrastructure protects every keystroke.",
+    title: "Post-Generation Validation",
+    description: "Non-blocking checks flag claim, figure, numeral, and section issues so iteration gets safer as it gets faster.",
     icon: ShieldCheck,
     color: "from-rose-400 to-red-400"
   }

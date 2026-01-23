@@ -1,5 +1,7 @@
 import HeroSection from '@/components/home/HeroSection'
+import OutputsSection from '@/components/home/OutputsSection'
 import FeaturesSection from '@/components/home/FeaturesSection'
+import ComparisonSection from '@/components/home/ComparisonSection'
 import HowItWorksSection from '@/components/home/HowItWorksSection'
 import PricingSection from '@/components/home/PricingSection'
 import TrustSection from '@/components/home/TrustSection'
@@ -10,7 +12,9 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-ai-graphite-950 selection:bg-ai-blue-500/30">
       <HeroSection />
+      <OutputsSection />
       <FeaturesSection />
+      <ComparisonSection />
       <HowItWorksSection />
       <PricingSection />
       <TrustSection />

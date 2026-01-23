@@ -106,8 +106,8 @@ export default function HeroSection() {
           transition={{ delay: 0.9, duration: 0.8 }}
           className="text-lg md:text-2xl text-ai-graphite-300 max-w-3xl mx-auto mb-12 leading-relaxed font-light"
         >
-          Step into the <span className="text-white font-medium">future of invention</span>. 
-          The world's most advanced AI cockpit for patent drafting and novelty analysis.
+          Turn raw invention notes into a <span className="text-white font-medium">filing-ready output pack</span>:
+          structured drafts, claim-ready sections, novelty evidence mapping, and figures planning built into one pipeline.
         </motion.p>
 
         {/* CTAs */}

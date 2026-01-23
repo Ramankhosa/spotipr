@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-label="PatentNest output pack">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#020617" stop-opacity="0.0"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgba(2,6,23,0.85)"/>
+      <stop offset="1" stop-color="rgba(2,6,23,0.55)"/>
+    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .sheet{fill:url(#card);stroke:rgba(14,165,233,0.22);stroke-width:2}
+      .cap{fill:rgba(14,165,233,0.18);stroke:rgba(14,165,233,0.35);stroke-width:1}
+      .capText{fill:rgba(186,230,253,0.95);font:600 12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:1.6px}
+      .h{fill:#ffffff;font:700 20px system-ui,Segoe UI,Roboto,Arial}
+      .t{fill:rgba(226,232,240,0.78);font:500 14px system-ui,Segoe UI,Roboto,Arial}
+      .k{fill:rgba(14,165,233,0.9)}
+      .wire{stroke:rgba(14,165,233,0.22);stroke-width:2;fill:none}
+    </style>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#bg)"/>
+  <circle cx="880" cy="200" r="180" fill="rgba(14,165,233,0.14)" filter="url(#softGlow)"/>
+
+  <!-- Stack -->
+  <g transform="translate(210 130)">
+    <rect class="sheet" x="40" y="40" rx="20" ry="20" width="760" height="480" opacity="0.55"/>
+    <rect class="sheet" x="20" y="20" rx="20" ry="20" width="760" height="480" opacity="0.75"/>
+    <rect class="sheet" x="0" y="0" rx="20" ry="20" width="760" height="480"/>
+
+    <!-- Header -->
+    <rect class="cap" x="34" y="34" rx="12" ry="12" width="176" height="30"/>
+    <text class="capText" x="50" y="55">OUTPUT PACK</text>
+    <text class="h" x="34" y="110">Patent-ready, export-ready</text>
+    <text class="t" x="34" y="138">A single run produces draft sections, evidence mapping, figures, and validation.</text>
+
+    <!-- Left column items -->
+    <g transform="translate(34 175)">
+      <circle class="k" cx="10" cy="10" r="6"/>
+      <text class="h" x="28" y="16">Draft + Claims</text>
+      <text class="t" x="28" y="40">Structured sections with consistent terminology and numbering.</text>
+      <path class="wire" d="M10 58H690"/>
+    </g>
+
+    <g transform="translate(34 255)">
+      <circle class="k" cx="10" cy="10" r="6"/>
+      <text class="h" x="28" y="16">Novelty Evidence Map</text>
+      <text class="t" x="28" y="40">Feature-level present/partial/absent coverage with evidence excerpts.</text>
+      <path class="wire" d="M10 58H690"/>
+    </g>
+
+    <g transform="translate(34 335)">
+      <circle class="k" cx="10" cy="10" r="6"/>
+      <text class="h" x="28" y="16">Figures + Captions</text>
+      <text class="t" x="28" y="40">Diagram plan + generation workflow aligned with the specification.</text>
+      <path class="wire" d="M10 58H690"/>
+    </g>
+
+    <g transform="translate(34 415)">
+      <circle class="k" cx="10" cy="10" r="6"/>
+      <text class="h" x="28" y="16">Validation Report</text>
+      <text class="t" x="28" y="40">Flags claim/figure/numeral mismatches and section-rule violations.</text>
+    </g>
+  </g>
+</svg>

@@ -48,11 +48,11 @@ export default function MinimalFooter() {
 
         <div className="border-t border-ai-graphite-900 pt-8 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-ai-graphite-600">
           <div>
-            © 2025 PatentNest AI Systems. All rights reserved.
+            (c) 2025 PatentNest.ai. All rights reserved.
           </div>
           <div className="flex gap-6">
-             <span>LAT: 37.7749° N</span>
-             <span>LNG: 122.4194° W</span>
+             <span>LAT: 37.7749 deg N</span>
+             <span>LNG: 122.4194 deg W</span>
           </div>
         </div>
       </div>

@@ -55,7 +55,7 @@ const plans = [
       { value: '15', label: 'Patent Drafts / month' },
       { label: 'Full jurisdiction access (all supported countries)' },
       { label: 'Team workspace (up to 5 seats included)' },
-      { label: 'Parallel Multi-Jurisdiciton Drafts enabled upto six countries' },
+      { label: 'Parallel multi-jurisdiction drafts enabled up to six countries' },
       { value: '100', label: 'Novelty Searches' },
       { value: '30', label: 'Ideation Refinement Runs' },
       { value: '150', label: 'Diagrams & Sketches' },

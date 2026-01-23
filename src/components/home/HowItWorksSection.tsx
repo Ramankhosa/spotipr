@@ -7,20 +7,20 @@ import { BrainCircuit, ScanSearch, FileCode2, ArrowRight } from 'lucide-react'
 const steps = [
   {
     id: "01",
-    title: "Neural Capture",
-    description: "Input your raw invention concepts. Our AI deconstructs your idea into semantic vector embeddings, understanding the core technical principles instantly.",
+    title: "Structure the Invention",
+    description: "Input your invention notes. The system normalizes your idea into structured components and claim-ready context to anchor drafting and figures.",
     icon: BrainCircuit
   },
   {
     id: "02",
-    title: "Global Intelligence Scan",
-    description: "We cross-reference your concept against millions of global patents in real-time. Identifying white space, potential conflicts, and novelty opportunities.",
+    title: "Map Novelty with Evidence",
+    description: "Generate an invention feature set and map it against selected prior art with present/partial/absent coverage and evidence excerpts.",
     icon: ScanSearch
   },
   {
     id: "03",
-    title: "Generative Synthesis",
-    description: "The system constructs a full patent specification—claims, abstract, and detailed description—using attorney-grade language models tailored to your jurisdiction.",
+    title: "Draft, Validate, Export",
+    description: "Generate specification sections and claims, run post-generation validation for consistency, and export an output pack (Doc + figures) ready for filing workflows.",
     icon: FileCode2
   }
 ]
@@ -45,7 +45,7 @@ export default function HowItWorksSection() {
             The Pipeline
           </motion.h2>
           <p className="text-lg text-ai-graphite-400 max-w-2xl mx-auto">
-            From neuron to patent application in three intelligent stages.
+            From raw invention notes to filing-ready output in three stages.
           </p>
         </div>
 
