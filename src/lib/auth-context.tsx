@@ -11,12 +11,32 @@ export interface User {
   ati_id: string | null
 }
 
+interface PaidSignupResult {
+  success: boolean
+  error?: string
+  isPaidSignup?: boolean
+  requiresPayment?: boolean
+  planCode?: string
+  billingCycle?: string
+  userId?: string
+  tenantId?: string
+}
+
 interface AuthContextType {
   user: User | null
   token: string | null
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
   logout: (logoutAll?: boolean) => Promise<void>
   signup: (email: string, password: string, atiToken: string, firstName: string, lastName: string, isTrialInvite?: boolean) => Promise<{ success: boolean; error?: string }>
+  paidSignup: (params: {
+    email: string
+    password: string
+    firstName: string
+    lastName: string
+    planCode: 'BASIC' | 'PRO' | 'ENTERPRISE'
+    billingCycle: 'monthly' | 'yearly'
+    companyName?: string
+  }) => Promise<PaidSignupResult>
   isLoading: boolean
   refreshUser: (authToken?: string) => Promise<void>
   // Authenticated fetch that automatically handles token refresh
@@ -306,6 +326,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Traditional ATI-based signup
   const signup = async (
     email: string, 
     password: string, 
@@ -335,6 +356,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Self-service paid signup (no ATI token required)
+  const paidSignup = async (params: {
+    email: string
+    password: string
+    firstName: string
+    lastName: string
+    planCode: 'BASIC' | 'PRO' | 'ENTERPRISE'
+    billingCycle: 'monthly' | 'yearly'
+    companyName?: string
+  }) => {
+    try {
+      const response = await fetch('/api/v1/auth/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(params)
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        return { 
+          success: true, 
+          isPaidSignup: data.is_paid_signup,
+          requiresPayment: data.requires_payment,
+          planCode: data.plan_code,
+          billingCycle: data.billing_cycle,
+          userId: data.user_id,
+          tenantId: data.tenant_id,
+        }
+      } else {
+        return { success: false, error: data.message || 'Signup failed' }
+      }
+    } catch (error) {
+      return { success: false, error: 'Network error' }
+    }
+  }
+
   const logout = async (logoutAll: boolean = false) => {
     await performLogout(true, logoutAll)
   }
@@ -346,6 +406,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       logout,
       signup,
+      paidSignup,
       isLoading,
       refreshUser,
       authFetch

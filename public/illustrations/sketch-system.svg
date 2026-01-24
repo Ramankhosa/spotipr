@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-label="Sketch generation system aligned to specification components">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.06"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .panel{fill:rgba(2,6,23,0.72);stroke:rgba(14,165,233,0.22);stroke-width:2}
+      .cap{fill:rgba(14,165,233,0.16);stroke:rgba(14,165,233,0.35);stroke-width:1}
+      .capText{fill:rgba(186,230,253,0.95);font:600 12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:1.6px}
+      .h{fill:#ffffff;font:700 18px system-ui,Segoe UI,Roboto,Arial}
+      .t{fill:rgba(226,232,240,0.75);font:500 13px system-ui,Segoe UI,Roboto,Arial}
+      .wire{stroke:rgba(148,163,184,0.22);stroke-width:2;fill:none}
+      .ink{stroke:rgba(226,232,240,0.70);stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+      .ink2{stroke:rgba(226,232,240,0.35);stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+      .num{fill:rgba(14,165,233,0.95);filter:url(#glow)}
+      .numText{fill:#020617;font:800 12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      .chip{fill:rgba(2,6,23,0.50);stroke:rgba(14,165,233,0.25);stroke-width:1}
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="url(#bg)"/>
+  <circle cx="920" cy="210" r="190" fill="rgba(14,165,233,0.12)" filter="url(#glow)"/>
+
+  <!-- Left: spec components -->
+  <g transform="translate(90 110)">
+    <rect class="panel" x="0" y="0" width="420" height="540" rx="18" ry="18"/>
+    <rect class="cap" x="22" y="20" rx="12" ry="12" width="170" height="28"/>
+    <text class="capText" x="36" y="40">SPEC COMPONENTS</text>
+    <text class="h" x="22" y="86">Registered component numerals</text>
+    <text class="t" x="22" y="112">Used consistently across draft + figures.</text>
+
+    <g transform="translate(22 150)">
+      <rect class="chip" x="0" y="0" width="376" height="64" rx="14"/>
+      <circle class="num" cx="28" cy="32" r="14"/>
+      <text class="numText" x="24" y="36">110</text>
+      <text class="h" x="58" y="28">Housing</text>
+      <text class="t" x="58" y="48">Main enclosure / chassis.</text>
+    </g>
+
+    <g transform="translate(22 230)">
+      <rect class="chip" x="0" y="0" width="376" height="64" rx="14"/>
+      <circle class="num" cx="28" cy="32" r="14"/>
+      <text class="numText" x="24" y="36">120</text>
+      <text class="h" x="58" y="28">Core module</text>
+      <text class="t" x="58" y="48">Primary mechanism assembly.</text>
+    </g>
+
+    <g transform="translate(22 310)">
+      <rect class="chip" x="0" y="0" width="376" height="64" rx="14"/>
+      <circle class="num" cx="28" cy="32" r="14"/>
+      <text class="numText" x="24" y="36">130</text>
+      <text class="h" x="58" y="28">Interface</text>
+      <text class="t" x="58" y="48">Input/output coupling region.</text>
+    </g>
+
+    <g transform="translate(22 390)">
+      <rect class="chip" x="0" y="0" width="376" height="64" rx="14"/>
+      <circle class="num" cx="28" cy="32" r="14"/>
+      <text class="numText" x="24" y="36">140</text>
+      <text class="h" x="58" y="28">Fastener set</text>
+      <text class="t" x="58" y="48">Fixes modules in place.</text>
+    </g>
+  </g>
+
+  <!-- Right: sketch canvas -->
+  <g transform="translate(560 110)">
+    <rect class="panel" x="0" y="0" width="550" height="540" rx="18" ry="18"/>
+    <rect class="cap" x="22" y="20" rx="12" ry="12" width="174" height="28"/>
+    <text class="capText" x="36" y="40">FIGURE SKETCH</text>
+    <text class="h" x="22" y="86">Sketch output aligned to the spec</text>
+    <text class="t" x="22" y="112">Callouts reference the same numerals.</text>
+
+    <!-- "Sketch" lines -->
+    <g transform="translate(70 170)">
+      <!-- Outer housing -->
+      <path class="ink" d="M60 40 C110 10, 220 10, 280 48 C325 78, 345 140, 322 205 C300 266, 240 300, 170 292 C96 284, 50 234, 44 170 C38 110, 18 78, 60 40 Z"/>
+      <!-- Inner module -->
+      <path class="ink2" d="M120 120 C150 92, 220 92, 252 124 C276 150, 286 190, 266 220 C245 252, 182 260, 142 238 C108 218, 98 150, 120 120 Z"/>
+      <!-- Interface -->
+      <path class="ink2" d="M280 152 C326 150, 360 164, 388 192"/>
+      <path class="ink2" d="M280 170 C324 178, 352 196, 374 220"/>
+      <!-- Fasteners -->
+      <path class="ink2" d="M92 98 L104 110"/>
+      <path class="ink2" d="M252 92 L264 104"/>
+      <path class="ink2" d="M98 244 L110 232"/>
+      <path class="ink2" d="M250 256 L262 244"/>
+
+      <!-- Callout wires -->
+      <path class="wire" d="M88 78 H-40" />
+      <path class="wire" d="M188 116 H-8" />
+      <path class="wire" d="M360 200 H468" />
+      <path class="wire" d="M138 254 H-30" />
+
+      <!-- Callout numerals -->
+      <g transform="translate(-84 64)">
+        <circle class="num" cx="20" cy="20" r="14"/>
+        <text class="numText" x="14" y="24">110</text>
+      </g>
+      <g transform="translate(-52 102)">
+        <circle class="num" cx="20" cy="20" r="14"/>
+        <text class="numText" x="14" y="24">120</text>
+      </g>
+      <g transform="translate(468 180)">
+        <circle class="num" cx="20" cy="20" r="14"/>
+        <text class="numText" x="14" y="24">130</text>
+      </g>
+      <g transform="translate(-76 238)">
+        <circle class="num" cx="20" cy="20" r="14"/>
+        <text class="numText" x="14" y="24">140</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Bridge -->
+  <path class="wire" d="M510 360 C540 360, 546 360, 560 360" />
+  <circle class="num" cx="536" cy="360" r="7"/>
+</svg>
+

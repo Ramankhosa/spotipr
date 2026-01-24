@@ -172,11 +172,27 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
     async checkQuota(request: FeatureRequest): Promise<QuotaCheckResult> {
       try {
-        // Get tenant's current active plan
+        // First check if tenant is in PENDING_PAYMENT status (self-service signup not yet paid)
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: request.tenantId },
+          select: { status: true }
+        })
+        
+        if (tenant?.status === 'PENDING_PAYMENT') {
+          return { allowed: false, remaining: { monthly: 0, daily: 0 } }
+        }
+
+        // Get tenant's current active plan (also check expiry)
+        const now = new Date()
         const tenantPlan = await prisma.tenantPlan.findFirst({
           where: {
             tenantId: request.tenantId,
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            // Check that plan hasn't expired
+            OR: [
+              { expiresAt: null },           // No expiry set
+              { expiresAt: { gt: now } }     // Not expired yet
+            ]
           },
           include: {
             plan: true

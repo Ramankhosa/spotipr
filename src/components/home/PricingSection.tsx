@@ -7,11 +7,12 @@ import { Check, Star, ArrowRight } from 'lucide-react'
 const plans = [
   {
     name: 'Basic',
+    code: 'BASIC',
     description: 'For inventors filing a single patent',
     price: '$59',
     period: '/ month',
     cta: 'Start Basic',
-    href: '/register',
+    href: '/pricing',
     highlight: false,
     features: [
       { value: '1', label: 'Patent Draft / month' },
@@ -24,11 +25,12 @@ const plans = [
   },
   {
     name: 'Pro',
+    code: 'PRO',
     description: 'For startups and frequent patent drafting',
     price: '$199',
     period: '/ month',
     cta: 'Start Pro',
-    href: '/register',
+    href: '/pricing',
     highlight: true,
     badge: 'Most Popular',
     features: [
@@ -42,14 +44,15 @@ const plans = [
   },
   {
     name: 'Enterprise',
+    code: 'ENTERPRISE',
     description: 'For teams, law firms & university IP cells',
     price: '$599',
     period: '/ month',
-    cta: 'Talk to Sales',
-    href: '/contact',
+    cta: 'Start Enterprise',
+    href: '/pricing',
     highlight: false,
-    secondaryCta: 'Start Enterprise',
-    secondaryHref: '/register',
+    secondaryCta: 'Talk to Sales',
+    secondaryHref: '/contact',
     note: 'Need a tailored rollout or extra seats? Talk to sales.',
     features: [
       { value: '15', label: 'Patent Drafts / month' },

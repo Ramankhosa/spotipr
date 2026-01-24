@@ -1,5 +1,6 @@
 import HeroSection from '@/components/home/HeroSection'
 import OutputsSection from '@/components/home/OutputsSection'
+import DiagramsSection from '@/components/home/DiagramsSection'
 import FeaturesSection from '@/components/home/FeaturesSection'
 import ComparisonSection from '@/components/home/ComparisonSection'
 import HowItWorksSection from '@/components/home/HowItWorksSection'
@@ -13,6 +14,7 @@ export default function HomePage() {
     <div className="min-h-screen bg-ai-graphite-950 selection:bg-ai-blue-500/30">
       <HeroSection />
       <OutputsSection />
+      <DiagramsSection />
       <FeaturesSection />
       <ComparisonSection />
       <HowItWorksSection />

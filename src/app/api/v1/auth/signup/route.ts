@@ -8,8 +8,10 @@ import { verificationTemplate } from '@/lib/email-templates'
 import { autoAssignToDefaultTeam } from '@/lib/org-access-service'
 import { validateInviteToken, recordSignup } from '@/lib/trial-invite-service'
 import { assignTrialPlanToTenant } from '@/lib/trial-plan-service'
+import { createPaidSignup } from '@/lib/auto-tenant-service'
 
-const signupSchema = z.object({
+// Schema for manual ATI-based signup
+const atiSignupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   atiToken: z.string().min(1),
@@ -18,10 +20,42 @@ const signupSchema = z.object({
   isTrialInvite: z.boolean().optional() // Flag for trial invite tokens
 })
 
+// Schema for self-service paid signup (no ATI token required)
+const paidSignupSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  firstName: z.string().min(1).max(100),
+  lastName: z.string().min(1).max(100),
+  planCode: z.enum(['BASIC', 'PRO', 'ENTERPRISE']),
+  billingCycle: z.enum(['monthly', 'yearly']),
+  companyName: z.string().max(200).optional(),
+})
+
+// Combined schema that accepts either flow
+const signupSchema = z.union([
+  atiSignupSchema,
+  paidSignupSchema,
+])
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { email, password, atiToken, firstName, lastName, isTrialInvite } = signupSchema.parse(body)
+    
+    // Determine which signup flow based on presence of atiToken vs planCode
+    const hasAtiToken = body.atiToken && body.atiToken.length > 0
+    const hasPlanCode = body.planCode && ['BASIC', 'PRO', 'ENTERPRISE'].includes(body.planCode)
+
+    // ===========================================================================
+    // FLOW 1: Self-Service Paid Signup (no ATI token, has plan selection)
+    // ===========================================================================
+    if (!hasAtiToken && hasPlanCode) {
+      return handlePaidSignup(request, body)
+    }
+
+    // ===========================================================================
+    // FLOW 2: Manual ATI-Based Signup (traditional invitation flow)
+    // ===========================================================================
+    const { email, password, atiToken, firstName, lastName, isTrialInvite } = atiSignupSchema.parse(body)
 
     // Check if email is already in use globally
     const existingUser = await prisma.user.findUnique({
@@ -426,6 +460,96 @@ export async function POST(request: NextRequest) {
     }
 
     console.error('Signup error:', error)
+    return NextResponse.json(
+      { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * Handle self-service paid signup (Flow 1)
+ * Creates tenant, user, and redirects to payment
+ */
+async function handlePaidSignup(request: NextRequest, body: any) {
+  try {
+    const { email, password, firstName, lastName, planCode, billingCycle, companyName } = paidSignupSchema.parse(body)
+
+    // Check if email is already in use
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    })
+
+    if (existingUser) {
+      return NextResponse.json(
+        { code: 'EMAIL_IN_USE', message: 'Email address is already registered' },
+        { status: 400 }
+      )
+    }
+
+    // Create paid signup (tenant + user in one transaction)
+    const result = await createPaidSignup({
+      email,
+      password,
+      firstName,
+      lastName,
+      companyName,
+      planCode,
+      billingCycle,
+    })
+
+    if (!result.success) {
+      return NextResponse.json(
+        { code: 'SIGNUP_FAILED', message: result.error || 'Failed to create account' },
+        { status: 400 }
+      )
+    }
+
+    // Create audit log
+    const ip = request.headers.get('x-forwarded-for') ||
+               request.headers.get('x-real-ip') ||
+               'unknown'
+
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: result.user!.id,
+        tenantId: result.tenant!.id,
+        action: 'USER_SIGNUP',
+        resource: `user:${result.user!.id}`,
+        ip,
+        meta: {
+          email,
+          signup_method: 'paid_self_service',
+          plan_code: planCode,
+          billing_cycle: billingCycle,
+          tenant_ati_id: result.tenant!.atiId,
+          registration_source: 'PAID_SIGNUP',
+        }
+      }
+    })
+
+    console.log(`[Signup] Paid self-service signup complete: ${email} → Plan: ${planCode}`)
+
+    return NextResponse.json({
+      success: true,
+      user_id: result.user!.id,
+      tenant_id: result.tenant!.id,
+      roles: ['OWNER'],
+      is_paid_signup: true,
+      requires_payment: true,
+      plan_code: planCode,
+      billing_cycle: billingCycle,
+    }, { status: 201 })
+
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { code: 'INVALID_INPUT', message: 'Invalid input data', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    console.error('Paid signup error:', error)
     return NextResponse.json(
       { code: 'INTERNAL_ERROR', message: 'Internal server error' },
       { status: 500 }
