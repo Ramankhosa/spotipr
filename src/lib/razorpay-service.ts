@@ -544,34 +544,292 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       return { success: false, error: 'Payment verification failed' }
     }
 
-    // Idempotency check: if already captured or authorized, return success without re-processing
-    if (payment.status === 'CAPTURED' || payment.status === 'AUTHORIZED') {
+    // If already CAPTURED, verify that subscription is actually active FOR THE CORRECT PLAN
+    // AND that the subscription period hasn't expired
+    // This handles multiple edge cases:
+    // - Payment captured but activation failed
+    // - Renewal payment where expiry job hasn't run yet (status still ACTIVE but period expired)
+    if (payment.status === 'CAPTURED') {
+      const now = new Date()
+      
+      // Check if subscription for THIS SPECIFIC PLAN is active AND not expired
+      const subscription = await prisma.subscription.findFirst({
+        where: { 
+          tenantId: payment.tenantId,
+          planId: payment.planId, // Must match the paid plan
+          status: 'ACTIVE'
+        }
+      })
+      
+      const tenantPlan = await prisma.tenantPlan.findFirst({
+        where: {
+          tenantId: payment.tenantId,
+          planId: payment.planId, // Must match the paid plan
+          status: 'ACTIVE'
+        }
+      })
+
+      // Verify subscription period is still valid (not expired or about to expire)
+      // We check for > now (not just >= now) to ensure there's actual remaining time
+      const subscriptionPeriodValid = subscription?.currentPeriodEnd && 
+        new Date(subscription.currentPeriodEnd) > now
+      
+      const tenantPlanValid = tenantPlan?.expiresAt && 
+        new Date(tenantPlan.expiresAt) > now
+
+      // Only short-circuit if BOTH subscription AND tenant plan are:
+      // 1. Active (status = ACTIVE)
+      // 2. Not expired (period end / expiry > now)
+      if (subscription && tenantPlan && subscriptionPeriodValid && tenantPlanValid) {
+        return { 
+          success: true, 
+          paymentId: payment.id, 
+          subscriptionActivated: true,
+          planCode: payment.planCode,
+        }
+      }
+
+      // Log why we're not short-circuiting for debugging
+      if (subscription && tenantPlan && (!subscriptionPeriodValid || !tenantPlanValid)) {
+        console.warn(`[RazorpayService] Payment ${payment.id} is CAPTURED, subscription/plan exist but period expired. Running recovery to extend.`, {
+          subscriptionEnd: subscription?.currentPeriodEnd,
+          tenantPlanExpiry: tenantPlan?.expiresAt,
+          now: now.toISOString()
+        })
+      }
+
+      // ==========================================================================
+      // CAPTURED RECOVERY PATH
+      // Payment was CAPTURED but activation failed - need to retry activation
+      // This can happen due to:
+      // - Database errors during original activation
+      // - Race conditions
+      // - Plan upgrade where old plan is still active
+      // ==========================================================================
+      console.warn(`[RazorpayService] Payment ${payment.id} is CAPTURED but subscription/plan not active for plan ${payment.planCode}, retrying activation`)
+      
+      // Use payment.paidAt for period calculation (not now) to maintain correct period
+      // If paidAt is null (shouldn't happen for CAPTURED), fall back to now
+      const periodStart = payment.paidAt || new Date()
+      const periodEnd = new Date(periodStart)
+      if (payment.billingCycle === 'yearly') {
+        periodEnd.setFullYear(periodEnd.getFullYear() + 1)
+      } else {
+        periodEnd.setMonth(periodEnd.getMonth() + 1)
+      }
+
+      // Deactivate any OTHER active plans (handles upgrades)
+      await prisma.tenantPlan.updateMany({
+        where: { 
+          tenantId: payment.tenantId, 
+          status: 'ACTIVE',
+          planId: { not: payment.planId }
+        },
+        data: { status: 'INACTIVE' },
+      })
+
+      // Activate the correct plan for the tenant
+      await activatePlanForTenant(payment.tenantId, payment.planId, periodEnd)
+      
+      // Activate tenant if needed
+      await prisma.tenant.updateMany({
+        where: { 
+          id: payment.tenantId,
+          status: { in: ['PENDING_PAYMENT', 'SUSPENDED'] }
+        },
+        data: { status: 'ACTIVE' }
+      })
+
+      // Extract discount metadata from payment
+      const metadata = payment.metadata as any
+      const originalAmount = metadata?.originalAmount
+
+      // Create or update subscription with full metadata
+      let subscriptionId: string
+      const existingSubscription = await prisma.subscription.findFirst({
+        where: { tenantId: payment.tenantId, status: 'ACTIVE' }
+      })
+
+      if (existingSubscription) {
+        // Update existing subscription to the new plan (upgrade scenario)
+        await prisma.subscription.update({
+          where: { id: existingSubscription.id },
+          data: {
+            planId: payment.planId,
+            planCode: payment.planCode,
+            billingCycle: payment.billingCycle,
+            currency: payment.currency,
+            amount: payment.amount,
+            status: 'ACTIVE',
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+            nextBillingDate: periodEnd,
+            discountId: payment.discountId,
+            discountAmount: payment.discountAmount,
+            originalAmount: originalAmount,
+          },
+        })
+        subscriptionId = existingSubscription.id
+      } else {
+        // Create new subscription with full metadata
+        const newSubscription = await prisma.subscription.create({
+          data: {
+            tenantId: payment.tenantId,
+            userId: payment.userId,
+            planId: payment.planId,
+            planCode: payment.planCode,
+            billingCycle: payment.billingCycle,
+            currency: payment.currency,
+            amount: payment.amount,
+            status: 'ACTIVE',
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+            nextBillingDate: periodEnd,
+            discountId: payment.discountId,
+            discountAmount: payment.discountAmount,
+            originalAmount: originalAmount,
+          },
+        })
+        subscriptionId = newSubscription.id
+      }
+
+      // Link payment to subscription (critical for reporting/renewals)
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { subscriptionId },
+      })
+
+      // Align ATI token expiry
+      await alignAtiTokenExpiry(payment.tenantId, periodEnd)
+
+      // Send payment success email (may have been missed if original activation failed)
+      try {
+        const user = await prisma.user.findUnique({
+          where: { id: payment.userId },
+          select: { email: true, name: true, firstName: true }
+        })
+
+        if (user?.email) {
+          const planCode = payment.planCode.replace('_PLAN', '') as PlanCode
+          const planInfo = PLAN_PRICING[planCode]
+          
+          await sendPaymentSuccessEmail({
+            userEmail: user.email,
+            userName: user.name || user.firstName || undefined,
+            planCode,
+            planName: planInfo?.name || payment.planCode,
+            amount: payment.amount,
+            currency: payment.currency as Currency,
+            billingCycle: payment.billingCycle as 'monthly' | 'yearly',
+            paymentId: payment.receipt || payment.id,
+            receiptNumber: payment.receipt || payment.id,
+            nextBillingDate: periodEnd,
+            discountApplied: payment.discountAmount ? {
+              name: 'Discount',
+              amount: payment.discountAmount,
+            } : undefined,
+          })
+          console.log(`[RazorpayService] Recovery: Sent payment success email to ${user.email}`)
+        }
+      } catch (emailError) {
+        // Log but don't fail recovery for email errors
+        console.error('[RazorpayService] Recovery: Failed to send payment success email:', emailError)
+      }
+
+      console.log(`[RazorpayService] Successfully recovered activation for payment ${payment.id}`)
+      
       return { 
         success: true, 
         paymentId: payment.id, 
-        subscriptionActivated: payment.status === 'CAPTURED',
+        subscriptionActivated: true,
         planCode: payment.planCode,
       }
     }
 
-    // Fetch payment details from Razorpay to confirm status
+    // For AUTHORIZED payments, we MUST re-check Razorpay in case it's now CAPTURED
+    // This handles the case where webhook was delayed/missed and user retries verification
+    // This is the ONLY path to activate subscription if webhook fails
+
+    // Fetch payment details from Razorpay to confirm CURRENT status
     const razorpayPayment = await razorpayRequest<RazorpayPayment>(`/payments/${razorpayPaymentId}`)
 
-    // Only process if Razorpay confirms payment is captured/authorized
-    if (razorpayPayment.status !== 'captured' && razorpayPayment.status !== 'authorized') {
+    // ==========================================================================
+    // PAYMENT STATUS VERIFICATION - ONLY ACCEPT CAPTURED
+    // ==========================================================================
+    // We ONLY accept 'captured' status for subscription activation because:
+    //
+    // 1. 'authorized' means funds are reserved but NOT yet transferred
+    // 2. Capture can fail even after authorization (insufficient funds at capture time)
+    // 3. If we activate on 'authorized' and webhook is delayed/missed, user gets
+    //    fraudulent access with no rollback
+    //
+    // For 'authorized' payments:
+    // - We update payment status to AUTHORIZED but DO NOT activate subscription
+    // - The webhook (payment.captured) will handle activation when capture completes
+    // - The webhook (payment.failed) will handle rollback if capture fails
+    //
+    // This conservative approach ensures users only get access after funds are
+    // actually captured, preventing fraud even if webhooks are delayed/missed.
+    // ==========================================================================
+    if (razorpayPayment.status === 'authorized') {
+      // Payment is authorized but not yet captured - update status but don't activate
+      await prisma.payment.updateMany({
+        where: { 
+          id: payment.id,
+          status: 'CREATED'
+        },
+        data: {
+          razorpayPaymentId,
+          razorpaySignature,
+          status: 'AUTHORIZED',
+          method: razorpayPayment.method,
+        },
+      })
+
+      console.log(`[RazorpayService] Payment authorized but pending capture: ${razorpayPaymentId}`)
+      
+      return { 
+        success: true, 
+        paymentId: payment.id,
+        subscriptionActivated: false,
+        planCode: payment.planCode,
+        // Client should show "Payment processing" message and wait for webhook/poll
+      }
+    }
+
+    if (razorpayPayment.status !== 'captured') {
       return { success: false, error: `Payment not completed. Status: ${razorpayPayment.status}` }
     }
 
+    // CRITICAL: Verify payment amount and currency match the stored order
+    // This prevents tampering attacks where user might try to pay less than the order amount
+    if (razorpayPayment.amount !== payment.amount) {
+      console.error(`[RazorpayService] Payment amount mismatch! Order: ${payment.amount}, Paid: ${razorpayPayment.amount}`)
+      return { success: false, error: 'Payment amount does not match order' }
+    }
+
+    if (razorpayPayment.currency !== payment.currency) {
+      console.error(`[RazorpayService] Payment currency mismatch! Order: ${payment.currency}, Paid: ${razorpayPayment.currency}`)
+      return { success: false, error: 'Payment currency does not match order' }
+    }
+
+    // Also verify the order_id matches (defense in depth)
+    if (razorpayPayment.order_id !== razorpayOrderId) {
+      console.error(`[RazorpayService] Order ID mismatch! Expected: ${razorpayOrderId}, Got: ${razorpayPayment.order_id}`)
+      return { success: false, error: 'Payment order ID mismatch' }
+    }
+
     // Use atomic update with status check to prevent race conditions
+    // At this point, we know status is 'captured' (AUTHORIZED was handled above)
     const updatedPayment = await prisma.payment.updateMany({
       where: { 
         id: payment.id,
-        status: 'CREATED'  // Only update if still in CREATED status
+        status: { in: ['CREATED', 'AUTHORIZED'] }  // Can be CREATED or AUTHORIZED (from earlier attempt)
       },
       data: {
         razorpayPaymentId,
         razorpaySignature,
-        status: razorpayPayment.status === 'captured' ? 'CAPTURED' : 'AUTHORIZED',
+        status: 'CAPTURED',
         method: razorpayPayment.method,
         paidAt: new Date(),
       },
@@ -675,6 +933,16 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       data: { status: 'ACTIVE' }
     })
 
+    // ==========================================================================
+    // ATI TOKEN EXPIRY ALIGNMENT
+    // ==========================================================================
+    // For paid signups (AUTO_GENERATED tokens), align the ATI token expiry with
+    // the subscription period. This ensures that:
+    // 1. The token expiry reflects the paid access period
+    // 2. If subscription lapses, users lose access
+    // 3. On renewal, token expiry is extended
+    await alignAtiTokenExpiry(payment.tenantId, periodEnd)
+
     // Send payment success email notification (async, don't block)
     sendPaymentSuccessNotification(payment, periodEnd).catch(err => {
       console.error('[RazorpayService] Failed to send payment notification:', err)
@@ -745,6 +1013,67 @@ async function activatePlanForTenant(tenantId: string, planId: string, expiresAt
   }
 
   console.log(`[RazorpayService] Plan activated for tenant ${tenantId} until ${expiresAt}`)
+}
+
+/**
+ * Align ATI token expiry with subscription period
+ * 
+ * For paid signups (AUTO_GENERATED tokens), the ATI token expiry should match
+ * the subscription period end. This ensures:
+ * 1. Users who signed up via paid signup lose access when subscription expires
+ * 2. On renewal, their access is extended automatically
+ * 
+ * For admin-issued member ATIs, this also ensures they don't exceed the parent
+ * tenant's subscription period.
+ */
+async function alignAtiTokenExpiry(tenantId: string, subscriptionEndDate: Date): Promise<void> {
+  try {
+    // Update all AUTO_GENERATED tokens for this tenant
+    // These are the paid signup tokens that should expire with the subscription
+    const autoGeneratedResult = await prisma.aTIToken.updateMany({
+      where: {
+        tenantId,
+        tokenType: 'AUTO_GENERATED',
+        // Only update if expiry is null or earlier than new date
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { lt: subscriptionEndDate } }
+        ]
+      },
+      data: {
+        expiresAt: subscriptionEndDate
+      }
+    })
+
+    if (autoGeneratedResult.count > 0) {
+      console.log(`[RazorpayService] Updated expiry for ${autoGeneratedResult.count} AUTO_GENERATED ATI tokens to ${subscriptionEndDate}`)
+    }
+
+    // Also cap any MANUAL tokens that exceed the subscription period
+    // This ensures admin-issued member ATIs don't outlive the tenant's subscription
+    // NOTE: We also cap tokens with NULL expiry (legacy tokens with no expiration set)
+    // to prevent them from outliving the subscription period.
+    const manualResult = await prisma.aTIToken.updateMany({
+      where: {
+        tenantId,
+        tokenType: 'MANUAL',
+        OR: [
+          { expiresAt: null }, // Cap legacy tokens with no expiry set
+          { expiresAt: { gt: subscriptionEndDate } } // Cap those exceeding subscription
+        ]
+      },
+      data: {
+        expiresAt: subscriptionEndDate
+      }
+    })
+
+    if (manualResult.count > 0) {
+      console.log(`[RazorpayService] Capped expiry for ${manualResult.count} MANUAL ATI tokens to subscription end ${subscriptionEndDate}`)
+    }
+  } catch (error) {
+    // Log but don't fail the subscription activation
+    console.error('[RazorpayService] Failed to align ATI token expiry (non-blocking):', error)
+  }
 }
 
 /**
@@ -1008,5 +1337,207 @@ export async function generateSpecialPricingForUser(params: {
   }
 
   return result
+}
+
+// ============================================================================
+// RAZORPAY SUBSCRIPTION SUPPORT (for auto-renewal)
+// ============================================================================
+
+/**
+ * Create a Razorpay Subscription for recurring billing
+ * This enables auto-renewal without user intervention
+ * 
+ * Prerequisites:
+ * 1. Create Razorpay Plans in the Razorpay Dashboard (or via API) for each plan/cycle combo
+ * 2. Store plan IDs in environment variables or database
+ */
+export interface CreateSubscriptionParams {
+  tenantId: string
+  userId: string
+  planCode: PlanCode
+  billingCycle: BillingCycle
+  currency: Currency
+  customerEmail: string
+  customerName?: string
+  customerPhone?: string
+}
+
+export interface CreateSubscriptionResult {
+  success: boolean
+  subscriptionId?: string
+  razorpaySubscriptionId?: string
+  shortUrl?: string // Payment link for customer
+  error?: string
+}
+
+/**
+ * Get Razorpay Plan ID for a given plan/cycle/currency combination
+ * Checks in order: environment variable, database PlanPricing table
+ */
+async function getRazorpayPlanId(planCode: PlanCode, billingCycle: BillingCycle, currency: Currency): Promise<string | null> {
+  // First check environment variable (fastest)
+  const envKey = `RAZORPAY_PLAN_${planCode}_${billingCycle.toUpperCase()}_${currency}`
+  const envPlanId = process.env[envKey]
+  if (envPlanId) {
+    console.log(`[RazorpayService] Using Razorpay Plan ID from env: ${envKey}`)
+    return envPlanId
+  }
+  
+  // Check database PlanPricing table
+  try {
+    const planPricing = await prisma.planPricing.findFirst({
+      where: {
+        planCode,
+        billingCycle: billingCycle.toUpperCase(), // DB stores as MONTHLY/YEARLY
+        isActive: true,
+      },
+      select: {
+        razorpayPlanIdUSD: true,
+        razorpayPlanIdINR: true,
+      }
+    })
+    
+    if (planPricing) {
+      const razorpayPlanId = currency === 'INR' 
+        ? planPricing.razorpayPlanIdINR 
+        : planPricing.razorpayPlanIdUSD
+      
+      if (razorpayPlanId) {
+        console.log(`[RazorpayService] Using Razorpay Plan ID from database: ${razorpayPlanId}`)
+        return razorpayPlanId
+      }
+    }
+  } catch (error) {
+    console.error('[RazorpayService] Error fetching Razorpay Plan ID from database:', error)
+  }
+  
+  return null
+}
+
+/**
+ * Create a Razorpay Subscription for recurring billing
+ * 
+ * Note: This requires Razorpay Plans to be created first in the Razorpay Dashboard.
+ * Plans define the recurring billing cycle and amount.
+ */
+export async function createRazorpaySubscription(
+  params: CreateSubscriptionParams
+): Promise<CreateSubscriptionResult> {
+  try {
+    ensureRazorpayConfigured()
+    
+    const { tenantId, userId, planCode, billingCycle, currency, customerEmail, customerName, customerPhone } = params
+    
+    // Get the Razorpay Plan ID for this plan/cycle/currency
+    const razorpayPlanId = await getRazorpayPlanId(planCode, billingCycle, currency)
+    
+    if (!razorpayPlanId) {
+      console.warn(`[RazorpayService] No Razorpay Plan ID configured for ${planCode}/${billingCycle}/${currency}`)
+      return { 
+        success: false, 
+        error: `Auto-renewal not available for ${planCode} ${billingCycle} plan. Please use one-time payment.` 
+      }
+    }
+    
+    // Create or get Razorpay customer
+    let customerId: string
+    
+    // Check if we already have a customer for this user
+    const existingSubscription = await prisma.subscription.findFirst({
+      where: { userId, razorpayCustomerId: { not: null } },
+      select: { razorpayCustomerId: true }
+    })
+    
+    if (existingSubscription?.razorpayCustomerId) {
+      customerId = existingSubscription.razorpayCustomerId
+    } else {
+      // Create new Razorpay customer
+      const customer = await razorpayRequest<{ id: string }>('/customers', 'POST', {
+        name: customerName || customerEmail.split('@')[0],
+        email: customerEmail,
+        contact: customerPhone || undefined,
+        notes: { tenantId, userId }
+      })
+      customerId = customer.id
+    }
+    
+    // Create Razorpay Subscription
+    const subscription = await razorpayRequest<{
+      id: string
+      plan_id: string
+      customer_id: string
+      status: string
+      short_url: string
+    }>('/subscriptions', 'POST', {
+      plan_id: razorpayPlanId,
+      customer_id: customerId,
+      total_count: billingCycle === 'yearly' ? 12 : 120, // 1 year or 10 years of monthly
+      quantity: 1,
+      customer_notify: 1,
+      notes: { tenantId, userId, planCode, billingCycle }
+    })
+    
+    // Create internal subscription record
+    const plan = await prisma.plan.findFirst({
+      where: { code: { in: [`${planCode}_PLAN`, planCode] }, status: 'ACTIVE' }
+    })
+    
+    const internalSubscription = await prisma.subscription.create({
+      data: {
+        tenantId,
+        userId,
+        planId: plan?.id || '',
+        planCode,
+        billingCycle,
+        currency,
+        amount: getPlanPrice(planCode, billingCycle, currency),
+        status: 'CREATED',
+        razorpaySubscriptionId: subscription.id,
+        razorpayPlanId: razorpayPlanId,
+        razorpayCustomerId: customerId,
+      }
+    })
+    
+    console.log(`[RazorpayService] Created Razorpay subscription: ${subscription.id} for ${planCode} ${billingCycle}`)
+    
+    return {
+      success: true,
+      subscriptionId: internalSubscription.id,
+      razorpaySubscriptionId: subscription.id,
+      shortUrl: subscription.short_url, // Payment link for customer
+    }
+  } catch (error) {
+    console.error('[RazorpayService] Create subscription error:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to create subscription'
+    }
+  }
+}
+
+/**
+ * Cancel a Razorpay Subscription
+ */
+export async function cancelRazorpaySubscription(
+  razorpaySubscriptionId: string,
+  cancelAtCycleEnd: boolean = true
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    ensureRazorpayConfigured()
+    
+    await razorpayRequest(`/subscriptions/${razorpaySubscriptionId}/cancel`, 'POST', {
+      cancel_at_cycle_end: cancelAtCycleEnd ? 1 : 0
+    })
+    
+    console.log(`[RazorpayService] Cancelled Razorpay subscription: ${razorpaySubscriptionId}`)
+    
+    return { success: true }
+  } catch (error) {
+    console.error('[RazorpayService] Cancel subscription error:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to cancel subscription'
+    }
+  }
 }
 

@@ -295,7 +295,25 @@ export async function cleanupExpiredTokens(): Promise<number> {
 }
 
 // ATI Token utilities
-const ATI_PEPPER = process.env.ATI_PEPPER || 'default-pepper-change-in-prod'
+// SECURITY: In production, ATI_PEPPER must be set - reject weak defaults
+const ATI_PEPPER = (() => {
+  const pepper = process.env.ATI_PEPPER
+  if (!pepper) {
+    if (process.env.NODE_ENV === 'production') {
+      // In production, fail hard if security-critical env vars are missing
+      console.error('CRITICAL SECURITY: ATI_PEPPER environment variable is not set!')
+      throw new Error('ATI_PEPPER environment variable is required in production')
+    }
+    // Development mode - use weak default with warning
+    console.warn('[SECURITY WARNING] ATI_PEPPER not set - using weak default. Set this in production!')
+    return 'default-pepper-change-in-prod'
+  }
+  // Validate pepper strength
+  if (pepper.length < 32) {
+    console.warn('[SECURITY WARNING] ATI_PEPPER should be at least 32 characters for security')
+  }
+  return pepper
+})()
 
 export function generateATIToken(): string {
   return crypto.randomBytes(32).toString('base64url')
@@ -391,7 +409,22 @@ export async function incrementATITokenUsage(tokenId: string) {
 }
 
 // Token encryption for temporary revelation
-const ENCRYPTION_KEY = process.env.TOKEN_ENCRYPTION_KEY || 'default-encryption-key-change-in-production-32-chars-minimum'
+// SECURITY: In production, TOKEN_ENCRYPTION_KEY must be set
+const ENCRYPTION_KEY = (() => {
+  const key = process.env.TOKEN_ENCRYPTION_KEY
+  if (!key) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('CRITICAL SECURITY: TOKEN_ENCRYPTION_KEY environment variable is not set!')
+      throw new Error('TOKEN_ENCRYPTION_KEY environment variable is required in production')
+    }
+    console.warn('[SECURITY WARNING] TOKEN_ENCRYPTION_KEY not set - using weak default. Set this in production!')
+    return 'default-encryption-key-change-in-production-32-chars-minimum'
+  }
+  if (key.length < 32) {
+    console.warn('[SECURITY WARNING] TOKEN_ENCRYPTION_KEY should be at least 32 characters for AES-256')
+  }
+  return key
+})()
 const ALGORITHM = 'aes-256-cbc'
 
 export function encryptToken(token: string): string {

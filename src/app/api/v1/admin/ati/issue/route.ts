@@ -92,6 +92,47 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ==========================================================================
+    // ATI EXPIRY CAPPING: Ensure member ATI tokens don't outlive tenant subscription
+    // ==========================================================================
+    // Get the tenant's active subscription to cap the token expiry
+    let finalExpiresAt: Date | null = expires_at ? new Date(expires_at) : null
+    
+    const tenantSubscription = await prisma.subscription.findFirst({
+      where: {
+        tenantId: user.tenant_id,
+        status: 'ACTIVE'
+      },
+      select: { currentPeriodEnd: true }
+    })
+
+    // Also check tenant plan expiry as fallback
+    const tenantPlan = await prisma.tenantPlan.findFirst({
+      where: {
+        tenantId: user.tenant_id,
+        status: 'ACTIVE'
+      },
+      select: { expiresAt: true }
+    })
+
+    // Determine the tenant's subscription end date
+    const tenantExpiryDate = tenantSubscription?.currentPeriodEnd || tenantPlan?.expiresAt
+
+    if (tenantExpiryDate) {
+      if (finalExpiresAt) {
+        // Cap the requested expiry to not exceed tenant subscription
+        if (finalExpiresAt > tenantExpiryDate) {
+          console.log(`[ATIIssue] Capping requested expiry ${finalExpiresAt} to tenant subscription end ${tenantExpiryDate}`)
+          finalExpiresAt = tenantExpiryDate
+        }
+      } else {
+        // If no expiry specified, default to tenant subscription end
+        // This ensures member tokens don't have unlimited access beyond subscription
+        finalExpiresAt = tenantExpiryDate
+        console.log(`[ATIIssue] Setting ATI expiry to tenant subscription end: ${tenantExpiryDate}`)
+      }
+    }
+
     // Create ATI token record
     const atiToken = await prisma.aTIToken.create({
       data: {
@@ -100,7 +141,7 @@ export async function POST(request: NextRequest) {
         rawToken: encryptedRawToken,
         rawTokenExpiry,
         fingerprint,
-        expiresAt: expires_at ? new Date(expires_at) : null,
+        expiresAt: finalExpiresAt,
         maxUses: max_uses,
         planTier: planTier, // Use tenant's active plan tier
         notes,

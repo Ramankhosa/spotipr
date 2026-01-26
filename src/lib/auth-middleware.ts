@@ -151,20 +151,44 @@ export async function authenticateUser(request: NextRequest): Promise<{
         }
       }
 
-      // Check for used up status (quota exceeded)
+      // ==========================================================================
+      // USED_UP STATUS HANDLING - CRITICAL FOR EXISTING USER ACCESS
+      // ==========================================================================
+      // USED_UP only affects NEW signups, not existing authenticated users.
+      // The token's maxUses controls how many users can sign up with it, not their ongoing access.
+      // Existing users who already signed up should NOT be blocked because the token reached capacity.
+      // 
+      // Access control for existing users is managed via:
+      // - Token expiry (expiresAt) - checked above
+      // - Token revocation (REVOKED status) - checked above
+      // - Token suspension (SUSPENDED status) - checked above
+      // - Tenant status - checked below
+      //
+      // For USED_UP tokens:
+      // - AUTO_GENERATED tokens (paid signup): Always USED_UP after owner signs up - this is expected
+      // - MANUAL tokens (admin-issued): USED_UP means signup capacity exhausted, but existing users
+      //   should still have access based on the token's expiry date (already checked above)
+      //
+      // If we reach here with a USED_UP token:
+      // - The token is NOT expired (expiry check above would have blocked)
+      // - The token is NOT revoked/suspended (those checks above would have blocked)
+      // - Therefore, the existing user should be allowed access
       if (signupToken.status === 'USED_UP') {
-        return {
-          user: null,
-          error: {
-            code: 'ATI_TOKEN_QUOTA_EXCEEDED',
-            message: 'Your ATI token quota has been exceeded. Please contact your administrator.',
-            status: 401
-          }
-        }
+        // Log for monitoring but ALLOW access - USED_UP is about signup capacity, not existing user access
+        console.log(`[AuthMiddleware] Allowing access for existing user with USED_UP token: ${signupToken.fingerprint} (type: ${signupToken.tokenType})`)
+        // Continue - do NOT return an error here
       }
 
-      // Only allow ACTIVE or ISSUED tokens
-      if (signupToken.status !== 'ACTIVE' && signupToken.status !== 'ISSUED') {
+      // ==========================================================================
+      // FINAL STATUS VALIDATION - Allow valid statuses for existing users
+      // ==========================================================================
+      // Valid statuses for existing authenticated users:
+      // - ACTIVE: Standard active token
+      // - ISSUED: Newly issued token (first use may not have updated to ACTIVE)
+      // - USED_UP: Token signup capacity reached, but existing users retain access until expiry
+      const validStatusesForExistingUsers = ['ACTIVE', 'ISSUED', 'USED_UP']
+      if (!validStatusesForExistingUsers.includes(signupToken.status)) {
+        // This catches any other unexpected statuses
         return {
           user: null,
           error: {

@@ -121,18 +121,29 @@ export async function POST(request: NextRequest) {
           return response
         }
 
-        // Check for used up status (quota exceeded)
+        // ==========================================================================
+        // USED_UP STATUS - DO NOT BLOCK FOR TOKEN REFRESH
+        // ==========================================================================
+        // USED_UP only affects NEW signups, not existing users refreshing tokens.
+        // The token's maxUses controls how many users can sign up with it,
+        // not whether existing users can refresh their sessions.
+        //
+        // Existing users retain access until:
+        // - Token expiry (expiresAt) - checked above
+        // - Token revocation (REVOKED status) - checked above
+        // - Token suspension (SUSPENDED status) - checked above
+        // - Token made inactive (INACTIVE status) - checked above
+        // - Tenant status changes - checked below
         if (signupToken.status === 'USED_UP') {
-          const response = NextResponse.json(
-            { code: 'ATI_TOKEN_QUOTA_EXCEEDED', message: 'Your ATI token quota has been exceeded. Please contact your administrator.' },
-            { status: 401 }
-          )
-          response.cookies.set('refresh_token', '', { maxAge: 0, path: '/' })
-          return response
+          // Log for monitoring but ALLOW refresh - this is expected behavior
+          console.log(`[Refresh] User ${user.email} refreshing token with USED_UP ATI ${signupToken.fingerprint} (type: ${signupToken.tokenType})`)
+          // Continue - do NOT return an error here
         }
 
-        // Only allow ACTIVE or ISSUED tokens
-        if (signupToken.status !== 'ACTIVE' && signupToken.status !== 'ISSUED') {
+        // Only allow ACTIVE, ISSUED, or USED_UP tokens for existing users
+        // USED_UP is valid for existing users who already signed up
+        const validStatusesForExistingUsers = ['ACTIVE', 'ISSUED', 'USED_UP']
+        if (!validStatusesForExistingUsers.includes(signupToken.status)) {
           const response = NextResponse.json(
             { code: 'ATI_TOKEN_INVALID', message: 'Your ATI token is not active. Please contact your administrator.' },
             { status: 401 }

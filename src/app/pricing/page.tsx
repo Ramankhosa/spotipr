@@ -40,6 +40,7 @@ export default function PricingPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedPlan, setSelectedPlan] = useState<PlanCode | null>(null)
   const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [showPendingModal, setShowPendingModal] = useState(false)
   const [successPlan, setSuccessPlan] = useState<string>('')
 
   const { 
@@ -51,8 +52,18 @@ export default function PricingPage() {
     // On success
     (data) => {
       setSuccessPlan(data.planCode)
-      setShowSuccessModal(true)
       setSelectedPlan(null)
+      
+      // Check if payment is pending capture (authorized but not yet captured)
+      if (data.isPendingCapture) {
+        // Show pending modal instead of success modal
+        setShowPendingModal(true)
+        setShowSuccessModal(false)
+      } else {
+        // Full success - subscription is activated
+        setShowSuccessModal(true)
+        setShowPendingModal(false)
+      }
     },
     // On failure
     (error) => {
@@ -127,6 +138,7 @@ export default function PricingPage() {
             planCode: redirectPlan,
             billingCycle: redirectCycle || billingCycle,
             countryCode,
+            enableAutoRenewal: true, // Enable auto-renewal by default
           })
           
           // Clear the URL params after initiating checkout
@@ -157,6 +169,7 @@ export default function PricingPage() {
       planCode,
       billingCycle,
       countryCode,
+      enableAutoRenewal: true, // Enable auto-renewal by default
     })
   }
 
@@ -417,6 +430,47 @@ export default function PricingPage() {
             >
               Go to Dashboard
             </button>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Pending Capture Modal - Payment authorized but not yet captured */}
+      {showPendingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-ai-graphite-900 border border-ai-graphite-800 rounded-2xl p-8 max-w-md mx-4 text-center"
+          >
+            <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-amber-500/20 flex items-center justify-center">
+              <svg className="w-8 h-8 text-amber-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-3">
+              Payment Processing
+            </h2>
+            <p className="text-ai-graphite-400 mb-4">
+              Your payment for <span className="text-white font-medium">{successPlan}</span> is being processed.
+            </p>
+            <p className="text-ai-graphite-500 text-sm mb-6">
+              This usually takes a few seconds. Your subscription will activate automatically once confirmed.
+            </p>
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  setShowPendingModal(false)
+                  router.push('/dashboard')
+                }}
+                className="w-full px-6 py-3 bg-ai-blue-500/20 border border-ai-blue-500/50 text-white rounded-lg font-medium hover:bg-ai-blue-500/30 transition-colors"
+              >
+                Go to Dashboard
+              </button>
+              <p className="text-ai-graphite-500 text-xs">
+                You&apos;ll receive an email once your subscription is active.
+              </p>
+            </div>
           </motion.div>
         </div>
       )}

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { validateATIToken, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { autoAssignToDefaultTeam } from '@/lib/org-access-service'
+import { assignTrialPlanToTenant } from '@/lib/trial-plan-service'
 
 const completeSignupSchema = z.object({
   atiToken: z.string().min(1),
@@ -89,6 +90,81 @@ export async function POST(request: NextRequest) {
         { code: 'TENANT_INACTIVE', message: 'Tenant is not active' },
         { status: 400 }
       )
+    }
+
+    // CRITICAL: Ensure tenant has an active TenantPlan - without this, service access fails
+    // This is the same check as in the manual signup route for consistency
+    const existingTenantPlan = await prisma.tenantPlan.findFirst({
+      where: {
+        tenantId: tenant.id,
+        status: 'ACTIVE'
+      }
+    })
+
+    if (!existingTenantPlan) {
+      console.log(`[SocialSignup] Tenant ${tenant.name} has no TenantPlan - creating one now`)
+      
+      // Determine plan based on ATI token's planTier
+      const planTier = fullToken?.planTier || 'FREE_PLAN'
+      
+      // Normalize plan code (same logic as manual signup)
+      const normalizePlanCode = (input: string): string => {
+        const normalized = input.toUpperCase().replace(/[\s-]+/g, '_')
+        const aliases: Record<string, string> = {
+          'ENTERPRISE': 'ENTERPRISE_PLAN',
+          'ENTERPRISE_PLAN': 'ENTERPRISE_PLAN',
+          'PRO': 'PRO_PLAN',
+          'PRO_PLAN': 'PRO_PLAN',
+          'PROFESSIONAL': 'PRO_PLAN',
+          'FREE': 'FREE_PLAN',
+          'FREE_PLAN': 'FREE_PLAN',
+          'BASIC': 'FREE_PLAN',
+          'TRIAL': 'TRIAL',
+          'TRIAL_PLAN': 'TRIAL'
+        }
+        return aliases[normalized] || normalized
+      }
+      
+      const targetPlanCode = normalizePlanCode(planTier)
+      console.log(`[SocialSignup] ATI planTier: "${planTier}" -> normalized: "${targetPlanCode}"`)
+      
+      // Handle TRIAL plan specially
+      if (targetPlanCode === 'TRIAL') {
+        try {
+          await assignTrialPlanToTenant(tenant.id)
+        } catch (e) {
+          console.warn('[SocialSignup] Failed to assign trial plan:', e)
+        }
+      } else {
+        let targetPlan = await prisma.plan.findUnique({
+          where: { code: targetPlanCode }
+        })
+        
+        // Fallback to any active plan
+        if (!targetPlan) {
+          targetPlan = await prisma.plan.findFirst({
+            where: { status: 'ACTIVE' },
+            orderBy: { createdAt: 'asc' }
+          })
+          console.log(`[SocialSignup] Plan "${targetPlanCode}" not found, falling back to: ${targetPlan?.code}`)
+        }
+        
+        if (targetPlan) {
+          await prisma.tenantPlan.create({
+            data: {
+              tenantId: tenant.id,
+              planId: targetPlan.id,
+              status: 'ACTIVE',
+              effectiveFrom: new Date()
+            }
+          })
+          console.log(`[SocialSignup] Created TenantPlan: ${targetPlan.code} for tenant ${tenant.name}`)
+        } else {
+          console.warn(`[SocialSignup] WARNING: No plan available to assign to tenant ${tenant.name}`)
+        }
+      }
+    } else {
+      console.log(`[SocialSignup] Tenant ${tenant.name} already has plan: ${existingTenantPlan.planId}`)
     }
 
     // Check tenant user limits

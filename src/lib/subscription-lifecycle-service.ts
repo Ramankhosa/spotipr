@@ -219,6 +219,90 @@ export async function handleSubscriptionRenewal(params: {
       data: { status: 'ACTIVE' },
     })
 
+    // ==========================================================================
+    // EXTEND ATI TOKEN EXPIRY ON RENEWAL
+    // ==========================================================================
+    // Align ATI token expiry with new subscription period so users retain access
+    //
+    // IMPORTANT: We use the OLD subscription end date (before update) to determine
+    // which tokens should be extended. This ensures:
+    // - Tokens that were capped to the subscription end get extended
+    // - Tokens that admins intentionally expired EARLIER are NOT touched
+    //   (respects the "member ATI can expire earlier than subscription" rule)
+    // ==========================================================================
+    const oldSubscriptionEnd = subscription.currentPeriodEnd
+    
+    // Use exact match for old subscription end to avoid extending member ATIs
+    // that were intentionally set to expire earlier than the subscription.
+
+    try {
+      // Update AUTO_GENERATED tokens (paid signup) to match new subscription end
+      // These always follow the subscription period
+      await prisma.aTIToken.updateMany({
+        where: {
+          tenantId: subscription.tenantId,
+          tokenType: 'AUTO_GENERATED',
+        },
+        data: {
+          expiresAt: periodEnd
+        }
+      })
+
+      // Extend MANUAL tokens that were capped to the PREVIOUS subscription end
+      // IMPORTANT: We only extend tokens whose expiresAt matches the old subscription end
+      // Tokens that admins set to expire EARLIER are NOT touched
+      if (oldSubscriptionEnd) {
+        await prisma.aTIToken.updateMany({
+          where: {
+            tenantId: subscription.tenantId,
+            tokenType: 'MANUAL',
+            status: { in: ['ACTIVE', 'ISSUED', 'USED_UP'] },
+            // Only extend tokens capped exactly to the old subscription end
+            expiresAt: oldSubscriptionEnd
+          },
+          data: {
+            expiresAt: periodEnd
+            // NOTE: Status is intentionally NOT changed to preserve USED_UP and other states
+          }
+        })
+
+        // Separately handle EXPIRED tokens - only revive those that expired AT subscription end
+        // Tokens that were manually expired by admin BEFORE subscription end are NOT revived
+        await prisma.aTIToken.updateMany({
+          where: {
+            tenantId: subscription.tenantId,
+            tokenType: 'MANUAL',
+            status: 'EXPIRED',
+            // Only revive tokens that expired at the old subscription end
+            expiresAt: oldSubscriptionEnd
+          },
+          data: {
+            expiresAt: periodEnd,
+            status: 'ISSUED' // Revive tokens that were auto-expired at subscription end
+          }
+        })
+      }
+
+      // Cap MANUAL tokens with null expiry to subscription end
+      // This ensures legacy tokens without expiration don't outlive the subscription
+      await prisma.aTIToken.updateMany({
+        where: {
+          tenantId: subscription.tenantId,
+          tokenType: 'MANUAL',
+          status: { in: ['ACTIVE', 'ISSUED', 'USED_UP'] },
+          expiresAt: null
+        },
+        data: {
+          expiresAt: periodEnd
+        }
+      })
+
+      console.log(`[SubscriptionLifecycle] Extended ATI token expiry to ${periodEnd}`)
+    } catch (atiError) {
+      // Log but don't fail the renewal
+      console.error('[SubscriptionLifecycle] Failed to extend ATI token expiry (non-blocking):', atiError)
+    }
+
     console.log(`[SubscriptionLifecycle] Renewal processed: ${subscription.id}, new period ends ${periodEnd}`)
 
     return { success: true }

@@ -5,6 +5,8 @@
  * 
  * RULE: If more than ONE causal mechanism is required → discard and regenerate.
  * NO prior art search. NO obviousness gating.
+ * 
+ * QUOTA ENFORCEMENT: Each successful idea generation counts as one "ideation run"
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -12,6 +14,9 @@ import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import * as IdeationService from '@/lib/ideation/ideation-service';
 import type { IdeaFrame, NoveltyGate } from '@/lib/ideation/schemas';
+import { enforceServiceAccess } from '@/lib/service-access-middleware';
+import { checkTrialQuota } from '@/lib/trial-plan-service';
+import { trackServiceUsage } from '@/lib/service-usage-tracker';
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -41,6 +46,42 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json(
         { error: authResult.error?.message },
         { status: authResult.error?.status || 401 }
+      );
+    }
+
+    // Get user's tenant info for quota checks
+    const user = await prisma.user.findUnique({
+      where: { id: authResult.user.id },
+      select: { id: true, tenantId: true },
+    });
+
+    if (!user?.tenantId) {
+      return NextResponse.json(
+        { error: 'User not associated with tenant' },
+        { status: 403 }
+      );
+    }
+
+    // ENFORCEMENT: Check organizational service access (Tenant Admin controlled)
+    const serviceCheck = await enforceServiceAccess(
+      user.id,
+      user.tenantId,
+      'IDEATION'
+    );
+    if (!serviceCheck.allowed) {
+      return serviceCheck.response;
+    }
+
+    // ENFORCEMENT: Check trial-specific quotas (ideation run limits)
+    const trialQuotaCheck = await checkTrialQuota(user.id, 'ideation');
+    if (!trialQuotaCheck.allowed) {
+      return NextResponse.json(
+        { 
+          error: trialQuotaCheck.reason,
+          code: 'QUOTA_EXCEEDED',
+          remaining: trialQuotaCheck.remaining 
+        },
+        { status: 403 }
       );
     }
 
@@ -106,6 +147,34 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       requestHeaders,
       userGuidance: userGuidance?.trim() || undefined,
     });
+
+    // =========================================================================
+    // TRACKING: Record successful ideation run completion for quota enforcement
+    // One "ideation run" = one successful call to generateIdeas
+    // =========================================================================
+    // NOTE: Wrapped in try-catch to prevent tracking failures from breaking
+    // successful generations. Tracking is important but not worth failing
+    // an otherwise successful operation.
+    if (ideas.length > 0 && user.tenantId) {
+      try {
+        await trackServiceUsage({
+          tenantId: user.tenantId,
+          userId: user.id,
+          serviceType: 'IDEATION',
+          operationId: `${sessionId}-generate-${Date.now()}`, // Unique per generation
+          operationType: 'IDEA_GENERATION',
+          isCompleted: true, // Each successful generation is a completion
+          metadata: {
+            sessionId,
+            ideasGenerated: ideas.length,
+            recipeIntent: recipe.recipeIntent,
+          }
+        });
+      } catch (trackingError) {
+        // Log the error but don't fail the request - the user's generation succeeded
+        console.error('[IdeationGenerate] Failed to track service usage (non-blocking):', trackingError);
+      }
+    }
 
     // =========================================================================
     // Prepare response with mechanism-pure idea data (SRS Section 5)

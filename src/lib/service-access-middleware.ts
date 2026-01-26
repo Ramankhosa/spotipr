@@ -100,10 +100,28 @@ export async function enforceServiceAccess(
     return { allowed: true, result }
   } catch (error) {
     console.error('[ServiceAccessMiddleware] Error checking access:', error)
-    // On error, allow access (fail open) - metering will still enforce quotas
+    
+    // SECURITY: Fail closed in production - deny access on errors
+    // This prevents access bypass through intentional error triggering
+    const isProduction = process.env.NODE_ENV === 'production'
+    if (isProduction) {
+      return { 
+        allowed: false, 
+        response: NextResponse.json(
+          {
+            error: 'Service temporarily unavailable. Please try again later.',
+            code: 'ACCESS_CHECK_FAILED',
+          },
+          { status: 503 }
+        )
+      }
+    }
+    
+    // In development, allow access with warning for easier debugging
+    console.warn('[ServiceAccessMiddleware] DEV MODE: Access check failed, allowing access for debugging')
     return { 
       allowed: true, 
-      result: { allowed: true, reason: 'Access check failed, defaulting to allowed' } 
+      result: { allowed: true, reason: 'Access check failed - dev mode override' } 
     }
   }
 }

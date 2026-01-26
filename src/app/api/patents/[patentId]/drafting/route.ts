@@ -16,7 +16,7 @@ import { getWritingSample, buildWritingSampleBlock } from '@/lib/writing-sample-
 import { resolveCanonicalKey, normalizeSectionKeys } from '@/lib/section-alias-service';
 import { enforceServiceAccess } from '@/lib/service-access-middleware';
 import { getDiagramConfig, generateDiagramPromptInstructions } from '@/lib/jurisdiction-style-service';
-import { trackSectionDrafted } from '@/lib/patent-drafting-tracker';
+import { trackSectionDrafted, canDraftPatent } from '@/lib/patent-drafting-tracker';
 import { resolveSourceOfTruth, computeJurisdictionStateOnDelete } from '@/lib/jurisdiction-state-service';
 import { cloneInstructionsBetweenSessions } from '@/lib/user-instruction-service';
 import { getSupersetSectionKeys, isNonApplicableHeading, getSectionContextRequirements } from '@/lib/multi-jurisdiction-service';
@@ -656,15 +656,46 @@ export async function POST(
         return await handleUploadDiagram(authResult.user, patentId, data);
 
       case 'generate_draft':
-        return await handleGenerateDraft(authResult.user, patentId, data, requestHeaders);
-
-      // Multi-jurisdiction: Generate reference draft (superset sections)
       case 'generate_reference_draft':
-        return await handleGenerateReferenceDraft(authResult.user, patentId, data, requestHeaders);
-
-      // Multi-jurisdiction: Generate a single section of the reference draft (section-by-section mode)
       case 'generate_reference_section':
-        return await handleGenerateReferenceSection(authResult.user, patentId, data, requestHeaders);
+      case 'generate_sections':
+      case 'save_sections':
+      case 'autosave_sections': {
+        // PRE-CHECK: Verify user has patent drafting quota before expensive operations
+        // This provides early feedback and prevents wasted LLM calls
+        if (authResult.user.tenantId && data.sessionId) {
+          const quotaCheck = await canDraftPatent(authResult.user.tenantId, data.sessionId)
+          if (!quotaCheck.allowed) {
+            return NextResponse.json(
+              {
+                error: quotaCheck.reason || 'Patent drafting quota exceeded. Please upgrade your plan.',
+                code: 'QUOTA_EXCEEDED',
+                quota: {
+                  daily: quotaCheck.quota?.dailyUsed + '/' + (quotaCheck.quota?.dailyLimit ?? '∞'),
+                  monthly: quotaCheck.quota?.monthlyUsed + '/' + (quotaCheck.quota?.monthlyLimit ?? '∞'),
+                }
+              },
+              { status: 403 }
+            )
+          }
+        }
+        
+        // Dispatch to appropriate handler based on action
+        switch (action) {
+          case 'generate_draft':
+            return await handleGenerateDraft(authResult.user, patentId, data, requestHeaders);
+          case 'generate_reference_draft':
+            return await handleGenerateReferenceDraft(authResult.user, patentId, data, requestHeaders);
+          case 'generate_reference_section':
+            return await handleGenerateReferenceSection(authResult.user, patentId, data, requestHeaders);
+          case 'generate_sections':
+            return await handleGenerateSections(authResult.user, patentId, data, requestHeaders);
+          case 'save_sections':
+            return await handleSaveSections(authResult.user, patentId, data);
+          case 'autosave_sections':
+            return await handleAutosaveSections(authResult.user, patentId, data);
+        }
+      }
 
       // Multi-jurisdiction: Get the list of sections needed for reference draft
       case 'get_reference_sections':
@@ -674,19 +705,9 @@ export async function POST(
       case 'translate_to_jurisdiction':
         return await handleTranslateToJurisdiction(authResult.user, patentId, data, requestHeaders);
 
-      // New: Section-level generation and save for Annexure 2
-      case 'generate_sections':
-        return await handleGenerateSections(authResult.user, patentId, data, requestHeaders);
-
       // Check for warnings before auto-generation
       case 'check_warnings':
         return await handleCheckWarnings(authResult.user, patentId, data, requestHeaders);
-
-      case 'save_sections':
-        return await handleSaveSections(authResult.user, patentId, data);
-
-      case 'autosave_sections':
-        return await handleAutosaveSections(authResult.user, patentId, data);
 
       case 'delete_annexure_draft':
         return await handleDeleteAnnexureDraft(authResult.user, patentId, data);
@@ -12365,13 +12386,27 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
     const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
     for (const sectionKey of savedSectionKeys) {
       if (sectionKey === 'detailedDescription' || sectionKey === 'description' || sectionKey === 'claims') {
-        await trackSectionDrafted(
+        const trackResult = await trackSectionDrafted(
           session.tenantId,
           sessionId,
           patentId,
           user.id,
           sectionKey
         )
+        
+        // ENFORCEMENT: If quota is exceeded, return error to block autosave
+        // This prevents users from exceeding their plan's patent drafting limits
+        if (trackResult.quotaExceeded) {
+          return NextResponse.json(
+            { 
+              error: 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+              code: 'QUOTA_EXCEEDED',
+              quotaExceeded: true,
+              draft // Return partial draft for UX
+            },
+            { status: 403 }
+          )
+        }
       }
     }
   }
@@ -12901,13 +12936,29 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
     const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
     for (const sectionKey of savedSectionKeys) {
       if (sectionKey === 'detailedDescription' || sectionKey === 'description' || sectionKey === 'claims') {
-        await trackSectionDrafted(
+        const trackResult = await trackSectionDrafted(
           session.tenantId,
           sessionId,
           patentId,
           user.id,
           sectionKey
         )
+        
+        // ENFORCEMENT: If quota is exceeded, return error to block saving
+        // This prevents users from exceeding their plan's patent drafting limits
+        if (trackResult.quotaExceeded) {
+          return NextResponse.json(
+            { 
+              error: 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+              code: 'QUOTA_EXCEEDED',
+              quotaExceeded: true,
+              // Still return the draft so UI can show what was attempted
+              draft,
+              validationReport
+            },
+            { status: 403 }
+          )
+        }
       }
     }
   }

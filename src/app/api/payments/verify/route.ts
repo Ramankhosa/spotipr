@@ -65,9 +65,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Provide appropriate message based on activation status
+    const message = result.subscriptionActivated 
+      ? 'Payment verified and subscription activated successfully'
+      : 'Payment authorized and processing. Your subscription will activate shortly.'
+
     return NextResponse.json({
       success: true,
-      message: 'Payment verified successfully',
+      message,
       paymentId: result.paymentId,
       subscriptionActivated: result.subscriptionActivated,
       planCode: result.planCode,

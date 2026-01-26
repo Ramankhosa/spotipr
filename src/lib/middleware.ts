@@ -145,19 +145,29 @@ export async function authenticateRequest(request: NextRequest): Promise<{
         }
       }
 
-      // Check for used up status
+      // ==========================================================================
+      // USED_UP STATUS - DO NOT BLOCK FOR EXISTING USERS
+      // ==========================================================================
+      // USED_UP only affects NEW signups, not existing authenticated users.
+      // The token's maxUses controls how many users can sign up with it,
+      // not whether existing users can make API requests.
+      //
+      // Existing users retain access until:
+      // - Token expiry (expiresAt) - checked above
+      // - Token revocation (REVOKED status) - checked above
+      // - Token suspension (SUSPENDED status) - checked above
+      // - Token made inactive (INACTIVE status) - checked above
+      // - Tenant status changes - checked above
       if (signupToken.status === 'USED_UP') {
-        return {
-          user: null,
-          error: NextResponse.json(
-            { code: 'ATI_TOKEN_QUOTA_EXCEEDED', message: 'Your ATI token quota has been exceeded. Please contact your administrator.' },
-            { status: 401 }
-          )
-        }
+        // Log for monitoring but ALLOW request - this is expected behavior
+        console.log(`[Auth] User ${payload.sub} making request with USED_UP token ${signupToken.fingerprint}`)
+        // Continue - do NOT return an error here
       }
 
-      // Only allow ACTIVE or ISSUED tokens
-      if (signupToken.status !== 'ACTIVE' && signupToken.status !== 'ISSUED') {
+      // Only allow ACTIVE, ISSUED, or USED_UP tokens for existing users
+      // USED_UP is valid for existing users who already signed up
+      const validStatusesForExistingUsers = ['ACTIVE', 'ISSUED', 'USED_UP']
+      if (!validStatusesForExistingUsers.includes(signupToken.status)) {
         return {
           user: null,
           error: NextResponse.json(

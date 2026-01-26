@@ -83,13 +83,28 @@ function generatePaidAtiId(): string {
 
 /**
  * Generate a secure ATI token
+ * Uses the same pepper-based hashing as auth.ts for consistency
  */
 function generateAtiToken(): { rawToken: string; tokenHash: string; fingerprint: string } {
   // Generate raw token (32 bytes = 64 hex chars)
   const rawToken = crypto.randomBytes(32).toString('hex')
   
-  // Hash the token for storage
-  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex')
+  // SECURITY: Use pepper for consistent hashing with auth.ts validateATIToken
+  // This ensures tokens can be validated by hashATIToken in auth.ts
+  const ATI_PEPPER = (() => {
+    const pepper = process.env.ATI_PEPPER
+    if (!pepper) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('ATI_PEPPER environment variable is required in production')
+      }
+      console.warn('[AutoTenantService] ATI_PEPPER not set - using weak default')
+      return 'default-pepper-change-in-prod'
+    }
+    return pepper
+  })()
+  
+  // Hash the token with pepper for storage (matches hashATIToken in auth.ts)
+  const tokenHash = crypto.createHash('sha256').update(rawToken + ATI_PEPPER).digest('hex')
   
   // Generate fingerprint (first 8 chars of hash)
   const fingerprint = tokenHash.substring(0, 8).toUpperCase()

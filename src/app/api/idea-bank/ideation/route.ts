@@ -3,12 +3,16 @@
  * 
  * GET  - List all ideation sessions for the user
  * POST - Create a new ideation session
+ * 
+ * QUOTA ENFORCEMENT: Service access is checked before creating sessions
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import * as IdeationService from '@/lib/ideation/ideation-service';
+import { enforceServiceAccess } from '@/lib/service-access-middleware';
+import { checkTrialQuota } from '@/lib/trial-plan-service';
 
 export async function GET(request: NextRequest) {
   try {
@@ -69,6 +73,30 @@ export async function POST(request: NextRequest) {
 
     if (!user?.tenantId) {
       return NextResponse.json({ error: 'User not associated with tenant' }, { status: 403 });
+    }
+
+    // ENFORCEMENT: Check organizational service access (Tenant Admin controlled)
+    const serviceCheck = await enforceServiceAccess(
+      user.id,
+      user.tenantId,
+      'IDEATION'
+    );
+    if (!serviceCheck.allowed) {
+      return serviceCheck.response;
+    }
+
+    // ENFORCEMENT: Check trial-specific quotas before creating session
+    // This provides early feedback to trial users who have exhausted their quota
+    const trialQuotaCheck = await checkTrialQuota(user.id, 'ideation');
+    if (!trialQuotaCheck.allowed) {
+      return NextResponse.json(
+        { 
+          error: trialQuotaCheck.reason,
+          code: 'QUOTA_EXCEEDED',
+          remaining: trialQuotaCheck.remaining 
+        },
+        { status: 403 }
+      );
     }
 
     const body = await request.json();

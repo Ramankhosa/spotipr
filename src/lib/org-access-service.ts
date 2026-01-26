@@ -617,10 +617,20 @@ export async function checkServiceAccess(
   })
   
   if (!tenantPlan) {
-    // In development/testing, allow access if no plan is set up
-    // In production, you may want to return { allowed: false }
-    console.warn(`[ServiceAccess] No active plan found for tenant ${tenantId}, allowing access by default`)
-    return { allowed: true, reason: 'No plan configured - defaulting to allowed' }
+    // SECURITY: Fail closed - deny access if no plan is configured
+    // This prevents access bypass when plans are missing or expired
+    const isProduction = process.env.NODE_ENV === 'production'
+    if (isProduction) {
+      console.error(`[ServiceAccess] DENIED: No active plan found for tenant ${tenantId}`)
+      return { 
+        allowed: false, 
+        reason: 'No active subscription plan. Please contact your administrator or subscribe to a plan.' 
+      }
+    } else {
+      // In development/testing, log warning but allow access for easier testing
+      console.warn(`[ServiceAccess] DEV MODE: No active plan found for tenant ${tenantId}, allowing access`)
+      return { allowed: true, reason: 'No plan configured - dev mode override' }
+    }
   }
   
   const featureCode = SERVICE_TO_FEATURE[serviceType]
@@ -629,10 +639,19 @@ export async function checkServiceAccess(
   )
   
   if (!planFeature) {
-    // Feature not in plan - allow by default for development
-    // In production, you may want to restrict this
-    console.warn(`[ServiceAccess] ${serviceType} not in plan for tenant ${tenantId}, allowing access by default`)
-    return { allowed: true, reason: 'Feature not in plan - defaulting to allowed' }
+    // SECURITY: Fail closed - deny access if feature not in plan
+    const isProduction = process.env.NODE_ENV === 'production'
+    if (isProduction) {
+      console.error(`[ServiceAccess] DENIED: ${serviceType} not in plan for tenant ${tenantId}`)
+      return { 
+        allowed: false, 
+        reason: `Your current plan does not include ${serviceType}. Please upgrade your plan.` 
+      }
+    } else {
+      // In development/testing, log warning but allow access
+      console.warn(`[ServiceAccess] DEV MODE: ${serviceType} not in plan for tenant ${tenantId}, allowing access`)
+      return { allowed: true, reason: 'Feature not in plan - dev mode override' }
+    }
   }
   
   // Check tenant-level usage using unified service usage tracker

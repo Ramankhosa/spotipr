@@ -199,63 +199,33 @@ export async function POST(request: NextRequest) {
       console.log(`[Signup] Tenant ${tenant.name} already has plan: ${existingTenantPlan.planId}`)
     }
 
-    // Check if this is the first user for this tenant
-    const existingUsersCount = await prisma.user.count({
+    // Pre-fetch data for role determination (these are read-only checks)
+    // The actual user limit check happens atomically inside the transaction
+    const existingUsersCountPreCheck = await prisma.user.count({
       where: { tenantId: tenant.id }
     })
 
-    // Validate tenant user limit based on original tenant creation token
-    if (existingUsersCount > 0) {
-      // Find the original tenant admin user (first user) and their signup token
+    // Pre-fetch tenant admin info for role logic (used outside transaction)
+    let tenantAdminTokenInfo: { signupAtiTokenId: string | null; maxUses: number | null } | null = null
+    if (existingUsersCountPreCheck > 0) {
       const tenantAdmin = await prisma.user.findFirst({
         where: {
           tenantId: tenant.id,
-          roles: { hasSome: ['OWNER', 'ADMIN'] } // Find tenant admin
+          roles: { hasSome: ['OWNER', 'ADMIN'] }
         },
-        select: {
-          id: true,
-          signupAtiTokenId: true
-        },
-        orderBy: { createdAt: 'asc' } // Get the first admin user
+        select: { signupAtiTokenId: true },
+        orderBy: { createdAt: 'asc' }
       })
-
-      console.log('Tenant user limit validation:', {
-        tenantId: tenant.id,
-        existingUsersCount,
-        tenantAdminFound: !!tenantAdmin,
-        tenantAdminSignupTokenId: tenantAdmin?.signupAtiTokenId
-      })
-
+      
       if (tenantAdmin?.signupAtiTokenId) {
-        // Get the original token used to create the tenant admin
         const originalToken = await prisma.aTIToken.findUnique({
-          where: { id: tenantAdmin.signupAtiTokenId }
+          where: { id: tenantAdmin.signupAtiTokenId },
+          select: { maxUses: true }
         })
-
-        console.log('Original token check:', {
-          tokenId: tenantAdmin.signupAtiTokenId,
-          tokenFound: !!originalToken,
-          tokenMaxUses: originalToken?.maxUses,
-          wouldExceedLimit: originalToken?.maxUses ? existingUsersCount >= originalToken.maxUses : false
-        })
-
-        // Check if adding this user would exceed the tenant's user limit
-        // existingUsersCount is the current count before adding this user
-        // So we reject if current count >= maxUses (meaning tenant is already at limit)
-        // Note: if maxUses is null/undefined, it means unlimited users allowed
-        if (originalToken?.maxUses && existingUsersCount >= originalToken.maxUses) {
-          return NextResponse.json(
-            {
-              code: 'TENANT_USER_LIMIT_EXCEEDED',
-              message: `Tenant has reached its maximum user limit of ${originalToken.maxUses} users.`,
-              current_users: existingUsersCount,
-              max_users: originalToken.maxUses
-            },
-            { status: 400 }
-          )
+        tenantAdminTokenInfo = {
+          signupAtiTokenId: tenantAdmin.signupAtiTokenId,
+          maxUses: originalToken?.maxUses ?? null
         }
-      } else {
-        console.log('No tenant admin with signup token found - allowing signup (unlimited)')
       }
     }
 
@@ -265,7 +235,7 @@ export async function POST(request: NextRequest) {
     let tokenCreator = null
     let roleReason = 'default'
 
-    if (existingUsersCount === 0) {
+    if (existingUsersCountPreCheck === 0) {
       // First user for this tenant - make them OWNER (cannot be overridden)
       userRole = 'OWNER'
       roleReason = 'first_tenant_user'
@@ -332,7 +302,20 @@ export async function POST(request: NextRequest) {
     const passwordHash = await hashPassword(password)
 
     // Use a transaction to ensure atomicity - either everything succeeds or nothing does
+    // This includes the user limit check to prevent race conditions in parallel signups
     const result = await prisma.$transaction(async (tx) => {
+      // ATOMIC CHECK: Re-count users inside transaction to prevent race conditions
+      // Two parallel signup requests could both pass the pre-check, but this ensures
+      // only one succeeds when the limit would be exceeded
+      const existingUsersCount = await tx.user.count({
+        where: { tenantId: tenant.id }
+      })
+
+      // Validate tenant user limit atomically
+      if (tenantAdminTokenInfo?.maxUses && existingUsersCount >= tenantAdminTokenInfo.maxUses) {
+        throw new Error(`TENANT_USER_LIMIT_EXCEEDED:${tenantAdminTokenInfo.maxUses}:${existingUsersCount}`)
+      }
+
       // Create user
       const user = await tx.user.create({
         data: {
@@ -396,7 +379,7 @@ export async function POST(request: NextRequest) {
             ati_token_creator: tokenCreator?.actorUserId || null,
             ati_explicit_role: fullToken?.assignedRole || null,
             ati_assigned_team: fullToken?.assignedTeamId || null,
-            is_first_tenant_user: existingUsersCount === 0
+            is_first_tenant_user: existingUsersCountPreCheck === 0
           }
         }
       })
@@ -455,6 +438,22 @@ export async function POST(request: NextRequest) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { code: 'INVALID_INPUT', message: 'Invalid input data', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    // Handle atomic tenant user limit exceeded error from transaction
+    if (error instanceof Error && error.message.startsWith('TENANT_USER_LIMIT_EXCEEDED:')) {
+      const parts = error.message.split(':')
+      const maxUsers = parseInt(parts[1], 10)
+      const currentUsers = parseInt(parts[2], 10)
+      return NextResponse.json(
+        {
+          code: 'TENANT_USER_LIMIT_EXCEEDED',
+          message: `Tenant has reached its maximum user limit of ${maxUsers} users.`,
+          current_users: currentUsers,
+          max_users: maxUsers
+        },
         { status: 400 }
       )
     }
