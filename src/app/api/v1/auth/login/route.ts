@@ -13,10 +13,21 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { email, password } = loginSchema.parse(body)
 
-    // Find user with tenant
+    // Find user with tenant (include selected plan info for payment-pending users)
     const user = await prisma.user.findUnique({
       where: { email },
-      include: { tenant: true }
+      include: { 
+        tenant: {
+          select: {
+            id: true,
+            atiId: true,
+            status: true,
+            registrationSource: true,
+            selectedPlanCode: true,
+            selectedBillingCycle: true
+          }
+        } 
+      }
     })
 
     if (!user) {
@@ -143,14 +154,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check tenant status
-    if (user.tenant && user.tenant.status !== 'ACTIVE') {
+    // Check tenant status - allow PENDING_PAYMENT for login (service checks handle blocking)
+    if (user.tenant && user.tenant.status !== 'ACTIVE' && user.tenant.status !== 'PENDING_PAYMENT') {
       const scopeType = isPlatformScope ? 'platform' : 'tenant'
       return NextResponse.json(
         { code: 'SCOPE_INACTIVE', message: `${scopeType} scope is inactive. Please contact administrator.` },
         { status: 401 }
       )
     }
+
+    // Track if user needs to complete payment (for frontend redirect)
+    const isPendingPayment = user.tenant?.status === 'PENDING_PAYMENT'
 
     // Generate JWT with scope information (short-lived access token)
     const accessToken = generateJWT({
@@ -189,10 +203,21 @@ export async function POST(request: NextRequest) {
     })
 
     // Create response with access token in body
-    const response = NextResponse.json({
+    // Include payment_required flag for frontend to handle redirect
+    const responseData: Record<string, any> = {
       token: accessToken,
       expires_in: 900 // 15 minutes in seconds (matches JWT_EXPIRES_IN)
-    }, { status: 200 })
+    }
+
+    // If payment pending, include info for frontend to redirect
+    if (isPendingPayment) {
+      responseData.payment_required = true
+      responseData.redirect_url = '/pricing?checkout=true'
+      responseData.plan_code = user.tenant?.selectedPlanCode
+      responseData.billing_cycle = user.tenant?.selectedBillingCycle
+    }
+
+    const response = NextResponse.json(responseData, { status: 200 })
 
     // Set refresh token as httpOnly cookie (not accessible via JavaScript - XSS protection)
     response.cookies.set('refresh_token', refreshTokenData.token, {
@@ -220,6 +245,5 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-
 
 

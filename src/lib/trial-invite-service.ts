@@ -475,7 +475,7 @@ export async function sendInvites(
       console.log('[Trial Campaign] Processing invite for:', invite.email)
       
       // Generate tracking URLs
-      const inviteLink = `${baseUrl}/register?invite=${invite.inviteToken}&trial=true&email=${encodeURIComponent(invite.email)}`
+      const inviteLink = `${baseUrl}/institutional-access?invite=${invite.inviteToken}&trial=true&email=${encodeURIComponent(invite.email)}`
       const trackingPixelUrl = `${baseUrl}/api/track/open?id=${invite.id}`
       const unsubscribeLink = `${baseUrl}/api/track/unsubscribe?id=${invite.id}`
 

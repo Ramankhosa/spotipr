@@ -172,6 +172,31 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
     async checkQuota(request: FeatureRequest): Promise<QuotaCheckResult> {
       try {
+        // SPECIAL CASE: PATENT_DRAFTING completion quotas are handled separately by PatentDraftingTracker
+        // The PatentDraftingTracker counts COMPLETE PATENTS (when both description + claims are saved)
+        // The metering system here counts LLM API CALLS, which is a different metric.
+        // For PATENT_DRAFTING, we bypass the LLM completion quota check to avoid confusion.
+        // The patent count limit is enforced in patent-drafting-tracker.ts via canDraftPatent()
+        if (request.featureCode === 'PATENT_DRAFTING') {
+          console.log('[Metering] PATENT_DRAFTING: Bypassing LLM completion quota (patent count handled by PatentDraftingTracker)')
+          return {
+            allowed: true,
+            remaining: { monthly: undefined, daily: undefined }  // undefined = unlimited for LLM calls
+          }
+        }
+
+        // SPECIAL CASE: DIAGRAM_GENERATION is part of the patent drafting workflow
+        // Diagrams are generated as part of each patent draft, so counting individual LLM calls
+        // for diagram generation separately doesn't make sense.
+        // The patent count limit already controls how many patents (with diagrams) can be drafted.
+        if (request.featureCode === 'DIAGRAM_GENERATION') {
+          console.log('[Metering] DIAGRAM_GENERATION: Bypassing LLM completion quota (part of patent drafting workflow)')
+          return {
+            allowed: true,
+            remaining: { monthly: undefined, daily: undefined }  // undefined = unlimited for LLM calls
+          }
+        }
+
         // First check if tenant is in PENDING_PAYMENT status (self-service signup not yet paid)
         const tenant = await prisma.tenant.findUnique({
           where: { id: request.tenantId },
@@ -242,13 +267,14 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           return { allowed: false, remaining: { monthly: 0, daily: 0 } }
         }
 
-        // Use override values if valid, otherwise use plan defaults (or 0 if no plan feature)
+        // Use override values if valid, otherwise use plan defaults (or null if no plan feature)
+        // null means unlimited quota for that period
         const monthlyQuota = (overrideValid && tenantOverride.monthlyQuota !== null) 
           ? tenantOverride.monthlyQuota 
-          : (planFeature?.monthlyQuota || 0)
+          : (planFeature?.monthlyQuota ?? null)
         const dailyQuota = (overrideValid && tenantOverride.dailyQuota !== null)
           ? tenantOverride.dailyQuota
-          : (planFeature?.dailyQuota || 0)
+          : (planFeature?.dailyQuota ?? null)
 
         // Get current usage
         const monthlyUsage = await this.getCurrentUsage(
@@ -263,12 +289,15 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           'DAILY'
         )
 
-        // Calculate remaining
-        const monthlyRemaining = Math.max(0, monthlyQuota - monthlyUsage)
-        const dailyRemaining = Math.max(0, dailyQuota - dailyUsage)
+        // Calculate remaining (null quota means unlimited, so remaining is also null)
+        const monthlyRemaining = monthlyQuota === null ? null : Math.max(0, monthlyQuota - monthlyUsage)
+        const dailyRemaining = dailyQuota === null ? null : Math.max(0, dailyQuota - dailyUsage)
 
         // Check if quota exceeded
-        const allowed = monthlyRemaining > 0 && dailyRemaining > 0
+        // null remaining means unlimited, so it's always allowed
+        const monthlyAllowed = monthlyRemaining === null || monthlyRemaining > 0
+        const dailyAllowed = dailyRemaining === null || dailyRemaining > 0
+        const allowed = monthlyAllowed && dailyAllowed
 
         // Calculate reset time (monthly by default)
         const resetTime = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1)
@@ -284,7 +313,15 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
       } catch (error) {
         console.error('Quota check failed:', error)
-        // Fail open - allow request if quota check fails
+        // SECURITY: Fail closed in production - deny access on error
+        // This prevents access bypass during database outages or errors
+        const isProduction = process.env.NODE_ENV === 'production'
+        if (isProduction) {
+          console.error('[SECURITY] Quota check failed - denying access in production')
+          return { allowed: false, remaining: { monthly: 0, daily: 0 } }
+        }
+        // Allow in dev mode for easier debugging
+        console.warn('[DEV] Quota check failed - allowing access in dev mode')
         return {
           allowed: true,
           remaining: { monthly: 999999, daily: 999999 }
@@ -402,13 +439,42 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
       await Promise.all(updates)
     },
 
-    async getCurrentUsage(tenantId: string, featureCode?: string, periodType: 'DAILY' | 'MONTHLY' = 'MONTHLY'): Promise<number> {
+    async getCurrentUsage(tenantId: string, featureCodeOrId?: string, periodType: 'DAILY' | 'MONTHLY' = 'MONTHLY'): Promise<number> {
       const { key } = getCurrentPeriod(periodType)
+
+      // Determine if we have a feature ID or feature code
+      let featureId: string | undefined = undefined
+      
+      if (featureCodeOrId) {
+        // Check if it looks like an ID (UUID or CUID) or a feature code string
+        // UUIDs have dashes, CUIDs start with 'c' and are ~25 chars of lowercase alphanumeric
+        // Feature codes are uppercase like 'PATENT_DRAFTING'
+        const isUUID = featureCodeOrId.includes('-') && featureCodeOrId.length > 20
+        const isCUID = /^c[a-z0-9]{20,}$/i.test(featureCodeOrId)
+        const isFeatureId = isUUID || isCUID
+        
+        if (isFeatureId) {
+          // It's a feature ID, use it directly
+          featureId = featureCodeOrId
+        } else {
+          // It's a feature code, look up the ID
+          const feature = await prisma.feature.findUnique({
+            where: { code: featureCodeOrId as any },
+            select: { id: true }
+          })
+          featureId = feature?.id
+        }
+      }
+
+      // If no featureId found, return 0 (no usage)
+      if (!featureId) {
+        return 0
+      }
 
       const meter = await prisma.usageMeter.findFirst({
         where: {
           tenantId,
-          featureId: featureCode,
+          featureId: featureId,
           periodType,
           periodKey: key
         }

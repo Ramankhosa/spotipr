@@ -29,39 +29,36 @@ function RegisterContent() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [atiToken, setAtiToken] = useState('')
   const [companyName, setCompanyName] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [isInvited, setIsInvited] = useState(false)
-  const [isTrial, setIsTrial] = useState(false)
-  
+
   // Paid signup state
   const [isPaidSignup, setIsPaidSignup] = useState(false)
   const [planCode, setPlanCode] = useState<PlanCode | null>(null)
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly')
-  
-  const { signup, paidSignup } = useAuth()
+
+  const { paidSignup } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Check for URL params
   useEffect(() => {
     const inviteToken = searchParams?.get('invite')
     const trialParam = searchParams?.get('trial')
     const emailParam = searchParams?.get('email')
     const planParam = searchParams?.get('plan')?.toUpperCase() as PlanCode | undefined
     const cycleParam = searchParams?.get('cycle') as BillingCycle | undefined
-    
-    // If invite token is provided, use ATI flow
-    if (inviteToken) {
-      setAtiToken(inviteToken)
-      setIsInvited(true)
-      setIsPaidSignup(false)
+
+    if (inviteToken || trialParam === 'true') {
+      const params = new URLSearchParams()
+      if (inviteToken) params.set('invite', inviteToken)
+      if (trialParam) params.set('trial', trialParam)
+      if (emailParam) params.set('email', emailParam)
+      router.replace(`/institutional-access${params.toString() ? `?${params.toString()}` : ''}`)
+      return
     }
-    
-    // If plan param is provided (from pricing page), use paid signup flow
+
     if (planParam && ['BASIC', 'PRO', 'ENTERPRISE'].includes(planParam)) {
       setPlanCode(planParam)
       setIsPaidSignup(true)
@@ -69,15 +66,11 @@ function RegisterContent() {
         setBillingCycle(cycleParam)
       }
     }
-    
-    if (trialParam === 'true') {
-      setIsTrial(true)
-    }
-    
+
     if (emailParam) {
       setEmail(decodeURIComponent(emailParam))
     }
-  }, [searchParams])
+  }, [searchParams, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -97,9 +90,6 @@ function RegisterContent() {
       return
     }
 
-    // ===========================================================================
-    // PAID SIGNUP FLOW (from pricing page)
-    // ===========================================================================
     if (isPaidSignup && planCode) {
       const result = await paidSignup({
         email,
@@ -113,33 +103,28 @@ function RegisterContent() {
 
       if (result.success) {
         setSuccess('Account created! Redirecting to payment...')
-        
-        // Store signup info for checkout page
+
         localStorage.setItem('pending_payment', JSON.stringify({
           planCode: result.planCode,
           billingCycle: result.billingCycle,
           userId: result.userId,
           tenantId: result.tenantId,
         }))
-        
-        // Auto-login and redirect to checkout
-        // First login to get token
+
         const loginResponse = await fetch('/api/v1/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
         })
-        
+
         if (loginResponse.ok) {
           const loginData = await loginResponse.json()
           localStorage.setItem('auth_token', loginData.token)
-          
-          // Redirect to pricing page to complete checkout
+
           setTimeout(() => {
             router.push(`/pricing?checkout=true&plan=${planCode}&cycle=${billingCycle}`)
           }, 1000)
         } else {
-          // If auto-login fails, redirect to login
           setTimeout(() => {
             router.push('/login?redirect=/pricing')
           }, 1500)
@@ -149,283 +134,126 @@ function RegisterContent() {
       }
 
       setIsLoading(false)
-      return
     }
-
-    // ===========================================================================
-    // ATI-BASED SIGNUP FLOW (traditional invitation)
-    // ===========================================================================
-    const result = await signup(email, password, atiToken, firstName, lastName, isTrial)
-
-    if (result.success) {
-      if (isTrial) {
-        setSuccess('Trial account created! Redirecting to login...')
-      } else {
-        setSuccess('Account created successfully! You can now log in.')
-      }
-      setTimeout(() => {
-        router.push('/login')
-      }, 2000)
-    } else {
-      setError(result.error || 'Signup failed')
-    }
-
-    setIsLoading(false)
   }
 
-  // ===========================================================================
-  // RENDER: Paid Signup UI
-  // ===========================================================================
-  if (isPaidSignup && planCode) {
+  if (!isPaidSignup || !planCode) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950 relative overflow-hidden py-12 px-4 sm:px-6 lg:px-8">
-        {/* Background Elements */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-[50%] -left-[20%] w-[100%] h-[100%] rounded-full bg-ai-blue-900/10 blur-[150px]" />
           <div className="absolute -bottom-[20%] -right-[20%] w-[80%] h-[80%] rounded-full bg-purple-900/10 blur-[150px]" />
         </div>
 
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6 }}
-          className="max-w-lg w-full space-y-6 relative z-10"
+          className="max-w-md w-full space-y-6 relative z-10"
         >
           <div className="flex flex-col items-center">
             <div className="mb-6 relative">
               <div className="absolute -inset-4 bg-ai-blue-500/20 blur-xl rounded-full" />
               <AnimatedLogo size="lg" />
             </div>
-            
-            {/* Plan Badge */}
-            <div className="mb-3 flex items-center gap-2">
-              <CreditCard className="w-4 h-4 text-ai-blue-400" />
-              <span className="text-sm font-medium text-ai-blue-400">
-                {PLAN_NAMES[planCode]} Plan • {billingCycle === 'yearly' ? 'Annual' : 'Monthly'}
-              </span>
-            </div>
-            
             <h2 className="text-center text-3xl font-bold text-white tracking-tight">
               Create your account
             </h2>
             <p className="mt-2 text-center text-sm text-ai-graphite-400">
-              Complete signup to start your {PLAN_NAMES[planCode]} subscription
+              Choose how you'd like to join PatentNest.
             </p>
           </div>
 
-          {/* Plan Features Preview */}
-          <div className="bg-ai-graphite-900/50 border border-ai-graphite-700 rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-sm font-medium text-white">{PLAN_NAMES[planCode]} includes:</span>
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              {PLAN_FEATURES[planCode].map((feature, idx) => (
-                <div key={idx} className="flex items-center gap-2 text-sm text-ai-graphite-300">
-                  <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                  <span>{feature}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Registration Form */}
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <input
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                  placeholder="First name"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                />
-              </div>
-              <div className="flex-1">
-                <input
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                  placeholder="Last name"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                />
-              </div>
-            </div>
-            
-            <input
-              type="email"
-              required
-              className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-              placeholder="Email address"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            
-            {/* Optional Company Name */}
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Building2 className="w-4 h-4 text-ai-graphite-400" />
-                <label className="text-sm text-ai-graphite-400">Company/Organization (optional)</label>
-              </div>
-              <input
-                type="text"
-                className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                placeholder="Your company name"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-              />
-            </div>
-            
-            <input
-              type="password"
-              required
-              className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-              placeholder="Password (min 8 characters)"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            
-            <input
-              type="password"
-              required
-              className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-              placeholder="Confirm password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-            />
-
-            {error && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="rounded-lg bg-red-900/20 border border-red-900/50 p-4"
-              >
-                <div className="text-sm text-red-400 text-center">{error}</div>
-              </motion.div>
-            )}
-
-            {success && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="rounded-lg bg-green-900/20 border border-green-900/50 p-4"
-              >
-                <div className="text-sm text-green-400 text-center">{success}</div>
-              </motion.div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-ai-blue-900/30 transition-all duration-200 overflow-hidden"
+          <div className="space-y-4">
+            <Link
+              href="/pricing"
+              className="block w-full rounded-xl border border-ai-blue-500/40 bg-ai-blue-600/10 p-5 text-left transition-colors hover:bg-ai-blue-600/20"
             >
-              <span className="relative z-10">
-                {isLoading ? 'Creating account...' : 'Continue to Payment'}
-              </span>
-              <div className="absolute inset-0 -translate-x-full group-hover:translate-x-0 bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-500" />
-            </button>
+              <div className="flex items-center gap-3 text-white">
+                <CreditCard className="w-5 h-5 text-ai-blue-300" />
+                <span className="font-semibold">Self-serve subscription</span>
+              </div>
+              <p className="mt-2 text-sm text-ai-graphite-400">
+                Pick a plan, create your account, and complete payment to activate access.
+              </p>
+            </Link>
 
-            <p className="text-xs text-ai-graphite-500 text-center">
-              By creating an account, you agree to our{' '}
-              <Link href="/terms" className="text-ai-blue-400 hover:text-ai-blue-300">Terms</Link>{' '}
-              and{' '}
-              <Link href="/privacy" className="text-ai-blue-400 hover:text-ai-blue-300">Privacy Policy</Link>.
-            </p>
+            <Link
+              href="/institutional-access"
+              className="block w-full rounded-xl border border-ai-graphite-800 bg-ai-graphite-900/50 p-5 text-left transition-colors hover:border-ai-blue-500/40"
+            >
+              <div className="flex items-center gap-3 text-white">
+                <Building2 className="w-5 h-5 text-ai-graphite-300" />
+                <span className="font-semibold">Institutional Access</span>
+              </div>
+              <p className="mt-2 text-sm text-ai-graphite-400">
+                Use your organization's ATI access code to join an existing tenant.
+              </p>
+            </Link>
+          </div>
 
-            <div className="flex items-center justify-center gap-4 text-sm">
-              <Link href="/login" className="text-ai-graphite-400 hover:text-white transition-colors">
-                Already have an account?
+          <div className="text-center">
+            <span className="text-sm text-ai-graphite-400">
+              Already have an account?{' '}
+              <Link href="/login" className="font-medium text-ai-blue-400 hover:text-ai-blue-300 transition-colors">
+                Sign in
               </Link>
-              <span className="text-ai-graphite-600">|</span>
-              <Link href="/pricing" className="text-ai-graphite-400 hover:text-white transition-colors">
-                Change plan
-              </Link>
-            </div>
-          </form>
+            </span>
+          </div>
         </motion.div>
       </div>
     )
   }
 
-  // ===========================================================================
-  // RENDER: ATI-Based Signup UI (Original)
-  // ===========================================================================
   return (
     <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950 relative overflow-hidden py-12 px-4 sm:px-6 lg:px-8">
-      {/* Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-[50%] -left-[20%] w-[100%] h-[100%] rounded-full bg-ai-blue-900/10 blur-[150px]" />
         <div className="absolute -bottom-[20%] -right-[20%] w-[80%] h-[80%] rounded-full bg-purple-900/10 blur-[150px]" />
       </div>
 
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
-        className="max-w-md w-full space-y-8 relative z-10"
+        className="max-w-lg w-full space-y-6 relative z-10"
       >
         <div className="flex flex-col items-center">
           <div className="mb-6 relative">
             <div className="absolute -inset-4 bg-ai-blue-500/20 blur-xl rounded-full" />
             <AnimatedLogo size="lg" />
           </div>
-          
-          {/* Dynamic header based on invite/trial status */}
-          {isInvited && isTrial ? (
-            <>
-              <div className="mb-2 px-3 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-full">
-                <span className="text-xs font-medium text-emerald-400">✨ Free Trial Access</span>
-              </div>
-              <h2 className="text-center text-3xl font-bold text-white tracking-tight">
-                Welcome to Your Trial
-              </h2>
-              <p className="mt-2 text-center text-sm text-ai-graphite-400">
-                You&apos;ve been invited to try our platform. Create your account to get started.
-              </p>
-            </>
-          ) : isInvited ? (
-            <>
-              <div className="mb-2 px-3 py-1 bg-ai-blue-500/20 border border-ai-blue-500/30 rounded-full">
-                <span className="text-xs font-medium text-ai-blue-400">🎉 You&apos;re Invited</span>
-              </div>
-              <h2 className="text-center text-3xl font-bold text-white tracking-tight">
-                Join Your Team
-              </h2>
-              <p className="mt-2 text-center text-sm text-ai-graphite-400">
-                Your team has invited you to collaborate. Create your account to join.
-              </p>
-            </>
-          ) : (
-            <>
-              <h2 className="text-center text-3xl font-bold text-white tracking-tight">
-                Create your account
-              </h2>
-              <p className="mt-2 text-center text-sm text-ai-graphite-400">
-                Join your organization&apos;s secure workspace with an access code.
-              </p>
-            </>
-          )}
+
+          <div className="mb-3 flex items-center gap-2">
+            <CreditCard className="w-4 h-4 text-ai-blue-400" />
+            <span className="text-sm font-medium text-ai-blue-400">
+              {PLAN_NAMES[planCode]} Plan • {billingCycle === 'yearly' ? 'Annual' : 'Monthly'}
+            </span>
+          </div>
+
+          <h2 className="text-center text-3xl font-bold text-white tracking-tight">
+            Create your account
+          </h2>
+          <p className="mt-2 text-center text-sm text-ai-graphite-400">
+            Complete signup to start your {PLAN_NAMES[planCode]} subscription.
+          </p>
         </div>
 
-        {/* CTA for users without access code */}
-        {!isInvited && (
-          <div className="bg-gradient-to-r from-ai-blue-900/30 to-purple-900/30 border border-ai-blue-700/30 rounded-lg p-4">
-            <p className="text-sm text-ai-graphite-300 text-center mb-3">
-              Don&apos;t have an access code? Get started with a paid plan:
-            </p>
-            <Link 
-              href="/pricing"
-              className="flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-ai-blue-600/20 border border-ai-blue-500/30 rounded-lg text-sm font-medium text-ai-blue-300 hover:bg-ai-blue-600/30 hover:text-white transition-colors"
-            >
-              <CreditCard className="w-4 h-4" />
-              View Plans & Pricing
-            </Link>
+        <div className="bg-ai-graphite-900/50 border border-ai-graphite-700 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-sm font-medium text-white">{PLAN_NAMES[planCode]} includes:</span>
           </div>
-        )}
+          <div className="grid grid-cols-1 gap-2">
+            {PLAN_FEATURES[planCode].map((feature, idx) => (
+              <div key={idx} className="flex items-center gap-2 text-sm text-ai-graphite-300">
+                <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span>{feature}</span>
+              </div>
+            ))}
+          </div>
+        </div>
 
-        {/* Social Login Section */}
-        <div className="mt-8">
+        <div className="mt-4">
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-ai-graphite-700" />
@@ -438,7 +266,9 @@ function RegisterContent() {
           <div className="mt-6 grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={() => window.location.href = '/api/auth/social/google'}
+              onClick={() => {
+                window.location.href = `/api/auth/social/google?flow=paid&plan=${planCode}&cycle=${billingCycle}`
+              }}
               className="w-full inline-flex justify-center py-2 px-4 border border-ai-graphite-700 bg-ai-graphite-900/50 rounded-lg shadow-sm text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
               <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
@@ -452,7 +282,9 @@ function RegisterContent() {
 
             <button
               type="button"
-              onClick={() => window.location.href = '/api/auth/social/linkedin'}
+              onClick={() => {
+                window.location.href = `/api/auth/social/linkedin?flow=paid&plan=${planCode}&cycle=${billingCycle}`
+              }}
               className="w-full inline-flex justify-center py-2 px-4 border border-ai-graphite-700 bg-ai-graphite-900/50 rounded-lg shadow-sm text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
               <svg className="w-5 h-5 mr-2" fill="#0077B5" viewBox="0 0 24 24">
@@ -463,13 +295,10 @@ function RegisterContent() {
           </div>
 
           <p className="mt-3 text-xs text-center text-ai-graphite-500">
-            {isInvited 
-              ? 'Your access code will be applied automatically' 
-              : 'You\'ll enter your access code after social verification'}
+            We will create your account and continue to payment.
           </p>
         </div>
 
-        {/* Divider */}
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
             <div className="w-full border-t border-ai-graphite-700" />
@@ -479,133 +308,73 @@ function RegisterContent() {
           </div>
         </div>
 
-        {/* Email Registration Form */}
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          <div className="space-y-4">
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label htmlFor="firstName" className="sr-only">
-                  First name
-                </label>
-                <input
-                  id="firstName"
-                  name="firstName"
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                  placeholder="First name"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                />
-              </div>
-              <div className="flex-1">
-                <label htmlFor="lastName" className="sr-only">
-                  Last name
-                </label>
-                <input
-                  id="lastName"
-                  name="lastName"
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                  placeholder="Last name"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                />
-              </div>
-            </div>
-            <div>
-              <label htmlFor="email" className="sr-only">
-                Email address
-              </label>
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <div className="flex gap-3">
+            <div className="flex-1">
               <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
+                type="text"
                 required
                 className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                placeholder="Email address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                placeholder="First name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
               />
             </div>
-            {/* ATI Token Section - Hidden if pre-filled from invite link */}
-            {isInvited ? (
-              <div className="p-3 bg-ai-graphite-900/50 border border-ai-graphite-700 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="text-sm text-ai-graphite-300">Access code applied from your invitation</span>
-                </div>
-                <input type="hidden" name="atiToken" value={atiToken} />
-              </div>
-            ) : (
-              <div>
-                <label htmlFor="atiToken" className="block text-sm font-medium text-ai-graphite-300 mb-1.5">
-                  Organization Access Code
-                </label>
-                <input
-                  id="atiToken"
-                  name="atiToken"
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                  placeholder="Enter your organization's access code"
-                  value={atiToken}
-                  onChange={(e) => setAtiToken(e.target.value)}
-                />
-                {/* Helpful info about access codes */}
-                <div className="mt-2 p-3 bg-ai-graphite-900/30 border border-ai-graphite-800 rounded-lg">
-                  <p className="text-xs text-ai-graphite-400 leading-relaxed">
-                    <span className="text-ai-graphite-300 font-medium">What&apos;s an access code?</span>
-                    <br />
-                    Your organization admin provides this code to control who can join the team workspace. 
-                    It ensures your patent data stays secure and only authorized team members can access it.
-                  </p>
-                  <p className="mt-2 text-xs text-ai-graphite-500">
-                    💡 Check your email or ask your team admin for the code.
-                  </p>
-                </div>
-              </div>
-            )}
-            <div>
-              <label htmlFor="password" className="sr-only">
-                Password
-              </label>
+            <div className="flex-1">
               <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
+                type="text"
                 required
                 className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                placeholder="Password (min 8 characters)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="confirmPassword" className="sr-only">
-                Confirm Password
-              </label>
-              <input
-                id="confirmPassword"
-                name="confirmPassword"
-                type="password"
-                autoComplete="new-password"
-                required
-                className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                placeholder="Confirm password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Last name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
               />
             </div>
           </div>
 
+          <input
+            type="email"
+            required
+            className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
+            placeholder="Email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Building2 className="w-4 h-4 text-ai-graphite-400" />
+              <label className="text-sm text-ai-graphite-400">Company/Organization (optional)</label>
+            </div>
+            <input
+              type="text"
+              className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
+              placeholder="Your company name"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+            />
+          </div>
+
+          <input
+            type="password"
+            required
+            className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
+            placeholder="Password (min 8 characters)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          <input
+            type="password"
+            required
+            className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
+            placeholder="Confirm password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+          />
+
           {error && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               className="rounded-lg bg-red-900/20 border border-red-900/50 p-4"
@@ -615,7 +384,7 @@ function RegisterContent() {
           )}
 
           {success && (
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               className="rounded-lg bg-green-900/20 border border-green-900/50 p-4"
@@ -630,30 +399,26 @@ function RegisterContent() {
             className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-ai-blue-900/30 transition-all duration-200 overflow-hidden"
           >
             <span className="relative z-10">
-              {isLoading ? 'Creating account...' : 'Create account'}
+              {isLoading ? 'Creating account...' : 'Continue to Payment'}
             </span>
             <div className="absolute inset-0 -translate-x-full group-hover:translate-x-0 bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-500" />
           </button>
 
-          <p className="mt-4 text-xs text-ai-graphite-500 text-center">
+          <p className="text-xs text-ai-graphite-500 text-center">
             By creating an account, you agree to our{' '}
-            <Link href="/terms" className="text-ai-blue-400 hover:text-ai-blue-300 underline-offset-2 hover:underline">
-              Terms of Service
-            </Link>{' '}
+            <Link href="/terms" className="text-ai-blue-400 hover:text-ai-blue-300">Terms</Link>{' '}
             and{' '}
-            <Link href="/privacy" className="text-ai-blue-400 hover:text-ai-blue-300 underline-offset-2 hover:underline">
-              Privacy Policy
-            </Link>
-            .
+            <Link href="/privacy" className="text-ai-blue-400 hover:text-ai-blue-300">Privacy Policy</Link>.
           </p>
 
-          <div className="text-center">
-            <span className="text-sm text-ai-graphite-400">
-              Already have an account?{' '}
-              <Link href="/login" className="font-medium text-ai-blue-400 hover:text-ai-blue-300 transition-colors">
-                Sign in
-              </Link>
-            </span>
+          <div className="flex items-center justify-center gap-4 text-sm">
+            <Link href="/login" className="text-ai-graphite-400 hover:text-white transition-colors">
+              Already have an account?
+            </Link>
+            <span className="text-ai-graphite-600">|</span>
+            <Link href="/institutional-access" className="text-ai-graphite-400 hover:text-white transition-colors">
+              Institutional Access
+            </Link>
           </div>
         </form>
       </motion.div>
@@ -661,15 +426,16 @@ function RegisterContent() {
   )
 }
 
-// Wrap with Suspense for useSearchParams
 export default function RegisterPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950">
-        <div className="text-white">Loading...</div>
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950">
+          <div className="text-white">Loading...</div>
+        </div>
+      }
+    >
       <RegisterContent />
     </Suspense>
   )
-}
+}

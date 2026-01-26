@@ -634,13 +634,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       // 4. Not currently rendering
       // 5. No processing status (not in progress or failed)
       // 6. Not already queued for rendering (prevents duplicate calls)
+      // 7. Not already attempted auto-fix (prevents infinite LLM loops after fix failure)
+      const hasFailedAutoFix = autoFixAttemptedRef.current.has(key)
       const shouldRender =
         d.plantumlCode &&
         !uploaded[key] &&
         !d.imageUploadedAt &&
         !rendering[key] &&
         !processingStatus[key] &&
-        !queuedForRenderRef.current.has(key)
+        !queuedForRenderRef.current.has(key) &&
+        !hasFailedAutoFix  // Don't auto-render if auto-fix was already attempted
 
       if (shouldRender) {
         queuedForRenderRef.current.add(key)
@@ -658,9 +661,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       const updated = { ...prev }
       diagramSources.forEach((d: any) => {
         const key = getDiagramKey(d.figureNo, d.language || 'en')
-        // For diagrams without an image, always clear the queued ref to allow re-rendering
-        // This fixes the bug where replaced diagrams wouldn't auto-render because the ref wasn't cleared
-        if (!d?.imageUploadedAt) {
+        // For diagrams without an image, clear the queued ref to allow re-rendering
+        // BUT: Don't clear if auto-fix was already attempted - prevents infinite retry loops
+        // Users must manually click "Retry Render" to attempt again after a failure
+        if (!d?.imageUploadedAt && !autoFixAttemptedRef.current.has(key)) {
           queuedForRenderRef.current.delete(key)
         }
         // Reset uploaded to false if no image exists OR if imageUploadedAt is null (cleared after regeneration)

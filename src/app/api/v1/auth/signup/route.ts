@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { hashPassword, validateATIToken, incrementATITokenUsage, createAuditLog } from '@/lib/auth'
+import { hashPassword, validateATIToken, incrementATITokenUsage, createAuditLog, generateJWT, generateRefreshToken, storeRefreshToken } from '@/lib/auth'
 import { generateToken, hashToken } from '@/lib/token-utils'
 import { sendEmail } from '@/lib/mailer'
 import { verificationTemplate } from '@/lib/email-templates'
@@ -135,14 +135,30 @@ export async function POST(request: NextRequest) {
     }
 
     // CRITICAL: Ensure tenant has an active TenantPlan - without this, service access fails
+    const now = new Date()
     const existingTenantPlan = await prisma.tenantPlan.findFirst({
       where: {
         tenantId: tenant.id,
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } }
+        ]
       }
     })
 
     if (!existingTenantPlan) {
+      const anyTenantPlan = await prisma.tenantPlan.findFirst({
+        where: { tenantId: tenant.id }
+      })
+
+      if (anyTenantPlan) {
+        return NextResponse.json(
+          { code: 'TENANT_PLAN_INACTIVE', message: 'Tenant subscription is inactive. Please contact your administrator.' },
+          { status: 400 }
+        )
+      }
+
       console.log(`[Signup] Tenant ${tenant.name} has no TenantPlan - creating one now`)
       
       // Determine plan based on ATI token's planTier
@@ -504,11 +520,12 @@ async function handlePaidSignup(request: NextRequest, body: any) {
       )
     }
 
-    // Create audit log
+    // Get request metadata
     const ip = request.headers.get('x-forwarded-for') ||
                request.headers.get('x-real-ip') ||
                'unknown'
 
+    // Create audit log
     await prisma.auditLog.create({
       data: {
         actorUserId: result.user!.id,
@@ -529,7 +546,26 @@ async function handlePaidSignup(request: NextRequest, body: any) {
 
     console.log(`[Signup] Paid self-service signup complete: ${email} → Plan: ${planCode}`)
 
-    return NextResponse.json({
+    // Generate JWT token for authentication - service-level checks will block product access
+    // until payment is completed and tenant status changes from PENDING_PAYMENT to ACTIVE
+    const accessToken = generateJWT({
+      sub: result.user!.id,
+      email: result.user!.email,
+      tenant_id: result.tenant!.id,
+      roles: ['OWNER'],
+      ati_id: result.tenant!.atiId,
+      tenant_ati_id: result.tenant!.atiId,
+      scope: 'tenant'
+    })
+
+    // Generate and store refresh token
+    const refreshTokenData = generateRefreshToken(result.user!.id)
+    await storeRefreshToken(result.user!.id, refreshTokenData, {
+      userAgent: request.headers.get('user-agent') || undefined,
+      ipAddress: ip
+    })
+
+    const response = NextResponse.json({
       success: true,
       user_id: result.user!.id,
       tenant_id: result.tenant!.id,
@@ -538,7 +574,29 @@ async function handlePaidSignup(request: NextRequest, body: any) {
       requires_payment: true,
       plan_code: planCode,
       billing_cycle: billingCycle,
+      token: accessToken,
+      redirect_url: '/pricing?checkout=true',
     }, { status: 201 })
+
+    // Set refresh token as httpOnly cookie
+    response.cookies.set('refresh_token', refreshTokenData.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: '/'
+    })
+
+    // Set access token cookie
+    response.cookies.set('access_token', accessToken, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 15 * 60, // 15 minutes
+      path: '/'
+    })
+
+    return response
 
   } catch (error) {
     if (error instanceof z.ZodError) {

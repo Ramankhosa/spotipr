@@ -32,7 +32,11 @@ export default function LoginPage() {
       minLoadTime
     ])
 
-    if (result.success) {
+    if (result.success && result.requiresPayment) {
+      // Login succeeded but payment is required - redirect to payment page
+      router.push(result.redirectUrl || '/pricing?checkout=true')
+    } else if (result.success) {
+      // Full login success - redirect to dashboard
       router.push('/dashboard')
     } else {
       // Check if this is a social login account

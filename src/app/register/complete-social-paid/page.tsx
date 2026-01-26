@@ -2,12 +2,19 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-
-// Force dynamic rendering since we use search params
-export const dynamic = 'force-dynamic'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
 import AnimatedLogo from '@/components/ui/animated-logo'
+import { CreditCard, Building2 } from 'lucide-react'
+
+// Force dynamic rendering since we use search params
+export const dynamic = 'force-dynamic'
+
+const PLAN_NAMES = {
+  BASIC: 'Basic',
+  PRO: 'Pro',
+  ENTERPRISE: 'Enterprise',
+} as const
 
 const providerIcons: Record<string, JSX.Element> = {
   google: (
@@ -42,45 +49,47 @@ const providerNames: Record<string, string> = {
   twitter: 'Twitter'
 }
 
-interface PendingData {
+interface PendingPaidData {
   provider: string
   providerId: string
   email: string
   name?: string
   firstName?: string
   lastName?: string
+  planCode: keyof typeof PLAN_NAMES
+  billingCycle: 'monthly' | 'yearly'
   exp: number
 }
 
-function CompleteSocialSignupContent() {
+function CompletePaidSocialSignupContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [atiToken, setAtiToken] = useState('')
+  const [companyName, setCompanyName] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [pendingData, setPendingData] = useState<PendingData | null>(null)
+  const [pendingData, setPendingData] = useState<PendingPaidData | null>(null)
   const [isExpired, setIsExpired] = useState(false)
 
   const token = searchParams?.get('token')
   const provider = searchParams?.get('provider') || 'social'
 
   useEffect(() => {
-    if (token) {
-      try {
-        const decoded = JSON.parse(Buffer.from(token, 'base64url').toString())
-        setPendingData(decoded)
-
-        // Check if token is expired
-        if (Date.now() > decoded.exp) {
-          setIsExpired(true)
-          setError('Your registration session has expired. Please try again.')
-        }
-      } catch (e) {
-        setError('Invalid registration token. Please try again.')
-      }
-    } else {
+    if (!token) {
       setError('Missing registration token. Please start the signup process again.')
+      return
+    }
+
+    try {
+      const decoded = JSON.parse(Buffer.from(token, 'base64url').toString())
+      setPendingData(decoded)
+
+      if (Date.now() > decoded.exp) {
+        setIsExpired(true)
+        setError('Your registration session has expired. Please try again.')
+      }
+    } catch {
+      setError('Invalid registration token. Please try again.')
     }
   }, [token])
 
@@ -90,42 +99,42 @@ function CompleteSocialSignupContent() {
     setSuccess('')
     setIsLoading(true)
 
-    if (!atiToken.trim()) {
-      setError('Please enter your ATI token')
-      setIsLoading(false)
-      return
-    }
-
     try {
-      const response = await fetch('/api/auth/social/complete-signup', {
+      const response = await fetch('/api/auth/social/complete-paid-signup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         credentials: 'include',
         body: JSON.stringify({
-          atiToken: atiToken.trim(),
-          pendingToken: token
+          pendingToken: token,
+          companyName: companyName.trim() || undefined
         })
       })
 
       const data = await response.json()
 
       if (response.ok) {
-        setSuccess('Account created successfully! Redirecting to dashboard...')
-        
-        // Store token in localStorage
+        setSuccess('Account created. Redirecting to payment...')
+
         if (data.token) {
           localStorage.setItem('auth_token', data.token)
         }
 
+        localStorage.setItem('pending_payment', JSON.stringify({
+          planCode: data.plan_code,
+          billingCycle: data.billing_cycle,
+          userId: data.user_id,
+          tenantId: data.tenant_id,
+        }))
+
         setTimeout(() => {
-          router.push('/dashboard')
-        }, 1500)
+          router.push(`/pricing?checkout=true&plan=${data.plan_code}&cycle=${data.billing_cycle}`)
+        }, 1000)
       } else {
         setError(data.message || 'Failed to complete registration')
       }
-    } catch (err) {
+    } catch {
       setError('Network error. Please try again.')
     } finally {
       setIsLoading(false)
@@ -134,7 +143,6 @@ function CompleteSocialSignupContent() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950 relative overflow-hidden">
-      {/* Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-[50%] -left-[20%] w-[100%] h-[100%] rounded-full bg-ai-blue-900/10 blur-[150px]" />
         <div className="absolute -bottom-[20%] -right-[20%] w-[80%] h-[80%] rounded-full bg-purple-900/10 blur-[150px]" />
@@ -152,31 +160,42 @@ function CompleteSocialSignupContent() {
             <AnimatedLogo size="lg" />
           </div>
           <h2 className="text-center text-3xl font-bold text-white tracking-tight">
-            Complete Your Registration
+            Finish your signup
           </h2>
 
-          {/* Provider info */}
           {pendingData && (
-            <div className="mt-4 flex items-center gap-3 px-4 py-3 bg-ai-graphite-900/50 rounded-lg border border-ai-graphite-700">
-              <div className="flex-shrink-0">
-                {providerIcons[provider] || providerIcons.google}
+            <div className="mt-4 w-full space-y-3">
+              <div className="flex items-center gap-3 px-4 py-3 bg-ai-graphite-900/50 rounded-lg border border-ai-graphite-700">
+                <div className="flex-shrink-0">
+                  {providerIcons[provider] || providerIcons.google}
+                </div>
+                <div className="text-left">
+                  <p className="text-sm text-ai-graphite-400">
+                    Signing up with {providerNames[provider] || 'Social'}
+                  </p>
+                  <p className="text-white font-medium truncate max-w-[200px]">
+                    {pendingData.email}
+                  </p>
+                  {pendingData.name && (
+                    <p className="text-sm text-ai-graphite-400">{pendingData.name}</p>
+                  )}
+                </div>
               </div>
-              <div className="text-left">
-                <p className="text-sm text-ai-graphite-400">
-                  Signing up with {providerNames[provider] || 'Social'}
-                </p>
-                <p className="text-white font-medium truncate max-w-[200px]">
-                  {pendingData.email}
-                </p>
-                {pendingData.name && (
-                  <p className="text-sm text-ai-graphite-400">{pendingData.name}</p>
-                )}
+
+              <div className="flex items-center gap-3 px-4 py-3 bg-ai-graphite-900/50 rounded-lg border border-ai-graphite-700">
+                <CreditCard className="w-5 h-5 text-ai-blue-300" />
+                <div>
+                  <p className="text-sm text-ai-graphite-400">Selected plan</p>
+                  <p className="text-white font-medium">
+                    {PLAN_NAMES[pendingData.planCode]} - {pendingData.billingCycle === 'yearly' ? 'Annual' : 'Monthly'}
+                  </p>
+                </div>
               </div>
             </div>
           )}
 
           <p className="mt-4 text-center text-sm text-ai-graphite-400">
-            Enter your organization&apos;s access code to complete registration.
+            Confirm your details and continue to payment.
           </p>
         </div>
 
@@ -186,42 +205,26 @@ function CompleteSocialSignupContent() {
               <p className="text-red-400">Your registration session has expired.</p>
             </div>
             <Link
-              href="/login"
+              href="/register"
               className="inline-flex items-center justify-center px-4 py-2 border border-ai-graphite-700 rounded-lg text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
             >
-              Return to Login
+              Return to Signup
             </Link>
           </div>
         ) : (
-          <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="atiToken" className="block text-sm font-medium text-ai-graphite-300 mb-2">
-                  Organization Access Code
-                </label>
-                <input
-                  id="atiToken"
-                  name="atiToken"
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
-                  placeholder="Enter your organization's access code"
-                  value={atiToken}
-                  onChange={(e) => setAtiToken(e.target.value)}
-                />
-                {/* Helpful info box */}
-                <div className="mt-3 p-3 bg-ai-graphite-900/30 border border-ai-graphite-800 rounded-lg">
-                  <p className="text-xs text-ai-graphite-400 leading-relaxed">
-                    <span className="text-ai-graphite-300 font-medium">What&apos;s an access code?</span>
-                    <br />
-                    Your organization admin provides this code to control who can join. 
-                    It ensures only authorized team members can access your workspace.
-                  </p>
-                  <p className="mt-2 text-xs text-ai-graphite-500">
-                    💡 Check your email or ask your team admin for the code.
-                  </p>
-                </div>
+          <form className="mt-6 space-y-6" onSubmit={handleSubmit}>
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Building2 className="w-4 h-4 text-ai-graphite-400" />
+                <label className="text-sm text-ai-graphite-400">Company/Organization (optional)</label>
               </div>
+              <input
+                type="text"
+                className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
+                placeholder="Your company name"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+              />
             </div>
 
             {error && (
@@ -250,26 +253,17 @@ function CompleteSocialSignupContent() {
               className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-ai-blue-900/30 transition-all duration-200 overflow-hidden"
             >
               <span className="relative z-10">
-                {isLoading ? 'Creating account...' : 'Complete Registration'}
+                {isLoading ? 'Creating account...' : 'Continue to Payment'}
               </span>
               <div className="absolute inset-0 -translate-x-full group-hover:translate-x-0 bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-500" />
             </button>
 
-            <div className="text-center space-y-2">
-              <Link
-                href="/login"
-                className="text-sm text-ai-graphite-400 hover:text-white transition-colors"
-              >
-                Cancel and return to login
-              </Link>
-              <span className="block text-sm text-ai-graphite-600">or</span>
-              <Link
-                href="/institutional-access"
-                className="text-sm font-medium text-ai-blue-400 hover:text-ai-blue-300 transition-colors"
-              >
-                Register with email instead
-              </Link>
-            </div>
+            <p className="text-xs text-ai-graphite-500 text-center">
+              By creating an account, you agree to our{' '}
+              <Link href="/terms" className="text-ai-blue-400 hover:text-ai-blue-300">Terms</Link>{' '}
+              and{' '}
+              <Link href="/privacy" className="text-ai-blue-400 hover:text-ai-blue-300">Privacy Policy</Link>.
+            </p>
           </form>
         )}
       </motion.div>
@@ -277,15 +271,16 @@ function CompleteSocialSignupContent() {
   )
 }
 
-export default function CompleteSocialSignupPage() {
+export default function CompletePaidSocialSignupPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950">
-        <div className="text-white">Loading...</div>
-      </div>
-    }>
-      <CompleteSocialSignupContent />
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950">
+          <div className="text-white">Loading...</div>
+        </div>
+      }
+    >
+      <CompletePaidSocialSignupContent />
     </Suspense>
   )
 }
-

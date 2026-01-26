@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { getAppOrigin, getRedirectUri, oauthConfig } from '@/lib/oauth-config'
+import { parsePaidSignupState } from '@/lib/oauth-state'
 
 // Force dynamic rendering since we access search params
 export const dynamic = 'force-dynamic'
@@ -82,14 +83,36 @@ export async function GET(request: NextRequest) {
         oauthProvider: 'LINKEDIN',
         oauthProviderId: profileId
       },
-      include: { tenant: true }
+      include: { 
+        tenant: {
+          select: {
+            id: true,
+            atiId: true,
+            status: true,
+            registrationSource: true,
+            selectedPlanCode: true,
+            selectedBillingCycle: true
+          }
+        }
+      }
     })
 
     if (!user) {
       // Check if user exists with same email
       const existingUser = await prisma.user.findUnique({
         where: { email: email },
-        include: { tenant: true }
+        include: { 
+          tenant: {
+            select: {
+              id: true,
+              atiId: true,
+              status: true,
+              registrationSource: true,
+              selectedPlanCode: true,
+              selectedBillingCycle: true
+            }
+          }
+        }
       })
 
       if (existingUser) {
@@ -102,10 +125,23 @@ export async function GET(request: NextRequest) {
             oauthProfile: linkedinUser,
             emailVerified: true
           },
-          include: { tenant: true }
+          include: { 
+            tenant: {
+              select: {
+                id: true,
+                atiId: true,
+                status: true,
+                registrationSource: true,
+                selectedPlanCode: true,
+                selectedBillingCycle: true
+              }
+            }
+          }
         })
       } else {
-        // New user - redirect to registration completion with ATI token entry
+        const paidState = parsePaidSignupState(state)
+
+        // New user - redirect to registration completion
         const pendingData = {
           provider: 'linkedin',
           providerId: profileId,
@@ -114,18 +150,44 @@ export async function GET(request: NextRequest) {
           firstName: firstName,
           lastName: lastName,
           profile: linkedinUser,
-          exp: Date.now() + 15 * 60 * 1000
+          exp: Date.now() + 15 * 60 * 1000,
+          ...(paidState ? {
+            flow: 'paid',
+            planCode: paidState.planCode,
+            billingCycle: paidState.billingCycle,
+          } : {})
         }
 
         const pendingToken = Buffer.from(JSON.stringify(pendingData)).toString('base64url')
 
+        const completionPath = paidState
+          ? '/register/complete-social-paid'
+          : '/institutional-access/complete-social'
+
         return NextResponse.redirect(
-          new URL(`/register/complete-social?token=${pendingToken}&provider=linkedin`, appOrigin)
+          new URL(`${completionPath}?token=${pendingToken}&provider=linkedin`, appOrigin)
         )
       }
     }
 
     // User exists - proceed with login
+    // Get request metadata
+    const ip = request.headers.get('x-forwarded-for') ||
+               request.headers.get('x-real-ip') ||
+               'unknown'
+
+    // Check for inactive tenant statuses (SUSPENDED, etc.) - but allow PENDING_PAYMENT
+    const allowedStatuses = ['ACTIVE', 'PENDING_PAYMENT']
+    if (user.tenant && !allowedStatuses.includes(user.tenant.status)) {
+      return NextResponse.redirect(
+        new URL('/login?error=tenant_inactive', appOrigin)
+      )
+    }
+
+    // Track if payment is pending (for redirect destination)
+    const isPendingPayment = user.tenant?.status === 'PENDING_PAYMENT'
+
+    // Generate full JWT token (service-level checks will handle access control)
     const accessTokenJWT = generateJWT({
       sub: user.id,
       email: user.email,
@@ -135,11 +197,6 @@ export async function GET(request: NextRequest) {
       tenant_ati_id: user.tenant?.atiId || null,
       scope: user.tenant?.atiId === 'PLATFORM' ? 'platform' : 'tenant'
     })
-
-    // Get request metadata
-    const ip = request.headers.get('x-forwarded-for') ||
-               request.headers.get('x-real-ip') ||
-               'unknown'
 
     // Generate and store refresh token
     const refreshTokenData = generateRefreshToken(user.id)
@@ -163,9 +220,10 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    // Create response
+    // Redirect to appropriate page based on payment status
+    const redirectPath = isPendingPayment ? '/pricing?checkout=true' : '/dashboard'
     const response = NextResponse.redirect(
-      new URL('/dashboard', appOrigin)
+      new URL(redirectPath, appOrigin)
     )
 
     // Set tokens as cookies

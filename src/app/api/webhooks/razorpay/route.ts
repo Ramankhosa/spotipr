@@ -56,6 +56,9 @@ interface WebhookPayload {
   created_at: number
 }
 
+type RazorpayPaymentEntity = NonNullable<WebhookPayload['payload']['payment']>['entity']
+type RazorpaySubscriptionEntity = NonNullable<WebhookPayload['payload']['subscription']>['entity']
+
 export async function POST(request: NextRequest) {
   try {
     // Get raw body for signature verification
@@ -137,7 +140,7 @@ export async function POST(request: NextRequest) {
 /**
  * Handle payment.captured event
  */
-async function handlePaymentCaptured(payment: WebhookPayload['payload']['payment']['entity']) {
+async function handlePaymentCaptured(payment: RazorpayPaymentEntity) {
   console.log(`[Razorpay Webhook] Payment captured: ${payment.id}`)
 
   // Find and update payment record
@@ -186,7 +189,7 @@ async function handlePaymentCaptured(payment: WebhookPayload['payload']['payment
  * IMPORTANT: If payment was previously AUTHORIZED (pre-capture), we need to rollback
  * any subscription/plan activation that may have occurred prematurely.
  */
-async function handlePaymentFailed(payment: WebhookPayload['payload']['payment']['entity']) {
+async function handlePaymentFailed(payment: RazorpayPaymentEntity) {
   console.log(`[Razorpay Webhook] Payment failed: ${payment.id}`)
 
   const paymentRecord = await prisma.payment.findUnique({
@@ -254,7 +257,7 @@ async function handlePaymentFailed(payment: WebhookPayload['payload']['payment']
 /**
  * Handle payment.authorized event
  */
-async function handlePaymentAuthorized(payment: WebhookPayload['payload']['payment']['entity']) {
+async function handlePaymentAuthorized(payment: RazorpayPaymentEntity) {
   console.log(`[Razorpay Webhook] Payment authorized: ${payment.id}`)
 
   const paymentRecord = await prisma.payment.findUnique({
@@ -276,7 +279,7 @@ async function handlePaymentAuthorized(payment: WebhookPayload['payload']['payme
 /**
  * Handle subscription.activated event
  */
-async function handleSubscriptionActivated(subscription: WebhookPayload['payload']['subscription']['entity']) {
+async function handleSubscriptionActivated(subscription: RazorpaySubscriptionEntity) {
   console.log(`[Razorpay Webhook] Subscription activated: ${subscription.id}`)
 
   const subscriptionRecord = await prisma.subscription.findFirst({
@@ -323,7 +326,7 @@ async function handleSubscriptionActivated(subscription: WebhookPayload['payload
 /**
  * Handle subscription.cancelled event
  */
-async function handleSubscriptionCancelled(subscription: WebhookPayload['payload']['subscription']['entity']) {
+async function handleSubscriptionCancelled(subscription: RazorpaySubscriptionEntity) {
   console.log(`[Razorpay Webhook] Subscription cancelled: ${subscription.id}`)
 
   const subscriptionRecord = await prisma.subscription.findUnique({
@@ -344,7 +347,7 @@ async function handleSubscriptionCancelled(subscription: WebhookPayload['payload
 /**
  * Handle subscription.halted event
  */
-async function handleSubscriptionHalted(subscription: WebhookPayload['payload']['subscription']['entity']) {
+async function handleSubscriptionHalted(subscription: RazorpaySubscriptionEntity) {
   console.log(`[Razorpay Webhook] Subscription halted: ${subscription.id}`)
 
   const subscriptionRecord = await prisma.subscription.findFirst({

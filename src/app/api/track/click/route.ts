@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
       const terminalStates = ['SIGNED_UP', 'BOUNCED', 'UNSUBSCRIBED', 'EXPIRED']
       if (terminalStates.includes(invite.status)) {
         // Still redirect, just don't track
-        const inviteUrl = `${baseUrl}/register?invite=${invite.inviteToken}&trial=true&email=${encodeURIComponent(invite.email)}`
+        const inviteUrl = `${baseUrl}/institutional-access?invite=${invite.inviteToken}&trial=true&email=${encodeURIComponent(invite.email)}`
         return NextResponse.redirect(inviteUrl)
       }
 
@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Build the actual invite URL
-      const inviteUrl = `${baseUrl}/register?invite=${invite.inviteToken}&trial=true&email=${encodeURIComponent(invite.email)}`
+      const inviteUrl = `${baseUrl}/institutional-access?invite=${invite.inviteToken}&trial=true&email=${encodeURIComponent(invite.email)}`
       return NextResponse.redirect(inviteUrl)
     }
   } catch (error) {

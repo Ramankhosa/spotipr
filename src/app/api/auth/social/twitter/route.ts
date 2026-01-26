@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getRedirectUri, validateOAuthConfig } from '@/lib/oauth-config'
+import { encodeOAuthState, normalizePaidSignupParams } from '@/lib/oauth-state'
 import crypto from 'crypto'
 
 export async function GET(request: NextRequest) {
@@ -16,15 +17,26 @@ export async function GET(request: NextRequest) {
     const codeVerifier = crypto.randomBytes(32).toString('base64url')
     const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest().toString('base64url')
 
+    const searchParams = request.nextUrl.searchParams
+    const flowParam = searchParams.get('flow')
+    const paidParams = flowParam === 'paid'
+      ? normalizePaidSignupParams(searchParams.get('plan'), searchParams.get('cycle'))
+      : null
+
     // Generate state parameter for CSRF protection
     const state = crypto.randomUUID()
 
     // Store PKCE verifier and state in session (in production, use secure session store)
     // For now, we'll encode them in the state parameter
-    const encodedState = Buffer.from(JSON.stringify({
+    const encodedState = encodeOAuthState({
       state,
-      codeVerifier
-    })).toString('base64url')
+      codeVerifier,
+      ...(paidParams ? {
+        flow: 'paid',
+        planCode: paidParams.planCode,
+        billingCycle: paidParams.billingCycle,
+      } : {})
+    })
 
     const redirectUri = getRedirectUri('twitter', request.nextUrl.origin)
     const params = new URLSearchParams({

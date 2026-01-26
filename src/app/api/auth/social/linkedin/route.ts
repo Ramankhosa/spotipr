@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthorizationUrl, validateOAuthConfig } from '@/lib/oauth-config'
+import { encodeOAuthState, normalizePaidSignupParams } from '@/lib/oauth-state'
 
 // Force dynamic rendering since we access request.nextUrl.origin
 export const dynamic = 'force-dynamic'
@@ -14,8 +15,20 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Generate state parameter for CSRF protection
-    const state = crypto.randomUUID()
+    const searchParams = request.nextUrl.searchParams
+    const flowParam = searchParams.get('flow')
+    const paidParams = flowParam === 'paid'
+      ? normalizePaidSignupParams(searchParams.get('plan'), searchParams.get('cycle'))
+      : null
+
+    const state = paidParams
+      ? encodeOAuthState({
+          flow: 'paid',
+          planCode: paidParams.planCode,
+          billingCycle: paidParams.billingCycle,
+          nonce: crypto.randomUUID(),
+        })
+      : crypto.randomUUID()
 
     // Generate authorization URL
     const authUrl = getAuthorizationUrl('linkedin', state, request.nextUrl.origin)

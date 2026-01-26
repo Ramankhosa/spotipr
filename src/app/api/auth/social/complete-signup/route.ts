@@ -94,14 +94,30 @@ export async function POST(request: NextRequest) {
 
     // CRITICAL: Ensure tenant has an active TenantPlan - without this, service access fails
     // This is the same check as in the manual signup route for consistency
+    const now = new Date()
     const existingTenantPlan = await prisma.tenantPlan.findFirst({
       where: {
         tenantId: tenant.id,
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } }
+        ]
       }
     })
 
     if (!existingTenantPlan) {
+      const anyTenantPlan = await prisma.tenantPlan.findFirst({
+        where: { tenantId: tenant.id }
+      })
+
+      if (anyTenantPlan) {
+        return NextResponse.json(
+          { code: 'TENANT_PLAN_INACTIVE', message: 'Tenant subscription is inactive. Please contact your administrator.' },
+          { status: 400 }
+        )
+      }
+
       console.log(`[SocialSignup] Tenant ${tenant.name} has no TenantPlan - creating one now`)
       
       // Determine plan based on ATI token's planTier

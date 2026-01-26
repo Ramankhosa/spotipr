@@ -22,10 +22,19 @@ interface PaidSignupResult {
   tenantId?: string
 }
 
+interface LoginResult {
+  success: boolean
+  error?: string
+  requiresPayment?: boolean
+  redirectUrl?: string
+  planCode?: string
+  billingCycle?: string
+}
+
 interface AuthContextType {
   user: User | null
   token: string | null
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>
+  login: (email: string, password: string) => Promise<LoginResult>
   logout: (logoutAll?: boolean) => Promise<void>
   signup: (email: string, password: string, atiToken: string, firstName: string, lastName: string, isTrialInvite?: boolean) => Promise<{ success: boolean; error?: string }>
   paidSignup: (params: {
@@ -65,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return null
     }
   }, [])
+
   // Schedule proactive token refresh (before expiry)
   const scheduleTokenRefresh = useCallback((currentToken: string, refreshFn: () => Promise<string | null>) => {
     // Clear any existing timer
@@ -295,7 +305,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getTokenExpiry, refreshAccessToken, scheduleTokenRefresh, refreshUser])
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<{
+    success: boolean
+    error?: string
+    requiresPayment?: boolean
+    redirectUrl?: string
+    planCode?: string
+    billingCycle?: string
+  }> => {
     try {
       const response = await fetch('/api/v1/auth/login', {
         method: 'POST',
@@ -309,7 +326,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json()
 
       if (response.ok) {
-        const { token: newToken } = data
+        const { token: newToken, payment_required, redirect_url, plan_code, billing_cycle } = data
         setToken(newToken)
         localStorage.setItem('auth_token', newToken)
         tokenExpiryRef.current = getTokenExpiry(newToken)
@@ -317,6 +334,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Get user info
         await refreshUser(newToken)
+
+        // Check if payment is required (user logged in but needs to complete payment)
+        if (payment_required) {
+          return {
+            success: true, // Login succeeded, but payment needed
+            requiresPayment: true,
+            redirectUrl: redirect_url || '/pricing?checkout=true',
+            planCode: plan_code,
+            billingCycle: billing_cycle
+          }
+        }
+
         return { success: true }
       } else {
         return { success: false, error: data.message || 'Login failed' }
@@ -372,12 +401,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: {
           'Content-Type': 'application/json'
         },
+        credentials: 'include', // Include cookies for refresh token
         body: JSON.stringify(params)
       })
 
       const data = await response.json()
 
       if (response.ok) {
+        // Store token if returned (user is now authenticated for payment flow)
+        if (data.token) {
+          setToken(data.token)
+          localStorage.setItem('auth_token', data.token)
+          tokenExpiryRef.current = getTokenExpiry(data.token)
+          scheduleTokenRefresh(data.token, refreshAccessToken)
+        }
+
         return { 
           success: true, 
           isPaidSignup: data.is_paid_signup,

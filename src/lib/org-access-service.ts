@@ -500,6 +500,34 @@ export async function checkServiceAccess(
   tenantId: string,
   serviceType: ServiceType
 ): Promise<ServiceAccessResult> {
+  // ==========================================================================
+  // SECURITY: Check tenant payment status first
+  // This ensures users from PENDING_PAYMENT tenants (paid signup not completed)
+  // cannot access services even if other checks pass
+  // ==========================================================================
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { status: true, registrationSource: true }
+  })
+  
+  if (!tenant) {
+    return { allowed: false, reason: 'Tenant not found' }
+  }
+  
+  if (tenant.status === 'PENDING_PAYMENT') {
+    return {
+      allowed: false,
+      reason: 'Payment required. Please complete your subscription payment to access services.'
+    }
+  }
+  
+  if (tenant.status === 'SUSPENDED') {
+    return {
+      allowed: false,
+      reason: 'Tenant subscription is suspended. Please contact your administrator.'
+    }
+  }
+
   // Get user info
   const user = await prisma.user.findUnique({
     where: { id: userId },

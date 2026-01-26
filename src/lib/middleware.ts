@@ -6,6 +6,12 @@ export interface AuthenticatedRequest extends NextRequest {
   user?: JWTPayload
 }
 
+// Tenant statuses that allow authentication (but may have limited service access)
+// - ACTIVE: Full access
+// - PENDING_PAYMENT: Authenticated, but service-level checks block product features
+// Service-level blocking is handled by checkServiceAccess() in org-access-service.ts
+const ALLOWED_TENANT_STATUSES = ['ACTIVE', 'PENDING_PAYMENT']
+
 export async function authenticateRequest(request: NextRequest): Promise<{
   user: JWTPayload | null
   error: NextResponse | null
@@ -83,12 +89,13 @@ export async function authenticateRequest(request: NextRequest): Promise<{
     }
   }
 
-  // Check tenant status
-  if (user.tenant && user.tenant.status !== 'ACTIVE') {
+  // Check tenant status - allow PENDING_PAYMENT for renewal/payment flows
+  // Service-level blocking is handled by checkServiceAccess() for product features
+  if (user.tenant && !ALLOWED_TENANT_STATUSES.includes(user.tenant.status)) {
     return {
       user: null,
       error: NextResponse.json(
-        { code: 'TENANT_INACTIVE', message: 'Tenant is not active' },
+        { code: 'TENANT_INACTIVE', message: 'Tenant is not active. Please contact support.' },
         { status: 401 }
       )
     }
