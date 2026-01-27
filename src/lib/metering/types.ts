@@ -86,8 +86,8 @@ export interface EnforcementDecision {
   reason?: string
   retryAfter?: number
   remainingQuota?: {
-    daily?: number
-    monthly?: number
+    daily?: number | null
+    monthly?: number | null
   }
 }
 
@@ -158,8 +158,8 @@ export interface MeteringResult {
 export interface QuotaCheckResult {
   allowed: boolean
   remaining: {
-    daily?: number
-    monthly?: number
+    daily?: number | null
+    monthly?: number | null
   }
   resetTime?: Date
 }

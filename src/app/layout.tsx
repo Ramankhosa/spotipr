@@ -7,17 +7,17 @@ import './globals.css'
 // Configure Inter and Cormorant Garamond fonts with fallbacks for offline development
 const inter = Inter({
   subsets: ['latin'],
-  display: 'swap',
+  display: 'optional', // Changed from 'swap' to 'optional' to prevent build failures
   fallback: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-  preload: true, // Enable preload for better performance
+  preload: false, // Disable preload to avoid network requests during build
 })
 
 const cormorant = Cormorant_Garamond({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
-  display: 'swap',
+  display: 'optional', // Changed from 'swap' to 'optional' to prevent build failures
   variable: '--font-cormorant',
-  preload: true, // Enable preload for better performance
+  preload: false, // Disable preload to avoid network requests during build
 })
 
 export const metadata: Metadata = {

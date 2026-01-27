@@ -75,6 +75,13 @@ export interface ReservationLimits {
   defaultReservationDays: number;
 }
 
+export interface IdeaExportResult {
+  ideas: IdeaBankIdeaWithDetails[];
+  totalCount: number;
+  truncated: boolean;
+  appliedLimit: number;
+}
+
 /**
  * Service for managing the Idea Bank - a marketplace for AI-generated patent ideas
  */
@@ -82,6 +89,7 @@ export class IdeaBankService extends BasePatentService {
 
   private readonly DEFAULT_RESERVATION_DAYS = 30;
   private readonly MAX_CONCURRENT_RESERVATIONS = 10;
+  private readonly MAX_EXPORT_IDEAS = 5000;
 
   /**
    * Check if user has access to Idea Bank feature (read-only operations)
@@ -310,6 +318,124 @@ export class IdeaBankService extends BasePatentService {
       totalCount,
       totalPages: Math.ceil(totalCount / limit),
       currentPage: page
+    };
+  }
+
+  /**
+   * Export ideas matching filters (non-paginated, capped for safety)
+   */
+  async exportIdeas(
+    requestHeaders: Record<string, string>,
+    filters: IdeaSearchFilters,
+    user: User,
+    maxIdeas: number = this.MAX_EXPORT_IDEAS
+  ): Promise<IdeaExportResult> {
+    const cappedLimit = Math.max(1, Math.min(maxIdeas, this.MAX_EXPORT_IDEAS));
+
+    // Build where clause (mirrors searchIdeas)
+    const where: Prisma.IdeaBankIdeaWhereInput = {
+      status: { not: 'ARCHIVED' },
+    };
+
+    if (filters.query) {
+      where.OR = [
+        { title: { contains: filters.query, mode: 'insensitive' } },
+        { description: { contains: filters.query, mode: 'insensitive' } },
+        { abstract: { contains: filters.query, mode: 'insensitive' } },
+        { keyFeatures: { hasSome: [filters.query] } },
+        { potentialApplications: { hasSome: [filters.query] } },
+      ];
+    }
+
+    if (filters.domainTags && filters.domainTags.length > 0) {
+      where.domainTags = { hasSome: filters.domainTags };
+    }
+
+    if (filters.technicalField) {
+      where.technicalField = { equals: filters.technicalField, mode: 'insensitive' };
+    }
+
+    if (filters.status) {
+      where.status = filters.status;
+    }
+
+    if (filters.noveltyScoreMin !== undefined || filters.noveltyScoreMax !== undefined) {
+      where.noveltyScore = {};
+      if (filters.noveltyScoreMin !== undefined) {
+        where.noveltyScore.gte = filters.noveltyScoreMin;
+      }
+      if (filters.noveltyScoreMax !== undefined) {
+        where.noveltyScore.lte = filters.noveltyScoreMax;
+      }
+    }
+
+    if (filters.createdBy) {
+      where.createdBy = filters.createdBy;
+    }
+
+    if (filters.tenantId) {
+      where.OR = where.OR || [];
+      (where.OR as any[]).push(
+        { tenantId: filters.tenantId },
+        { tenantId: null }
+      );
+    }
+
+    const [ideas, totalCount] = await Promise.all([
+      prisma.ideaBankIdea.findMany({
+        where,
+        include: {
+          creator: {
+            select: { id: true, name: true, email: true }
+          },
+          tenant: {
+            select: { id: true, name: true }
+          },
+          derivedFrom: {
+            select: { id: true, title: true }
+          },
+          derivedIdeas: {
+            select: { id: true, title: true, createdBy: true },
+            take: 5
+          },
+          reservations: {
+            where: {
+              userId: user.id,
+              status: 'ACTIVE'
+            }
+          }
+        },
+        orderBy: [
+          { publishedAt: 'desc' },
+          { createdAt: 'desc' }
+        ],
+        take: cappedLimit
+      }),
+      prisma.ideaBankIdea.count({ where })
+    ]);
+
+    const processedIdeas = ideas.map(idea => {
+      const isReservedByCurrentUser = idea.reservations.length > 0;
+      let redactedDescription = idea.description;
+
+      if (idea.status === 'RESERVED' && !isReservedByCurrentUser) {
+        const words = idea.description.split(' ');
+        const visibleWords = words.slice(0, 3).join(' ');
+        redactedDescription = `${visibleWords}... [Content reserved - ${idea.reservedCount} reservations]`;
+      }
+
+      return {
+        ...idea,
+        _isReservedByCurrentUser: isReservedByCurrentUser,
+        _redactedDescription: redactedDescription
+      };
+    });
+
+    return {
+      ideas: processedIdeas,
+      totalCount,
+      truncated: totalCount > processedIdeas.length,
+      appliedLimit: cappedLimit
     };
   }
 

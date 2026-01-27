@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { FileSpreadsheet } from 'lucide-react'
 import IdeaCard from './IdeaCard'
 import IdeaListItem from './IdeaListItem'
 import IdeaDetailsModal from './IdeaDetailsModal'
@@ -45,6 +46,7 @@ export default function IdeaBankDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditorModal, setShowEditorModal] = useState(false)
   const [editingIdea, setEditingIdea] = useState<IdeaBankIdeaWithDetails | null>(null)
+  const [exportLoading, setExportLoading] = useState(false)
 
   // Layout
   const [layout, setLayout] = useState<LayoutType>('tile')
@@ -395,6 +397,60 @@ export default function IdeaBankDashboard() {
     router.push(`/patents/draft/new?${params.toString()}`)
   }
 
+  const handleExportIdeas = async () => {
+    setExportLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (filters.query) params.set('query', filters.query)
+      if (filters.technicalField) params.set('technicalField', filters.technicalField)
+      if (filters.status) params.set('status', filters.status)
+      if (filters.domainTags?.length) params.set('domainTags', filters.domainTags.join(','))
+
+      const response = await fetch(`/api/idea-bank/export?${params.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        }
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        alert(errorData.details || errorData.error || 'Failed to export ideas')
+        return
+      }
+
+      const blob = await response.blob()
+      const disposition = response.headers.get('content-disposition') || ''
+      const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i)
+      const filename = filenameMatch?.[1] || `idea-bank-export-${new Date().toISOString().slice(0, 10)}.xlsx`
+
+      const truncated = response.headers.get('x-export-truncated') === 'true'
+      const exportCount = response.headers.get('x-export-count')
+      const totalCount = response.headers.get('x-export-totalcount')
+      const exportLimit = response.headers.get('x-export-limit')
+
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+
+      if (truncated) {
+        alert(
+          `Export capped at ${exportLimit || exportCount} ideas out of ${totalCount || exportCount}. ` +
+          'Refine your filters to export fewer ideas.'
+        )
+      }
+    } catch (error) {
+      console.error('Failed to export ideas:', error)
+      alert('Failed to export ideas. Please try again.')
+    } finally {
+      setExportLoading(false)
+    }
+  }
+
   // Pagination controls
   const goToPage = (p: number) => {
     const clamped = Math.max(1, Math.min(totalPages, p))
@@ -425,94 +481,107 @@ export default function IdeaBankDashboard() {
                 Identify, reserve, and cultivate high-value concepts.
               </p>
             </div>
-            <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
-              <DialogTrigger asChild>
-                <Button className="bg-slate-900 hover:bg-slate-800 text-white font-medium px-8 py-6 rounded-full shadow-lg shadow-slate-200 transition-all hover:scale-105 active:scale-95 border border-slate-700">
-                  + Initialize Invention
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="bg-white border-slate-100 shadow-2xl sm:max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle className="text-xl text-slate-900">Initialize New Invention</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="title" className="text-slate-700">Designation (Title) *</Label>
-                    <Input
-                      id="title"
-                      value={createForm.title}
-                      onChange={(e) => setCreateForm(prev => ({ ...prev, title: e.target.value }))}
-                      placeholder="Enter idea title"
-                      className="bg-slate-50 border-slate-200 text-slate-900 focus:ring-slate-900/10"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="description" className="text-slate-700">Core Logic (Description) *</Label>
-                    <Textarea
-                      id="description"
-                      value={createForm.description}
-                      onChange={(e) => setCreateForm(prev => ({ ...prev, description: e.target.value }))}
-                      placeholder="Describe your invention idea"
-                      rows={4}
-                      className="bg-slate-50 border-slate-200 text-slate-900 focus:ring-slate-900/10"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="abstract" className="text-slate-700">Executive Summary (Abstract)</Label>
-                    <Textarea
-                      id="abstract"
-                      value={createForm.abstract}
-                      onChange={(e) => setCreateForm(prev => ({ ...prev, abstract: e.target.value }))}
-                      placeholder="Patent abstract (optional)"
-                      rows={3}
-                      className="bg-slate-50 border-slate-200 text-slate-900 focus:ring-slate-900/10"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-slate-700">Domain Classification</Label>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {availableDomains.map(domain => (
-                        <Badge
-                          key={domain}
-                          variant="outline"
-                          className={`cursor-pointer transition-all ${
-                            createForm.domainTags.includes(domain) 
-                              ? "bg-slate-900 text-white border-slate-900" 
-                              : "bg-white text-slate-500 border-slate-200 hover:border-slate-400"
-                          }`}
-                          onClick={() => {
-                            setCreateForm(prev => ({
-                              ...prev,
-                              domainTags: prev.domainTags.includes(domain)
-                                ? prev.domainTags.filter(t => t !== domain)
-                                : [...prev.domainTags, domain]
-                            }))
-                          }}
-                        >
-                          {domain}
-                        </Badge>
-                      ))}
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <Button
+                variant="outline"
+                onClick={handleExportIdeas}
+                disabled={exportLoading}
+                className="border-slate-200 text-slate-700 hover:bg-white bg-white/80 font-medium px-6 py-6 rounded-full shadow-sm"
+                title="Download a structured Excel export of the current idea list"
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-2" />
+                {exportLoading ? 'Exporting...' : 'Download Excel'}
+              </Button>
+
+              <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
+                <DialogTrigger asChild>
+                  <Button className="bg-slate-900 hover:bg-slate-800 text-white font-medium px-8 py-6 rounded-full shadow-lg shadow-slate-200 transition-all hover:scale-105 active:scale-95 border border-slate-700">
+                    + Initialize Invention
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-white border-slate-100 shadow-2xl sm:max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle className="text-xl text-slate-900">Initialize New Invention</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="title" className="text-slate-700">Designation (Title) *</Label>
+                      <Input
+                        id="title"
+                        value={createForm.title}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, title: e.target.value }))}
+                        placeholder="Enter idea title"
+                        className="bg-slate-50 border-slate-200 text-slate-900 focus:ring-slate-900/10"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="description" className="text-slate-700">Core Logic (Description) *</Label>
+                      <Textarea
+                        id="description"
+                        value={createForm.description}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, description: e.target.value }))}
+                        placeholder="Describe your invention idea"
+                        rows={4}
+                        className="bg-slate-50 border-slate-200 text-slate-900 focus:ring-slate-900/10"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="abstract" className="text-slate-700">Executive Summary (Abstract)</Label>
+                      <Textarea
+                        id="abstract"
+                        value={createForm.abstract}
+                        onChange={(e) => setCreateForm(prev => ({ ...prev, abstract: e.target.value }))}
+                        placeholder="Patent abstract (optional)"
+                        rows={3}
+                        className="bg-slate-50 border-slate-200 text-slate-900 focus:ring-slate-900/10"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-700">Domain Classification</Label>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {availableDomains.map(domain => (
+                          <Badge
+                            key={domain}
+                            variant="outline"
+                            className={`cursor-pointer transition-all ${
+                              createForm.domainTags.includes(domain) 
+                                ? "bg-slate-900 text-white border-slate-900" 
+                                : "bg-white text-slate-500 border-slate-200 hover:border-slate-400"
+                            }`}
+                            onClick={() => {
+                              setCreateForm(prev => ({
+                                ...prev,
+                                domainTags: prev.domainTags.includes(domain)
+                                  ? prev.domainTags.filter(t => t !== domain)
+                                  : [...prev.domainTags, domain]
+                              }))
+                            }}
+                          >
+                            {domain}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex justify-end space-x-2 pt-4">
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowCreateModal(false)}
+                        className="border-slate-200 text-slate-600 hover:bg-slate-50"
+                      >
+                        Abort
+                      </Button>
+                      <Button
+                        onClick={handleCreateIdea}
+                        disabled={creatingIdea || !createForm.title.trim() || !createForm.description.trim()}
+                        className="bg-slate-900 hover:bg-slate-800 text-white"
+                      >
+                        {creatingIdea ? 'Initializing...' : 'Initialize'}
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex justify-end space-x-2 pt-4">
-                    <Button
-                      variant="outline"
-                      onClick={() => setShowCreateModal(false)}
-                      className="border-slate-200 text-slate-600 hover:bg-slate-50"
-                    >
-                      Abort
-                    </Button>
-                    <Button
-                      onClick={handleCreateIdea}
-                      disabled={creatingIdea || !createForm.title.trim() || !createForm.description.trim()}
-                      className="bg-slate-900 hover:bg-slate-800 text-white"
-                    >
-                      {creatingIdea ? 'Initializing...' : 'Initialize'}
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
 
           {/* Stats HUD - Light Version */}
