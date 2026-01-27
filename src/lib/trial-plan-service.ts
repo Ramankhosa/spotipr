@@ -97,15 +97,26 @@ export async function getTrialUserInfo(userId: string): Promise<{
     })
 
     if (!invite) {
-      // Also check if user belongs to TRIAL tenant
+      // Also check if user belongs to TRIAL tenant or MANUAL_ATI tenant
+      // MANUAL_ATI tenants are post-paid (charged based on usage), so they bypass quota
       const user = await prisma.user.findUnique({
         where: { id: userId },
         include: {
-          tenant: true
+          tenant: {
+            select: {
+              atiId: true,
+              registrationSource: true
+            }
+          }
         }
       })
 
       if (user?.tenant?.atiId === 'TRIAL') {
+        return { isTrialUser: true }
+      }
+
+      // ATI users (MANUAL_ATI) bypass quota - they're billed based on usage
+      if (user?.tenant?.registrationSource === 'MANUAL_ATI') {
         return { isTrialUser: true }
       }
 
