@@ -9,6 +9,9 @@ import { enforceServiceAccess } from '@/lib/service-access-middleware'
 
 const ideaBankService = new IdeaBankService()
 
+// Force dynamic rendering since we access request headers and URL
+export const dynamic = 'force-dynamic'
+
 const exportSchema = z.object({
   query: z.string().optional(),
   domainTags: z.array(z.string()).optional(),
@@ -166,4 +169,3 @@ export async function GET(request: NextRequest) {
     )
   }
 }
-
