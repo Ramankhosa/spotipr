@@ -45,6 +45,117 @@ export interface PatentDraftingQuota {
   monthlyLimit: number | null
   dailyRemaining: number | null
   monthlyRemaining: number | null
+  // Billing-cycle-aware period (monthly quota window)
+  billingPeriodStart?: Date
+  billingPeriodEnd?: Date
+  billingPeriodKey?: string
+  billingPeriodSource?: 'subscription' | 'calendar'
+}
+
+// ======================================================================
+// Billing period helpers (subscription-cycle based monthly quota)
+// ======================================================================
+
+function getUtcMonthWindow(now: Date): { start: Date; endExclusive: Date } {
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth()
+  const start = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0))
+  const endExclusive = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0))
+  return { start, endExclusive }
+}
+
+function getUtcDayWindow(now: Date): { start: Date; endInclusive: Date } {
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth()
+  const day = now.getUTCDate()
+  const start = new Date(Date.UTC(year, month, day, 0, 0, 0, 0))
+  const endInclusive = new Date(Date.UTC(year, month, day, 23, 59, 59, 999))
+  return { start, endInclusive }
+}
+
+function addMonthsClampedUtc(base: Date, months: number): Date {
+  const year = base.getUTCFullYear()
+  const month = base.getUTCMonth() + months
+  const day = base.getUTCDate()
+  const hours = base.getUTCHours()
+  const minutes = base.getUTCMinutes()
+  const seconds = base.getUTCSeconds()
+  const ms = base.getUTCMilliseconds()
+
+  const firstOfTarget = new Date(Date.UTC(year, month, 1, hours, minutes, seconds, ms))
+  const daysInTarget = new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth() + 1, 0)).getUTCDate()
+  const clampedDay = Math.min(day, daysInTarget)
+  return new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth(), clampedDay, hours, minutes, seconds, ms))
+}
+
+function resolveAnchoredMonthlyWindow(now: Date, anchorStart: Date): { start: Date; endExclusive: Date } {
+  const monthsDiff =
+    (now.getUTCFullYear() - anchorStart.getUTCFullYear()) * 12 +
+    (now.getUTCMonth() - anchorStart.getUTCMonth())
+
+  let monthsFromAnchor = monthsDiff
+  let start = addMonthsClampedUtc(anchorStart, monthsFromAnchor)
+  if (start > now) {
+    monthsFromAnchor -= 1
+    start = addMonthsClampedUtc(anchorStart, monthsFromAnchor)
+  }
+  const endExclusive = addMonthsClampedUtc(anchorStart, monthsFromAnchor + 1)
+  return { start, endExclusive }
+}
+
+async function resolveBillingPeriod(
+  tenantId: string,
+  now: Date
+): Promise<{ start: Date; endExclusive: Date; key: string; source: 'subscription' | 'calendar' }> {
+  const subscription = await prisma.subscription.findFirst({
+    where: {
+      tenantId,
+      status: { in: ['ACTIVE', 'PENDING', 'AUTHENTICATED'] },
+      currentPeriodStart: { not: null },
+      currentPeriodEnd: { not: null }
+    },
+    orderBy: { currentPeriodStart: 'desc' },
+    select: {
+      billingCycle: true,
+      currentPeriodStart: true,
+      currentPeriodEnd: true
+    }
+  })
+
+  if (subscription?.currentPeriodStart && subscription?.currentPeriodEnd) {
+    const start = subscription.currentPeriodStart
+    const end = subscription.currentPeriodEnd
+    const cycle = (subscription.billingCycle || '').toLowerCase()
+
+    if (cycle === 'monthly') {
+      if (now >= start && now < end) {
+        return {
+          start,
+          endExclusive: end,
+          key: start.toISOString().substring(0, 10),
+          source: 'subscription'
+        }
+      }
+    } else if (cycle === 'yearly') {
+      if (now >= start && now < end) {
+        const window = resolveAnchoredMonthlyWindow(now, start)
+        return {
+          start: window.start,
+          endExclusive: window.endExclusive,
+          key: window.start.toISOString().substring(0, 10),
+          source: 'subscription'
+        }
+      }
+    }
+  }
+
+  const calendar = getUtcMonthWindow(now)
+  return {
+    start: calendar.start,
+    endExclusive: calendar.endExclusive,
+    key: calendar.start.toISOString().substring(0, 10),
+    source: 'calendar'
+  }
 }
 
 /**
@@ -66,8 +177,9 @@ export async function trackSectionDrafted(
     return { counted: false, quotaExceeded: false }
   }
   
-  const currentDay = new Date().toISOString().substring(0, 10)
-  const currentMonth = new Date().toISOString().substring(0, 7)
+  const now = new Date()
+  const billingPeriod = await resolveBillingPeriod(tenantId, now)
+  const periodKey = billingPeriod.key
   
   // Upsert the tracking record
   const usage = await prisma.patentDraftingUsage.upsert({
@@ -118,8 +230,7 @@ export async function trackSectionDrafted(
       where: { sessionId },
       data: {
         isCounted: true,
-        countedDate: currentDay,
-        countedMonth: currentMonth,
+        countedMonth: periodKey,
         countedAt: new Date()
       }
     })
@@ -135,8 +246,10 @@ export async function trackSectionDrafted(
  * Get current patent drafting quota status for a tenant
  */
 export async function getPatentDraftingQuota(tenantId: string): Promise<PatentDraftingQuota> {
-  const currentDay = new Date().toISOString().substring(0, 10)
-  const currentMonth = new Date().toISOString().substring(0, 7)
+  const now = new Date()
+  const billingPeriod = await resolveBillingPeriod(tenantId, now)
+  const periodEndInclusive = new Date(billingPeriod.endExclusive.getTime() - 1)
+  const dayWindow = getUtcDayWindow(now)
   
   // Get daily and monthly counted patents
   const [dailyCount, monthlyCount] = await Promise.all([
@@ -144,14 +257,14 @@ export async function getPatentDraftingQuota(tenantId: string): Promise<PatentDr
       where: {
         tenantId,
         isCounted: true,
-        countedDate: currentDay
+        countedAt: { gte: dayWindow.start, lte: dayWindow.endInclusive }
       }
     }),
     prisma.patentDraftingUsage.count({
       where: {
         tenantId,
         isCounted: true,
-        countedMonth: currentMonth
+        countedAt: { gte: billingPeriod.start, lte: periodEndInclusive }
       }
     })
   ])
@@ -197,7 +310,11 @@ export async function getPatentDraftingQuota(tenantId: string): Promise<PatentDr
     monthlyUsed: monthlyCount,
     monthlyLimit,
     dailyRemaining: dailyLimit !== null ? Math.max(0, dailyLimit - dailyCount) : null,
-    monthlyRemaining: monthlyLimit !== null ? Math.max(0, monthlyLimit - monthlyCount) : null
+    monthlyRemaining: monthlyLimit !== null ? Math.max(0, monthlyLimit - monthlyCount) : null,
+    billingPeriodStart: billingPeriod.start,
+    billingPeriodEnd: periodEndInclusive,
+    billingPeriodKey: billingPeriod.key,
+    billingPeriodSource: billingPeriod.source
   }
 }
 
@@ -318,8 +435,9 @@ export async function syncExistingSections(
   )
   const hasClaims = draftedSections.includes('claims')
   
-  const currentDay = new Date().toISOString().substring(0, 10)
-  const currentMonth = new Date().toISOString().substring(0, 7)
+  const now = new Date()
+  const billingPeriod = await resolveBillingPeriod(tenantId, now)
+  const periodKey = billingPeriod.key
   
   const existing = await prisma.patentDraftingUsage.findUnique({
     where: { sessionId }
@@ -369,16 +487,14 @@ export async function syncExistingSections(
       hasDescription,
       hasClaims,
       isCounted: shouldCount,
-      countedDate: shouldCount ? currentDay : null,
-      countedMonth: shouldCount ? currentMonth : null,
+      countedMonth: shouldCount ? periodKey : null,
       countedAt: shouldCount ? new Date() : null
     },
     update: {
       hasDescription,
       hasClaims,
       isCounted: shouldCount,
-      countedDate: shouldCount ? currentDay : undefined,
-      countedMonth: shouldCount ? currentMonth : undefined,
+      countedMonth: shouldCount ? periodKey : undefined,
       countedAt: shouldCount ? new Date() : undefined
     }
   })

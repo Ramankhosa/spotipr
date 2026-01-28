@@ -2030,8 +2030,12 @@ No explanation. No alternatives. Just the word.`;
     
     // Build context strings (only if admin flag allows)
     // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
+    // Handle edge case where both referenceLabel and numeral are missing
     const numerals = shouldInjectComponents 
-      ? componentsList.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral})`).join(', ')
+      ? componentsList.map((c: any) => {
+          const ref = c.referenceLabel || c.numeral
+          return ref ? `${c.name} (${ref})` : c.name
+        }).join(', ')
       : ''
     const figs = shouldInjectFigures
       ? (figures || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
@@ -2097,7 +2101,11 @@ No explanation. No alternatives. Just the word.`;
     const archetype = archetypeList.join('+') || 'GENERAL'
 
     // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
-    const numeralsContext = componentsList2.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral})`).join(', ')
+    // Handle edge case where both referenceLabel and numeral are missing
+    const numeralsContext = componentsList2.map((c: any) => {
+      const ref = c.referenceLabel || c.numeral
+      return ref ? `${c.name} (${ref})` : c.name
+    }).join(', ')
     const figs = (figures || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
     const instr = (instructions && instructions[section]) ? String(instructions[section]) : 'none'
 
@@ -2807,7 +2815,10 @@ Use the Super Admin panel to add the missing prompt.
       // Only check numerals if components have been declared
       if (guardrailComps.length > 0) {
         // Support all numbering styles: numeric (100), step labels (S100), constituent labels ((a))
-        const allowed = new Set(guardrailComps.map((c:any) => String(c.referenceLabel || c.numeral)))
+        // Filter out components without referenceLabel or numeral to avoid "undefined" in Set
+        const allowed = new Set(guardrailComps
+          .filter((c:any) => c.referenceLabel || c.numeral)
+          .map((c:any) => String(c.referenceLabel || c.numeral)))
         // Match patterns: (100), (S100), (a), (b), etc.
         const refs = Array.from(text.matchAll(/\(([S]?\d{2,3}|[a-z])\)/gi)).map(m => m[1])
         if (refs.some(r => !allowed.has(r) && !allowed.has(`(${r})`))) return { ok: false, reason: 'List includes undeclared reference label' }
@@ -2980,7 +2991,11 @@ Use the Super Admin panel to add the missing prompt.
         return '1. A system comprising: components as described.'
       case 'listOfNumerals':
         // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
-        const nums = fallbackComps.map((c: any) => `( ${c.referenceLabel || c.numeral} ) G ${c.name}`).join('\n')
+        // Handle edge case where both referenceLabel and numeral are missing
+        const nums = fallbackComps.map((c: any) => {
+          const ref = c.referenceLabel || c.numeral
+          return ref ? `( ${ref} ) G ${c.name}` : c.name
+        }).join('\n')
         return nums || '(100) G Main component'
       default:
         return 'Content not available.'
@@ -3696,7 +3711,7 @@ INVENTION CONTEXT:
 ${idea.title ? `Title: ${idea.title}` : ''}
 ${idea.problem ? `Problem: ${idea.problem}` : ''}
 ${idea.objectives ? `Objectives: ${idea.objectives}` : ''}
-${components.length > 0 ? `Components: ${components.map(c => `${c.name} (${c.referenceLabel || c.numeral})`).join(', ')}` : ''}
+${components.length > 0 ? `Components: ${components.map(c => { const ref = c.referenceLabel || c.numeral; return ref ? `${c.name} (${ref})` : c.name; }).join(', ')}` : ''}
 ${idea.logic ? `Logic: ${idea.logic}` : ''}
 ${figures.length > 0 ? `Figures: ${figures.map(f => `Fig.${f.figureNo}: ${f.title}`).join(', ')}` : ''}
 ${priorArtSelections.length > 0 ? `Prior art for context (approved - ALL ${priorArtSelections.length} patents): ${priorArtSelections.map(p=>`${p.patentNumber}${p.title?`: ${p.title}`:''}`).join(' | ')}` : ''}

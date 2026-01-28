@@ -82,12 +82,13 @@ export async function GET(request: NextRequest) {
       lte: endDate,
     }
 
-    // Fetch drafting sessions per user (proxy for patents drafted)
-    const draftingByUser = await prisma.draftingSession.groupBy({
+    // Fetch counted patent drafts per user (quota-aligned)
+    const draftingByUser = await prisma.patentDraftingUsage.groupBy({
       by: ['userId'],
       where: {
-        createdAt: dateRange,
+        isCounted: true,
         ...(query.tenantId ? { tenantId: query.tenantId } : {}),
+        countedAt: dateRange
       },
       _count: { _all: true },
     })

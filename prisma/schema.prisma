@@ -957,8 +957,7 @@ model PatentDraftingUsage {
   isCounted      Boolean @default(false) // True when patent is counted toward quota
 
   // Period tracking for quota enforcement
-  countedDate  String? // YYYY-MM-DD when counted (for daily quota)
-  countedMonth String? // YYYY-MM when counted (for monthly quota)
+  countedMonth String? // Billing period key (subscription-cycle start date, ISO YYYY-MM-DD)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -966,7 +965,7 @@ model PatentDraftingUsage {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
-  @@index([tenantId, countedDate])
+  @@index([tenantId, countedAt])
   @@index([tenantId, countedMonth])
   @@index([sessionId])
   @@map("patent_drafting_usage")

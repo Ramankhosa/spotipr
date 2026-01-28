@@ -25,6 +25,7 @@ import { resolveModel } from '@/lib/metering/model-resolver'
 import { llmGateway } from '@/lib/metering/gateway'
 import { createMeteringSystem } from '@/lib/metering/system'
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge'
+import { CONTINGENCY_MULTIPLIER } from '@/lib/metering/cost-calculator'
 import type { TaskCode, FeatureCode } from '@prisma/client'
 
 // Types
@@ -82,6 +83,10 @@ export interface SketchGenerationResult {
 // Constants
 const SKETCH_UPLOAD_DIR = 'public/uploads/sketches'
 const MAX_MODIFY_ATTEMPTS = 10
+const SKETCH_FIXED_COST_INR = 30
+// Static FX assumption to map INR to USD for unified metering totals.
+const INR_TO_USD = 0.012
+const SKETCH_FIXED_COST_USD = SKETCH_FIXED_COST_INR * INR_TO_USD
 
 // ============================================================================
 // IMAGE GENERATION MODEL CONFIGURATION
@@ -845,16 +850,30 @@ async function recordSketchUsage(
 
   try {
     const meteringSystem = createMeteringSystem()
-    await meteringSystem.metering.recordUsage(reservationId, {
-      inputTokens: Math.ceil(tokensUsed * 0.3), // Estimate: 30% input
-      outputTokens: Math.ceil(tokensUsed * 0.7), // Estimate: 70% output (image)
-      modelClass: modelCode as any,
-      apiCalls: 1,
-      metadata: {
-        service: 'sketch-generation',
-        stageCode: SKETCH_STAGE_CODE
-      }
-    }, userId)
+    const fixedCost = SKETCH_FIXED_COST_USD
+    const contingencyCost = fixedCost * CONTINGENCY_MULTIPLIER
+
+    await meteringSystem.metering.recordUsage(
+      reservationId,
+      {
+        inputTokens: Math.ceil(tokensUsed * 0.3), // Estimate: 30% input
+        outputTokens: Math.ceil(tokensUsed * 0.7), // Estimate: 70% output (image)
+        modelClass: modelCode as any,
+        apiCalls: 1,
+        metadata: {
+          service: 'sketch-generation',
+          stageCode: SKETCH_STAGE_CODE,
+          cost: {
+            actualCost: fixedCost,
+            contingencyCost,
+            currency: 'USD',
+            source: 'fixed_inr_sketch_cost',
+            inrAmount: SKETCH_FIXED_COST_INR
+          }
+        }
+      },
+      userId
+    )
     console.log(`[SketchService] Usage recorded: ${tokensUsed} tokens for reservation ${reservationId}`)
   } catch (error) {
     console.error('[SketchService] Failed to record usage:', error)

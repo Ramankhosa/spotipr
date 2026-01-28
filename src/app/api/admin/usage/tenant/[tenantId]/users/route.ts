@@ -85,11 +85,12 @@ export async function GET(
         }
       }),
       prisma.lLMModelPrice.findMany(),
-      prisma.draftingSession.groupBy({
+      prisma.patentDraftingUsage.groupBy({
         by: ['userId'],
         where: {
           tenantId: params.tenantId,
-          createdAt: dateRange
+          isCounted: true,
+          countedAt: dateRange
         },
         _count: { _all: true }
       }),
@@ -301,4 +302,3 @@ export async function GET(
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-

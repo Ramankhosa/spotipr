@@ -74,16 +74,18 @@ export async function GET(
         }
       }
 
-      const patentsByUser = await prisma.patent.groupBy({
-        by: ['createdBy'],
+      const patentsByUser = await prisma.patentDraftingUsage.groupBy({
+        by: ['userId'],
         where: {
-          createdBy: { in: userIds }
+          userId: { in: userIds },
+          isCounted: true,
+          ...(token.tenantId ? { tenantId: token.tenantId } : {})
         },
         _count: { _all: true }
       })
 
       for (const row of patentsByUser) {
-        const metrics = userMetrics[row.createdBy]
+        const metrics = userMetrics[row.userId]
         if (metrics) {
           metrics.patentsDrafted = row._count._all
         }

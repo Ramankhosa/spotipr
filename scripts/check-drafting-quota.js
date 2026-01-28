@@ -11,6 +11,94 @@
 const { PrismaClient } = require('@prisma/client')
 const prisma = new PrismaClient()
 
+function getUtcDayWindow(now) {
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth()
+  const day = now.getUTCDate()
+  const start = new Date(Date.UTC(year, month, day, 0, 0, 0, 0))
+  const endInclusive = new Date(Date.UTC(year, month, day, 23, 59, 59, 999))
+  return { start, endInclusive }
+}
+
+function getUtcMonthWindow(now) {
+  const year = now.getUTCFullYear()
+  const month = now.getUTCMonth()
+  const start = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0))
+  const endExclusive = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0))
+  return { start, endExclusive }
+}
+
+function addMonthsClampedUtc(base, months) {
+  const year = base.getUTCFullYear()
+  const month = base.getUTCMonth() + months
+  const day = base.getUTCDate()
+  const hours = base.getUTCHours()
+  const minutes = base.getUTCMinutes()
+  const seconds = base.getUTCSeconds()
+  const ms = base.getUTCMilliseconds()
+
+  const firstOfTarget = new Date(Date.UTC(year, month, 1, hours, minutes, seconds, ms))
+  const daysInTarget = new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth() + 1, 0)).getUTCDate()
+  const clampedDay = Math.min(day, daysInTarget)
+  return new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth(), clampedDay, hours, minutes, seconds, ms))
+}
+
+function resolveAnchoredMonthlyWindow(now, anchorStart) {
+  const monthsDiff =
+    (now.getUTCFullYear() - anchorStart.getUTCFullYear()) * 12 +
+    (now.getUTCMonth() - anchorStart.getUTCMonth())
+
+  let monthsFromAnchor = monthsDiff
+  let start = addMonthsClampedUtc(anchorStart, monthsFromAnchor)
+  if (start > now) {
+    monthsFromAnchor -= 1
+    start = addMonthsClampedUtc(anchorStart, monthsFromAnchor)
+  }
+  const endExclusive = addMonthsClampedUtc(anchorStart, monthsFromAnchor + 1)
+  return { start, endExclusive }
+}
+
+async function resolveBillingPeriod(tenantId, now) {
+  const calendar = getUtcMonthWindow(now)
+  if (!tenantId) {
+    return { ...calendar, source: 'calendar' }
+  }
+
+  const subscription = await prisma.subscription.findFirst({
+    where: {
+      tenantId,
+      status: { in: ['ACTIVE', 'PENDING', 'AUTHENTICATED'] },
+      currentPeriodStart: { not: null },
+      currentPeriodEnd: { not: null }
+    },
+    orderBy: { currentPeriodStart: 'desc' },
+    select: {
+      billingCycle: true,
+      currentPeriodStart: true,
+      currentPeriodEnd: true
+    }
+  })
+
+  if (subscription?.currentPeriodStart && subscription?.currentPeriodEnd) {
+    const start = subscription.currentPeriodStart
+    const endExclusive = subscription.currentPeriodEnd
+    const cycle = (subscription.billingCycle || '').toLowerCase()
+
+    if (cycle === 'monthly') {
+      if (now >= start && now < endExclusive) {
+        return { start, endExclusive, source: 'subscription' }
+      }
+    } else if (cycle === 'yearly') {
+      if (now >= start && now < endExclusive) {
+        const window = resolveAnchoredMonthlyWindow(now, start)
+        return { start: window.start, endExclusive: window.endExclusive, source: 'subscription' }
+      }
+    }
+  }
+
+  return { ...calendar, source: 'calendar' }
+}
+
 async function main() {
   const tenantId = process.argv[2]
   const sessionId = process.argv[3]
@@ -69,25 +157,38 @@ async function main() {
   console.log('2. CURRENT USAGE (PatentDraftingUsage table)')
   console.log('-'.repeat(40))
   
-  const currentDay = new Date().toISOString().substring(0, 10)
-  const currentMonth = new Date().toISOString().substring(0, 7)
+  const now = new Date()
+  const dayWindow = getUtcDayWindow(now)
+  const billingPeriod = await resolveBillingPeriod(tenantId, now)
+  const periodEndInclusive = new Date(billingPeriod.endExclusive.getTime() - 1)
 
   const whereClause = tenantId ? { tenantId } : {}
 
   const [dailyCount, monthlyCount, totalRecords] = await Promise.all([
     prisma.patentDraftingUsage.count({
-      where: { ...whereClause, isCounted: true, countedDate: currentDay }
+      where: {
+        ...whereClause,
+        isCounted: true,
+        countedAt: { gte: dayWindow.start, lte: dayWindow.endInclusive }
+      }
     }),
     prisma.patentDraftingUsage.count({
-      where: { ...whereClause, isCounted: true, countedMonth: currentMonth }
+      where: {
+        ...whereClause,
+        isCounted: true,
+        countedAt: { gte: billingPeriod.start, lte: periodEndInclusive }
+      }
     }),
     prisma.patentDraftingUsage.count({
       where: whereClause
     })
   ])
 
-  console.log(`  Today (${currentDay}): ${dailyCount} patents counted`)
-  console.log(`  This month (${currentMonth}): ${monthlyCount} patents counted`)
+  const dayKey = dayWindow.start.toISOString().substring(0, 10)
+  const periodStartKey = billingPeriod.start.toISOString().substring(0, 10)
+  const periodEndKey = periodEndInclusive.toISOString().substring(0, 10)
+  console.log(`  Today (UTC ${dayKey}): ${dailyCount} patents counted`)
+  console.log(`  Billing period (${billingPeriod.source} ${periodStartKey} to ${periodEndKey}): ${monthlyCount} patents counted`)
   console.log(`  Total records: ${totalRecords}`)
   console.log('')
 

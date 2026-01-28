@@ -4532,8 +4532,10 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     }
 
     // Format components for the prompt (supports all numbering styles: 100/200, S100/S200, (a)/(b))
+    // NOTE: Intentionally exclude component type classification (MAIN_CONTROLLER, SUBSYSTEM, etc.)
+    // to prevent LLM from including these internal tags in the generated claims
     const componentsList = Array.isArray(context.components)
-      ? context.components.map((c: any) => `- ${c.name}${c.type ? ` (${c.type})` : ''}${(c.referenceLabel || c.numeral) ? ` (${c.referenceLabel || c.numeral})` : ''}`).join('\n')
+      ? context.components.map((c: any) => `- ${c.name}${(c.referenceLabel || c.numeral) ? ` (${c.referenceLabel || c.numeral})` : ''}`).join('\n')
       : ''
 
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)

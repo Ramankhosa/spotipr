@@ -96,11 +96,12 @@ export async function computeUsageSummary(
         modelClass: true
       }
     }),
-    prisma.draftingSession.groupBy({
+    prisma.patentDraftingUsage.groupBy({
       by: ['tenantId'],
       where: {
-        createdAt: dateRange,
-        ...(tenantFilterId ? { tenantId: tenantFilterId } : {})
+        isCounted: true,
+        ...(tenantFilterId ? { tenantId: tenantFilterId } : {}),
+        countedAt: dateRange
       },
       _count: { _all: true }
     }),
@@ -183,7 +184,7 @@ export async function computeUsageSummary(
     global.totalCost += cost
   }
 
-  // Drafting sessions per tenant (patent drafts)
+  // Counted patent drafts per tenant (quota-aligned)
   for (const row of draftsByTenant) {
     const tId = row.tenantId || 'no-tenant'
     if (tenantFilterId && tId !== tenantFilterId) continue
@@ -328,18 +329,15 @@ export async function computeUserCostsByTenant(
     }
   })
 
-  // Get drafting sessions per user
-  const draftingSessions = await prisma.draftingSession.findMany({
+  // Get counted patent drafts per user (quota-aligned)
+  const draftingByUser = await prisma.patentDraftingUsage.groupBy({
+    by: ['userId'],
     where: {
       tenantId,
-      createdAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
-      }
+      isCounted: true,
+      countedAt: { gte: normalizedStart, lte: normalizedEnd }
     },
-    select: {
-      userId: true
-    }
+    _count: { _all: true }
   })
 
   // Get novelty searches per user
@@ -400,10 +398,11 @@ export async function computeUserCostsByTenant(
     }
   }
 
-  // Add drafting session counts
-  for (const session of draftingSessions) {
-    if (!userMap.has(session.userId)) {
-      userMap.set(session.userId, {
+  // Add counted patent drafts per user
+  for (const row of draftingByUser) {
+    const userId = row.userId
+    if (!userMap.has(userId)) {
+      userMap.set(userId, {
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalApiCalls: 0,
@@ -412,7 +411,7 @@ export async function computeUserCostsByTenant(
         noveltySearches: 0
       })
     }
-    userMap.get(session.userId)!.patentDrafts += 1
+    userMap.get(userId)!.patentDrafts += row._count._all
   }
 
   // Add novelty search counts
@@ -593,9 +592,12 @@ export async function computePatentCosts(
     metrics.totalOutputTokens += output
     metrics.totalApiCalls += calls
 
-    // Calculate cost
+    // Calculate cost (honour explicit overrides stored in metadata.cost)
+    const metaCost = meta?.cost
     let actualCost = 0
-    if (log.modelClass) {
+    if (metaCost && typeof metaCost.actualCost === 'number') {
+      actualCost = metaCost.actualCost
+    } else if (log.modelClass) {
       const costBreakdown = calculateCost(log.modelClass, input, output)
       actualCost = costBreakdown.actualCost
     } else {

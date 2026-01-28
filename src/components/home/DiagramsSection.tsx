@@ -6,9 +6,9 @@ import { motion } from 'framer-motion'
 import { ArrowRight, PenTool, Hash, Layers } from 'lucide-react'
 
 const sampleOutputs = [
-  { src: '/illustrations/ranch.png', alt: 'Wrench example sketch output', label: 'Wrench' },
-  { src: '/illustrations/posture.png', alt: 'Posture example sketch output', label: 'Posture' },
-  { src: '/illustrations/bottlecap.png', alt: 'Bottle cap example sketch output', label: 'Bottle Cap' },
+  { src: '/images/BlockDiagram.svg', alt: 'Block diagram output example', label: 'Block Diagram' },
+  { src: '/images/Activity.svg', alt: 'Activity diagram output example', label: 'Activity Diagram' },
+  { src: '/images/Sketch.svg', alt: 'Sketch output example', label: 'Sketch' },
 ]
 
 const highlights = [
@@ -115,8 +115,8 @@ export default function DiagramsSection() {
               <div className="absolute inset-0 bg-gradient-to-br from-ai-blue-500/10 to-transparent" />
               <div className="relative w-full aspect-[16/9] bg-white">
                 <Image
-                  src="/illustrations/sketch%20feature%29.jpg"
-                  alt="Hand sketch converted into patent-ready figures"
+                  src="/images/Sketch.svg"
+                  alt="Hand sketch converted into a patent-ready figure"
                   fill
                   sizes="(min-width: 1024px) 50vw, 100vw"
                   quality={100}
@@ -166,7 +166,7 @@ export default function DiagramsSection() {
                       </div>
                       <div className="px-4 py-3 border-t border-ai-graphite-800/60">
                         <div className="text-white font-semibold">{s.label}</div>
-                        <div className="text-xs text-ai-graphite-500 mt-0.5">Patent-style sketches with callouts</div>
+                        <div className="text-xs text-ai-graphite-500 mt-0.5">Patent-ready diagram outputs</div>
                       </div>
                     </div>
                   ))}

@@ -1,23 +1,32 @@
 import type { Metadata } from 'next'
-import { Inter, Cormorant_Garamond } from 'next/font/google'
+import localFont from 'next/font/local'
 import { Providers } from '@/components/providers'
 import Header from '@/components/Header'
 import './globals.css'
 
 // Configure Inter and Cormorant Garamond fonts with fallbacks for offline development
-const inter = Inter({
-  subsets: ['latin'],
-  display: 'optional', // Changed from 'swap' to 'optional' to prevent build failures
+const inter = localFont({
+  variable: '--font-inter',
+  src: [
+    { path: '../fonts/inter/Inter-Regular.ttf', weight: '400', style: 'normal' },
+    { path: '../fonts/inter/Inter-Medium.ttf', weight: '500', style: 'normal' },
+    { path: '../fonts/inter/Inter-SemiBold.ttf', weight: '600', style: 'normal' },
+    { path: '../fonts/inter/Inter-Bold.ttf', weight: '700', style: 'normal' },
+  ],
+  display: 'optional',
   fallback: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-  preload: false, // Disable preload to avoid network requests during build
 })
 
-const cormorant = Cormorant_Garamond({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  display: 'optional', // Changed from 'swap' to 'optional' to prevent build failures
+const cormorant = localFont({
   variable: '--font-cormorant',
-  preload: false, // Disable preload to avoid network requests during build
+  src: [
+    { path: '../fonts/cormorant/Cormorant-Regular.ttf', weight: '400', style: 'normal' },
+    { path: '../fonts/cormorant/Cormorant-Medium.ttf', weight: '500', style: 'normal' },
+    { path: '../fonts/cormorant/Cormorant-SemiBold.ttf', weight: '600', style: 'normal' },
+    { path: '../fonts/cormorant/Cormorant-Bold.ttf', weight: '700', style: 'normal' },
+  ],
+  display: 'optional',
+  fallback: ['Georgia', 'serif'],
 })
 
 export const metadata: Metadata = {
