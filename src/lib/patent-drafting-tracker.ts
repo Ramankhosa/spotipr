@@ -304,6 +304,7 @@ export async function initializeSessionTracking(
 
 /**
  * Manually mark sections as drafted (for existing drafts that need syncing)
+ * Checks quota before counting to prevent exceeding limits
  */
 export async function syncExistingSections(
   tenantId: string,
@@ -311,7 +312,7 @@ export async function syncExistingSections(
   patentId: string,
   userId: string,
   draftedSections: string[]
-): Promise<{ counted: boolean }> {
+): Promise<{ counted: boolean; quotaExceeded: boolean }> {
   const hasDescription = draftedSections.some(s => 
     s === 'detailedDescription' || s === 'description'
   )
@@ -326,10 +327,37 @@ export async function syncExistingSections(
   
   if (existing?.isCounted) {
     // Already counted, nothing to do
-    return { counted: false }
+    return { counted: false, quotaExceeded: false }
   }
   
   const shouldCount = hasDescription && hasClaims
+  
+  // Check quota before counting
+  if (shouldCount) {
+    const quota = await getPatentDraftingQuota(tenantId)
+    
+    // Check daily quota
+    if (quota.dailyLimit !== null && quota.dailyUsed >= quota.dailyLimit) {
+      // Update tracking without counting
+      await prisma.patentDraftingUsage.upsert({
+        where: { sessionId },
+        create: { tenantId, sessionId, patentId, userId, hasDescription, hasClaims, isCounted: false },
+        update: { hasDescription, hasClaims }
+      })
+      return { counted: false, quotaExceeded: true }
+    }
+    
+    // Check monthly quota
+    if (quota.monthlyLimit !== null && quota.monthlyUsed >= quota.monthlyLimit) {
+      // Update tracking without counting
+      await prisma.patentDraftingUsage.upsert({
+        where: { sessionId },
+        create: { tenantId, sessionId, patentId, userId, hasDescription, hasClaims, isCounted: false },
+        update: { hasDescription, hasClaims }
+      })
+      return { counted: false, quotaExceeded: true }
+    }
+  }
   
   await prisma.patentDraftingUsage.upsert({
     where: { sessionId },
@@ -355,6 +383,6 @@ export async function syncExistingSections(
     }
   })
   
-  return { counted: shouldCount }
+  return { counted: shouldCount, quotaExceeded: false }
 }
 

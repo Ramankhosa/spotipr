@@ -620,6 +620,23 @@ export async function checkServiceAccess(
     }
   }
   
+  // ==========================================================================
+  // ATI USERS (MANUAL_ATI) BYPASS: Enterprise ATI users are post-paid based on
+  // usage, so they bypass plan feature checks and quotas. They are billed
+  // separately based on actual usage metering.
+  // ==========================================================================
+  if (tenant.registrationSource === 'MANUAL_ATI') {
+    console.log(`[ServiceAccess] ALLOWED: MANUAL_ATI user ${userId} accessing ${serviceType} (post-paid bypass)`)
+    return {
+      allowed: true,
+      remainingQuota: {
+        daily: null,   // Unlimited for ATI users
+        monthly: null  // Unlimited for ATI users
+      },
+      quotaSource: 'tenant'
+    }
+  }
+  
   // 4. Check tenant plan
   const tenantPlan = await prisma.tenantPlan.findFirst({
     where: {

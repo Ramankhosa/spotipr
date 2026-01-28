@@ -31,6 +31,7 @@ export interface TrialUsage {
 
 export interface TrialQuotaStatus {
   isTrialUser: boolean
+  isAtiUser?: boolean  // ATI users bypass ALL trial quotas (post-paid billing)
   limits: TrialPlanLimits
   usage: TrialUsage
   remaining: {
@@ -81,6 +82,7 @@ const DEFAULT_TRIAL_LIMITS: TrialPlanLimits = {
  */
 export async function getTrialUserInfo(userId: string): Promise<{
   isTrialUser: boolean
+  isAtiUser?: boolean  // ATI users bypass ALL trial quotas (post-paid billing)
   invite?: any
   campaign?: any
 }> {
@@ -115,9 +117,10 @@ export async function getTrialUserInfo(userId: string): Promise<{
         return { isTrialUser: true }
       }
 
-      // ATI users (MANUAL_ATI) bypass quota - they're billed based on usage
+      // ATI users (MANUAL_ATI) bypass ALL quota - they're billed based on usage
+      // Mark them as isAtiUser so downstream functions know to bypass trial limits entirely
       if (user?.tenant?.registrationSource === 'MANUAL_ATI') {
-        return { isTrialUser: true }
+        return { isTrialUser: true, isAtiUser: true }
       }
 
       return { isTrialUser: false }
@@ -143,12 +146,27 @@ export async function getTrialUserInfo(userId: string): Promise<{
 /**
  * Get trial plan limits for a user
  * Returns campaign-specific limits or defaults
+ * 
+ * IMPORTANT: ATI users (MANUAL_ATI) bypass ALL trial limits - they are post-paid
  */
 export async function getTrialLimits(userId: string): Promise<TrialPlanLimits> {
-  const { isTrialUser, campaign } = await getTrialUserInfo(userId)
+  const { isTrialUser, isAtiUser, campaign } = await getTrialUserInfo(userId)
 
   if (!isTrialUser) {
     // Not a trial user - return nulls (no trial limits apply)
+    return {
+      patentDraftLimit: null,
+      noveltySearchLimit: null,
+      ideationRunLimit: null,
+      priorArtSearchLimit: null,
+      diagramLimit: null,
+      totalTokenBudget: null
+    }
+  }
+
+  // ATI users (MANUAL_ATI) bypass ALL trial limits - they are post-paid based on usage
+  // Return nulls so no trial quotas are enforced
+  if (isAtiUser) {
     return {
       patentDraftLimit: null,
       noveltySearchLimit: null,
@@ -297,11 +315,56 @@ export async function getTrialUsage(userId: string): Promise<TrialUsage> {
  * Get comprehensive trial quota status for a user
  */
 export async function getTrialQuotaStatus(userId: string): Promise<TrialQuotaStatus> {
-  const { isTrialUser, invite, campaign } = await getTrialUserInfo(userId)
+  const { isTrialUser, isAtiUser, invite, campaign } = await getTrialUserInfo(userId)
   
   if (!isTrialUser) {
     return {
       isTrialUser: false,
+      limits: {
+        patentDraftLimit: null,
+        noveltySearchLimit: null,
+        ideationRunLimit: null,
+        priorArtSearchLimit: null,
+        diagramLimit: null,
+        totalTokenBudget: null
+      },
+      usage: {
+        patentsDrafted: 0,
+        noveltySearches: 0,
+        ideationRuns: 0,
+        priorArtSearches: 0,
+        diagrams: 0,
+        totalTokensUsed: 0
+      },
+      remaining: {
+        patents: null,
+        noveltySearches: null,
+        ideationRuns: null,
+        priorArtSearches: null,
+        diagrams: null,
+        tokens: null
+      },
+      quotaExceeded: {
+        patents: false,
+        noveltySearches: false,
+        ideationRuns: false,
+        priorArtSearches: false,
+        diagrams: false,
+        tokens: false,
+        any: false
+      },
+      trialExpired: false,
+      trialExpiresAt: null,
+      daysRemaining: null
+    }
+  }
+
+  // ATI users (MANUAL_ATI) bypass ALL trial quotas - they are post-paid
+  // Return early with no limits/quotas exceeded
+  if (isAtiUser) {
+    return {
+      isTrialUser: true,
+      isAtiUser: true,
       limits: {
         patentDraftLimit: null,
         noveltySearchLimit: null,
@@ -407,6 +470,8 @@ export async function getTrialQuotaStatus(userId: string): Promise<TrialQuotaSta
 /**
  * Check if trial user can perform an action
  * Returns { allowed, reason } 
+ * 
+ * IMPORTANT: ATI users (MANUAL_ATI) bypass ALL trial limits - they are post-paid
  */
 export async function checkTrialQuota(
   userId: string,
@@ -416,6 +481,11 @@ export async function checkTrialQuota(
 
   if (!status.isTrialUser) {
     // Not a trial user - trial limits don't apply
+    return { allowed: true }
+  }
+
+  // ATI users (MANUAL_ATI) bypass ALL trial limits - they are post-paid based on usage
+  if (status.isAtiUser) {
     return { allowed: true }
   }
 

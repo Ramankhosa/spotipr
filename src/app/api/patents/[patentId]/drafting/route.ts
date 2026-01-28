@@ -12284,6 +12284,50 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
     }
   });
 
+  // QUOTA TRACKING: Track essential sections for patent-based quota counting
+  // A patent counts toward quota when both detailedDescription AND claims are drafted
+  // This ensures generateDraft properly counts toward tenant quota limits
+  if (session.tenantId) {
+    const hasDraftedDescription = !!(result.draft?.detailedDescription && result.draft.detailedDescription.trim())
+    const hasDraftedClaims = !!(result.draft?.claims && result.draft.claims.trim())
+    
+    if (hasDraftedDescription) {
+      const descTrackResult = await trackSectionDrafted(
+        session.tenantId,
+        sessionId,
+        patentId,
+        user.id,
+        'detailedDescription'
+      )
+      if (descTrackResult.quotaExceeded) {
+        // Return the draft but include quota warning
+        return NextResponse.json({ 
+          draft,
+          quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
+          quotaExceeded: true
+        })
+      }
+    }
+    
+    if (hasDraftedClaims) {
+      const claimsTrackResult = await trackSectionDrafted(
+        session.tenantId,
+        sessionId,
+        patentId,
+        user.id,
+        'claims'
+      )
+      if (claimsTrackResult.quotaExceeded) {
+        // Return the draft but include quota warning
+        return NextResponse.json({ 
+          draft,
+          quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
+          quotaExceeded: true
+        })
+      }
+    }
+  }
+
   return NextResponse.json({ draft });
 }
 
@@ -12689,6 +12733,57 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
       console.log('Creating new draft with keys:', Object.keys(createData))
       console.log('Extra sections keys:', Object.keys(extraSections))
       await prisma.annexureDraft.create({ data: createData })
+    }
+    
+    // QUOTA TRACKING: Track essential sections for patent-based quota counting
+    // A patent counts toward quota when both detailedDescription AND claims are drafted
+    // This ensures generateSections properly counts toward tenant quota limits
+    if (session.tenantId && normalizedGenerated) {
+      const hasDraftedDescription = !!(
+        (normalizedGenerated.detailedDescription && (normalizedGenerated.detailedDescription as string).trim()) ||
+        (normalizedGenerated.description && (normalizedGenerated.description as string).trim())
+      )
+      const hasDraftedClaims = !!(normalizedGenerated.claims && (normalizedGenerated.claims as string).trim())
+      
+      let quotaExceeded = false
+      
+      if (hasDraftedDescription) {
+        const descTrackResult = await trackSectionDrafted(
+          session.tenantId,
+          sessionId,
+          patentId,
+          user.id,
+          'detailedDescription'
+        )
+        if (descTrackResult.quotaExceeded) {
+          quotaExceeded = true
+        }
+      }
+      
+      if (hasDraftedClaims) {
+        const claimsTrackResult = await trackSectionDrafted(
+          session.tenantId,
+          sessionId,
+          patentId,
+          user.id,
+          'claims'
+        )
+        if (claimsTrackResult.quotaExceeded) {
+          quotaExceeded = true
+        }
+      }
+      
+      if (quotaExceeded) {
+        // Return the generated content but include quota warning
+        return NextResponse.json({ 
+          generated: result.generated, 
+          debugSteps: result.debugSteps, 
+          llmMeta: result.llmMeta,
+          warnings: result.warnings,
+          quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
+          quotaExceeded: true
+        })
+      }
     }
   } catch (e) {
     console.error('Autosave after generation failed:', e)
