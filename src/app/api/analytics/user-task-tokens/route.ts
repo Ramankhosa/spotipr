@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getMetaActualCost } from '@/lib/usage-log-cost'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -171,8 +172,10 @@ export async function GET(request: NextRequest) {
       if (!unitPrices) {
         unitPrices = { input: 0.000005, output: 0.000015 }
       }
-      const cost =
-        input * (unitPrices.input / 1_000_000) + output * (unitPrices.output / 1_000_000)
+      const metaCost = getMetaActualCost(log.meta)
+      const cost = metaCost !== null && (metaCost > 0 || (input === 0 && output === 0))
+        ? metaCost
+        : input * (unitPrices.input / 1_000_000) + output * (unitPrices.output / 1_000_000)
 
       userEntry.totalInputTokens += input
       userEntry.totalOutputTokens += output

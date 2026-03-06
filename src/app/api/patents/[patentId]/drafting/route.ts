@@ -4020,13 +4020,15 @@ async function attemptRepairPlantUml(
   const errorsText = validationErrors
     .map(e => `${e.type}${e.line ? `@${e.line}` : ''}: ${e.message}`)
     .join('\n')
-  const prompt = `You are a diagram syntax compiler and fixer.
-Fix ONLY syntax/structure problems. Preserve all semantics, reference numerals, and component names.
+  const prompt = `You are a PlantUML syntax fixer.
+Fix ONLY syntax/structure errors with the smallest possible edit.
+Do NOT change meaning: no renaming labels, no reordering nodes, no adding/removing components or arrows unless absolutely required for syntax.
 
-CRITICAL PRESERVATION RULES:
-- Preserve diagram type and the existing skinparam style. Do NOT convert a sequence diagram into a block diagram or vice versa.
+STRICT RULES:
+- Preserve diagram type (block/sequence/activity/state). Do NOT convert it.
 - Do NOT add !include/!theme/!pragma/title/caption.
-- Keep all existing skinparam directives (monochrome, shadowing, ArrowColor, BorderColor, etc.) intact.
+- Do NOT add, remove, or modify any skinparam lines.
+- Keep all component names and reference numerals exactly as-is.
 
 FIGURE: ${opts.figureTitle || 'Untitled'}
 DESCRIPTION: ${opts.description || 'n/a'}
@@ -4040,7 +4042,7 @@ ${errorsText || 'none'}
 
 ${opts.plantumlErrorText ? `DIAGRAM SERVER ERROR:\n${opts.plantumlErrorText}` : ''}
 
-Return ONLY corrected diagram code between @startuml and @enduml. Do not add explanations.`
+Return ONLY corrected diagram code between @startuml and @enduml. No explanations, no extra text.`
 
   try {
     const request = { headers: opts.requestHeaders || {} }

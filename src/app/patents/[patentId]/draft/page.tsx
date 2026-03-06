@@ -125,7 +125,9 @@ export default function PatentDraftingPage() {
   const [session, setSession] = useState<DraftingSession | null>(null)
   const [styleStatus, setStyleStatus] = useState<{ enabled: boolean; sections: string[]; profile?: { version: number; status: string; updatedAt: string } | null } | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // Fatal errors block page render; inline errors are shown in-page while keeping the user on the drafting screen
+  const [fatalError, setFatalError] = useState<string | null>(null)
+  const [inlineError, setInlineError] = useState<string | null>(null)
   const [usage, setUsage] = useState<PatentUsageMetrics | null>(null)
   const [quotaError, setQuotaError] = useState<{
     message: string;
@@ -152,10 +154,12 @@ export default function PatentDraftingPage() {
 
       const data = await response.json()
       setSession(data.session)
+      setInlineError(null)
       return data.session
     } catch (err) {
       console.error('Resume session error:', err)
-      setError(err instanceof Error ? err.message : 'Failed to resume drafting')
+      // Keep the user on the drafting page; surface a retry message instead of kicking them out
+      setInlineError('Error has occurred, please retry.')
       return null
     }
   }, [patentId])
@@ -163,6 +167,7 @@ export default function PatentDraftingPage() {
   const loadData = useCallback(async () => {
     try {
       setIsLoading(true)
+      setInlineError(null)
 
       // Load patent details
       const patentResponse = await fetch(`/api/patents/${patentId}`, {
@@ -235,7 +240,8 @@ export default function PatentDraftingPage() {
 
     } catch (err) {
       console.error('Failed to load data:', err)
-      setError(err instanceof Error ? err.message : 'Failed to load data')
+      // Fatal because we cannot render the drafting workspace without these primitives
+      setFatalError(err instanceof Error ? err.message : 'Failed to load data')
     } finally {
       setIsLoading(false)
     }
@@ -353,7 +359,7 @@ export default function PatentDraftingPage() {
         // Handle component validation errors
         if (errorCode === 'INVALID_COMPONENT_MAP' && result?.details) {
           const validationErrors = Array.isArray(result.details) ? result.details : [result.details];
-          setError(`Component validation failed: ${validationErrors.join(', ')}`);
+          setInlineError(`Component validation failed: ${validationErrors.join(', ')}`);
           return null;
         }
 
@@ -381,11 +387,12 @@ export default function PatentDraftingPage() {
         ]
         if (diagramActions.includes(stageData?.action)) {
           // Return error object so component can display it
+          setInlineError(message || 'Error has occurred, please retry.')
           return { error: message, details: result?.details, code: errorCode }
         }
 
-        // For other errors, set error state instead of throwing to prevent runtime crash
-        setError(message);
+        // For other errors, set inline error state instead of throwing to prevent runtime crash
+        setInlineError(message || 'Error has occurred, please retry.');
         return null;
       }
 
@@ -448,12 +455,14 @@ export default function PatentDraftingPage() {
         }, 2500)
       }
 
+      // Clear any previous inline error after a successful action
+      setInlineError(null)
       return result
     } catch (err) {
       console.error('Stage completion error:', err)
-      // Don't throw - set error state to prevent component crash and redirect
-      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
-      setError(errorMessage)
+      // Don't throw - show inline error so the user stays on this page
+      const errorMessage = err instanceof Error ? err.message : 'Error has occurred, please retry.'
+      setInlineError(errorMessage)
       return null
     }
   }
@@ -534,18 +543,26 @@ export default function PatentDraftingPage() {
     return <PageLoadingBird message="Loading patent drafting..." />
   }
 
-  if (error || !patent) {
+  if (fatalError || !patent) {
     return (
       <div className="min-h-screen bg-[#F5F6F7] flex items-center justify-center">
         <div className="text-center">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Error</h2>
-          <p className="text-gray-600 mb-4">{error || 'Patent not found'}</p>
-          <Link
-            href="/dashboard"
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
-          >
-            Back to Dashboard
-          </Link>
+          <p className="text-gray-600 mb-4">{fatalError || 'Patent not found'}</p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => { setFatalError(null); loadData(); }}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
+            >
+              Retry
+            </button>
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center px-4 py-2 border text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
+            >
+              Go to Dashboard
+            </Link>
+          </div>
         </div>
       </div>
     )
@@ -632,6 +649,32 @@ export default function PatentDraftingPage() {
                   </svg>
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Inline error banner for non-fatal stage errors */}
+        {inlineError && (
+          <div className="bg-rose-50 border-b border-rose-200 px-4 py-3">
+            <div className="max-w-[98%] mx-auto flex items-center justify-between">
+              <div className="flex items-start gap-2 text-rose-800 text-sm">
+                <svg className="w-5 h-5 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <p className="font-medium">Error has occurred, please retry.</p>
+                  <p className="text-xs text-rose-700 mt-1">{inlineError}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setInlineError(null)}
+                className="text-rose-600 hover:text-rose-800 p-1 rounded-full hover:bg-rose-100 transition-colors"
+                aria-label="Dismiss error"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </div>
         )}

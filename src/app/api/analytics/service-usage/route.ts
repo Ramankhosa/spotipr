@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch counted patent drafts per user (quota-aligned)
     const draftingByUser = await prisma.patentDraftingUsage.groupBy({
-      by: ['userId'],
+      by: ['userId', 'tenantId'],
       where: {
         isCounted: true,
         ...(query.tenantId ? { tenantId: query.tenantId } : {}),
@@ -168,7 +168,14 @@ export async function GET(request: NextRequest) {
     })
 
     const draftingMap = new Map<string, number>()
-    draftingByUser.forEach((row) => draftingMap.set(row.userId, row._count._all))
+    const tenantByUser = new Map<string, string | null>()
+    draftingByUser.forEach((row) => {
+      const current = draftingMap.get(row.userId) || 0
+      draftingMap.set(row.userId, current + row._count._all)
+      if (!tenantByUser.has(row.userId)) {
+        tenantByUser.set(row.userId, row.tenantId)
+      }
+    })
 
     const noveltyMap = new Map<string, number>()
     noveltyByUser.forEach((row) => noveltyMap.set(row.userId, row._count._all))
@@ -176,26 +183,24 @@ export async function GET(request: NextRequest) {
     const reservationMap = new Map<string, number>()
     reservationsByUser.forEach((row) => reservationMap.set(row.userId, row._count._all))
 
-    let totalPatentsDrafted = 0
-    let totalNoveltySearches = 0
-    let totalIdeasReserved = 0
+    const totalPatentsDrafted = draftingByUser.reduce((sum, row) => sum + row._count._all, 0)
+    const totalNoveltySearches = noveltyByUser.reduce((sum, row) => sum + row._count._all, 0)
+    const totalIdeasReserved = reservationsByUser.reduce((sum, row) => sum + row._count._all, 0)
 
-    const resultUsers = users.map((u) => {
-      const patentsDrafted = draftingMap.get(u.id) || 0
-      const noveltySearches = noveltyMap.get(u.id) || 0
-      const ideasReserved = reservationMap.get(u.id) || 0
-
-      totalPatentsDrafted += patentsDrafted
-      totalNoveltySearches += noveltySearches
-      totalIdeasReserved += ideasReserved
+    const userMap = new Map(users.map(user => [user.id, user]))
+    const resultUsers = Array.from(userIds).map((id) => {
+      const u = userMap.get(id)
+      const patentsDrafted = draftingMap.get(id) || 0
+      const noveltySearches = noveltyMap.get(id) || 0
+      const ideasReserved = reservationMap.get(id) || 0
 
       return {
-        userId: u.id,
-        userName: u.name || u.email,
-        userEmail: u.email,
-        tenantId: u.tenantId,
-        tenantName: u.tenant?.name || null,
-        tenantType: u.tenant?.type || null,
+        userId: id,
+        userName: u?.name || u?.email || 'Unknown user',
+        userEmail: u?.email || 'unknown@unknown.com',
+        tenantId: u?.tenantId || tenantByUser.get(id) || null,
+        tenantName: u?.tenant?.name || null,
+        tenantType: u?.tenant?.type || null,
         patentsDrafted,
         noveltySearches,
         ideasReserved,

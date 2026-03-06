@@ -18,7 +18,9 @@ export default function HomePage() {
       <FeaturesSection />
       <ComparisonSection />
       <HowItWorksSection />
-      <PricingSection />
+      <div className="hidden">
+        <PricingSection />
+      </div>
       <TrustSection />
       <CTAFooter />
       <MinimalFooter />

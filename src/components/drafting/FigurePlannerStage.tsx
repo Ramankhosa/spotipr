@@ -219,7 +219,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [highlightUpload, setHighlightUpload] = useState(false)
   const renderQueueRef = useRef<Promise<void>>(Promise.resolve())
   // Ref to hold latest handleUploadImage function to avoid stale closures in queueUpload
-  const handleUploadImageRef = useRef<((figureNo: number, file: File, customFilename?: string, language?: string) => Promise<void>) | null>(null)
+  const handleUploadImageRef = useRef<((figureNo: number, file: File, customFilename?: string, language?: string, opEpoch?: number) => Promise<void>) | null>(null)
 
   // === FIGURE PLANNER TAB STATE ===
   const [activeTab, setActiveTab] = useState<'diagrams' | 'sketches' | 'arrange'>('diagrams')
@@ -589,6 +589,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // Track figures that have already had an auto-fix attempt (prevents infinite LLM loops)
   // This ref is NEVER cleared by useEffects - only manually by user clicking "Retry Render"
   const autoFixAttemptedRef = useRef<Set<string>>(new Set())
+  // Increment to invalidate in-flight renders/uploads when a figure is deleted.
+  const diagramOpEpochRef = useRef<Record<string, number>>({})
+  const getDiagramOpEpoch = useCallback((key: string) => diagramOpEpochRef.current[key] ?? 0, [])
+  const bumpDiagramOpEpoch = useCallback((key: string) => {
+    const next = (diagramOpEpochRef.current[key] ?? 0) + 1
+    diagramOpEpochRef.current[key] = next
+    return next
+  }, [])
   const renderAbortControllersRef = useRef<Record<string, AbortController | null>>({})
   const uploadQueueRef = useRef<Promise<void>>(Promise.resolve())
   const [uploadingByKey, setUploadingByKey] = useState<Record<string, boolean>>({})
@@ -646,8 +654,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         !hasFailedAutoFix  // Don't auto-render if auto-fix was already attempted
 
       if (shouldRender) {
+        const opEpoch = getDiagramOpEpoch(key)
         queuedForRenderRef.current.add(key)
-        autoProcessDiagram(figNo, d.plantumlCode, lang)
+        autoProcessDiagram(figNo, d.plantumlCode, lang, opEpoch)
       }
     })
   }, [diagramSources, uploaded, rendering, processingStatus, stateInitialized])
@@ -1779,16 +1788,18 @@ Now output the JSON array.`
     }
   }
 
-  const queueUpload = useCallback((key: string, figureNo: number, blob: Blob, language: string) => {
+  const queueUpload = useCallback((key: string, figureNo: number, blob: Blob, language: string, opEpoch?: number) => {
+    const expectedEpoch = typeof opEpoch === 'number' ? opEpoch : getDiagramOpEpoch(key)
     uploadQueueRef.current = uploadQueueRef.current.then(async () => {
       try {
+        if (getDiagramOpEpoch(key) !== expectedEpoch) return
         setUploadingByKey(prev => ({ ...prev, [key]: true }))
         setIsUploading(true)
         const filename = `figure_${figureNo}_${language}_${Date.now()}.png`
         const file = new File([blob], filename, { type: 'image/png' })
         // Use ref to get latest handleUploadImage and avoid stale closure
         if (handleUploadImageRef.current) {
-          await handleUploadImageRef.current(figureNo, file, filename, language)
+          await handleUploadImageRef.current(figureNo, file, filename, language, expectedEpoch)
         }
       } finally {
         setUploadingByKey(prev => ({ ...prev, [key]: false }))
@@ -1799,8 +1810,25 @@ Now output the JSON array.`
     })
   }, [])
 
-  const runSingleRender = async (figureNo: number, plantumlCode: string, language = 'en', isAutoFixRetry = false) => {
+  const invalidateDiagramOps = useCallback((figureNo: number, language?: string | null) => {
+    const key = getDiagramKey(figureNo, (language || 'en').toLowerCase())
+    bumpDiagramOpEpoch(key)
+    queuedForRenderRef.current.delete(key)
+    autoFixAttemptedRef.current.delete(key)
+    const controller = renderAbortControllersRef.current[key]
+    if (controller) {
+      try { controller.abort() } catch {}
+    }
+    renderAbortControllersRef.current[key] = null
+  }, [bumpDiagramOpEpoch])
+
+  const runSingleRender = async (figureNo: number, plantumlCode: string, language = 'en', isAutoFixRetry = false, opEpoch?: number) => {
     const key = getDiagramKey(figureNo, language)
+    const runEpoch = typeof opEpoch === 'number' ? opEpoch : getDiagramOpEpoch(key)
+    if (getDiagramOpEpoch(key) !== runEpoch) {
+      queuedForRenderRef.current.delete(key)
+      return
+    }
     setProcessingStatus(prev => ({ ...prev, [key]: isAutoFixRetry ? 'Retrying with fixed code...' : intelligentMessages[0] }))
     setProcessingStep(prev => ({ ...prev, [key]: 0 }))
 
@@ -1841,6 +1869,11 @@ Now output the JSON array.`
         // AUTO-FIX FEATURE: Attempt auto-fix via LLM ONLY ONCE per figure
         // Check both isAutoFixRetry flag AND autoFixAttemptedRef to prevent infinite loops
         // The ref persists across re-renders and is only cleared by manual "Retry Render" click
+        if (getDiagramOpEpoch(key) !== runEpoch) {
+          queuedForRenderRef.current.delete(key)
+          return
+        }
+
         const hasAttemptedAutoFix = autoFixAttemptedRef.current.has(key)
         
         if (!isAutoFixRetry && !hasAttemptedAutoFix) {
@@ -1866,7 +1899,7 @@ Now output the JSON array.`
               // Retry with fixed code (mark as retry to prevent duplicate auto-fix attempts)
               // Note: autoFixAttemptedRef already has this key, so even if useEffect triggers,
               // it won't attempt another LLM call
-              await runSingleRender(figureNo, fixResp.fixedCode, language, true)
+              await runSingleRender(figureNo, fixResp.fixedCode, language, true, runEpoch)
               return // Exit - the retry will handle completion
             } else {
               // LLM fix failed to produce valid code - mark as failed immediately
@@ -1900,7 +1933,11 @@ Now output the JSON array.`
       setProcessingStep(prev => ({ ...prev, [key]: 3 }))
 
       // Upload in the background so the next render can start quickly
-      queueUpload(key, figureNo, blob, language)
+      if (getDiagramOpEpoch(key) !== runEpoch) {
+        queuedForRenderRef.current.delete(key)
+        return
+      }
+      queueUpload(key, figureNo, blob, language, runEpoch)
 
       // Clear processing status
       setProcessingStatus(prev => ({ ...prev, [key]: '' }))
@@ -1920,11 +1957,11 @@ Now output the JSON array.`
   }
 
   // Intelligent automatic diagram processing with serialized queue and reduced gap between requests
-  const autoProcessDiagram = (figureNo: number, plantumlCode: string, language = 'en') => {
+  const autoProcessDiagram = (figureNo: number, plantumlCode: string, language = 'en', opEpoch?: number) => {
     renderQueueRef.current = renderQueueRef.current.then(async () => {
       // Reduced gap between render requests for better responsiveness
       await new Promise(resolve => setTimeout(resolve, 150))
-      await runSingleRender(figureNo, plantumlCode, language)
+      await runSingleRender(figureNo, plantumlCode, language, false, opEpoch)
     }).catch((err) => {
       // Catch any unhandled errors to prevent queue breakage
       console.error(`[AutoProcess] Error processing figure ${figureNo}:`, err)
@@ -1933,7 +1970,11 @@ Now output the JSON array.`
     return renderQueueRef.current
   }
 
-  const handleUploadImage = async (figureNo: number, file: File, customFilename?: string, language = 'en') => {
+  const handleUploadImage = async (figureNo: number, file: File, customFilename?: string, language = 'en', opEpoch?: number) => {
+    const key = getDiagramKey(figureNo, language)
+    const expectedEpoch = typeof opEpoch === 'number' ? opEpoch : getDiagramOpEpoch(key)
+    if (getDiagramOpEpoch(key) !== expectedEpoch) return
+
     try {
       setIsUploading(true)
       setError(null)
@@ -2501,13 +2542,14 @@ Now output the JSON array.`
                             variant="outline"
                             className="mt-2"
                             onClick={() => {
+                              const opEpoch = getDiagramOpEpoch(diagramKey)
                               // Clear states and re-queue for rendering
                               setProcessingStatus(prev => ({ ...prev, [diagramKey]: '' }))
                               setProcessingStep(prev => ({ ...prev, [diagramKey]: 0 }))
                               queuedForRenderRef.current.delete(diagramKey) // Allow re-queueing
                               // Clear auto-fix attempted flag so user can try auto-fix again on manual retry
                               autoFixAttemptedRef.current.delete(diagramKey)
-                              autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en')
+                              autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en', opEpoch)
                             }}
                           >
                             <RefreshCw className="w-4 h-4 mr-2" /> Retry Render
@@ -2519,10 +2561,11 @@ Now output the JSON array.`
                         <Code className="w-12 h-12 text-gray-300 mx-auto mb-2" />
                         <p className="text-sm text-gray-500 mb-4">Code ready for processing</p>
                         <Button size="sm" onClick={() => {
+                          const opEpoch = getDiagramOpEpoch(diagramKey)
                           queuedForRenderRef.current.delete(diagramKey) // Ensure it can be queued
                           // Clear auto-fix attempted flag so user-initiated render can try auto-fix
                           autoFixAttemptedRef.current.delete(diagramKey)
-                          autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en')
+                          autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en', opEpoch)
                         }}>
                           <RefreshCw className="w-4 h-4 mr-2" /> Render Image
                         </Button>
@@ -2584,6 +2627,7 @@ Now output the JSON array.`
                       const langLabel = LANGUAGE_LABELS[selectedLang]?.split(' ')[0] || selectedLang.toUpperCase()
                       if(!confirm(`Delete Figure ${figNo} (${langLabel})?`)) return
                       try {
+                        invalidateDiagramOps(figNo, selectedLang)
                         await onComplete({ action: 'delete_figure', sessionId: session?.id, figureNo: figNo, language: selectedLang })
                         await onRefresh()
                         // Clear selected arrange figure if it was the deleted one
@@ -2656,7 +2700,8 @@ Now output the JSON array.`
                                 // Clear auto-fix flag since this is fresh regenerated code - allow one auto-fix attempt
                                 autoFixAttemptedRef.current.delete(diagramKey)
                                 queuedForRenderRef.current.delete(diagramKey)
-                                autoProcessDiagram(figNo, newCode, lang)
+                                const opEpoch = getDiagramOpEpoch(diagramKey)
+                                autoProcessDiagram(figNo, newCode, lang, opEpoch)
                               } else if (resp?.error) {
                                 // Handle API error response
                                 const errorMsg = resp.details 

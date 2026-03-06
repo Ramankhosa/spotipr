@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { useAuth } from '@/lib/auth-context'
 import { motion, useScroll, useTransform } from 'framer-motion'
 import { ArrowRight, Sparkles, Search, FileText } from 'lucide-react'
@@ -156,6 +157,19 @@ export default function HeroSection() {
         </motion.div>
 
       </motion.div>
+
+      <div className="pointer-events-none absolute right-3 top-3 z-10 hidden md:right-6 md:top-6 md:block lg:right-10 lg:top-8">
+        <div className="rounded-2xl border border-white/10 bg-ai-graphite-900/70 p-4 shadow-[0_0_40px_rgba(14,165,233,0.2)] backdrop-blur-sm">
+          <Image
+            src="/images/lpu-logo.png"
+            alt="LPU logo"
+            width={220}
+            height={220}
+            className="h-auto w-20 object-contain lg:w-[6.5rem]"
+            priority
+          />
+        </div>
+      </div>
 
       {/* Decorative Elements */}
       <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-ai-graphite-950 to-transparent pointer-events-none" />

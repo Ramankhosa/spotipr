@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic'
 const QuerySchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  tenantId: z.string().optional(),
   page: z.string().optional(),
   pageSize: z.string().optional(),
   sortBy: z
@@ -53,6 +54,7 @@ export async function GET(request: NextRequest) {
     const parsed = QuerySchema.parse({
       startDate: getParam('startDate'),
       endDate: getParam('endDate'),
+      tenantId: getParam('tenantId'),
       page: getParam('page'),
       pageSize: getParam('pageSize'),
       sortBy: getParam('sortBy'),
@@ -62,7 +64,7 @@ export async function GET(request: NextRequest) {
     const endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
     const startDate = parsed.startDate ? new Date(parsed.startDate) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
 
-    const usage = await computeUsageSummary(startDate, endDate)
+    const usage = await computeUsageSummary(startDate, endDate, parsed.tenantId)
 
     const sortBy = parsed.sortBy || 'inputTokens'
     const sortDir = parsed.sortDir === 'asc' ? 1 : -1

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getMetaActualCost } from '@/lib/usage-log-cost'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -81,6 +82,7 @@ export async function GET(
           outputTokens: true,
           apiCalls: true,
           modelClass: true,
+          meta: true,
           startedAt: true
         }
       }),
@@ -133,9 +135,13 @@ export async function GET(
 
     const buckets = new Map<string, UserBucket>()
 
-    const calcCost = (log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null }) => {
+    const calcCost = (log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null; meta?: unknown }) => {
       const inputTokens = log.inputTokens || 0
       const outputTokens = log.outputTokens || 0
+      const metaCost = getMetaActualCost(log.meta)
+      if (metaCost !== null && (metaCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
+        return metaCost
+      }
       if (log.modelClass && priceMap.has(log.modelClass)) {
         const price = priceMap.get(log.modelClass)!
         return inputTokens * (price.input / 1_000_000) + outputTokens * (price.output / 1_000_000)
