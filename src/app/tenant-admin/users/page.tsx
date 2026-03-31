@@ -18,6 +18,8 @@ interface User {
   lastName: string | null
   roles: string[]
   status: string
+  emailVerified: boolean
+  emailDraftingEnabled: boolean
   teams: TeamInfo[]
   createdAt: string
 }
@@ -130,6 +132,84 @@ export default function TenantAdminUsersPage() {
     }
   }
 
+  const handleEmailChange = async (targetUser: User) => {
+    if (!token) return
+    const nextEmail = window.prompt(`Update email for ${targetUser.name || targetUser.email}`, targetUser.email)
+    if (!nextEmail || nextEmail.trim() === targetUser.email) return
+
+    try {
+      const res = await fetch(`/api/tenant-admin/users/${targetUser.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ action: 'change_email', newEmail: nextEmail.trim() })
+      })
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || 'Failed to update email')
+      }
+
+      fetchUsers()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update email')
+    }
+  }
+
+  const handleEmailDraftingToggle = async (targetUser: User) => {
+    if (!token) return
+
+    try {
+      const res = await fetch(`/api/tenant-admin/users/${targetUser.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          action: 'set_email_drafting_enabled',
+          enabled: !targetUser.emailDraftingEnabled
+        })
+      })
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || 'Failed to update email drafting access')
+      }
+
+      fetchUsers()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update email drafting access')
+    }
+  }
+
+  const handleResendVerification = async (targetUser: User) => {
+    if (!token) return
+
+    try {
+      const res = await fetch(`/api/tenant-admin/users/${targetUser.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ action: 'resend_verification_email' })
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to resend verification email')
+      }
+
+      alert(data.message || 'Verification email sent successfully')
+      fetchUsers()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to resend verification email')
+    }
+  }
+
   const canModifyUser = (targetUser: User) => {
     if (!authUser) return false
     const actorRoles = authUser.roles || []
@@ -220,6 +300,22 @@ export default function TenantAdminUsersPage() {
                         <div className="text-sm text-gray-500 dark:text-gray-400">
                           {user.email}
                         </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <span className={`inline-flex px-2 py-0.5 text-[11px] rounded-full ${
+                            user.emailVerified
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                          }`}>
+                            {user.emailVerified ? 'Verified' : 'Verification Pending'}
+                          </span>
+                          <span className={`inline-flex px-2 py-0.5 text-[11px] rounded-full ${
+                            user.emailDraftingEnabled
+                              ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+                              : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                          }`}>
+                            {user.emailDraftingEnabled ? 'Email Drafting Enabled' : 'Email Drafting Disabled'}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -283,6 +379,26 @@ export default function TenantAdminUsersPage() {
                           }
                         >
                           {user.status === 'ACTIVE' ? 'Suspend' : 'Activate'}
+                        </button>
+                        <button
+                          onClick={() => handleEmailChange(user)}
+                          className="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                        >
+                          Edit Email
+                        </button>
+                        {!user.emailVerified && (
+                          <button
+                            onClick={() => handleResendVerification(user)}
+                            className="text-amber-600 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300"
+                          >
+                            Resend Verification
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleEmailDraftingToggle(user)}
+                          className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
+                        >
+                          {user.emailDraftingEnabled ? 'Disable Email Drafting' : 'Enable Email Drafting'}
                         </button>
                       </div>
                     )}

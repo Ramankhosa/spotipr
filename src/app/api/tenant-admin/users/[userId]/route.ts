@@ -16,6 +16,11 @@ import {
 } from '@/lib/org-access-service'
 import { prisma } from '@/lib/prisma'
 import type { UserRole } from '@prisma/client'
+import {
+  resendManagedUserEmailVerification,
+  setManagedUserEmailDraftingEnabled,
+  updateManagedUserEmail
+} from '@/lib/admin-user-email-service'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,6 +55,8 @@ export async function GET(
         lastName: true,
         roles: true,
         status: true,
+        emailVerified: true,
+        emailDraftingEnabled: true,
         tenantId: true,
         createdAt: true,
         updatedAt: true,
@@ -88,6 +95,8 @@ export async function GET(
         roles: user.roles,
         currentRole: userHighestRole,
         status: user.status,
+        emailVerified: user.emailVerified,
+        emailDraftingEnabled: user.emailDraftingEnabled,
         teams: user.teamMemberships.map(m => ({
           id: m.team.id,
           name: m.team.name,
@@ -139,7 +148,7 @@ export async function PATCH(
     
     const { userId } = params
     const body = await request.json()
-    const { action, newRole, status } = body
+    const { action, newRole, status, newEmail, enabled } = body
     
     if (!actor.tenant_id) {
       return NextResponse.json({ error: 'No tenant context' }, { status: 400 })
@@ -163,6 +172,61 @@ export async function PATCH(
       }
       
       return NextResponse.json({ success: true, message: 'Role updated successfully' })
+    }
+
+    if (action === 'change_email' && typeof newEmail === 'string') {
+      const result = await updateManagedUserEmail({
+        actorUserId: actor.sub,
+        targetUserId: userId,
+        newEmail,
+        tenantId: actor.tenant_id,
+        auditAction: 'TENANT_USER_EMAIL_CHANGE',
+        ip: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown'
+      })
+
+      if (!result.success) {
+        return NextResponse.json({ error: result.error, code: result.code }, { status: result.code === 'NOT_FOUND' ? 404 : result.code === 'FORBIDDEN' ? 403 : 400 })
+      }
+
+      return NextResponse.json({
+        success: true,
+        changed: result.changed,
+        user: result.user,
+        message: result.changed ? 'Email updated. Verification required before email drafting can be re-enabled.' : 'Email unchanged'
+      })
+    }
+
+    if (action === 'set_email_drafting_enabled' && typeof enabled === 'boolean') {
+      const result = await setManagedUserEmailDraftingEnabled({
+        actorUserId: actor.sub,
+        targetUserId: userId,
+        enabled,
+        tenantId: actor.tenant_id,
+        auditAction: 'TENANT_USER_EMAIL_DRAFTING_TOGGLE',
+        ip: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown'
+      })
+
+      if (!result.success) {
+        return NextResponse.json({ error: result.error, code: result.code }, { status: result.code === 'NOT_FOUND' ? 404 : result.code === 'FORBIDDEN' ? 403 : 400 })
+      }
+
+      return NextResponse.json({ success: true, user: result.user, message: 'Email drafting access updated successfully' })
+    }
+
+    if (action === 'resend_verification_email') {
+      const result = await resendManagedUserEmailVerification({
+        actorUserId: actor.sub,
+        targetUserId: userId,
+        tenantId: actor.tenant_id,
+        auditAction: 'TENANT_USER_EMAIL_VERIFICATION_RESEND',
+        ip: request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown'
+      })
+
+      if (!result.success) {
+        return NextResponse.json({ error: result.error, code: result.code }, { status: result.code === 'NOT_FOUND' ? 404 : result.code === 'FORBIDDEN' ? 403 : 400 })
+      }
+
+      return NextResponse.json({ success: true, user: result.user, message: 'Verification email sent successfully' })
     }
     
     // Handle status change (activate/deactivate)

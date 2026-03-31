@@ -294,6 +294,7 @@ export default function SuperAdminDashboard() {
       icon: '🔐',
       items: [
         { label: 'Trial Campaigns', icon: '📧', href: '/super-admin/trial-campaigns', badge: 'NEW' },
+        { label: 'User Management', icon: '👥', href: '/super-admin/users' },
         { label: 'ATI Token Management', icon: '🎟️', href: '/ati-management' },
         { label: 'Service Control', icon: '🎛️', href: '/super-admin/service-control' }
       ]

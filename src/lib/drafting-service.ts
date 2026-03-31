@@ -24,6 +24,7 @@ import {
   buildUniversalDraftingBundle,
   buildAntiHallucinationGuards
 } from '@/lib/section-injection-config';
+import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import crypto from 'crypto';
 
 // NOTE: Legacy SUPERSET_PROMPTS removed - all prompts now come from database
@@ -445,10 +446,10 @@ export class DraftingService {
       });
 
       // Validate input length - limit to prevent token overflow
-      if (rawIdea.length > 5000) {
+      if (rawIdea.length > MAX_DRAFTING_INPUT_CHARS) {
         return {
           success: false,
-          error: 'Idea text exceeds maximum length of 5,000 characters. Please shorten your description.'
+          error: `Idea text exceeds maximum length of ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters. Please shorten your description.`
         };
       }
       

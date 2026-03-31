@@ -80,9 +80,11 @@ model Tenant {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
-  users     User[]
-  atiTokens ATIToken[]
-  auditLogs AuditLog[]
+  users               User[]
+  atiTokens           ATIToken[]
+  auditLogs           AuditLog[]
+  tenantInboundAliases TenantInboundAlias[]
+  emailDraftRequests   EmailDraftRequest[]
 
   // Metering relations
   tenantPlans            TenantPlan[]
@@ -150,6 +152,7 @@ model User {
   roles                    UserRole[] @default([ANALYST])
   status                   UserStatus @default(ACTIVE)
   emailVerified            Boolean    @default(false)
+  emailDraftingEnabled     Boolean    @default(false)
   noveltySearchesCompleted Int        @default(0) // Track successful novelty searches
 
   // Social login fields
@@ -177,6 +180,7 @@ model User {
   noveltySearchRuns       NoveltySearchRun[]
   draftingSessions        DraftingSession[]
   draftingHistory         DraftingHistory[]
+  emailDraftRequests      EmailDraftRequest[]
 
   // Auth tokens
   emailVerificationTokens EmailVerificationToken[]
@@ -194,6 +198,7 @@ model User {
   ownedStyleProfiles  StyleProfile[]     @relation("StyleProfileUser")
   styleTrainingJobs   StyleTrainingJob[]
   documents           Document[]
+  documentAccessLinks DocumentAccessLink[]
 
   // Country Profile relations
   createdCountryProfiles CountryProfile[] @relation("CountryProfileCreator")
@@ -422,6 +427,7 @@ model Project {
   applicantProfile  ApplicantProfile?
   collaborators     ProjectCollaborator[]
   patents           Patent[]
+  emailDraftRequests EmailDraftRequest[]
   noveltySearchRuns NoveltySearchRun[]
   user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -574,6 +580,7 @@ model Patent {
   noveltySearchRuns  NoveltySearchRun[]
   draftingSessions   DraftingSession[]
   sketchRecords      SketchRecord[]
+  emailDraftRequest  EmailDraftRequest?
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   creator User    @relation(fields: [createdBy], references: [id])
@@ -1785,6 +1792,7 @@ model DraftingSession {
 
   // Sketch records
   sketchRecords SketchRecord[]
+  emailDraftRequest EmailDraftRequest?
 
   // Figure sequence for unified ordering of diagrams + sketches
   // Array of { type: 'diagram'|'sketch', sourceId: string, finalFigNo: number }
@@ -2335,6 +2343,43 @@ enum StyleTrainingJobStatus {
 enum DocumentType {
   SAMPLE // Training samples for style learning
   REFERENCE // Reference documents
+  PATENT_DRAFT_EXPORT
+}
+
+enum EmailDraftRequestStatus {
+  RECEIVED
+  VALIDATING
+  PARSING
+  INITIALIZING
+  NORMALIZING
+  CLAIMS_SETUP
+  PRIOR_ART_CONTEXT
+  COMPONENTS
+  FIGURES
+  DRAFTING
+  REVIEW
+  EXPORT
+  DELIVERED
+  DELIVERED_WITH_WARNINGS
+  REJECTED
+  FAILED
+  CANCELED
+}
+
+enum EmailDraftAttachmentKind {
+  MAIN_BRIEF
+  CLAIMS
+  PRIOR_ART
+  SUPPLEMENTAL
+  UNSUPPORTED_IMAGE
+  UNSUPPORTED_OTHER
+}
+
+enum EmailDraftAttachmentStatus {
+  STORED
+  PARSED
+  IGNORED
+  FAILED
 }
 
 model StyleProfile {
@@ -2402,11 +2447,144 @@ model Document {
   // Relations
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id])
+  accessLinks DocumentAccessLink[]
 
   // Indexes
   @@index([tenantId, userId, type])
   @@index([hash])
   @@map("documents")
+}
+
+model TenantInboundAlias {
+  id                     String   @id @default(cuid())
+  tenantId               String
+  localPart              String
+  domain                 String   @default("patentnest.ai")
+  isActive               Boolean  @default(true)
+  defaultJurisdictions   String[] @default([])
+  defaultFilingType      String   @default("utility")
+  defaultAllowRefine     Boolean  @default(true)
+  defaultDeliveryTtlDays Int      @default(7)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requests EmailDraftRequest[]
+
+  @@unique([domain, localPart])
+  @@index([tenantId, isActive])
+  @@map("tenant_inbound_aliases")
+}
+
+model EmailDraftRequest {
+  id                 String                  @id @default(cuid())
+  tenantId           String
+  userId             String
+  aliasId            String
+  projectId          String?
+  patentId           String?                 @unique
+  sessionId          String?                 @unique
+  subject            String?
+  senderEmail        String
+  senderDisplayName  String?
+  recipientEmail     String
+  messageId          String?
+  receiptId          String?
+  requestHash        String
+  dedupeKey          String                  @unique
+  rawMimeStorageKey  String?
+  rawMimeText        String?                 @db.Text
+  parsedPayload      Json?
+  normalizationBrief String?                @db.Text
+  warnings           Json?
+  status             EmailDraftRequestStatus @default(RECEIVED)
+  progressPct        Int                     @default(5)
+  currentStage       String?
+  errorCode          String?
+  errorMessage       String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  deliveredAt        DateTime?
+  lockedBy           String?
+  lockedUntil        DateTime?
+  heartbeatAt        DateTime?
+  attemptCount       Int                     @default(0)
+  retryCount         Int                     @default(0)
+  nextAttemptAt      DateTime                @default(now())
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alias       TenantInboundAlias  @relation(fields: [aliasId], references: [id], onDelete: Restrict)
+  project     Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  patent      Patent?             @relation(fields: [patentId], references: [id], onDelete: SetNull)
+  session     DraftingSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  attachments EmailDraftAttachment[]
+  events      EmailDraftEvent[]
+  accessLinks DocumentAccessLink[]
+
+  @@index([status, nextAttemptAt])
+  @@index([userId, status])
+  @@index([tenantId, createdAt])
+  @@index([messageId])
+  @@index([receiptId])
+  @@map("email_draft_requests")
+}
+
+model EmailDraftAttachment {
+  id              String                     @id @default(cuid())
+  requestId       String
+  kind            EmailDraftAttachmentKind   @default(SUPPLEMENTAL)
+  parseStatus     EmailDraftAttachmentStatus @default(STORED)
+  filename        String
+  mimeType        String?
+  sha256          String
+  sizeBytes       Int
+  attachmentOrder Int                        @default(0)
+  extractedText   String?                    @db.Text
+  warning         String?
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  request EmailDraftRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, kind])
+  @@map("email_draft_attachments")
+}
+
+model EmailDraftEvent {
+  id        String   @id @default(cuid())
+  requestId String
+  stage     String
+  state     String
+  message   String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  request EmailDraftRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("email_draft_events")
+}
+
+model DocumentAccessLink {
+  id             String   @id @default(cuid())
+  documentId     String
+  userId         String
+  requestId      String?
+  tokenHash      String   @unique
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  lastAccessedAt DateTime?
+  createdAt      DateTime @default(now())
+
+  document Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  request  EmailDraftRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  @@index([userId, expiresAt])
+  @@map("document_access_links")
 }
 
 // === WRITING SAMPLES FOR EXAMPLE-BASED STYLE MIMICRY ===

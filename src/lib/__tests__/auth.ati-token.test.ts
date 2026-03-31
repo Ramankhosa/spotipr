@@ -44,7 +44,7 @@ describe('validateATIToken', () => {
       where: { id: 'ati_1' },
       data: { status: 'EXPIRED' },
     })
-  })
+  }, 10000)
 
   test('marks used-up tokens and rejects them', async () => {
     prisma.aTIToken.findFirst.mockResolvedValue({

@@ -72,6 +72,8 @@ export interface UserWithTeams {
   lastName: string | null
   roles: UserRole[]
   status: string
+  emailVerified: boolean
+  emailDraftingEnabled: boolean
   teams: TeamInfo[]
   createdAt: Date
 }
@@ -1045,12 +1047,14 @@ export async function getTenantUsers(tenantId: string): Promise<UserWithTeams[]>
       id: true,
       email: true,
       name: true,
-      firstName: true,
-      lastName: true,
-      roles: true,
-      status: true,
-      createdAt: true,
-      teamMemberships: {
+        firstName: true,
+        lastName: true,
+        roles: true,
+        status: true,
+        emailVerified: true,
+        emailDraftingEnabled: true,
+        createdAt: true,
+        teamMemberships: {
         include: {
           team: { select: { id: true, name: true, description: true } }
         }
@@ -1064,10 +1068,12 @@ export async function getTenantUsers(tenantId: string): Promise<UserWithTeams[]>
     email: user.email,
     name: user.name,
     firstName: user.firstName,
-    lastName: user.lastName,
-    roles: user.roles,
-    status: user.status,
-    teams: user.teamMemberships.map(m => ({
+      lastName: user.lastName,
+      roles: user.roles,
+      status: user.status,
+      emailVerified: user.emailVerified,
+      emailDraftingEnabled: user.emailDraftingEnabled,
+      teams: user.teamMemberships.map(m => ({
       id: m.team.id,
       name: m.team.name,
       description: m.team.description,

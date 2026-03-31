@@ -20,6 +20,7 @@
     "import:local-patents": "node scripts/import-local-patents-from-csv.js patients11.csv",
     "seed:adminplans": "node scripts/adminplans-seed.js",
     "llm:add-thinking-models": "tsx scripts/add-thinking-models.ts",
+    "email-drafting:worker": "tsx scripts/email-drafting-worker.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -75,6 +76,7 @@
     "jspdf": "^3.0.3",
     "linkedin-api-client": "^0.3.0",
     "lucide-react": "^0.544.0",
+    "mailparser": "^3.9.6",
     "mammoth": "^1.11.0",
     "multer": "^2.0.2",
     "next": "14.2.3",
@@ -97,6 +99,7 @@
     "@types/image-size": "^0.7.0",
     "@types/js-cookie": "^3.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^20",
     "@types/pdfkit": "^0.17.3",
     "@types/react": "^18",

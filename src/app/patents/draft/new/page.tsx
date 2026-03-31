@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import KishoNormalizationLoader from '@/components/ui/kisho-normalization-loader'
+import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
 
 type CountryOption = {
   code: string
@@ -362,8 +363,8 @@ function NewPatentDraftPageContent() {
           return
         }
 
-    if (cleanContent.length > 5000) {
-      setError('File content exceeds 5,000 characters. Please reduce the file size or split into smaller sections.')
+    if (cleanContent.length > MAX_DRAFTING_INPUT_CHARS) {
+      setError(`File content exceeds ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters. Please reduce the file size or split into smaller sections.`)
       return
     }
 
@@ -413,8 +414,8 @@ function NewPatentDraftPageContent() {
       return
     }
 
-    if (rawIdea.length > 5000) {
-      setError('Description exceeds 5,000 character limit. Please shorten your text.')
+    if (rawIdea.length > MAX_DRAFTING_INPUT_CHARS) {
+      setError(`Description exceeds ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} character limit. Please shorten your text.`)
       return
     }
 
@@ -951,10 +952,10 @@ function NewPatentDraftPageContent() {
                 className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-vertical"
                 required
               />
-              <p className={`mt-1 text-sm ${rawIdea.length > 5000 ? 'text-red-600' : rawIdea.length > 4500 ? 'text-orange-600' : 'text-gray-500'}`}>
-                {rawIdea.length} characters (max 5,000)
-                {rawIdea.length > 4500 && rawIdea.length <= 5000 && ' - Approaching limit'}
-                {rawIdea.length > 5000 && ' - Exceeds limit!'}
+              <p className={`mt-1 text-sm ${rawIdea.length > MAX_DRAFTING_INPUT_CHARS ? 'text-red-600' : rawIdea.length > 13500 ? 'text-orange-600' : 'text-gray-500'}`}>
+                {rawIdea.length} characters (max {MAX_DRAFTING_INPUT_CHARS.toLocaleString()})
+                {rawIdea.length > 13500 && rawIdea.length <= MAX_DRAFTING_INPUT_CHARS && ' - Approaching limit'}
+                {rawIdea.length > MAX_DRAFTING_INPUT_CHARS && ' - Exceeds limit!'}
               </p>
               {/* Experimental Data Notice */}
               <div className="mt-3 flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md">
@@ -979,7 +980,7 @@ function NewPatentDraftPageContent() {
                 className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
               />
               <p className="mt-1 text-sm text-gray-500">
-                Supported format: .txt files only (max 5MB, 5,000 characters)
+                Supported format: .txt files only (max 5MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
               </p>
               <p className="mt-1 text-xs text-gray-400">
                 Note: Word documents (.docx) and PDFs are not supported yet. To convert:
