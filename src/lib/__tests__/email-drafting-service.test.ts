@@ -22,7 +22,7 @@ describe('email drafting parser', () => {
       Message: JSON.stringify({
         mail: {
           source: 'Inventor@Example.com',
-          destination: ['draft+acme@patentnest.ai'],
+          destination: ['noreply@patentnest.ai'],
           commonHeaders: { subject: 'Patent draft request' },
           messageId: 'msg_123',
         },
@@ -35,7 +35,7 @@ describe('email drafting parser', () => {
     })
 
     expect(payload.senderEmail).toBe('inventor@example.com')
-    expect(payload.recipientEmail).toBe('draft+acme@patentnest.ai')
+    expect(payload.recipientEmail).toBe('noreply@patentnest.ai')
     expect(payload.subject).toBe('Patent draft request')
     expect(payload.messageId).toBe('msg_123')
     expect(payload.verdicts).toMatchObject({
@@ -50,7 +50,7 @@ describe('email drafting parser', () => {
 
     const payload = await buildCanonicalEmailDraftPayload({
       senderEmail: 'inventor@example.com',
-      recipientEmail: 'draft+acme@patentnest.ai',
+      recipientEmail: 'noreply@patentnest.ai',
       subject: 'Fallback title',
       parsedPayload: {
         directBodyText: [
@@ -88,7 +88,7 @@ describe('email drafting parser', () => {
     await expect(
       buildCanonicalEmailDraftPayload({
         senderEmail: 'inventor@example.com',
-        recipientEmail: 'draft+acme@patentnest.ai',
+        recipientEmail: 'noreply@patentnest.ai',
         subject: 'Ambiguous claims',
         parsedPayload: {
           directBodyText: 'Please prepare a patent draft for the disclosed controller.',
@@ -113,7 +113,7 @@ describe('email drafting parser', () => {
     await expect(
       buildCanonicalEmailDraftPayload({
         senderEmail: 'inventor@example.com',
-        recipientEmail: 'draft+acme@patentnest.ai',
+        recipientEmail: 'noreply@patentnest.ai',
         subject: 'Image only',
         parsedPayload: {
           directBodyText: '',

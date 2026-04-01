@@ -11,6 +11,7 @@ import { generateToken, hashToken } from '@/lib/token-utils'
 import { upsertUserInstruction } from '@/lib/user-instruction-service'
 import { checkServiceAccess } from '@/lib/org-access-service'
 import {
+  EMAIL_DRAFTING_INBOUND_ADDRESS,
   EMAIL_DRAFTING_DOWNLOAD_TTL_DAYS,
   EMAIL_DRAFTING_MAX_REQUESTS_PER_HOUR,
   EMAIL_DRAFTING_PROGRESS,
@@ -704,8 +705,8 @@ async function storeExportArtifact(params: {
 async function validateInboundSender(alias: any, senderEmail: string) {
   const user = await prisma.user.findFirst({
     where: {
-      tenantId: alias.tenantId,
-      email: normalizeEmail(senderEmail)
+      email: normalizeEmail(senderEmail),
+      ...(alias?.tenantId ? { tenantId: alias.tenantId } : {})
     },
     include: { tenant: true }
   })
@@ -730,7 +731,7 @@ async function validateInboundSender(alias: any, senderEmail: string) {
     return { ok: false as const, code: 'TENANT_INACTIVE', message: 'Tenant is not active.' }
   }
 
-  const serviceAccess = await checkServiceAccess(user.id, alias.tenantId, 'PATENT_DRAFTING')
+  const serviceAccess = await checkServiceAccess(user.id, user.tenantId!, 'PATENT_DRAFTING')
   if (!serviceAccess.allowed) {
     return { ok: false as const, code: 'SERVICE_ACCESS_DENIED', message: serviceAccess.reason || 'Patent drafting is not available for this user.' }
   }
@@ -798,16 +799,19 @@ export async function receiveInboundEmail(input: any) {
     return { accepted: false as const, status: 403, errorCode: 'UNVERIFIED_SENDER', message: 'Sender verification failed.' }
   }
 
-  const alias = await (prisma as any).tenantInboundAlias.findFirst({
-    where: {
-      localPart: parsedRecipient.localPart,
-      domain: parsedRecipient.domain,
-      isActive: true
-    }
-  })
+  const isSharedInboundAddress = normalizeEmail(normalized.recipientEmail) === normalizeEmail(EMAIL_DRAFTING_INBOUND_ADDRESS)
+  const alias = isSharedInboundAddress
+    ? null
+    : await (prisma as any).tenantInboundAlias.findFirst({
+        where: {
+          localPart: parsedRecipient.localPart,
+          domain: parsedRecipient.domain,
+          isActive: true
+        }
+      })
 
   let effectiveAlias = alias
-  if (!effectiveAlias) {
+  if (!effectiveAlias && !isSharedInboundAddress) {
     const tenantAtiId = parsedRecipient.localPart.replace(/^draft\+/, '').toUpperCase()
     if (tenantAtiId) {
       const fallbackTenant = await prisma.tenant.findUnique({
@@ -827,7 +831,7 @@ export async function receiveInboundEmail(input: any) {
     }
   }
 
-  if (!effectiveAlias) {
+  if (!effectiveAlias && !isSharedInboundAddress) {
     return { accepted: false as const, status: 404, errorCode: 'UNKNOWN_ALIAS', message: 'Recipient alias was not recognized.' }
   }
 
@@ -861,8 +865,8 @@ export async function receiveInboundEmail(input: any) {
   try {
     const requestRecord = await (prisma as any).emailDraftRequest.create({
       data: {
-        tenantId: effectiveAlias.tenantId,
-        aliasId: effectiveAlias.id,
+        tenantId: senderResult.user.tenantId,
+        aliasId: effectiveAlias?.id ?? null,
         userId: senderResult.user.id,
         subject: normalized.subject,
         senderEmail: normalized.senderEmail,
@@ -885,7 +889,7 @@ export async function receiveInboundEmail(input: any) {
 
     await createEvent(requestRecord.id, 'RECEIVED', 'accepted', 'Inbound email accepted for processing')
 
-    return { accepted: true as const, status: 202, requestId: requestRecord.id, user: senderResult.user, alias: effectiveAlias }
+    return { accepted: true as const, status: 202, requestId: requestRecord.id, user: senderResult.user, alias: effectiveAlias ?? null }
   } catch (error: any) {
     if (error?.code === 'P2002') {
       const existing = await (prisma as any).emailDraftRequest.findUnique({ where: { dedupeKey } })

@@ -2,6 +2,8 @@ export const MAX_DRAFTING_INPUT_CHARS = 15000
 
 export const EMAIL_DRAFTING_PROJECT_NAME = 'Email Drafting Requests'
 
+export const EMAIL_DRAFTING_INBOUND_ADDRESS = 'noreply@patentnest.ai'
+
 export const EMAIL_DRAFTING_DOWNLOAD_TTL_DAYS = 7
 
 export const EMAIL_DRAFTING_MAX_REQUESTS_PER_HOUR = 3

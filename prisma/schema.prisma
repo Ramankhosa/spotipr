@@ -2480,7 +2480,7 @@ model EmailDraftRequest {
   id                 String                  @id @default(cuid())
   tenantId           String
   userId             String
-  aliasId            String
+  aliasId            String?
   projectId          String?
   patentId           String?                 @unique
   sessionId          String?                 @unique
@@ -2516,7 +2516,7 @@ model EmailDraftRequest {
 
   tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  alias       TenantInboundAlias  @relation(fields: [aliasId], references: [id], onDelete: Restrict)
+  alias       TenantInboundAlias? @relation(fields: [aliasId], references: [id], onDelete: Restrict)
   project     Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
   patent      Patent?             @relation(fields: [patentId], references: [id], onDelete: SetNull)
   session     DraftingSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)

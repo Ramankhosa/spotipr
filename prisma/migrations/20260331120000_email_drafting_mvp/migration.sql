@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS "email_draft_requests" (
   "id" TEXT NOT NULL,
   "tenantId" TEXT NOT NULL,
   "userId" TEXT NOT NULL,
-  "aliasId" TEXT NOT NULL,
+  "aliasId" TEXT,
   "projectId" TEXT,
   "patentId" TEXT,
   "sessionId" TEXT,
