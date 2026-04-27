@@ -369,9 +369,10 @@ export default function PatentDraftingPage() {
           return null;
         }
 
-        // For diagram/figure-related actions, return error details to component instead of setting page error
-        // This allows the component to display specific error messages inline
-        const diagramActions = [
+        // For component-owned long-running actions, return error details to the component instead
+        // of only setting a page-level error. This lets the active stage show the actionable message.
+        const componentOwnedErrorActions = [
+          'generate_claims',
           'regenerate_diagram_llm', 
           'generate_diagrams_llm',
           'plan_and_generate_diagrams_llm', // Combined plan+generate action
@@ -385,7 +386,7 @@ export default function PatentDraftingPage() {
           'generate_sketch_guided',
           'refine_sketch'
         ]
-        if (diagramActions.includes(stageData?.action)) {
+        if (componentOwnedErrorActions.includes(stageData?.action)) {
           // Return error object so component can display it
           setInlineError(message || 'Error has occurred, please retry.')
           return { error: message, details: result?.details, code: errorCode }

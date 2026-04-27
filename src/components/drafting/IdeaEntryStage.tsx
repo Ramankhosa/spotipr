@@ -347,20 +347,32 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         }
       })
 
-      if (response?.claims) {
-        if (Array.isArray(response.claims)) {
-          setClaims(response.claims)
-          // Format for display
-          const formatted = response.claims.map((c: Claim) => {
-            const depText = c.type === 'dependent' && c.dependsOn 
-              ? `The ${c.category || 'invention'} of claim ${c.dependsOn}, wherein ` 
-              : ''
-            return `<p><strong>${c.number}.</strong> ${depText}${c.text}</p>`
-          }).join('')
+      if (response?.error) {
+        throw new Error(response.error)
+      }
+
+      if (!response) {
+        throw new Error('No response received while generating claims.')
+      }
+
+      const responseClaims = Array.isArray(response.claims) ? response.claims : []
+      const responseClaimsHtml = typeof response.claimsHtml === 'string' ? response.claimsHtml.trim() : ''
+
+      if (responseClaims.length > 0) {
+        setClaims(responseClaims)
+        if (responseClaimsHtml) {
+          setClaimsText(responseClaimsHtml)
+        } else {
+          const formatted = responseClaims
+            .map((c: Claim) => `<p><strong>${c.number}.</strong> ${c.text}</p>`)
+            .join('\n')
           setClaimsText(formatted)
-        } else if (typeof response.claims === 'string') {
-          setClaimsText(response.claims)
         }
+      } else if (responseClaimsHtml) {
+        setClaims(parseClaimsFromHtml(responseClaimsHtml))
+        setClaimsText(responseClaimsHtml)
+      } else {
+        throw new Error('No claims were returned. Please try again.')
       }
       
       // Update patent type from response (decided during claim generation)

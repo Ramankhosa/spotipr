@@ -22,6 +22,11 @@ import { cloneInstructionsBetweenSessions } from '@/lib/user-instruction-service
 import { getSupersetSectionKeys, isNonApplicableHeading, getSectionContextRequirements } from '@/lib/multi-jurisdiction-service';
 import { ANNEXURE_LEGACY_COLUMNS } from '@/lib/annexure-schema';
 import {
+  DraftClaimsParseError,
+  formatDraftClaimsAsHtml,
+  parseGeneratedClaimsFromLLMOutput,
+} from '@/lib/draft-claims-parser';
+import {
   generateSketch,
   listSketches,
   getSketch,
@@ -4709,26 +4714,25 @@ Return ONLY the JSON object, no markdown fencing or explanation.`
       }, { status: 500 })
     }
 
-    // Parse the LLM response
+    // Parse the LLM response. Do not silently save an empty claim set:
+    // LLMs sometimes wrap valid claims in markdown/prose or return numbered text instead of JSON.
     let generatedClaims: any[] = []
     try {
-      const cleanedResponse = llmResult.response.output
-        .replace(/```json\n?/g, '')
-        .replace(/```\n?/g, '')
-        .trim()
-      const parsed = JSON.parse(cleanedResponse)
-      generatedClaims = Array.isArray(parsed.claims) ? parsed.claims : (Array.isArray(parsed) ? parsed : [])
+      generatedClaims = parseGeneratedClaimsFromLLMOutput(llmResult.response.output)
     } catch (parseErr) {
-      console.error('Failed to parse claims JSON:', parseErr)
-      // Try to extract claims from text if JSON parsing fails
-      generatedClaims = []
+      console.error('Failed to parse generated claims:', parseErr)
+      console.error('Claims LLM raw output preview:', (llmResult.response.output || '').slice(0, 1200))
+      const message = parseErr instanceof DraftClaimsParseError
+        ? parseErr.message
+        : 'Could not parse generated claims from the LLM response.'
+      return NextResponse.json({
+        error: message,
+        code: 'CLAIMS_PARSE_FAILED'
+      }, { status: 502 })
     }
 
     // Format claims as HTML for the editor
-    const claimsHtml = generatedClaims.map((c: any) => {
-      const typeLabel = c.type === 'dependent' && c.dependsOn ? `(Claim ${c.dependsOn})` : `(${c.category || 'independent'})`
-      return `<p><strong>${c.number}.</strong> ${c.text}</p>`
-    }).join('\n')
+    const claimsHtml = formatDraftClaimsAsHtml(generatedClaims)
 
     // Save to ideaRecord normalizedData
     const updatedNormalized = {
