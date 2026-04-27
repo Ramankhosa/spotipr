@@ -631,7 +631,7 @@ async function main() {
     { code: 'DRAFT_PRIOR_ART_ANALYSIS', displayName: 'Prior Art Analysis', featureCode: 'PATENT_DRAFTING', sortOrder: 3, description: 'Analyze prior art relevance' },
     { code: 'DRAFT_CLAIM_REFINEMENT', displayName: 'Claim Refinement', featureCode: 'PATENT_DRAFTING', sortOrder: 4, description: 'Refine claims based on prior art' },
     { code: 'DRAFT_FIGURE_PLANNER', displayName: 'Figure Planning', featureCode: 'PATENT_DRAFTING', sortOrder: 5, description: 'AI-powered figure planning and diagram suggestions' },
-    { code: 'DRAFT_SKETCH_GENERATION', displayName: 'Sketch Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 6, description: 'Generate patent sketches using Gemini 3 Pro Image Preview' },
+    { code: 'DRAFT_SKETCH_GENERATION', displayName: 'Sketch Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 6, description: 'Generate 2K patent sketches using Gemini 3 Pro Image Preview (Nano Banana Pro)' },
     { code: 'DRAFT_DIAGRAM_GENERATION', displayName: 'Diagram Generation', featureCode: 'PATENT_DRAFTING', sortOrder: 7, description: 'Generate PlantUML/technical diagrams' },
 
     // === ANNEXURE/SECTION DRAFTING STAGES ===

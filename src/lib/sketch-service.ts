@@ -1,7 +1,8 @@
 /**
  * Sketch Generation Service
  * 
- * Handles AI-powered sketch generation for patent figures using Gemini 3 (gemini-3-pro-image-preview).
+ * Handles AI-powered sketch generation for patent figures using Gemini 3 Pro Image
+ * Preview / Nano Banana Pro (gemini-3-pro-image-preview) at 2K output size.
  * Supports three modes: AUTO, GUIDED, and REFINE.
  * 
  * Key Features:
@@ -105,6 +106,8 @@ const SKETCH_FIXED_COST_USD = SKETCH_FIXED_COST_INR * INR_TO_USD
 // ✗ gemini-2.0-flash, gemini-2.0-flash-exp (text/vision only - NO image output)
 // ✗ gemini-2.0-flash-lite (text/vision only - NO image output)
 // ============================================================================
+const SKETCH_RECOMMENDED_MODEL = 'gemini-3-pro-image-preview'
+const SKETCH_OUTPUT_IMAGE_SIZE = '2K'
 const SKETCH_STAGE_CODE = 'DRAFT_SKETCH_GENERATION'
 const SKETCH_TASK_CODE: TaskCode = 'LLM3_DIAGRAM' // Closest task for vision + drafting limits
 
@@ -892,7 +895,7 @@ async function recordSketchUsage(
  * IMAGE GENERATION APPROACH:
  * - Primary: Use Gemini models with native image generation (responseModalities: ['Image', 'Text'])
  * - The model must support image OUTPUT (not just vision input)
- * - Currently supported: gemini-2.0-flash-exp-image-generation, imagen-3.0-generate-*
+ * - Recommended: gemini-3-pro-image-preview (Nano Banana Pro) with imageSize: "2K"
  * 
  * @param systemPrompt - System instructions for the model
  * @param userPrompt - User-provided prompt/instructions
@@ -921,15 +924,16 @@ export async function generateSketchWithGemini(
   
   const reservationId = accessCheck.reservationId
 
-  // Dynamic import to avoid client-side issues
-  const { GoogleGenerativeAI } = require('@google/generative-ai')
+  // Dynamic import to avoid client-side issues. The newer @google/genai SDK
+  // exposes imageConfig.imageSize, which is required to force 2K output.
+  const { GoogleGenAI } = require('@google/genai')
   
   const apiKey = process.env.GOOGLE_AI_API_KEY
   if (!apiKey) {
     return { success: false, error: 'Google AI API key not configured. Set GOOGLE_AI_API_KEY in .env' }
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey)
+  const genAI = new GoogleGenAI({ apiKey })
   
   // Retry logic with exponential backoff per model candidate
   const maxRetries = 3
@@ -938,21 +942,24 @@ export async function generateSketchWithGemini(
   for (const modelCode of modelCandidates) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Determine generation config based on model type
-        // Imagen models use different config than Gemini models
+        // Determine generation config based on model type.
+        // Imagen models use a different API than Gemini native image generation.
         const isImagenModel = modelCode.toLowerCase().includes('imagen')
-        
-        // For Gemini Nano Banana Pro image generation
-        // Reference: https://ai.google.dev/gemini-api/docs/image-generation
-        // Use responseModalities: ["TEXT", "IMAGE"] for native image generation
-        const generationConfig: any = isImagenModel ? {} : {
-          responseModalities: ["TEXT", "IMAGE"],  // Uppercase per Google API docs
+
+        if (isImagenModel) {
+          lastError = `Imagen model ${modelCode} is not supported by the Gemini native sketch path`
+          break
         }
         
-        const model = genAI.getGenerativeModel({
-          model: modelCode,
-          generationConfig,
-        })
+        // For Gemini Nano Banana Pro image generation.
+        // Reference: https://ai.google.dev/gemini-api/docs/image-generation
+        // Use responseModalities plus imageConfig.imageSize to force 2K output.
+        const generationConfig: any = {
+          responseModalities: ["TEXT", "IMAGE"],
+          imageConfig: {
+            imageSize: SKETCH_OUTPUT_IMAGE_SIZE,
+          },
+        }
 
         // Build content parts - focused prompt for image generation only
         const fullPrompt = systemPrompt + '\n\n' + userPrompt
@@ -985,10 +992,13 @@ export async function generateSketchWithGemini(
         }
 
         const refCount = referenceImages?.length || 0
-        console.log(`[SketchService] Calling ${modelCode} (attempt ${attempt}/${maxRetries})${inputImage ? ' with source image' : ''}${refCount > 0 ? ` with ${refCount} reference(s)` : ''}...`)
+        console.log(`[SketchService] Calling ${modelCode} at ${SKETCH_OUTPUT_IMAGE_SIZE} (attempt ${attempt}/${maxRetries})${inputImage ? ' with source image' : ''}${refCount > 0 ? ` with ${refCount} reference(s)` : ''}...`)
         
-        const result = await model.generateContent(parts)
-        const response = result.response
+        const response = await genAI.models.generateContent({
+          model: modelCode,
+          contents: parts,
+          config: generationConfig,
+        })
 
         // Extract image from response
         const candidates = response.candidates
@@ -1031,7 +1041,7 @@ export async function generateSketchWithGemini(
         }
 
         // Check for text response (might be an error or explanation)
-        const textResponse = response.text?.()
+        const textResponse = response.text
         if (textResponse) {
           console.log('[SketchService] Model returned text instead of image:', textResponse.substring(0, 300))
           lastError = `Model returned text instead of image: ${textResponse.substring(0, 150)}...`
@@ -1082,9 +1092,10 @@ export async function generateSketchWithGemini(
 
 TROUBLESHOOTING:
 1. Ensure the configured model supports image OUTPUT (not just vision input)
-2. Recommended model: gemini-3-pro-image-preview
-3. Models that do NOT work: gemini-2.0-flash, gemini-2.0-flash-exp, gemini-2.0-flash-lite (these are text-only)
-4. Configure the model in Super Admin → LLM Config → PATENT_DRAFTING → Sketch Generation`
+2. Recommended model: ${SKETCH_RECOMMENDED_MODEL} (Nano Banana Pro)
+3. Sketch output is requested with imageSize: "${SKETCH_OUTPUT_IMAGE_SIZE}" (2K), not 4K
+4. Models that do NOT work: gemini-2.0-flash, gemini-2.0-flash-exp, gemini-2.0-flash-lite (these are text-only)
+5. Configure the model in Super Admin → LLM Config → PATENT_DRAFTING → Sketch Generation`
   }
 }
 
@@ -1129,7 +1140,7 @@ export async function generateSketch(
   if (modelCandidates.length === 0) {
     return {
       success: false,
-      error: 'No sketch generation model configured. Please configure a model for "Sketch Generation" stage in Super Admin → LLM Config. Recommended model: gemini-3-pro-image-preview'
+      error: `No sketch generation model configured. Please configure a model for "Sketch Generation" stage in Super Admin → LLM Config. Recommended model: ${SKETCH_RECOMMENDED_MODEL}`
     }
   }
   

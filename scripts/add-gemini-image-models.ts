@@ -1,7 +1,7 @@
 /**
  * Add Gemini Image Generation Models to LLM Control
  * 
- * This script adds the best Gemini models for sketch/image generation
+ * This script adds the Gemini Nano Banana Pro model for sketch/image generation
  * to the llm_models table so they appear in the admin LLM control panel.
  * 
  * Usage:
@@ -25,58 +25,18 @@ interface GeminiImageModel {
   description?: string
 }
 
-// Best Gemini models for image generation (sketch generation)
+// Gemini image generation model used by Sketches (AI Generated).
+// Runtime requests force imageConfig.imageSize = "2K" in src/lib/sketch-service.ts.
 const GEMINI_IMAGE_MODELS: GeminiImageModel[] = [
   {
-    code: 'gemini-2.0-flash-exp',
-    displayName: 'Gemini 2.0 Flash Experimental (Best Image Output)',
-    contextWindow: 1048576, // 1M tokens
+    code: 'gemini-3-pro-image-preview',
+    displayName: 'Gemini 3 Pro Image Preview (Nano Banana Pro)',
+    contextWindow: 128000,
     supportsVision: true,
-    supportsStreaming: true,
-    inputCostPer1M: 10,   // $0.10 per 1M
-    outputCostPer1M: 40,  // $0.40 per 1M
-    description: 'Best for sketch/diagram generation. Experimental but stable with excellent image output quality.'
-  },
-  {
-    code: 'gemini-2.0-flash-thinking-exp',
-    displayName: 'Gemini 2.0 Flash Thinking (Higher Quality Reasoning)',
-    contextWindow: 1048576,
-    supportsVision: true,
-    supportsStreaming: true,
-    inputCostPer1M: 30,   // $0.30 per 1M
-    outputCostPer1M: 120, // $1.20 per 1M
-    description: 'Higher quality through reasoning. Slower but produces more accurate/detailed outputs.'
-  },
-  {
-    code: 'gemini-exp-1206',
-    displayName: 'Gemini Experimental (Dec 2024)',
-    contextWindow: 2097152, // 2M tokens
-    supportsVision: true,
-    supportsStreaming: true,
-    inputCostPer1M: 10,
-    outputCostPer1M: 40,
-    description: 'Latest experimental Gemini model with improved capabilities.'
-  },
-  // Also add the standard stable models if they don't exist
-  {
-    code: 'gemini-2.0-flash',
-    displayName: 'Gemini 2.0 Flash (Stable)',
-    contextWindow: 1048576,
-    supportsVision: true,
-    supportsStreaming: true,
-    inputCostPer1M: 10,
-    outputCostPer1M: 40,
-    description: 'Production-stable Gemini 2.0 Flash model with image output capability.'
-  },
-  {
-    code: 'gemini-2.0-flash-lite',
-    displayName: 'Gemini 2.0 Flash Lite (Fast & Cheap)',
-    contextWindow: 1048576,
-    supportsVision: true,
-    supportsStreaming: true,
-    inputCostPer1M: 8,    // $0.08 per 1M
-    outputCostPer1M: 30,  // $0.30 per 1M
-    description: 'Faster and cheaper. Good for high-volume use cases.'
+    supportsStreaming: false,
+    inputCostPer1M: 100,   // $1.00 per 1M
+    outputCostPer1M: 400,  // $4.00 per 1M / image generation placeholder
+    description: 'Nano Banana Pro model for professional 2K patent sketch generation.'
   }
 ]
 
