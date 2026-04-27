@@ -135,6 +135,15 @@ export class LLMGateway {
           if (modelResolution.maxTokensIn) {
             decision.maxTokensIn = modelResolution.maxTokensIn
           }
+
+          // Honor per-call output cap from request parameters (maxOutputTokens / maxTokensOut / maxTokens).
+          // This allows lightweight calls (e.g. patent-type classification needing one word) to use
+          // a tighter cap than the stage ceiling configured by Super Admin.
+          const perCallMaxOut = this.extractPerCallMaxOutputTokens(llmRequest.parameters)
+          if (perCallMaxOut && (!decision.maxTokensOut || perCallMaxOut < decision.maxTokensOut)) {
+            console.log(`[Gateway] Per-call maxOutputTokens=${perCallMaxOut} is tighter than stage limit=${decision.maxTokensOut ?? 'none'}, applying`)
+            decision.maxTokensOut = perCallMaxOut
+          }
           
           console.log(`[Gateway] ✓ Model resolved: ${modelResolution.modelCode} (source: ${modelResolution.source}, provider: ${modelResolution.provider})`)
           if (modelResolution.source === 'system-default') {
@@ -363,6 +372,20 @@ export class LLMGateway {
     else if (hasCode) charsPerToken = 3
     
     return Math.ceil(text.length / charsPerToken)
+  }
+
+  /**
+   * Extract a per-call output token cap from request parameters.
+   * Callers can pass maxOutputTokens, maxTokensOut, or maxTokens to request
+   * a tighter limit than the stage ceiling set by Super Admin.
+   */
+  private extractPerCallMaxOutputTokens(parameters?: Record<string, any>): number | undefined {
+    if (!parameters) return undefined
+    const raw = parameters.maxOutputTokens ?? parameters.maxTokensOut ?? parameters.maxTokens
+    if (raw === undefined || raw === null || raw === '') return undefined
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value <= 0) return undefined
+    return Math.floor(value)
   }
 
   /**

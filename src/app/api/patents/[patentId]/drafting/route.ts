@@ -6082,32 +6082,9 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   // Use LLM to normalize the idea
   console.log('Starting idea normalization for patent:', patentId, 'session:', sessionId);
 
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // PARALLEL EXECUTION: Run normalization and patent type classification together
-  // This decouples patent type classification from claim generation for better UX
-  // ═══════════════════════════════════════════════════════════════════════════════
-  const [result, patentTypeResult] = await Promise.all([
-    DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, allowRefine),
-    // Patent type classification runs in parallel - uses raw idea context
-    (async () => {
-      try {
-        // We can't use extracted components yet (they come from normalization)
-        // So we ask the LLM to classify based on raw idea text
-        const classificationResult = await DraftingService.decidePatentTypeFromRawIdea(
-          rawIdea,
-          title,
-          areaOfInvention,
-          user.tenantId,
-          requestHeaders
-        );
-        console.log(`[handleNormalizeIdea] Patent type classified in parallel: ${classificationResult.primary}`);
-        return classificationResult;
-      } catch (err) {
-        console.warn('[handleNormalizeIdea] Patent type classification failed, will retry with components:', err);
-        return null; // Will be re-classified with components if this fails
-      }
-    })()
-  ]);
+  // Only normalization blocks the response. Patent type LLM classification
+  // runs as a background task that updates the session when it completes.
+  const result = await DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, allowRefine);
 
   if (!result.success) {
     console.error('Idea normalization failed:', result.error);
@@ -6119,27 +6096,37 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
 
   console.log('Idea normalization successful');
 
-  // If parallel classification failed, try again with extracted components
-  let patentTypePrimary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null = patentTypeResult?.primary || null;
-  if (!patentTypePrimary && result.extractedFields?.components) {
+  // Instant regex heuristic gives the UI a patent type immediately.
+  // The background LLM call below will overwrite this with a more accurate result.
+  const heuristic = DraftingService.patentTypeFallbackFromText(rawIdea, title);
+  const patentTypePrimary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' = heuristic.primary;
+  console.log(`[handleNormalizeIdea] Patent type heuristic (instant): ${patentTypePrimary}`);
+
+  // Fire-and-forget: LLM-based patent type classification runs independently.
+  // When it finishes it overwrites the heuristic value on the session.
+  const bgSessionId = sessionId;
+  const bgExtractedFields = result.extractedFields;
+  void (async () => {
     try {
-      const fallbackDecision = await DraftingService.decidePatentType(
-        {
-          components: result.extractedFields.components,
-          logic: result.extractedFields?.logic || '',
-          inputs: result.extractedFields?.inputs,
-          outputs: result.extractedFields?.outputs,
-          objectives: result.extractedFields?.objectives
-        },
-        user.tenantId,
-        requestHeaders
+      const llmClassification = await DraftingService.decidePatentTypeFromRawIdea(
+        rawIdea, title, areaOfInvention, user.tenantId, requestHeaders
       );
-      patentTypePrimary = fallbackDecision.primary;
-      console.log(`[handleNormalizeIdea] Patent type fallback classified: ${patentTypePrimary}`);
+      console.log(`[handleNormalizeIdea/bg] LLM patent type: ${llmClassification.primary}`);
+      const bgComponents = bgExtractedFields?.components || [];
+      const bgLogic = bgExtractedFields?.logic || '';
+      await prisma.draftingSession.update({
+        where: { id: bgSessionId },
+        data: {
+          patentTypePrimary: llmClassification.primary,
+          patentTypeDecidedAt: new Date(),
+          patentTypeComponentsHash: DraftingService.generatePatentTypeContextHash(bgComponents, bgLogic)
+        }
+      });
+      console.log(`[handleNormalizeIdea/bg] Session updated with LLM patent type: ${llmClassification.primary}`);
     } catch (err) {
-      console.warn('[handleNormalizeIdea] Fallback patent type classification also failed:', err);
+      console.warn('[handleNormalizeIdea/bg] Background patent type classification failed, heuristic value retained:', err);
     }
-  }
+  })();
 
   // Create or update idea record
   const ideaRecord = await prisma.ideaRecord.upsert({
@@ -6189,19 +6176,14 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
 
   // Keep session status as IDEA_ENTRY so user sees Stage 1 first
   // Status will be updated to COMPONENT_PLANNER when they proceed from Stage 1
-  // Also store the patent type classification (decided in parallel with normalization)
-  const sessionUpdateData: any = { status: 'IDEA_ENTRY' };
-  
-  if (patentTypePrimary) {
-    // Store patent type on session (NOT in normalizedData - separation of concerns)
-    sessionUpdateData.patentTypePrimary = patentTypePrimary;
-    sessionUpdateData.patentTypeDecidedAt = new Date();
-    // Generate context hash from extracted components for change detection
-    const components = result.extractedFields?.components || [];
-    const logic = result.extractedFields?.logic || '';
-    sessionUpdateData.patentTypeComponentsHash = DraftingService.generatePatentTypeContextHash(components, logic);
-    console.log(`[handleNormalizeIdea] Storing patent type: ${patentTypePrimary}`);
-  }
+  const components = result.extractedFields?.components || [];
+  const logic = result.extractedFields?.logic || '';
+  const sessionUpdateData: any = {
+    status: 'IDEA_ENTRY',
+    patentTypePrimary,
+    patentTypeDecidedAt: new Date(),
+    patentTypeComponentsHash: DraftingService.generatePatentTypeContextHash(components, logic)
+  };
   
   await prisma.draftingSession.update({
     where: { id: sessionId },

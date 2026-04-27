@@ -953,7 +953,7 @@ No explanation. No alternatives. Just the word.`;
   /**
    * Text-based fallback for patent type when raw idea LLM classification fails.
    */
-  private static patentTypeFallbackFromText(
+  static patentTypeFallbackFromText(
     rawIdea: string,
     title: string
   ): { primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' } {

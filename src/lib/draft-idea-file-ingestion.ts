@@ -66,7 +66,7 @@ function decodeXmlEntities(value: string) {
 
 function extractTextFromDocxXml(xml: string) {
   const pieces: string[] = []
-  const tokenRegex = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>|<\/w:p>/g
+  const tokenRegex = /<(?:w|a):t\b[^>]*>([\s\S]*?)<\/(?:w|a):t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>|<\/w:p>/g
   let match: RegExpExecArray | null
 
   while ((match = tokenRegex.exec(xml)) !== null) {
@@ -86,11 +86,22 @@ function extractDocxTextFromZip(buffer: Buffer) {
   try {
     const zip = new AdmZip(buffer)
     const entries = zip.getEntries()
-    const documentEntries = entries.filter(entry =>
-      entry.entryName === 'word/document.xml' ||
-      /^word\/(?:header|footer)\d+\.xml$/.test(entry.entryName) ||
-      ['word/footnotes.xml', 'word/endnotes.xml', 'word/comments.xml'].includes(entry.entryName)
-    )
+    const documentEntries = entries.filter(entry => {
+      const name = entry.entryName
+      return (
+        name === 'word/document.xml' ||
+        /^word\/(?:header|footer)\d+\.xml$/.test(name) ||
+        ['word/footnotes.xml', 'word/endnotes.xml', 'word/comments.xml'].includes(name) ||
+        /^word\/charts\/.*\.xml$/.test(name) ||
+        /^word\/diagrams\/.*\.xml$/.test(name)
+      )
+    })
+
+    documentEntries.sort((a, b) => {
+      if (a.entryName === 'word/document.xml') return -1
+      if (b.entryName === 'word/document.xml') return 1
+      return 0
+    })
 
     return documentEntries
       .map(entry => extractTextFromDocxXml(entry.getData().toString('utf8')))
@@ -139,6 +150,47 @@ async function defaultExtractDocText(buffer: Buffer) {
   return [document.getBody(), document.getTextboxes?.() || ''].filter(Boolean).join('\n')
 }
 
+async function extractDocxWithFallback(
+  buffer: Buffer,
+  fileName: string,
+  extractFn: (buffer: Buffer) => Promise<string>
+): Promise<{ text: string; warning?: string }> {
+  let mammothError: Error | null = null
+
+  try {
+    const text = await extractFn(buffer)
+    if (normalizeText(text)) {
+      return { text }
+    }
+    console.warn('[docx-ingestion] Primary parser returned empty text, trying zip fallback', {
+      fileName,
+      bufferSize: buffer.byteLength,
+    })
+  } catch (error) {
+    mammothError = error instanceof Error ? error : new Error(String(error))
+    console.error('[docx-ingestion] Primary parser failed, trying zip fallback', {
+      fileName,
+      bufferSize: buffer.byteLength,
+      error: mammothError.message,
+      stack: mammothError.stack,
+    })
+  }
+
+  const zipText = extractDocxTextFromZip(buffer)
+  if (normalizeText(zipText)) {
+    return {
+      text: zipText,
+      ...(mammothError
+        ? { warning: 'File was processed using fallback extraction. Some formatting may have been lost.' }
+        : {}),
+    }
+  }
+
+  throw new DraftIdeaFileIngestionError(
+    'Could not extract text from this .docx file. Please save it as .txt and upload again.'
+  )
+}
+
 function assertUsableText(text: string, format: DraftIdeaFileFormat) {
   if (!text) {
     if (format === 'pdf') {
@@ -161,24 +213,27 @@ export async function extractDraftIdeaTextFromBuffer(
   const detectedFormat = detectFormat(input.fileName, input.mimeType)
 
   let rawText = ''
+  let warning: string | undefined
 
   try {
     if (detectedFormat === 'txt') {
       rawText = input.buffer.toString('utf8')
     } else if (detectedFormat === 'docx') {
-      rawText = await (dependencies.extractDocxText || defaultExtractDocxText)(input.buffer)
+      const docxResult = await extractDocxWithFallback(
+        input.buffer,
+        input.fileName,
+        dependencies.extractDocxText || defaultExtractDocxText
+      )
+      rawText = docxResult.text
+      warning = docxResult.warning
     } else if (detectedFormat === 'pdf') {
       rawText = await (dependencies.extractPdfText || defaultExtractPdfText)(input.buffer)
     } else {
       rawText = await (dependencies.extractDocText || defaultExtractDocText)(input.buffer)
     }
   } catch (error) {
-    if (detectedFormat === 'docx') {
-      rawText = extractDocxTextFromZip(input.buffer)
-      if (!normalizeText(rawText)) {
-        throw new DraftIdeaFileIngestionError('Could not extract text from this .docx file. Please save it as .txt and upload again.')
-      }
-    } else if (detectedFormat === 'doc') {
+    if (error instanceof DraftIdeaFileIngestionError) throw error
+    if (detectedFormat === 'doc') {
       throw new DraftIdeaFileIngestionError('Could not extract text from this .doc file. Please save it as .docx or .txt and upload again.')
     } else if (detectedFormat === 'pdf') {
       throw new DraftIdeaFileIngestionError('No readable text was found. Scanned PDFs are not supported yet.')
@@ -195,5 +250,6 @@ export async function extractDraftIdeaTextFromBuffer(
     fileName: input.fileName,
     fileSize: input.buffer.byteLength,
     detectedFormat,
+    ...(warning ? { warning } : {}),
   }
 }

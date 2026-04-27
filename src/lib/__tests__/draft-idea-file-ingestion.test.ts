@@ -83,6 +83,76 @@ describe('draft idea file ingestion', () => {
     expect(result.textContent).toBe('Fallback controller disclosure')
   })
 
+  test('falls back to zip when the primary docx parser returns empty text', async () => {
+    const zip = new AdmZip()
+    zip.addFile('word/document.xml', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:body><w:p><w:r><w:t>Recovered from empty mammoth</w:t></w:r></w:p></w:body>' +
+      '</w:document>'
+    ))
+
+    const result = await extractDraftIdeaTextFromBuffer(
+      {
+        fileName: 'tricky.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: zip.toBuffer(),
+      },
+      { extractDocxText: vi.fn().mockResolvedValue('   ') }
+    )
+
+    expect(result.detectedFormat).toBe('docx')
+    expect(result.textContent).toBe('Recovered from empty mammoth')
+  })
+
+  test('returns a warning when docx extraction used the zip fallback after a parser error', async () => {
+    const zip = new AdmZip()
+    zip.addFile('word/document.xml', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:body><w:p><w:r><w:t>Fallback text</w:t></w:r></w:p></w:body>' +
+      '</w:document>'
+    ))
+
+    const result = await extractDraftIdeaTextFromBuffer(
+      {
+        fileName: 'warning.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: zip.toBuffer(),
+      },
+      { extractDocxText: vi.fn().mockRejectedValue(new Error('corrupt docx')) }
+    )
+
+    expect(result.warning).toBe('File was processed using fallback extraction. Some formatting may have been lost.')
+  })
+
+  test('extracts DrawingML text from docx charts and diagrams via zip fallback', async () => {
+    const zip = new AdmZip()
+    zip.addFile('word/document.xml', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:body><w:p><w:r><w:t>Main body</w:t></w:r></w:p></w:body>' +
+      '</w:document>'
+    ))
+    zip.addFile('word/charts/chart1.xml', Buffer.from(
+      '<c:chartSpace xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+      '<a:t>Chart label</a:t>' +
+      '</c:chartSpace>'
+    ))
+
+    const result = await extractDraftIdeaTextFromBuffer(
+      {
+        fileName: 'charted.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: zip.toBuffer(),
+      },
+      { extractDocxText: vi.fn().mockRejectedValue(new Error('parse failed')) }
+    )
+
+    expect(result.textContent).toContain('Main body')
+    expect(result.textContent).toContain('Chart label')
+  })
+
   test('uses a clear failure message for docx parser errors', async () => {
     await expect(
       extractDraftIdeaTextFromBuffer(
