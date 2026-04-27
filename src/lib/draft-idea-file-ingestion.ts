@@ -1,4 +1,5 @@
 import mammoth from 'mammoth'
+import AdmZip from 'adm-zip'
 import { createRequire } from 'module'
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
 
@@ -52,6 +53,52 @@ function normalizeText(text: string) {
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .trim()
+}
+
+function decodeXmlEntities(value: string) {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+}
+
+function extractTextFromDocxXml(xml: string) {
+  const pieces: string[] = []
+  const tokenRegex = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>|<\/w:p>/g
+  let match: RegExpExecArray | null
+
+  while ((match = tokenRegex.exec(xml)) !== null) {
+    if (typeof match[1] === 'string') {
+      pieces.push(decodeXmlEntities(match[1]))
+    } else if (match[0].startsWith('<w:tab')) {
+      pieces.push('\t')
+    } else {
+      pieces.push('\n')
+    }
+  }
+
+  return pieces.join('')
+}
+
+function extractDocxTextFromZip(buffer: Buffer) {
+  try {
+    const zip = new AdmZip(buffer)
+    const entries = zip.getEntries()
+    const documentEntries = entries.filter(entry =>
+      entry.entryName === 'word/document.xml' ||
+      /^word\/(?:header|footer)\d+\.xml$/.test(entry.entryName) ||
+      ['word/footnotes.xml', 'word/endnotes.xml', 'word/comments.xml'].includes(entry.entryName)
+    )
+
+    return documentEntries
+      .map(entry => extractTextFromDocxXml(entry.getData().toString('utf8')))
+      .filter(Boolean)
+      .join('\n')
+  } catch {
+    return ''
+  }
 }
 
 function detectFormat(fileName: string, mimeType?: string): DraftIdeaFileFormat {
@@ -126,13 +173,18 @@ export async function extractDraftIdeaTextFromBuffer(
       rawText = await (dependencies.extractDocText || defaultExtractDocText)(input.buffer)
     }
   } catch (error) {
-    if (detectedFormat === 'doc') {
+    if (detectedFormat === 'docx') {
+      rawText = extractDocxTextFromZip(input.buffer)
+      if (!normalizeText(rawText)) {
+        throw new DraftIdeaFileIngestionError('Could not extract text from this .docx file. Please save it as .txt and upload again.')
+      }
+    } else if (detectedFormat === 'doc') {
       throw new DraftIdeaFileIngestionError('Could not extract text from this .doc file. Please save it as .docx or .txt and upload again.')
-    }
-    if (detectedFormat === 'pdf') {
+    } else if (detectedFormat === 'pdf') {
       throw new DraftIdeaFileIngestionError('No readable text was found. Scanned PDFs are not supported yet.')
+    } else {
+      throw error
     }
-    throw error
   }
 
   const textContent = normalizeText(rawText)

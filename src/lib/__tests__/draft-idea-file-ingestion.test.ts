@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import { Document, Packer, Paragraph, TextRun } from 'docx'
+import AdmZip from 'adm-zip'
 import {
   DraftIdeaFileIngestionError,
   extractDraftIdeaTextFromBuffer,
@@ -58,6 +59,41 @@ describe('draft idea file ingestion', () => {
 
     expect(result.detectedFormat).toBe('docx')
     expect(result.textContent).toContain('Smart irrigation controller invention description')
+  })
+
+  test('falls back to direct docx zip text extraction when the primary docx parser fails', async () => {
+    const zip = new AdmZip()
+    zip.addFile('word/document.xml', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:body><w:p><w:r><w:t>Fallback controller disclosure</w:t></w:r></w:p></w:body>' +
+      '</w:document>'
+    ))
+
+    const result = await extractDraftIdeaTextFromBuffer(
+      {
+        fileName: 'fallback.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: zip.toBuffer(),
+      },
+      { extractDocxText: vi.fn().mockRejectedValue(new Error('primary parser failed')) }
+    )
+
+    expect(result.detectedFormat).toBe('docx')
+    expect(result.textContent).toBe('Fallback controller disclosure')
+  })
+
+  test('uses a clear failure message for docx parser errors', async () => {
+    await expect(
+      extractDraftIdeaTextFromBuffer(
+        {
+          fileName: 'broken.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          buffer: Buffer.from('not-a-docx'),
+        },
+        { extractDocxText: vi.fn().mockRejectedValue(new Error('primary parser failed')) }
+      )
+    ).rejects.toThrow('Could not extract text from this .docx file. Please save it as .txt and upload again.')
   })
 
   test('extracts selectable text from pdf files', async () => {
