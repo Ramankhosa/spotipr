@@ -13,6 +13,17 @@ import type { UserRole } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
 const TEAM_MAX_MEMBERS = Number.parseInt(process.env.TEAM_MAX_MEMBERS || '', 10)
+const TEAM_ROLES = ['LEAD', 'MEMBER'] as const
+const SERVICE_TYPES = [
+  'PATENT_DRAFTING',
+  'NOVELTY_SEARCH',
+  'PRIOR_ART_SEARCH',
+  'IDEA_BANK',
+  'PERSONA_SYNC',
+  'DIAGRAM_GENERATION',
+  'PATENT_REVIEW',
+  'IDEATION'
+] as const
 
 /**
  * GET /api/tenant-admin/teams/[teamId]
@@ -27,10 +38,6 @@ export async function GET(
     if (authResult.error) return authResult.error
     
     const user = authResult.user!
-    
-    // Require at least MANAGER role
-    const roleCheck = await requireTenantRole(['OWNER', 'ADMIN', 'MANAGER'])(request)
-    if (roleCheck) return roleCheck
     
     const { teamId } = params
     
@@ -65,6 +72,11 @@ export async function GET(
     const userMembership = team.members.find(m => m.userId === user.sub)
     const isTeamLead = userMembership?.role === 'LEAD'
     const isAdmin = (user.roles || []).some((r: string) => ['OWNER', 'ADMIN'].includes(r))
+    const canViewTeamDetails = isTeamLead || (user.roles || []).some((r: string) => ['OWNER', 'ADMIN', 'MANAGER'].includes(r))
+
+    if (!canViewTeamDetails) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+    }
 
     const memberIds = team.members.map(m => m.userId)
     const memberStats: Record<string, { patentsDrafted: number; noveltySearches: number; totalInputTokens: number; totalOutputTokens: number }> = {}
@@ -151,6 +163,7 @@ export async function GET(
         canEdit: isTeamLead || isAdmin,
         canAddMembers: isTeamLead || isAdmin,
         canRemoveMembers: isTeamLead || isAdmin,
+        canChangeMemberRole: isAdmin,
         canChangeServiceAccess: isAdmin,
         canDelete: isAdmin
       }
@@ -206,8 +219,16 @@ export async function PATCH(
         }
         
         const { name, description, isDefault } = data
+
+        if (isDefault !== undefined && !isAdmin) {
+          return NextResponse.json(
+            { error: 'Only OWNER or ADMIN can change the default team' },
+            { status: 403 }
+          )
+        }
+
         const updateData = {
-          ...(name !== undefined && { name: name.trim() }),
+          ...(name !== undefined && typeof name === 'string' && { name: name.trim() }),
           ...(description !== undefined && { description: description?.trim() || null }),
           ...(isDefault !== undefined && { isDefault })
         }
@@ -238,7 +259,21 @@ export async function PATCH(
           return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
         }
         
-        const { userId: targetUserId, role = 'MEMBER' } = data
+        const { userId: targetUserId } = data
+        const requestedRole = data.role ?? 'MEMBER'
+
+        if (!TEAM_ROLES.includes(requestedRole)) {
+          return NextResponse.json({ error: 'Invalid team role' }, { status: 400 })
+        }
+
+        if (requestedRole === 'LEAD' && !isAdmin) {
+          return NextResponse.json(
+            { error: 'Only OWNER or ADMIN can add a member as team lead' },
+            { status: 403 }
+          )
+        }
+
+        const role = requestedRole as typeof TEAM_ROLES[number]
         
         // Verify target user exists and is in same tenant
         const targetUser = await prisma.user.findUnique({
@@ -312,6 +347,13 @@ export async function PATCH(
         
         // Cannot remove the last lead
         if (membership.role === 'LEAD') {
+          if (!isAdmin) {
+            return NextResponse.json(
+              { error: 'Only OWNER or ADMIN can remove a team lead' },
+              { status: 403 }
+            )
+          }
+
           const leadCount = await prisma.teamMember.count({
             where: { teamId, role: 'LEAD' }
           })
@@ -342,8 +384,11 @@ export async function PATCH(
       }
       
       case 'change_member_role': {
-        if (!isTeamLead && !isAdmin) {
-          return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+        if (!isAdmin) {
+          return NextResponse.json(
+            { error: 'Only OWNER or ADMIN can change team lead assignments' },
+            { status: 403 }
+          )
         }
         
         const { userId: targetUserId, newRole } = data
@@ -389,6 +434,10 @@ export async function PATCH(
         }
         
         const { serviceType, isEnabled, monthlyQuota, dailyQuota } = data
+
+        if (!SERVICE_TYPES.includes(serviceType)) {
+          return NextResponse.json({ error: 'Invalid service type' }, { status: 400 })
+        }
         
         await prisma.teamServiceAccess.upsert({
           where: { teamId_serviceType: { teamId, serviceType } },

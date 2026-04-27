@@ -24,15 +24,40 @@ export async function GET(request: NextRequest) {
     
     const user = authResult.user!
     
-    // Require at least MANAGER role to view teams
-    const roleCheck = await requireTenantRole(['OWNER', 'ADMIN', 'MANAGER'])(request)
-    if (roleCheck) return roleCheck
-    
     if (!user.tenant_id) {
       return NextResponse.json({ error: 'No tenant associated with user' }, { status: 400 })
     }
+
+    if (user.tenant_ati_id === 'PLATFORM') {
+      return NextResponse.json(
+        { code: 'FORBIDDEN', message: 'Platform scope users cannot access tenant-specific endpoints' },
+        { status: 403 }
+      )
+    }
     
-    const teams = await getTenantTeams(user.tenant_id)
+    const canViewAllTeams = (user.roles || []).some((role: string) =>
+      ['OWNER', 'ADMIN', 'MANAGER'].includes(role)
+    )
+
+    const teams = canViewAllTeams
+      ? await getTenantTeams(user.tenant_id)
+      : await prisma.team.findMany({
+          where: {
+            tenantId: user.tenant_id,
+            isActive: true,
+            members: { some: { userId: user.sub, role: 'LEAD' } }
+          },
+          include: {
+            members: {
+              include: {
+                user: { select: { id: true, email: true, name: true, firstName: true, lastName: true, roles: true } }
+              }
+            },
+            serviceAccess: true,
+            _count: { select: { members: true } }
+          },
+          orderBy: { name: 'asc' }
+        })
     
     return NextResponse.json({
       teams,

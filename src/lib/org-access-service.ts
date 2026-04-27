@@ -290,7 +290,8 @@ export async function createTeam(
       'IDEA_BANK',
       'PERSONA_SYNC',
       'DIAGRAM_GENERATION',
-      'PATENT_REVIEW'
+      'PATENT_REVIEW',
+      'IDEATION'
     ]
 
     await tx.teamServiceAccess.createMany({
@@ -539,6 +540,9 @@ export async function checkServiceAccess(
       status: true,
       tenantId: true,
       teamMemberships: {
+        where: {
+          team: { isActive: true }
+        },
         include: {
           team: {
             include: {

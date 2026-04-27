@@ -684,9 +684,18 @@ export default function VerticalStageNav({
             <div key={stage.key} className="mb-1">
               {/* Stage Header */}
               <div
+                role="button"
+                tabIndex={0}
+                onClick={() => handleStageClick(stage.key)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    handleStageClick(stage.key)
+                  }
+                }}
                 className={`
                   w-full flex items-center gap-2 px-3 py-2.5 rounded-xl
-                  transition-all duration-200 text-left border
+                  transition-all duration-200 text-left border cursor-pointer
                   ${isCurrent ? themeClasses.activeStage : themeClasses.hover + ' border-transparent'}
                 `}
               >
@@ -723,12 +732,7 @@ export default function VerticalStageNav({
                 </div>
 
                 {/* Stage Label */}
-                <button
-                  type="button"
-                  onClick={() => handleStageClick(stage.key)}
-                  className="flex-1 min-w-0 text-left"
-                  title="Go to this stage"
-                >
+                <div className="flex-1 min-w-0 text-left" title="Go to this stage">
                   <div className="flex items-center gap-2">
                     <span className={`
                       text-sm font-medium truncate
@@ -740,12 +744,15 @@ export default function VerticalStageNav({
                       {completion.completedCount}/{completion.totalCount}
                     </span>
                   </div>
-                </button>
+                </div>
 
                 {/* Expand Arrow */}
                 <button
                   type="button"
-                  onClick={() => toggleStageExpansion(stage.key)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    toggleStageExpansion(stage.key)
+                  }}
                   className={`p-1 rounded-md ${themeClasses.hover}`}
                   aria-label={isExpanded ? 'Collapse stage' : 'Expand stage'}
                 >
@@ -928,4 +935,3 @@ export default function VerticalStageNav({
     </aside>
   )
 }
-

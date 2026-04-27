@@ -38,6 +38,15 @@ interface TeamStats {
   }>
 }
 
+interface TeamPermissions {
+  canEdit: boolean
+  canAddMembers: boolean
+  canRemoveMembers: boolean
+  canChangeMemberRole: boolean
+  canChangeServiceAccess: boolean
+  canDelete: boolean
+}
+
 interface Team {
   id: string
   name: string
@@ -56,7 +65,9 @@ const SERVICE_LABELS: Record<string, string> = {
   PRIOR_ART_SEARCH: 'Prior Art Search',
   IDEA_BANK: 'Idea Bank',
   PERSONA_SYNC: 'AI Persona',
-  DIAGRAM_GENERATION: 'Diagram Generation'
+  DIAGRAM_GENERATION: 'Diagram Generation',
+  PATENT_REVIEW: 'Patent Review',
+  IDEATION: 'Ideation'
 }
 
 export default function TenantAdminTeamsPage() {
@@ -460,6 +471,14 @@ function TeamDetailsModal({
   const [users, setUsers] = useState<any[]>([])
   const [selectedUserId, setSelectedUserId] = useState('')
   const [loading, setLoading] = useState(false)
+  const [permissions, setPermissions] = useState<TeamPermissions>({
+    canEdit: isAdmin,
+    canAddMembers: isAdmin,
+    canRemoveMembers: isAdmin,
+    canChangeMemberRole: isAdmin,
+    canChangeServiceAccess: isAdmin,
+    canDelete: isAdmin
+  })
 
   useEffect(() => {
     // Fetch all users to show add member dropdown
@@ -492,6 +511,7 @@ function TeamDetailsModal({
         if (res.ok) {
           const data = await res.json()
           setMembers(data.members || [])
+          if (data.permissions) setPermissions(data.permissions)
           setTeamStats(data.stats || {
             totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
             members: []
@@ -537,6 +557,7 @@ function TeamDetailsModal({
       if (memberRes.ok) {
         const data = await memberRes.json()
         setMembers(data.members || [])
+        if (data.permissions) setPermissions(data.permissions)
         setTeamStats(data.stats || {
           totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
           members: []
@@ -577,6 +598,7 @@ function TeamDetailsModal({
       if (memberRes.ok) {
         const data = await memberRes.json()
         setMembers(data.members || [])
+        if (data.permissions) setPermissions(data.permissions)
         setTeamStats(data.stats || {
           totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
           members: []
@@ -669,7 +691,7 @@ function TeamDetailsModal({
         </div>
         
         {/* Add Member */}
-        {isAdmin && availableUsers.length > 0 && (
+        {permissions.canAddMembers && availableUsers.length > 0 && (
           <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
             <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Add Member
@@ -736,20 +758,24 @@ function TeamDetailsModal({
                 </div>
               </div>
               
-              {isAdmin && (
+              {(permissions.canChangeMemberRole || permissions.canRemoveMembers) && (
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleToggleLead(member.userId, member.role)}
-                    className="text-xs px-2 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-600"
-                  >
-                    {member.role === 'LEAD' ? 'Remove Lead' : 'Make Lead'}
-                  </button>
-                  <button
-                    onClick={() => handleRemoveMember(member.userId)}
-                    className="text-xs px-2 py-1 text-red-600 hover:text-red-800 dark:text-red-400"
-                  >
-                    Remove
-                  </button>
+                  {permissions.canChangeMemberRole && (
+                    <button
+                      onClick={() => handleToggleLead(member.userId, member.role)}
+                      className="text-xs px-2 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-600"
+                    >
+                      {member.role === 'LEAD' ? 'Remove Lead' : 'Make Lead'}
+                    </button>
+                  )}
+                  {permissions.canRemoveMembers && (
+                    <button
+                      onClick={() => handleRemoveMember(member.userId)}
+                      className="text-xs px-2 py-1 text-red-600 hover:text-red-800 dark:text-red-400"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               )}
             </div>

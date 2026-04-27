@@ -8,7 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { authenticateRequest, requireTenantRole } from '@/lib/middleware'
+import { authenticateRequest } from '@/lib/middleware'
 import { getTenantUsers } from '@/lib/org-access-service'
 import { prisma } from '@/lib/prisma'
 
@@ -26,12 +26,37 @@ export async function GET(request: NextRequest) {
     
     const user = authResult.user!
     
-    // Require at least MANAGER role to view users
-    const roleCheck = await requireTenantRole(['OWNER', 'ADMIN', 'MANAGER'])(request)
-    if (roleCheck) return roleCheck
-    
     if (!user.tenant_id) {
       return NextResponse.json({ error: 'No tenant associated with user' }, { status: 400 })
+    }
+
+    if (user.tenant_ati_id === 'PLATFORM') {
+      return NextResponse.json(
+        { code: 'FORBIDDEN', message: 'Platform scope users cannot access tenant-specific endpoints' },
+        { status: 403 }
+      )
+    }
+
+    const canViewUsers = (user.roles || []).some((role: string) =>
+      ['OWNER', 'ADMIN', 'MANAGER'].includes(role)
+    )
+
+    if (!canViewUsers) {
+      const ledTeam = await prisma.team.findFirst({
+        where: {
+          tenantId: user.tenant_id,
+          isActive: true,
+          members: { some: { userId: user.sub, role: 'LEAD' } }
+        },
+        select: { id: true }
+      })
+
+      if (!ledTeam) {
+        return NextResponse.json(
+          { code: 'FORBIDDEN', message: 'Insufficient permissions for tenant operations' },
+          { status: 403 }
+        )
+      }
     }
     
     // Get users with team info

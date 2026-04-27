@@ -508,6 +508,17 @@ export default function PatentDraftingPage() {
     return { prev, next, priorArtSkipped, claimRefinementSkipped }
   }
 
+  const getVisibleStageOrder = useCallback(() => {
+    const priorArtSkipped = !!(session as any)?.priorArtConfig?.skipped
+    const claimRefinementSkipped = !!(session as any)?.priorArtConfig?.skippedClaimRefinement
+
+    return STAGE_ORDER.filter(stage => {
+      if (priorArtSkipped && stage === 'RELATED_ART') return false
+      if (claimRefinementSkipped && stage === 'CLAIM_REFINEMENT') return false
+      return true
+    })
+  }, [session])
+
   useEffect(() => {
     // Clear navigation notice whenever stage changes
     setNavNotice(null)
@@ -574,7 +585,32 @@ export default function PatentDraftingPage() {
   // Handler for stage navigation from sidebar
   const handleNavigateToStage = async (stageKey: string) => {
     if (!session) return
-    await handleStageComplete({ action: 'set_stage', sessionId: session.id, stage: stageKey })
+
+    const targetStage = normalizeStage(stageKey)
+    const current = getCurrentStage()
+    if (targetStage === current) return
+
+    const order = getVisibleStageOrder()
+    const currentIndex = order.indexOf(current as keyof typeof STAGE_COMPONENTS)
+    const targetIndex = order.indexOf(targetStage as keyof typeof STAGE_COMPONENTS)
+
+    // The API enforces some sequential transitions from early stages. When the
+    // sidebar jumps forward multiple stages, walk through the visible path so
+    // clicking a later stage behaves like repeated Next clicks.
+    const stagesToVisit =
+      currentIndex !== -1 && targetIndex !== -1 && targetIndex > currentIndex + 1
+        ? order.slice(currentIndex + 1, targetIndex + 1)
+        : [targetStage]
+
+    setNavNotice(null)
+    for (const nextStage of stagesToVisit) {
+      const result = await handleStageComplete({
+        action: 'set_stage',
+        sessionId: session.id,
+        stage: nextStage
+      })
+      if (!result) break
+    }
   }
 
   // Get prev/next stage info for floating buttons

@@ -5567,14 +5567,15 @@ async function handleSetStage(user: any, patentId: string, data: any) {
   const claimRefinementSkipped = !!sessionPriorArtConfig.skippedClaimRefinement
   
   // Check if claim refinement is being skipped in THIS request
-  const isSkippingClaimRefinement = data.claimRefinementSkipped || data.priorArtConfig?.skippedClaimRefinement
+  const isSkippingPriorArt = !!(skipPriorArt || useInitialClaimsForDrafting || priorArtSkipped)
+  const isSkippingClaimRefinement = !!(data.claimRefinementSkipped || data.priorArtConfig?.skippedClaimRefinement || claimRefinementSkipped)
 
   if (stage === currentStage) {
     allowed = true
   } else if (currentStage === 'IDEA_ENTRY') {
     if (stage === 'RELATED_ART') {
       allowed = true
-    } else if (stage === 'COMPONENT_PLANNER' && (skipPriorArt || useInitialClaimsForDrafting)) {
+    } else if (stage === 'COMPONENT_PLANNER' && isSkippingPriorArt) {
       allowed = true
     } else {
       allowed = false

@@ -271,6 +271,7 @@ function ValidationPanel({
   const [showCelebration, setShowCelebration] = useState(false)
   const [celebrationMessage, setCelebrationMessage] = useState(getCelebrationMessage())
   const prevScoreRef = useRef<number | null>(null)
+  const celebrationEligibleRef = useRef(false)
   const [currentReviewId, setCurrentReviewId] = useState<string | null>(null)
   const [loadingExisting, setLoadingExisting] = useState(false)
   
@@ -318,6 +319,8 @@ function ValidationPanel({
           const latestReview = data.latest[jurisdiction.toUpperCase()]
           const issues = latestReview.issues || []
           // Restore review state
+          prevScoreRef.current = latestReview.summary?.overallScore ?? null
+          celebrationEligibleRef.current = false
           setAiIssues(issues)
           setAiSummary(latestReview.summary || null)
           setCurrentReviewId(latestReview.id)
@@ -401,6 +404,7 @@ function ValidationPanel({
       const data = await res.json()
       if (data.success) {
         const issues = data.issues || []
+        celebrationEligibleRef.current = true
         setAiIssues(issues)
         setAiSummary(data.summary || null)
         setCurrentReviewId(data.reviewId || null)
@@ -497,6 +501,7 @@ function ValidationPanel({
     
     // Track the applied fix locally
     setAppliedFixes(prev => new Set([...Array.from(prev), issue.id]))
+    celebrationEligibleRef.current = true
     
     // Remove the fixed issue from the list and recalculate score
     // Note: onAIIssuesChange is called via useEffect below to avoid render-phase setState
@@ -613,15 +618,19 @@ function ValidationPanel({
   // Trigger celebration when score reaches 100
   useEffect(() => {
     const currentScore = aiSummary?.overallScore ?? null
-    // Only celebrate if score just became 100 (wasn't 100 before)
-    if (currentScore === 100 && prevScoreRef.current !== 100) {
+    const previousScore = prevScoreRef.current
+    prevScoreRef.current = currentScore
+
+    // Only celebrate when an in-session AI review/fix reaches 100.
+    // Existing saved 100-score reviews should not replay on page load.
+    if (currentScore === 100 && previousScore !== 100 && celebrationEligibleRef.current) {
+      celebrationEligibleRef.current = false
       setCelebrationMessage(getCelebrationMessage())
       setShowCelebration(true)
-      // Auto-hide after 8 seconds
-      const timer = setTimeout(() => setShowCelebration(false), 8000)
+      // Auto-hide after 5 seconds
+      const timer = setTimeout(() => setShowCelebration(false), 5000)
       return () => clearTimeout(timer)
     }
-    prevScoreRef.current = currentScore
   }, [aiSummary?.overallScore, getCelebrationMessage])
 
   // Calculate counts
@@ -1214,7 +1223,8 @@ function ValidationPanel({
       {/* ================================================================== */}
       {showCelebration && (
         <div 
-          className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          onClick={() => setShowCelebration(false)}
           style={{ 
             background: 'radial-gradient(ellipse at center, rgba(16, 185, 129, 0.1) 0%, transparent 70%)'
           }}
@@ -1242,8 +1252,19 @@ function ValidationPanel({
           {/* Celebration Card */}
           <div 
             className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 rounded-3xl shadow-2xl p-8 max-w-md mx-4 transform animate-celebrate-bounce pointer-events-auto"
-            onClick={() => setShowCelebration(false)}
+            onClick={(event) => event.stopPropagation()}
           >
+            <button
+              type="button"
+              onClick={() => setShowCelebration(false)}
+              aria-label="Close celebration"
+              className="absolute right-4 top-4 z-10 rounded-full bg-white/20 p-2 text-white/80 transition-colors hover:bg-white/30 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/70"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
             {/* Glow effect */}
             <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/20 to-transparent" />
             
@@ -1278,7 +1299,7 @@ function ValidationPanel({
               
               {/* Dismiss hint */}
               <div className="text-white/60 text-xs">
-                Click anywhere to dismiss • Auto-hides in 8 seconds
+                Click outside or close to dismiss - Auto-hides in 5 seconds
               </div>
             </div>
             

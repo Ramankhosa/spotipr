@@ -74,6 +74,7 @@ function NewPatentDraftPageContent() {
     if (urlRawIdea) setRawIdea(urlRawIdea)
   }, [searchParams])
   const [isCreating, setIsCreating] = useState(false)
+  const [isFileProcessing, setIsFileProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [availableCountries, setAvailableCountries] = useState<CountryOption[]>([])
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
@@ -324,78 +325,58 @@ function NewPatentDraftPageContent() {
   }, [])
 
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    // Validate file type
-    const allowedTypes = ['text/plain']
-    if (!allowedTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.txt')) {
-      setError('Please upload a plain text (.txt) file. Word documents (.docx) are not supported yet.')
+    const fileName = file.name.toLowerCase()
+    const allowedExtensions = ['.txt', '.doc', '.docx', '.pdf']
+    const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext))
+    if (!hasAllowedExtension) {
+      setError('Unsupported file type. Please upload .txt, .doc, .docx, or .pdf files.')
+      event.target.value = ''
       return
     }
 
     if (file.size > 5 * 1024 * 1024) { // 5MB limit
       setError('File size must be less than 5MB')
+      event.target.value = ''
       return
     }
 
-    const reader = new FileReader()
+    setIsFileProcessing(true)
+    setError(null)
 
-    reader.onload = (e) => {
-      try {
-        const content = e.target?.result as string
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
 
-        if (!content) {
-          setError('File appears to be empty')
-          return
-        }
+      const response = await fetch('/api/patents/draft/ingest-file', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: formData
+      })
 
-        // Clean the content to remove BOM and normalize line endings
-        const cleanContent = content
-          .replace(/^\uFEFF/, '') // Remove BOM
-          .replace(/\r\n/g, '\n') // Normalize Windows line endings
-          .replace(/\r/g, '\n')   // Normalize Mac line endings
-          .trim() // Remove leading/trailing whitespace
-
-        if (cleanContent.length === 0) {
-          setError('File appears to be empty or contains no readable text')
-          return
-        }
-
-    if (cleanContent.length > MAX_DRAFTING_INPUT_CHARS) {
-      setError(`File content exceeds ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters. Please reduce the file size or split into smaller sections.`)
-      return
-    }
-
-        // Basic validation - check if content looks like text
-        const nonPrintableChars = (cleanContent.match(/[^\x20-\x7E\n\t]/g) || []).length
-        const nonPrintableRatio = nonPrintableChars / cleanContent.length
-
-        if (nonPrintableRatio > 0.1 && cleanContent.length > 100) {
-          setError('File appears to contain binary data or is not a plain text file. Please use a .txt file.')
-          return
-        }
-
-        setRawIdea(cleanContent)
-        setError(null)
-
-      } catch (error) {
-        console.error('File processing error:', error)
-        setError('Failed to process file. Please check the file format and try again.')
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to process file. Please check the file format and try again.')
       }
-    }
 
-    reader.onerror = () => {
-      setError('Failed to read file. Please check the file format and try again.')
-    }
+      if (!data.textContent || typeof data.textContent !== 'string') {
+        throw new Error('File appears to be empty or contains no readable text.')
+      }
 
-    reader.onabort = () => {
-      setError('File reading was aborted. Please try again.')
+      setRawIdea(data.textContent)
+      setError(null)
+    } catch (error) {
+      console.error('File processing error:', error)
+      setError(error instanceof Error ? error.message : 'Failed to process file. Please check the file format and try again.')
+    } finally {
+      setIsFileProcessing(false)
+      event.target.value = ''
     }
-
-    // Read as text with UTF-8 encoding
-    reader.readAsText(file, 'UTF-8')
   }
 
   const handleCreateDraft = async () => {
@@ -971,24 +952,23 @@ function NewPatentDraftPageContent() {
             {/* File Upload */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Or upload a text file
+                Or upload an idea file
               </label>
               <input
                 type="file"
-                accept=".txt"
+                accept=".txt,.doc,.docx,.pdf"
                 onChange={handleFileUpload}
+                disabled={isFileProcessing}
                 className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
               />
               <p className="mt-1 text-sm text-gray-500">
-                Supported format: .txt files only (max 5MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
+                Supported formats: .txt, .doc, .docx, and text-based .pdf files (max 5MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
               </p>
-              <p className="mt-1 text-xs text-gray-400">
-                Note: Word documents (.docx) and PDFs are not supported yet. To convert:
-              </p>
-              <ul className="mt-1 text-xs text-gray-400 list-disc list-inside">
-                <li>In Word: File &rarr; Save As &rarr; Plain Text (.txt)</li>
-                <li>In Google Docs: File &rarr; Download &rarr; Plain text (.txt)</li>
-              </ul>
+              {isFileProcessing && (
+                <p className="mt-1 text-xs text-indigo-600">
+                  Extracting readable text from the file...
+                </p>
+              )}
               <p className="mt-1 text-xs text-blue-600">
                 Tip: Uploading a file replaces any text you&apos;ve entered above
               </p>
@@ -1031,7 +1011,7 @@ function NewPatentDraftPageContent() {
                 </Link>
                 <button
                   onClick={handleCreateDraft}
-                  disabled={isCreating || !selectedProject || !patentTitle.trim()}
+                  disabled={isCreating || isFileProcessing || !selectedProject || !patentTitle.trim()}
                   className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCreating ? (
