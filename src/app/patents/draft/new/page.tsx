@@ -55,7 +55,7 @@ interface Project {
 }
 
 function NewPatentDraftPageContent() {
-  const { user, isLoading: authLoading } = useAuth()
+  const { user, isLoading: authLoading, authFetch } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialProjectId = searchParams?.get('projectId') || ''
@@ -75,6 +75,7 @@ function NewPatentDraftPageContent() {
   }, [searchParams])
   const [isCreating, setIsCreating] = useState(false)
   const [isFileProcessing, setIsFileProcessing] = useState(false)
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [availableCountries, setAvailableCountries] = useState<CountryOption[]>([])
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
@@ -326,7 +327,8 @@ function NewPatentDraftPageContent() {
 
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
+    const input = event.currentTarget
+    const file = input.files?.[0]
     if (!file) return
 
     const fileName = file.name.toLowerCase()
@@ -334,28 +336,28 @@ function NewPatentDraftPageContent() {
     const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext))
     if (!hasAllowedExtension) {
       setError('Unsupported file type. Please upload .txt, .doc, .docx, or .pdf files.')
-      event.target.value = ''
+      setUploadedFileName(null)
+      input.value = ''
       return
     }
 
     if (file.size > 5 * 1024 * 1024) { // 5MB limit
       setError('File size must be less than 5MB')
-      event.target.value = ''
+      setUploadedFileName(null)
+      input.value = ''
       return
     }
 
     setIsFileProcessing(true)
     setError(null)
+    setUploadedFileName(null)
 
     try {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch('/api/patents/draft/ingest-file', {
+      const response = await authFetch('/api/patents/draft/ingest-file', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
         body: formData
       })
 
@@ -369,13 +371,15 @@ function NewPatentDraftPageContent() {
       }
 
       setRawIdea(data.textContent)
+      setUploadedFileName(data.fileName || file.name)
       setError(null)
     } catch (error) {
       console.error('File processing error:', error)
+      setUploadedFileName(null)
       setError(error instanceof Error ? error.message : 'Failed to process file. Please check the file format and try again.')
     } finally {
       setIsFileProcessing(false)
-      event.target.value = ''
+      input.value = ''
     }
   }
 
@@ -967,6 +971,11 @@ function NewPatentDraftPageContent() {
               {isFileProcessing && (
                 <p className="mt-1 text-xs text-indigo-600">
                   Extracting readable text from the file...
+                </p>
+              )}
+              {uploadedFileName && !isFileProcessing && (
+                <p className="mt-1 text-xs text-emerald-600">
+                  Extracted text from {uploadedFileName} and loaded it into the description.
                 </p>
               )}
               <p className="mt-1 text-xs text-blue-600">

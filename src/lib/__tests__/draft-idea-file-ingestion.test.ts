@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
+import { Document, Packer, Paragraph, TextRun } from 'docx'
 import {
   DraftIdeaFileIngestionError,
   extractDraftIdeaTextFromBuffer,
@@ -35,6 +36,28 @@ describe('draft idea file ingestion', () => {
     expect(extractDocxText).toHaveBeenCalled()
     expect(result.detectedFormat).toBe('docx')
     expect(result.textContent).toBe('Smart controller disclosure')
+  })
+
+  test('extracts text from a real docx buffer', async () => {
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph({
+            children: [new TextRun('Smart irrigation controller invention description')],
+          }),
+        ],
+      }],
+    })
+    const buffer = await Packer.toBuffer(doc)
+
+    const result = await extractDraftIdeaTextFromBuffer({
+      fileName: 'idea.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer,
+    })
+
+    expect(result.detectedFormat).toBe('docx')
+    expect(result.textContent).toContain('Smart irrigation controller invention description')
   })
 
   test('extracts selectable text from pdf files', async () => {
