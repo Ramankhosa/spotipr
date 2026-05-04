@@ -41,6 +41,8 @@ interface DraftingSession {
   // Figure sequence for unified ordering of diagrams + sketches
   figureSequence?: Array<{ id: string; type: 'diagram' | 'sketch'; sourceId: string; finalFigNo: number }>
   figureSequenceFinalized?: boolean
+  figuresSkipped?: boolean
+  figuresSkippedAt?: string | null
 }
 
 interface Patent {
@@ -360,6 +362,9 @@ export default function PatentDraftingPage() {
         if (errorCode === 'INVALID_COMPONENT_MAP' && result?.details) {
           const validationErrors = Array.isArray(result.details) ? result.details : [result.details];
           setInlineError(`Component validation failed: ${validationErrors.join(', ')}`);
+          if (stageData?.action === 'update_component_map') {
+            return { error: message, details: validationErrors, code: errorCode };
+          }
           return null;
         }
 
@@ -373,6 +378,9 @@ export default function PatentDraftingPage() {
         // of only setting a page-level error. This lets the active stage show the actionable message.
         const componentOwnedErrorActions = [
           'generate_claims',
+          'claim_refinement_preview',
+          'generate_sections',
+          'update_persona_config',
           'regenerate_diagram_llm', 
           'generate_diagrams_llm',
           'plan_and_generate_diagrams_llm', // Combined plan+generate action
@@ -389,7 +397,13 @@ export default function PatentDraftingPage() {
         if (componentOwnedErrorActions.includes(stageData?.action)) {
           // Return error object so component can display it
           setInlineError(message || 'Error has occurred, please retry.')
-          return { error: message, details: result?.details, code: errorCode }
+          return {
+            error: message,
+            details: result?.details,
+            code: errorCode,
+            personaWarnings: result?.personaWarnings,
+            personaProvenance: result?.personaProvenance
+          }
         }
 
         // For other errors, set inline error state instead of throwing to prevent runtime crash

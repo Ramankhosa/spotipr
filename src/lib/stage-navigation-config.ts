@@ -387,6 +387,7 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         description: 'Generate PlantUML diagrams',
         required: false,
         getStatus: (session) => {
+          if (session?.figuresSkipped) return 'skipped'
           const diagrams = session?.diagramSources || []
           return diagrams.length > 0 ? 'completed' : 'pending'
         }
@@ -398,6 +399,7 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         description: 'Add hand-drawn figures',
         required: false,
         getStatus: (session) => {
+          if (session?.figuresSkipped) return 'skipped'
           const sketches = session?.sketchRecords || []
           return sketches.filter((s: any) => s.status === 'SUCCESS' && !s.isDeleted).length > 0 
             ? 'completed' 
@@ -411,6 +413,7 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         description: 'Order and organize figures',
         required: true,
         getStatus: (session) => {
+          if (session?.figuresSkipped) return 'skipped'
           const hasSequence = Array.isArray(session?.figureSequence) && session.figureSequence.length > 0
           return hasSequence ? 'completed' : 'pending'
         }
@@ -422,6 +425,7 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         description: 'Lock figure numbers',
         required: true,
         getStatus: (session) => {
+          if (session?.figuresSkipped) return 'skipped'
           return session?.figureSequenceFinalized ? 'completed' : 'pending'
         }
       }

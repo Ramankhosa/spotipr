@@ -12,7 +12,17 @@ import { llmGateway } from '@/lib/metering/gateway';
 // NOTE: Old document-based style learning (getGatedStyleInstructions) has been removed
 // The new Writing Personas system uses writing samples directly in DraftingService
 import { getDocumentTypeConfig, getSupportedCountryCodes, getCountryProfile, getDraftingPrompts, getSectionRules, getBaseStyle } from '@/lib/country-profile-service';
-import { getWritingSample, buildWritingSampleBlock } from '@/lib/writing-sample-service';
+import {
+  getWritingSample,
+  buildWritingSampleBlock,
+  getPersonaCoverageWarnings,
+  getPersonaSelectionFromSession,
+  hydratePersonaSelectionForUser,
+  normalizePersonaSelectionInput,
+  validatePersonaSelectionForUser,
+  PersonaAccessError,
+  type PersonaSelection
+} from '@/lib/writing-sample-service';
 import { resolveCanonicalKey, normalizeSectionKeys } from '@/lib/section-alias-service';
 import { enforceServiceAccess } from '@/lib/service-access-middleware';
 import { getDiagramConfig, generateDiagramPromptInstructions } from '@/lib/jurisdiction-style-service';
@@ -24,8 +34,12 @@ import { ANNEXURE_LEGACY_COLUMNS } from '@/lib/annexure-schema';
 import {
   DraftClaimsParseError,
   formatDraftClaimsAsHtml,
-  parseGeneratedClaimsFromLLMOutput,
+  parseGeneratedClaimsPayloadFromLLMOutput,
 } from '@/lib/draft-claims-parser';
+import {
+  analyzePreliminaryClaimQuality,
+  buildPreliminaryClaimsPrompt,
+} from '@/lib/preliminary-claim-generation';
 import {
   generateSketch,
   listSketches,
@@ -53,6 +67,13 @@ import path from 'path';
 import fs from 'fs/promises';
 import { imageSize } from 'image-size';
 import { normalizeFigureSequence } from '@/lib/figure-sequence'
+import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
+import {
+  areFiguresSkipped,
+  filterDrawingSections,
+  filterDrawingSectionKeys,
+  isDrawingSectionKey
+} from '@/lib/figure-availability'
 
 const sanitizeFigureTitleInput = (title?: string | null): string => {
   const raw = typeof title === 'string' ? title : ''
@@ -93,6 +114,140 @@ function extractFilenameFromPathLike(value: unknown): string | null {
 
 function buildProjectUploadImageUrl(projectId: string, patentId: string, filename: string): string {
   return `/api/projects/${projectId}/patents/${patentId}/upload?filename=${encodeURIComponent(filename)}`
+}
+
+async function reactivateFiguresForSession(sessionId: string) {
+  if (!sessionId) return
+  await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: {
+      figuresSkipped: false,
+      figuresSkippedAt: null
+    } as any
+  })
+}
+
+function buildNormalizationWarningsPromptBlock(warnings: unknown): string {
+  if (!Array.isArray(warnings) || warnings.length === 0) return ''
+  const lines = warnings
+    .map(w => String(w).trim())
+    .filter(Boolean)
+    .slice(0, 20)
+    .map(w => `- ${w}`)
+  if (lines.length === 0) return ''
+  return `NORMALIZATION REVIEW WARNINGS (ADVISORY)
+These are non-blocking hints that source details may need verification before claim drafting.
+${lines.join('\n')}`
+}
+
+function personaCoverageResponse(warnings: any[]) {
+  return NextResponse.json({
+    error: 'Selected persona is missing writing samples for one or more requested sections.',
+    code: 'PERSONA_COVERAGE_WARNING',
+    personaWarnings: warnings
+  }, { status: 409 })
+}
+
+function personaAccessResponse(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Persona not found or access denied'
+  return NextResponse.json({
+    error: message,
+    code: error instanceof PersonaAccessError ? error.code : 'PERSONA_ACCESS_DENIED'
+  }, { status: error instanceof PersonaAccessError ? error.status : 403 })
+}
+
+async function persistPersonaConfig(sessionId: string, enabled: boolean, selection?: PersonaSelection) {
+  await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: {
+      personaStyleEnabled: enabled,
+      primaryPersonaId: selection?.primaryPersonaId || null,
+      secondaryPersonaIds: selection?.secondaryPersonaIds || [],
+      personaStyleUpdatedAt: new Date()
+    } as any
+  })
+}
+
+async function resolveEffectivePersonaConfig(user: any, session: any, data: any) {
+  const hasRequestOverride = typeof data?.usePersonaStyle === 'boolean' || data?.personaSelection !== undefined
+  const sessionEnabled = (session as any).personaStyleEnabled === true
+  const sessionSelection = getPersonaSelectionFromSession(session)
+
+  let enabled = sessionEnabled
+  let selection = sessionSelection
+  let requestSelection: PersonaSelection | undefined
+
+  if (hasRequestOverride) {
+    enabled = data?.usePersonaStyle === true
+    requestSelection = normalizePersonaSelectionInput(data?.personaSelection)
+    if (requestSelection?.primaryPersonaId) {
+      selection = requestSelection
+    }
+  }
+
+  if (!enabled || !selection?.primaryPersonaId) {
+    if (hasRequestOverride) {
+      if (requestSelection?.primaryPersonaId) {
+        const resolved = await validatePersonaSelectionForUser(user.id, user.tenantId, requestSelection)
+        const resolvedSelection = resolved ? {
+          primaryPersonaId: resolved.primaryPersonaId,
+          primaryPersonaName: resolved.primaryPersonaName,
+          secondaryPersonaIds: resolved.secondaryPersonaIds,
+          secondaryPersonaNames: resolved.secondaryPersonaNames
+        } : undefined
+        await persistPersonaConfig(session.id, false, resolvedSelection)
+        return { enabled: false, selection: undefined as any }
+      }
+      await persistPersonaConfig(session.id, false, selection)
+    }
+    return { enabled: false, selection: undefined as any }
+  }
+
+  const resolved = await validatePersonaSelectionForUser(user.id, user.tenantId, selection)
+  const resolvedSelection = resolved ? {
+    primaryPersonaId: resolved.primaryPersonaId,
+    primaryPersonaName: resolved.primaryPersonaName,
+    secondaryPersonaIds: resolved.secondaryPersonaIds,
+    secondaryPersonaNames: resolved.secondaryPersonaNames
+  } : undefined
+
+  if (!resolvedSelection?.primaryPersonaId) {
+    if (hasRequestOverride) await persistPersonaConfig(session.id, false)
+    return { enabled: false, selection: undefined as any }
+  }
+
+  if (hasRequestOverride) {
+    await persistPersonaConfig(session.id, true, resolvedSelection)
+  }
+
+  return { enabled: true, selection: resolvedSelection }
+}
+
+async function hydrateSessionPersonaForResponse(user: any, session: any) {
+  const enabled = (session as any).personaStyleEnabled === true
+  const baseSelection = getPersonaSelectionFromSession(session)
+  if (!baseSelection?.primaryPersonaId) {
+    return {
+      ...session,
+      usePersonaStyle: false,
+      personaSelection: undefined
+    }
+  }
+
+  try {
+    const hydrated = await hydratePersonaSelectionForUser(user.id, user.tenantId, baseSelection)
+    return {
+      ...session,
+      usePersonaStyle: enabled && !!hydrated?.primaryPersonaId,
+      personaSelection: hydrated
+    }
+  } catch {
+    return {
+      ...session,
+      usePersonaStyle: false,
+      personaSelection: undefined
+    }
+  }
 }
 
 function resolveSketchPublicImageUrl(
@@ -529,7 +684,7 @@ export async function GET(
               imageUrl: resolvedUrl
             }
           })
-          return { ...s, sketchRecords: normalizedSketches }
+          return hydrateSessionPersonaForResponse(authResult.user, { ...s, sketchRecords: normalizedSketches })
         })
       )
 
@@ -633,6 +788,12 @@ export async function POST(
       case 'update_figure_plan':
         return await handleUpdateFigurePlan(authResult.user, patentId, data);
 
+      case 'skip_figures':
+        return await handleSkipFigures(authResult.user, patentId, data);
+
+      case 'restore_figures':
+        return await handleRestoreFigures(authResult.user, patentId, data);
+
       // Stage 3.5: Related Art search & selection
       case 'related_art_search':
         return await handleRelatedArtSearch(authResult.user, patentId, data, requestHeaders);
@@ -656,6 +817,9 @@ export async function POST(
 
       case 'save_prior_art_config':
         return await handleSavePriorArtConfig(authResult.user, patentId, data);
+
+      case 'update_persona_config':
+        return await handleUpdatePersonaConfig(authResult.user, patentId, data);
 
       case 'upload_diagram':
         return await handleUploadDiagram(authResult.user, patentId, data);
@@ -1000,6 +1164,82 @@ async function handleSavePriorArtConfig(user: any, patentId: string, data: any) 
   })
 
   return NextResponse.json({ session: updated, priorArtConfig: updatedConfig })
+}
+
+async function handleUpdatePersonaConfig(user: any, patentId: string, data: any) {
+  const { sessionId, enabled, primaryPersonaId, secondaryPersonaIds, personaSelection } = data
+  if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+
+  const session = await prisma.draftingSession.findFirst({ where: { id: sessionId, patentId, userId: user.id } })
+  if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+
+  const shouldEnable = enabled === true
+  const inputSelection = normalizePersonaSelectionInput(personaSelection || {
+    primaryPersonaId,
+    secondaryPersonaIds
+  })
+
+  if (!shouldEnable) {
+    try {
+      let selectionToPersist = inputSelection || getPersonaSelectionFromSession(session)
+      if (inputSelection?.primaryPersonaId) {
+        const resolved = await validatePersonaSelectionForUser(user.id, user.tenantId, inputSelection)
+        selectionToPersist = resolved ? {
+          primaryPersonaId: resolved.primaryPersonaId,
+          primaryPersonaName: resolved.primaryPersonaName,
+          secondaryPersonaIds: resolved.secondaryPersonaIds,
+          secondaryPersonaNames: resolved.secondaryPersonaNames
+        } : undefined
+      }
+
+      await persistPersonaConfig(sessionId, false, selectionToPersist)
+      const updated = await prisma.draftingSession.findUnique({ where: { id: sessionId } })
+      const hydrated = updated ? await hydrateSessionPersonaForResponse(user, updated) : updated
+      return NextResponse.json({
+        success: true,
+        session: hydrated,
+        usePersonaStyle: false,
+        personaSelection: (hydrated as any)?.personaSelection
+      })
+    } catch (error) {
+      return personaAccessResponse(error)
+    }
+  }
+
+  if (!inputSelection?.primaryPersonaId) {
+    return NextResponse.json({
+      error: 'Select a primary persona before enabling persona style.',
+      code: 'PERSONA_REQUIRED'
+    }, { status: 400 })
+  }
+
+  try {
+    const resolved = await validatePersonaSelectionForUser(user.id, user.tenantId, inputSelection)
+    if (!resolved?.primaryPersonaId) {
+      return NextResponse.json({
+        error: 'Select a primary persona before enabling persona style.',
+        code: 'PERSONA_REQUIRED'
+      }, { status: 400 })
+    }
+
+    const selection = {
+      primaryPersonaId: resolved.primaryPersonaId,
+      primaryPersonaName: resolved.primaryPersonaName,
+      secondaryPersonaIds: resolved.secondaryPersonaIds,
+      secondaryPersonaNames: resolved.secondaryPersonaNames
+    }
+
+    await persistPersonaConfig(sessionId, true, selection)
+    const updated = await prisma.draftingSession.findUnique({ where: { id: sessionId } })
+    return NextResponse.json({
+      success: true,
+      session: updated ? await hydrateSessionPersonaForResponse(user, updated) : updated,
+      usePersonaStyle: true,
+      personaSelection: selection
+    })
+  } catch (error) {
+    return personaAccessResponse(error)
+  }
 }
 
 async function handleRelatedArtLLMReview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
@@ -1538,11 +1778,12 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
     figureSequence: sequenceMeta?.figureSequence ?? (sessionData as any).figureSequence,
     figureSequenceFinalized: sequenceMeta?.figureSequenceFinalized ?? (sessionData as any).figureSequenceFinalized
   }
+  const figuresSkipped = areFiguresSkipped(session)
 
   // Determine the active jurisdiction for export (defaults to first selection)
   const fallbackJurisdiction = (session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'US'
   const effectiveJurisdiction = String(requestedJurisdiction || fallbackJurisdiction || 'US').toUpperCase()
-  const sections = await getExportSectionsForJurisdiction(effectiveJurisdiction)
+  const sections = filterDrawingSections(session, await getExportSectionsForJurisdiction(effectiveJurisdiction), section => section.key)
 
   // Determine preferred figure language for export based on jurisdiction
   const jurisdictionStatus = (session as any).jurisdictionDraftStatus || {}
@@ -1736,6 +1977,9 @@ async function handleExportDOCX(user: any, patentId: string, data: any, request?
         type: 'sketch'
       })
     }
+  }
+  if (figuresSkipped) {
+    figuresSorted = []
   }
 
   // Prepare content for normalization - read from legacy columns and extraSections JSON
@@ -2321,7 +2565,7 @@ async function handleExportPDF(user: any, patentId: string, data: any, request?:
   // Determine the active jurisdiction for export (defaults to first selection)
   const fallbackJurisdiction = (session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'US'
   const effectiveJurisdiction = String(requestedJurisdiction || fallbackJurisdiction || 'US').toUpperCase()
-  const sections = await getExportSectionsForJurisdiction(effectiveJurisdiction)
+  const sections = filterDrawingSections(session, await getExportSectionsForJurisdiction(effectiveJurisdiction), section => section.key)
 
   // Load export config early to honor country-specific settings (e.g., addParagraphNumbers)
   const { getExportConfig } = await import('@/lib/jurisdiction-style-service')
@@ -2592,6 +2836,9 @@ function buildPDFHtml(
       figures.push({ figureNo: maxFigNo + i + 1, title: sketch.title || `Figure ${maxFigNo + i + 1}` })
     }
   }
+  if (areFiguresSkipped(session)) {
+    figures = []
+  }
   
   if (figures.length > 0) {
     bodyHtml += getSectionHeading('briefDescriptionOfDrawings', 'Drawings / Figures')
@@ -2689,14 +2936,12 @@ function buildAnnexurePlainText(doc: any, sections?: ExportSectionDef[]): string
   const BODY = SECTIONS.filter(([_,v]) => String(v||'').trim()).map(([h,v]) => `${h}\n\n${String(v).trim()}`).join('\n\n')
   const PAGE_BREAK = '\n\n<<<PAGE_BREAK>>>\n\n'
   const DRAWINGS_HEADER = H('Drawings / Figures')
-  const FIGURE_PAGES = [`${DRAWINGS_HEADER}\n\n`]
-    .concat(
-      (doc.figures || [])
-        .sort((a:any,b:any)=>a.figureNo-b.figureNo)
-        .map((f:any)=>`Fig. ${f.figureNo} - ${String(f.caption||'').replace(/^Fig\.\s*\d+\s*-\s*/i,'')}`)
-    )
-    .join(PAGE_BREAK)
-  return [BODY, PAGE_BREAK, FIGURE_PAGES].join('')
+  const figureLines = (doc.figures || [])
+    .sort((a:any,b:any)=>a.figureNo-b.figureNo)
+    .map((f:any)=>`Fig. ${f.figureNo} - ${String(f.caption||'').replace(/^Fig\.\s*\d+\s*-\s*/i,'')}`)
+  if (figureLines.length === 0) return BODY
+  const FIGURE_PAGES = [`${DRAWINGS_HEADER}\n\n`, ...figureLines].join(PAGE_BREAK)
+  return [BODY, FIGURE_PAGES].filter(Boolean).join(PAGE_BREAK)
 }
 
 function preExportGuards(doc: any, sections?: ExportSectionDef[]): { ok: boolean; issues: string[] } {
@@ -2727,7 +2972,7 @@ function preExportGuards(doc: any, sections?: ExportSectionDef[]): { ok: boolean
   }
 
   if (String(doc.listOfNumerals||'').trim()) {
-    const nums = Array.from(String(doc.listOfNumerals).matchAll(/\((\d{1,5})\)/g)).map(m=>Number(m[1]))
+    const nums = Array.from(String(doc.listOfNumerals).matchAll(/\((\d+)\)/g)).map(m=>Number(m[1]))
     const dup = nums.filter((n,i)=>nums.indexOf(n)!==i)
     if (dup.length) issues.push(`Duplicate numerals in list: ${Array.from(new Set(dup)).join(', ')}`)
   }
@@ -2745,7 +2990,8 @@ async function handlePreviewExport(user: any, patentId: string, data: any) {
 
   const jurisdiction = requestedJurisdiction || (session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'US'
   const effectiveJurisdiction = String(jurisdiction || 'US').toUpperCase()
-  const sections = await getExportSectionsForJurisdiction(effectiveJurisdiction)
+  const figuresSkipped = areFiguresSkipped(session)
+  const sections = filterDrawingSections(session, await getExportSectionsForJurisdiction(effectiveJurisdiction), section => section.key)
 
   const drafts = Array.isArray(session.annexureDrafts) ? session.annexureDrafts : []
   const last = drafts.find((d: any) => (d.jurisdiction || 'US').toUpperCase() === effectiveJurisdiction)
@@ -2761,7 +3007,7 @@ async function handlePreviewExport(user: any, patentId: string, data: any) {
   }
 
   const exportInput: any = {
-    figures: [...(session!.figurePlans||[])].sort((a,b)=>a.figureNo-b.figureNo).map(f=>({
+    figures: figuresSkipped ? [] : [...(session!.figurePlans||[])].sort((a,b)=>a.figureNo-b.figureNo).map(f=>({
       figureNo: f.figureNo,
       caption: truncateCaptionPreview(f.title || `Figure ${f.figureNo}`),
       imagePathOrBuffer: (session!.diagramSources||[]).find((d:any)=>d.figureNo===f.figureNo)?.imagePath || ''
@@ -2886,7 +3132,8 @@ async function handleGetExportPreview(user: any, patentId: string, data: any) {
 
   const jurisdiction = requestedJurisdiction || (session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'US'
   const effectiveJurisdiction = String(jurisdiction || 'US').toUpperCase()
-  const sections = await getExportSectionsForJurisdiction(effectiveJurisdiction)
+  const figuresSkipped = areFiguresSkipped(session)
+  const sections = filterDrawingSections(session, await getExportSectionsForJurisdiction(effectiveJurisdiction), section => section.key)
 
   const drafts = Array.isArray(session.annexureDrafts) ? session.annexureDrafts : []
   const last = drafts.find((d: any) => (d.jurisdiction || 'US').toUpperCase() === effectiveJurisdiction)
@@ -2982,6 +3229,9 @@ async function handleGetExportPreview(user: any, patentId: string, data: any) {
         type: 'sketch'
       })
     }
+  }
+  if (figuresSkipped) {
+    figures = []
   }
   
   // Load export config to include in preview response (so frontend can use country defaults)
@@ -4361,6 +4611,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     userInstructions, 
     usePersonaStyle: usePersonaStyleFromData, 
     personaSelection: personaSelectionFromData,
+    acceptPersonaWarnings,
     userClaimRemarks  // User remarks for claim generation (influences drafting, not patent type)
   } = data
 
@@ -4385,35 +4636,20 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
   }
 
   // ═══════════════════════════════════════════════════════════════════════════════
-  // PATENT TYPE DECISION - Dedicated pre-claims step (NOT part of idea normalization)
+  // PATENT TYPE DECISION - from Stage 0 normalization or user override
   // ═══════════════════════════════════════════════════════════════════════════════
   const components = existingNormalized.components || []
   const logic = existingNormalized.logic || ''
   const currentContextHash = DraftingService.generatePatentTypeContextHash(components, logic)
   
-  // Re-decision policy: only re-decide if components/logic changed OR no previous decision
-  let patentTypePrimary = (session as any).patentTypePrimary
-  const storedContextHash = (session as any).patentTypeComponentsHash
-  const shouldRedecide = !patentTypePrimary || (storedContextHash && storedContextHash !== currentContextHash)
+  let patentTypePrimary = DraftingService.normalizePatentTypePrimary((session as any).patentTypePrimary)
+    || DraftingService.normalizePatentTypePrimary(existingNormalized.patentTypePrimary)
+    || DraftingService.patentTypeFallbackFromText(
+      session.ideaRecord?.rawInput || `${existingNormalized.problem || ''} ${existingNormalized.logic || ''}`,
+      session.ideaRecord?.title || ''
+    ).primary
   
-  if (shouldRedecide) {
-    console.log(`[handleGenerateClaims] Deciding patent type (${!patentTypePrimary ? 'first decision' : 'context changed'})`)
-    
-    const patentTypeDecision = await DraftingService.decidePatentType(
-      {
-        components,
-        logic,
-        inputs: existingNormalized.inputs,
-        outputs: existingNormalized.outputs,
-        objectives: existingNormalized.objectives
-      },
-      user.tenantId,
-      requestHeaders
-    )
-    
-    patentTypePrimary = patentTypeDecision.primary
-    
-    // Store decision on session (NOT in normalizedData - separation of concerns)
+  if (!(session as any).patentTypePrimary || !(session as any).patentTypeComponentsHash) {
     await prisma.draftingSession.update({
       where: { id: sessionId },
       data: {
@@ -4422,12 +4658,9 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
         patentTypeComponentsHash: currentContextHash
       }
     })
-    
-    console.log(`[handleGenerateClaims] Patent type decided: ${patentTypePrimary}`)
-  } else {
-    console.log(`[handleGenerateClaims] Using existing patent type: ${patentTypePrimary}`)
   }
-  
+  console.log(`[handleGenerateClaims] Using stored patent type: ${patentTypePrimary}`)
+
   // Save userClaimRemarks if provided (stored in normalizedData - this is descriptive, not decisional)
   if (userClaimRemarks !== undefined) {
     await prisma.ideaRecord.update({
@@ -4505,45 +4738,98 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     }
     
     const claimRules = claimRulesRaw || {}
-    
-    // Get writing sample for persona-style consistency (same as drafting stage)
-    // OFF by default, user must explicitly enable in UI
-    // Read from request data (sent from frontend) - not from session
-    const usePersonaStyle = usePersonaStyleFromData === true
-    const personaSelection = personaSelectionFromData || undefined
+
+    const personaConfig = await resolveEffectivePersonaConfig(user, session, {
+      usePersonaStyle: usePersonaStyleFromData,
+      personaSelection: personaSelectionFromData
+    })
+    const usePersonaStyle = personaConfig.enabled
+    const personaSelection = personaConfig.selection
+    if (usePersonaStyle && personaSelection?.primaryPersonaId && !acceptPersonaWarnings) {
+      const personaWarnings = await getPersonaCoverageWarnings(user.id, user.tenantId, ['claims'], activeJurisdiction, personaSelection)
+      if (personaWarnings.length > 0) return personaCoverageResponse(personaWarnings)
+    }
+
     let writingSampleBlock = ''
+    let personaProvenance: Record<string, any> = {
+      claims: {
+        styleEnabled: usePersonaStyle,
+        applied: false,
+        source: usePersonaStyle ? 'none' : 'disabled'
+      }
+    }
     if (usePersonaStyle && user?.id) {
       try {
-        const writingSample = await getWritingSample(user.id, 'claims', activeJurisdiction, personaSelection)
+        const writingSample = await getWritingSample(user.id, 'claims', activeJurisdiction, personaSelection, user.tenantId)
         if (writingSample) {
           writingSampleBlock = buildWritingSampleBlock(writingSample, 'claims')
+          personaProvenance.claims = {
+            styleEnabled: true,
+            applied: true,
+            source: writingSample.source || 'persona',
+            personaId: writingSample.personaId,
+            personaName: writingSample.personaName,
+            sampleId: writingSample.sampleId,
+            sampleJurisdiction: writingSample.jurisdiction,
+            isUniversal: writingSample.isUniversal
+          }
           console.log(`[handleGenerateClaims] Writing sample found for claims (persona: ${writingSample.personaName || 'default'})`)
         } else if (personaSelection?.primaryPersonaId) {
-          console.warn(`[handleGenerateClaims] ⚠️ Persona style enabled but no sample found for claims (jurisdiction: ${activeJurisdiction})`)
+          personaProvenance.claims = {
+            styleEnabled: true,
+            applied: false,
+            source: 'none',
+            personaId: personaSelection.primaryPersonaId,
+            message: 'No claims writing sample found for selected persona.'
+          }
+          console.warn(`[handleGenerateClaims] Persona style enabled but no sample found for claims (jurisdiction: ${activeJurisdiction})`)
         }
       } catch (err) {
+        if (err instanceof PersonaAccessError) return personaAccessResponse(err)
         console.warn('[handleGenerateClaims] Failed to get writing sample:', err)
       }
     }
-    
-    // Build context from idea record or provided context
+
+    // Build context from idea record or provided context. UI edits from Stage 1
+    // are preferred, while claim-support fields stay anchored to normalization.
     const idea = session.ideaRecord || {} as any
-    const context = ideaContext || {
-      title: idea.title,
-      problem: idea.problem,
-      objectives: idea.objectives,
-      logic: idea.logic,
-      components: idea.components,
-      bestMethod: idea.bestMethod,
-      abstract: idea.abstract
+    const context = {
+      title: ideaContext?.title ?? idea.title,
+      rawIdea: ideaContext?.rawIdea ?? idea.rawInput ?? '',
+      problem: ideaContext?.problem ?? idea.problem ?? existingNormalized.problem,
+      objectives: ideaContext?.objectives ?? idea.objectives ?? existingNormalized.objectives,
+      logic: ideaContext?.logic ?? idea.logic ?? existingNormalized.logic,
+      components: ideaContext?.components ?? idea.components ?? existingNormalized.components,
+      bestMethod: ideaContext?.bestMethod ?? idea.bestMethod ?? existingNormalized.bestMethod,
+      abstract: ideaContext?.abstract ?? idea.abstract ?? existingNormalized.abstract,
+      coreInventiveConcept: ideaContext?.coreInventiveConcept ?? existingNormalized.coreInventiveConcept,
+      claimableFeatures: ideaContext?.claimableFeatures ?? existingNormalized.claimableFeatures,
+      fallbackLimitations: ideaContext?.fallbackLimitations ?? existingNormalized.fallbackLimitations,
+      doNotClaim: ideaContext?.doNotClaim ?? existingNormalized.doNotClaim,
+      sourceFactLedger: ideaContext?.sourceFactLedger ?? existingNormalized.sourceFactLedger,
+      normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings
     }
 
-    // Format components for the prompt (supports all numbering styles: 100/200, S100/S200, (a)/(b))
-    // NOTE: Intentionally exclude component type classification (MAIN_CONTROLLER, SUBSYSTEM, etc.)
-    // to prevent LLM from including these internal tags in the generated claims
     const componentsList = Array.isArray(context.components)
-      ? context.components.map((c: any) => `- ${c.name}${(c.referenceLabel || c.numeral) ? ` (${c.referenceLabel || c.numeral})` : ''}`).join('\n')
+      ? context.components.map((c: any) => {
+          const label = (c.referenceLabel || c.numeral) ? ` (${c.referenceLabel || c.numeral})` : ''
+          const desc = c.description ? `: ${c.description}` : ''
+          const details = [
+            c.inputs ? `inputs=${c.inputs}` : '',
+            c.outputs ? `outputs=${c.outputs}` : '',
+            c.dependencies ? `depends=${c.dependencies}` : '',
+            c.parent ? `parent=${c.parent}` : '',
+          ].filter(Boolean).join('; ')
+          return `- ${c.name}${label}${desc}${details ? ` [${details}]` : ''}`
+        }).join('\n')
       : ''
+    const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+      context.sourceFactLedger || existingNormalized.sourceFactLedger,
+      'SOURCE FACT LEDGER FOR CLAIM SUPPORT'
+    )
+    const normalizationWarningsBlock = buildNormalizationWarningsPromptBlock(
+      context.normalizationReviewWarnings || existingNormalized.normalizationReviewWarnings
+    )
 
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
     const ruleLines: string[] = []
@@ -4610,8 +4896,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     const mergedConstraints = mergedClaimsPrompt.constraints || []
     const constraintsBlock = mergedConstraints.length > 0 ? `CONSTRAINTS:\n${mergedConstraints.map(c => `- ${c}`).join('\n')}` : ''
 
-    // Build the claims generation prompt using base + top-up logic (consistent with drafting stage)
-    const prompt = `You are a senior patent attorney drafting the "Claims" section for a ${countryName} patent specification handled by the ${officeName}.
+    // Legacy prompt retained only as a no-op reference while the preliminary prompt is built by the helper below.
+    const legacyClaimsPrompt = () => `You are a senior patent attorney drafting the "Claims" section for a ${countryName} patent specification handled by the ${officeName}.
 - Jurisdiction: ${activeJurisdiction}
 - Tone: ${tone}
 - Voice: ${voice}
@@ -4632,6 +4918,8 @@ ${context.logic ? `Technical Logic: ${context.logic}` : ''}
 ${componentsList ? `Key Components:\n${componentsList}` : ''}
 ${context.bestMethod ? `Best Method: ${context.bestMethod}` : ''}
 ${context.abstract ? `Abstract: ${context.abstract}` : ''}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
+${normalizationWarningsBlock ? `\n${normalizationWarningsBlock}` : ''}
 
 ═══════════════════════════════════════════════════════════════════════════════
 PATENT TYPE ENFORCEMENT (MANDATORY - DO NOT DEVIATE)
@@ -4668,6 +4956,8 @@ CLAIM GENERATION REQUIREMENTS:
 6. Maintain strict antecedent basis throughout all claims
 7. Reference components by name consistently
 8. Protect the core innovation and key variations
+9. Use source fact ledger facts as source support for dependent claims, alternatives, embodiments, thresholds, fallback rules, and optional features; do not force every ledger item into Claim 1
+10. Do not add claim limitations or technical facts that are absent from the invention context and source fact ledger
 
 OUTPUT FORMAT:
 Return a JSON object with this structure:
@@ -4690,6 +4980,22 @@ Return a JSON object with this structure:
 }
 
 Return ONLY the JSON object, no markdown fencing or explanation.`
+    void legacyClaimsPrompt
+    const prompt = buildPreliminaryClaimsPrompt({
+      jurisdiction: activeJurisdiction,
+      countryName,
+      officeName,
+      tone,
+      voice,
+      avoid,
+      baseInstruction,
+      rulesBlock,
+      constraintsBlock,
+      writingSampleBlock,
+      context,
+      patentTypePrimary,
+      userClaimRemarks: existingNormalized.userClaimRemarks
+    })
 
     // Call LLM to generate claims using the proper gateway API
     const request = { headers: requestHeaders || {} }
@@ -4717,8 +5023,13 @@ Return ONLY the JSON object, no markdown fencing or explanation.`
     // Parse the LLM response. Do not silently save an empty claim set:
     // LLMs sometimes wrap valid claims in markdown/prose or return numbered text instead of JSON.
     let generatedClaims: any[] = []
+    let generatedSupportMatrix: any[] = []
+    let generatedQualityWarnings: string[] = []
     try {
-      generatedClaims = parseGeneratedClaimsFromLLMOutput(llmResult.response.output)
+      const parsedClaimsPayload = parseGeneratedClaimsPayloadFromLLMOutput(llmResult.response.output)
+      generatedClaims = parsedClaimsPayload.claims
+      generatedSupportMatrix = parsedClaimsPayload.supportMatrix
+      generatedQualityWarnings = parsedClaimsPayload.qualityWarnings
     } catch (parseErr) {
       console.error('Failed to parse generated claims:', parseErr)
       console.error('Claims LLM raw output preview:', (llmResult.response.output || '').slice(0, 1200))
@@ -4733,6 +5044,13 @@ Return ONLY the JSON object, no markdown fencing or explanation.`
 
     // Format claims as HTML for the editor
     const claimsHtml = formatDraftClaimsAsHtml(generatedClaims)
+    const claimGenerationQuality = analyzePreliminaryClaimQuality({
+      claims: generatedClaims,
+      patentTypePrimary,
+      context,
+      llmSupportMatrix: generatedSupportMatrix,
+      llmQualityWarnings: generatedQualityWarnings
+    })
 
     // Save to ideaRecord normalizedData
     const updatedNormalized = {
@@ -4741,6 +5059,7 @@ Return ONLY the JSON object, no markdown fencing or explanation.`
       claimsStructured: generatedClaims,
       claimsProvisional: claimsHtml,
       claimsStructuredProvisional: generatedClaims,
+      claimGenerationQuality,
       claimsJurisdiction: activeJurisdiction,
       claimsGeneratedAt: new Date().toISOString()
     }
@@ -4753,12 +5072,17 @@ Return ONLY the JSON object, no markdown fencing or explanation.`
     return NextResponse.json({
       claims: generatedClaims,
       claimsHtml,
+      claimGenerationQuality,
       jurisdiction: activeJurisdiction,
       patentType: patentTypePrimary, // Return patent type for UI display
+      personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
+      personaProvenance,
+      personaWarnings: [],
       tokensUsed: (llmResult.response?.outputTokens || 0) + Math.ceil(prompt.length / 4)
     })
 
   } catch (error) {
+    if (error instanceof PersonaAccessError) return personaAccessResponse(error)
     console.error('Claims generation error:', error)
     return NextResponse.json({ error: 'Failed to generate claims' }, { status: 500 })
   }
@@ -4928,7 +5252,17 @@ async function handleUnfreezeClaims(user: any, patentId: string, data: any) {
 }
 
 async function handleClaimRefinementPreview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, useAuto = true, useManual = false, selectedPatents = [], runId, additionalInstructions } = data
+  const {
+    sessionId,
+    useAuto = true,
+    useManual = false,
+    selectedPatents = [],
+    runId,
+    additionalInstructions,
+    usePersonaStyle: usePersonaStyleFromData,
+    personaSelection: personaSelectionFromData,
+    acceptPersonaWarnings
+  } = data
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
 
   const session = await prisma.draftingSession.findFirst({
@@ -4994,6 +5328,10 @@ async function handleClaimRefinementPreview(user: any, patentId: string, data: a
       return `- ${name}${numeral}${desc}`
     })
     .join('\n')
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    normalized.sourceFactLedger,
+    'SOURCE FACT LEDGER FOR CLAIM REFINEMENT SUPPORT'
+  )
 
   const threatFor = (r: any) => {
     if (r?.noveltyThreat) return String(r.noveltyThreat)
@@ -5062,6 +5400,51 @@ ${userDirectives}
     : htmlToPlainText(provisionalHtml)
 
   const mode: 'AUTO' | 'MANUAL' | 'HYBRID' = useAuto && useManual ? 'HYBRID' : useAuto ? 'AUTO' : 'MANUAL'
+  const activeJurisdiction = (session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
+  let writingSampleBlock = ''
+  let personaProvenance: Record<string, any> = {
+    claims: {
+      styleEnabled: false,
+      applied: false,
+      source: 'disabled'
+    }
+  }
+  try {
+    const personaConfig = await resolveEffectivePersonaConfig(user, session, {
+      usePersonaStyle: usePersonaStyleFromData,
+      personaSelection: personaSelectionFromData
+    })
+    if (personaConfig.enabled && personaConfig.selection?.primaryPersonaId) {
+      if (!acceptPersonaWarnings) {
+        const personaWarnings = await getPersonaCoverageWarnings(user.id, user.tenantId, ['claims'], activeJurisdiction, personaConfig.selection)
+        if (personaWarnings.length > 0) return personaCoverageResponse(personaWarnings)
+      }
+
+      const writingSample = await getWritingSample(user.id, 'claims', activeJurisdiction, personaConfig.selection, user.tenantId)
+      personaProvenance.claims = {
+        styleEnabled: true,
+        applied: false,
+        source: 'none',
+        personaId: personaConfig.selection.primaryPersonaId
+      }
+      if (writingSample) {
+        writingSampleBlock = buildWritingSampleBlock(writingSample, 'claims')
+        personaProvenance.claims = {
+          styleEnabled: true,
+          applied: true,
+          source: writingSample.source || 'persona',
+          personaId: writingSample.personaId,
+          personaName: writingSample.personaName,
+          sampleId: writingSample.sampleId,
+          sampleJurisdiction: writingSample.jurisdiction,
+          isUniversal: writingSample.isUniversal
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof PersonaAccessError) return personaAccessResponse(error)
+    throw error
+  }
 
   const prompt = `You are an expert patent attorney refining claims to preserve the broadest defensible scope while addressing cited prior art.
 
@@ -5071,9 +5454,12 @@ ${ideaBasics.problem ? `- Problem: ${ideaBasics.problem}` : ''}
 ${ideaBasics.objectives ? `- Objectives: ${ideaBasics.objectives}` : ''}
 ${ideaBasics.abstract ? `- Abstract: ${ideaBasics.abstract}` : ''}
 ${componentList ? `- Key components: ${componentList}` : ''}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
 CURRENT CLAIMS (treat as provisional unless already frozen):
 ${claimLines}
+
+${writingSampleBlock}
 
 ${autoRefBlocks ? `PATENTS SELECTED FOR CLAIM REFINEMENT (user-selected, claims must be novel over ALL of these):\n${autoRefBlocks}\n\n*** CRITICAL: Novelty must be explicitly established over EACH reference above. These are NOT general prior art - they are specifically selected references that the user wants their claims to be distinguished from. ***` : ''}
 
@@ -5083,6 +5469,7 @@ ${criticalInstructionsBlock}
 Guidelines:
 - For each claim, either KEEP_AS_IS or provide a refined_text that avoids anticipation/obviousness over the selected patents.
 - Only narrow when justified by specific references from the selected patents list. Cite them via IDs (AUTO#1, MANUAL#1, etc.).
+- Use the source fact ledger only as available source support for fallback narrowing; do not introduce limitations that are absent from the original idea ledger/context.
 - Preserve jurisdictional style loosely; maintain numbering.
 - Prefer concise edits over full rewrites when possible.
 - Each refined claim must clearly distinguish from ALL selected patents above.
@@ -5140,7 +5527,10 @@ Return ONLY valid JSON:
     selectedPatents: Array.from(preferredAuto),
     manualIncluded: !!manualText,
     additionalInstructions: userDirectives || undefined,
-    claimRefSources: mergedClaimRefSelections.length
+    claimRefSources: mergedClaimRefSelections.length,
+    personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
+    personaProvenance,
+    personaWarnings: []
   }
 
   const mergedNormalized = {
@@ -5154,7 +5544,13 @@ Return ONLY valid JSON:
   })
 
   console.log(`[claim_refinement_preview] mode=${mode}, autoRefs=${autoRefs.length}, manualIncluded=${!!manualText}`)
-  return NextResponse.json({ success: true, preview: previewPayload })
+  return NextResponse.json({
+    success: true,
+    preview: previewPayload,
+    personaStyleApplied: previewPayload.personaStyleApplied,
+    personaProvenance: previewPayload.personaProvenance,
+    personaWarnings: previewPayload.personaWarnings
+  })
 }
 
 async function handleClaimRefinementApply(user: any, patentId: string, data: any) {
@@ -5359,7 +5755,7 @@ RULES:
 3. Do NOT add numbers to components that don't exist in the provided component list
 4. Match component names intelligently (e.g., "controller" matches "main controller", "control unit" matches "controller")
 5. Reference numerals format by style:
-   - NUMERIC_BUCKET: component name (100, 200, 300... as provided)
+   - NUMERIC_BUCKET: component name (assigned numeric label as provided)
    - STEP_LABEL (PROCESS): component name (S100, S200...) as provided; do NOT convert to plain numbers
    - CONSTITUENT_LABEL (COMPOSITION): component name ((a), (b), (c)...) as provided
 6. For dependent claims, only add numerals to new components not already numbered in the referenced claim
@@ -6025,7 +6421,8 @@ async function handleProceedToComponents(user: any, patentId: string, data: any)
       id: sessionId,
       patentId,
       userId: user.id
-    }
+    },
+    include: { ideaRecord: true }
   });
 
   if (!session) {
@@ -6069,7 +6466,8 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
       id: sessionId,
       patentId,
       userId: user.id
-    }
+    },
+    include: { ideaRecord: true }
   });
 
   if (!session) {
@@ -6082,9 +6480,16 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   // Use LLM to normalize the idea
   console.log('Starting idea normalization for patent:', patentId, 'session:', sessionId);
 
-  // Only normalization blocks the response. Patent type LLM classification
-  // runs as a background task that updates the session when it completes.
-  const result = await DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, allowRefine);
+  // Stage 0 normalization now returns the broad primary patent claim type.
+  // No separate patent-type LLM call is needed.
+  const existingMode = (session.ideaRecord?.normalizedData as any)?.sourceHandlingMode
+  const effectiveAllowRefine = typeof allowRefine === 'boolean'
+    ? allowRefine
+    : existingMode === 'PRESERVE'
+      ? false
+      : true
+
+  const result = await DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, effectiveAllowRefine);
 
   if (!result.success) {
     console.error('Idea normalization failed:', result.error);
@@ -6096,37 +6501,10 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
 
   console.log('Idea normalization successful');
 
-  // Instant regex heuristic gives the UI a patent type immediately.
-  // The background LLM call below will overwrite this with a more accurate result.
-  const heuristic = DraftingService.patentTypeFallbackFromText(rawIdea, title);
-  const patentTypePrimary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' = heuristic.primary;
-  console.log(`[handleNormalizeIdea] Patent type heuristic (instant): ${patentTypePrimary}`);
-
-  // Fire-and-forget: LLM-based patent type classification runs independently.
-  // When it finishes it overwrites the heuristic value on the session.
-  const bgSessionId = sessionId;
-  const bgExtractedFields = result.extractedFields;
-  void (async () => {
-    try {
-      const llmClassification = await DraftingService.decidePatentTypeFromRawIdea(
-        rawIdea, title, areaOfInvention, user.tenantId, requestHeaders
-      );
-      console.log(`[handleNormalizeIdea/bg] LLM patent type: ${llmClassification.primary}`);
-      const bgComponents = bgExtractedFields?.components || [];
-      const bgLogic = bgExtractedFields?.logic || '';
-      await prisma.draftingSession.update({
-        where: { id: bgSessionId },
-        data: {
-          patentTypePrimary: llmClassification.primary,
-          patentTypeDecidedAt: new Date(),
-          patentTypeComponentsHash: DraftingService.generatePatentTypeContextHash(bgComponents, bgLogic)
-        }
-      });
-      console.log(`[handleNormalizeIdea/bg] Session updated with LLM patent type: ${llmClassification.primary}`);
-    } catch (err) {
-      console.warn('[handleNormalizeIdea/bg] Background patent type classification failed, heuristic value retained:', err);
-    }
-  })();
+  const patentTypePrimary = DraftingService.normalizePatentTypePrimary(
+    result.extractedFields?.patentTypePrimary || result.normalizedData?.patentTypePrimary
+  ) || DraftingService.patentTypeFallbackFromText(rawIdea, title).primary;
+  console.log(`[handleNormalizeIdea] Patent type from normalization: ${patentTypePrimary}`);
 
   // Create or update idea record
   const ideaRecord = await prisma.ideaRecord.upsert({
@@ -6199,7 +6577,7 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
 }
 
 async function handleUpdateComponentMap(user: any, patentId: string, data: any) {
-  const { sessionId, components, numberingStyleOverride } = data;
+  const { sessionId, components, numberingStyleOverride, autoAssign } = data;
 
   if (!sessionId || !components) {
     return NextResponse.json(
@@ -6264,7 +6642,8 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
       type: validTypes.includes(comp?.type) ? comp.type : 'OTHER',
       description: typeof comp?.description === 'string' ? comp.description : '',
       name: typeof comp?.name === 'string' ? comp.name : '',
-      id: typeof comp?.id === 'string' ? comp.id : `comp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+      id: typeof comp?.id === 'string' ? comp.id : `comp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      ...(autoAssign ? { numeral: undefined, referenceLabel: undefined } : {})
     };
   });
 
@@ -6330,6 +6709,59 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
   });
 }
 
+async function handleSkipFigures(user: any, patentId: string, data: any) {
+  const { sessionId } = data
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id }
+  })
+
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  const updated = await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: {
+      status: 'ANNEXURE_DRAFT',
+      figuresSkipped: true,
+      figuresSkippedAt: new Date(),
+      figureSequence: [],
+      figureSequenceFinalized: false
+    } as any
+  })
+
+  return NextResponse.json({ success: true, session: updated })
+}
+
+async function handleRestoreFigures(user: any, patentId: string, data: any) {
+  const { sessionId } = data
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id }
+  })
+
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  const updated = await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: {
+      figuresSkipped: false,
+      figuresSkippedAt: null
+    } as any
+  })
+
+  return NextResponse.json({ success: true, session: updated })
+}
+
 async function handleUpdateFigurePlan(user: any, patentId: string, data: any) {
   const { sessionId, figureNo, title, nodes, edges, description } = data;
 
@@ -6381,6 +6813,8 @@ async function handleUpdateFigurePlan(user: any, patentId: string, data: any) {
       description
     }
   });
+
+  await reactivateFiguresForSession(sessionId)
 
   // Update session status if this is the first figure
   const figureCount = await prisma.figurePlan.count({ where: { sessionId } });
@@ -7472,6 +7906,7 @@ async function handlePlanFiguresLLM(
     include: { referenceMap: true, ideaRecord: true }
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
 
   // Get active jurisdiction
   const activeJurisdiction = (session as any).activeJurisdiction || 
@@ -7482,6 +7917,10 @@ async function handlePlanFiguresLLM(
   const components = extractComponentsArray(session.referenceMap)
   const claims = idea?.claimsStructured || []
   const claimsText = idea?.claims || ''
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    idea?.sourceFactLedger,
+    'SOURCE FACT LEDGER FOR FIGURE PLANNING'
+  )
   
   // Determine invention archetype
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
@@ -7539,11 +7978,13 @@ ${idea?.problem || 'Not specified'}
 TECHNICAL SOLUTION:
 ${idea?.logic || idea?.objectives || 'Not specified'}
 
+${sourceFactLedgerBlock ? `${sourceFactLedgerBlock}\n` : ''}
+
 COMPONENTS (with reference labels):
 ${componentsContext}
 
 NOTE: Reference labels vary by patent type:
-- SYSTEM/PRODUCT: numeric (100, 200, 300...)
+- SYSTEM/PRODUCT: assigned numeric labels
 - PROCESS: step labels (S100, S200, S300...)
 - COMPOSITION: constituent labels ((a), (b), (c)...)
 
@@ -7669,7 +8110,7 @@ DO NOT INVENT NEW REFERENCE LABELS:
 - Use ONLY the reference labels that EXIST in the COMPONENTS list above
 - Every label you use MUST appear in the COMPONENTS list
 - Reference label formats vary by patent type:
-  * SYSTEM/PRODUCT: numeric (100, 200, 300...)
+  * SYSTEM/PRODUCT: assigned numeric labels
   * PROCESS: step labels (S100, S200, S300...)
   * COMPOSITION: constituent labels ((a), (b), (c)...)
 - Activity/Flow diagrams reference components that perform actions, not abstract steps
@@ -7867,6 +8308,12 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
     include: { referenceMap: true, ideaRecord: true }
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
+  const normalizedIdea = session.ideaRecord?.normalizedData as any
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    normalizedIdea?.sourceFactLedger,
+    'SOURCE FACT LEDGER FOR DIAGRAM GENERATION'
+  )
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // PLAN-BASED GENERATION (Stage 2 of two-stage approach)
@@ -7920,6 +8367,7 @@ You are a RENDERER, not an explainer.
 INPUTS (SOURCE OF TRUTH):
 - Planner suggestions (JSON): See FIGURE PLAN below
 - Component registry (use verbatim; do not invent): See COMPONENTS below
+- Source fact ledger (read-only): use only to avoid omissions of source-stated details; numbered figures still use only approved numbered components
 
 ═══════════════════════════════════════════════════════════════════════════════
 GLOBAL RULES (NON-NEGOTIABLE)
@@ -7939,6 +8387,7 @@ GLOBAL RULES (NON-NEGOTIABLE)
 AVAILABLE COMPONENTS (Use ONLY these - do not invent new ones)
 ═══════════════════════════════════════════════════════════════════════════════
 ${componentsContext}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
 ═══════════════════════════════════════════════════════════════════════════════
 FIGURE PLAN (MANDATORY - Generate exactly these figures)
@@ -8071,7 +8520,7 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
   const patentTypePrimary = (session as any).patentTypePrimary as PatentTypePrimary | null
   
   // Determine Diagram Archetype from invention type (SECONDARY enhancer)
-  const idea = session.ideaRecord?.normalizedData as any
+  const idea = normalizedIdea
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
@@ -8149,6 +8598,10 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
   if (archetype.includes('BIO') || archetype.includes('CHEMICAL')) {
     styleGuide += ' Use process flows or reaction schemas.'
     nomenclature += ' Use: Reagent, Compound, Stage, Phase, Catalyst, Reactor (and similar domain entities).'
+  }
+
+  if (!usePlan && sourceFactLedgerBlock) {
+    effectivePrompt = `${effectivePrompt}\n\n${sourceFactLedgerBlock}`
   }
 
   const finalPrompt = `${effectivePrompt}
@@ -9096,7 +9549,7 @@ TASK: Translate all human-readable text in this PlantUML diagram from ${sourceLa
 
 CRITICAL RULES:
 1. PRESERVE ALL PLANTUML SYNTAX EXACTLY - @startuml, @enduml, arrows (-->), blocks, etc.
-2. PRESERVE ALL REFERENCE NUMERALS (100, 200, 300, etc.) - these are patent reference numbers
+2. PRESERVE ALL REFERENCE NUMERALS exactly as assigned - these are patent reference numbers
 3. PRESERVE ALL ALIAS NAMES (as xxx) - only translate the display text in quotes
 4. DO NOT translate technical PlantUML keywords (rectangle, component, node, etc.)
 5. Translate ONLY the text content inside quotes and labels
@@ -9520,6 +9973,7 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
   // Verify session and pull numerals
   const session = await prisma.draftingSession.findFirst({ where: { id: sessionId, patentId, userId: user.id }, include: { referenceMap: true, figurePlans: true, diagramSources: true, ideaRecord: true } })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
 
   // Get active jurisdiction
   const activeJurisdiction = (session as any).activeJurisdiction || 
@@ -9535,6 +9989,10 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
 
   // Determine Diagram Archetype
   const idea = session.ideaRecord?.normalizedData as any
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    idea?.sourceFactLedger,
+    'SOURCE FACT LEDGER FOR DIAGRAM REGENERATION'
+  )
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
@@ -9623,6 +10081,7 @@ ${existingDiagramCode}
 AVAILABLE COMPONENTS/NUMERALS
 ═══════════════════════════════════════════════════════════════════════════════
 ${numeralsPreview}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 CRITICAL: All reference numerals MUST be wrapped in parentheses, e.g., "Controller (100)" NOT "Controller 100".
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -9656,6 +10115,7 @@ Invention Type: ${archetype}
 AVAILABLE COMPONENTS/NUMERALS
 ═══════════════════════════════════════════════════════════════════════════════
 ${numeralsPreview}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
 **NUMBERED ELEMENT RULE (STRICT):**
 - Use ONLY the provided numbered components and their numerals listed above.
@@ -9816,6 +10276,7 @@ async function handleAddFigureLLM(user: any, patentId: string, data: any, reques
 
   const session = await prisma.draftingSession.findFirst({ where: { id: sessionId, patentId, userId: user.id }, include: { referenceMap: true, figurePlans: true, ideaRecord: true } })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
 
   // Get active jurisdiction
   const activeJurisdiction = (session as any).activeJurisdiction || 
@@ -9830,6 +10291,10 @@ async function handleAddFigureLLM(user: any, patentId: string, data: any, reques
 
   // Determine Diagram Archetype
   const idea = session.ideaRecord?.normalizedData as any
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    idea?.sourceFactLedger,
+    'SOURCE FACT LEDGER FOR NEW FIGURE'
+  )
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
@@ -9847,6 +10312,7 @@ Invention Type: ${archetype}
 AVAILABLE COMPONENTS/NUMERALS
 ═══════════════════════════════════════════════════════════════════════════════
 ${numeralsPreview}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
 **NUMBERED ELEMENT RULE (STRICT):**
 - Use ONLY the provided numbered components and their numerals listed above.
@@ -10000,6 +10466,7 @@ async function handleAddFiguresLLM(user: any, patentId: string, data: any, reque
     include: { referenceMap: true, figurePlans: true, diagramSources: true, ideaRecord: true }
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
 
   // Get active jurisdiction
   const activeJurisdiction = (session as any).activeJurisdiction || 
@@ -10017,6 +10484,10 @@ async function handleAddFiguresLLM(user: any, patentId: string, data: any, reque
   }).join('; ')
   const inventionTitle = session.ideaRecord?.title || ''
   const idea = session.ideaRecord?.normalizedData as any
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    idea?.sourceFactLedger,
+    'SOURCE FACT LEDGER FOR NEW FIGURES'
+  )
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
@@ -10030,6 +10501,7 @@ Invention Type: ${archetype}
 AVAILABLE COMPONENTS/NUMERALS
 ═══════════════════════════════════════════════════════════════════════════════
 ${numeralsPreview}
+${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
 **NUMBERED ELEMENT RULE (STRICT):**
 - Use ONLY the provided numbered components and their numerals listed above.
@@ -10232,6 +10704,7 @@ async function handleCreateManualFigure(user: any, patentId: string, data: any) 
     select: { id: true, figureSequence: true, figureSequenceFinalized: true }
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
 
   // Assign number if not provided
   let no = figureNo
@@ -10325,6 +10798,7 @@ async function handleGenerateSketch(user: any, patentId: string, data: any) {
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  await reactivateFiguresForSession(sessionId)
 
   try {
     const result = await generateSketch({
@@ -10384,6 +10858,7 @@ async function handleGenerateSketchGuided(user: any, patentId: string, data: any
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  await reactivateFiguresForSession(sessionId)
 
   try {
     const result = await generateSketch({
@@ -10452,6 +10927,7 @@ async function handleRefineSketch(user: any, patentId: string, data: any) {
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  await reactivateFiguresForSession(sessionId)
 
   try {
     const result = await generateSketch({
@@ -10516,6 +10992,7 @@ async function handleModifySketch(user: any, patentId: string, data: any) {
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  await reactivateFiguresForSession(sessionId)
 
   // Verify source sketch exists and belongs to this patent
   const sourceSketch = await prisma.sketchRecord.findFirst({
@@ -10745,6 +11222,9 @@ async function handleRetrySketch(user: any, patentId: string, data: any) {
     const session = sketch.sessionId ? await prisma.draftingSession.findFirst({
       where: { id: sketch.sessionId, userId: user.id }
     }) : null
+    if (session?.id) {
+      await reactivateFiguresForSession(session.id)
+    }
 
     const result = await retrySketchGeneration(
       sketchId, 
@@ -10812,6 +11292,7 @@ async function handleGenerateFromSuggestion(user: any, patentId: string, data: a
       if (!session) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 })
       }
+      await reactivateFiguresForSession(sketch.sessionId)
     }
 
     // Import and call the generation function
@@ -11174,6 +11655,7 @@ async function handleSaveFigureSequence(user: any, patentId: string, data: any) 
     if (!session) {
       return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
     }
+    await reactivateFiguresForSession(sessionId)
 
     if (session.figureSequenceFinalized) {
       return NextResponse.json({ error: 'Sequence is finalized. Unlock to make changes.' }, { status: 400 })
@@ -11263,6 +11745,7 @@ async function handleAIArrangeFigures(user: any, patentId: string, data: any, re
     if (!session) {
       return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
     }
+    await reactivateFiguresForSession(sessionId)
 
     // Fallback: If no sketches via session relation, load from patent directly
     let loadedSketches = session.sketchRecords || []
@@ -11505,6 +11988,7 @@ async function handleFinalizeFigureSequence(user: any, patentId: string, data: a
     if (!session) {
       return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
     }
+    await reactivateFiguresForSession(sessionId)
 
     const sequence = session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>
     if (!sequence || sequence.length === 0) {
@@ -12041,6 +12525,7 @@ async function handleUploadDiagram(user: any, patentId: string, data: any) {
       { status: 404 }
     );
   }
+  await reactivateFiguresForSession(sessionId)
 
   // Ensure a figurePlan exists for this figure number (some uploads may come first)
   let figurePlanId: string | null = null
@@ -12183,6 +12668,7 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
     figureSequence: sequenceMeta?.figureSequence ?? (sessionWithSketches as any).figureSequence,
     figureSequenceFinalized: sequenceMeta?.figureSequenceFinalized ?? (sessionWithSketches as any).figureSequenceFinalized
   }
+  const figuresSkipped = areFiguresSkipped(session)
   // Determine effective jurisdiction (Stage 3.7b)
   const effectiveJurisdiction = (jurisdiction || session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
   const preferredLanguage = getPreferredLanguageForJurisdiction(session, effectiveJurisdiction)
@@ -12241,7 +12727,7 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
       fieldOfInvention: result.draft?.fieldOfInvention || '',
       background: result.draft?.background || '',
       summary: result.draft?.summary || '',
-      briefDescriptionOfDrawings: result.draft?.briefDescriptionOfDrawings || '',
+      briefDescriptionOfDrawings: figuresSkipped ? '' : (result.draft?.briefDescriptionOfDrawings || ''),
       detailedDescription: result.draft?.detailedDescription || '',
       bestMethod: result.draft?.bestMethod || '',
       claims: result.draft?.claims || '',
@@ -12501,7 +12987,16 @@ async function handleDeleteAnnexureDraft(user: any, patentId: string, data: any)
 
 // New: Generate specific annexure sections without persisting (e.g., ["title","abstract"]) with backend debug steps
 async function handleGenerateSections(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, sections, instructions, selectedPatents, jurisdiction } = data
+  const {
+    sessionId,
+    sections,
+    instructions,
+    selectedPatents,
+    jurisdiction,
+    usePersonaStyle: usePersonaStyleFromData,
+    personaSelection: personaSelectionFromData,
+    acceptPersonaWarnings
+  } = data
 
   if (!sessionId || !Array.isArray(sections) || sections.length === 0) {
     return NextResponse.json({ error: 'sessionId and sections[] are required' }, { status: 400 })
@@ -12551,18 +13046,12 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     figureSequenceFinalized: sequenceMeta?.figureSequenceFinalized ?? (session as any).figureSequenceFinalized
   }
 
-  // Example-based style mimicry via Writing Personas (new system)
-  // OFF by default, user must explicitly enable in UI
-  // When enabled, DraftingService fetches user's writing samples and injects them into prompts
-  const usePersonaStyle = (data && typeof data.usePersonaStyle === 'boolean') ? Boolean(data.usePersonaStyle) : false
-  
-  // Extract persona selection for multi-persona support (primary + secondary styles)
-  const personaSelection = data?.personaSelection || undefined
-  
   // Use provided instructions directly (no legacy style injection)
   const mergedInstructions: Record<string, string> = { ...(instructions || {}) }
 
   const effectiveJurisdiction = (jurisdiction || session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
+  const effectiveSections = filterDrawingSectionKeys(session, sections)
+  const skippedDrawingSections = sections.filter((section: string) => !effectiveSections.includes(section))
 
   // Check for frozen claims - use them instead of regenerating
   const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
@@ -12572,15 +13061,40 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
   const claimsJurisdiction = normalizedData.claimsJurisdiction || effectiveJurisdiction
   
   // If claims are frozen and user is trying to generate claims, use frozen claims instead
-  let sectionsToGenerate = [...sections]
+  let sectionsToGenerate = [...effectiveSections]
   let frozenClaimsUsed = false
   
-  if (claimsFrozen && sections.includes('claims')) {
+  if (claimsFrozen && effectiveSections.includes('claims')) {
     // Remove 'claims' from sections to generate - we'll use frozen claims
-    sectionsToGenerate = sections.filter((s: string) => s !== 'claims')
+    sectionsToGenerate = effectiveSections.filter((s: string) => s !== 'claims')
     frozenClaimsUsed = true
     console.log(`[generateSections] Using frozen claims from Stage 1 (frozen at: ${normalizedData.claimsApprovedAt})`)
   }
+
+  let personaConfig: { enabled: boolean; selection?: PersonaSelection } = { enabled: false, selection: undefined }
+  try {
+    personaConfig = await resolveEffectivePersonaConfig(user, session, {
+      usePersonaStyle: usePersonaStyleFromData,
+      personaSelection: personaSelectionFromData
+    })
+
+    if (personaConfig.enabled && personaConfig.selection?.primaryPersonaId && sectionsToGenerate.length > 0 && !acceptPersonaWarnings) {
+      const personaWarnings = await getPersonaCoverageWarnings(
+        user.id,
+        user.tenantId,
+        sectionsToGenerate,
+        effectiveJurisdiction,
+        personaConfig.selection
+      )
+      if (personaWarnings.length > 0) return personaCoverageResponse(personaWarnings)
+    }
+  } catch (error) {
+    if (error instanceof PersonaAccessError) return personaAccessResponse(error)
+    throw error
+  }
+
+  const usePersonaStyle = personaConfig.enabled
+  const personaSelection = personaConfig.selection
 
   // Load latest draft for this jurisdiction (if any) and inject into session for context
   const lastDraftForJurisdiction = await prisma.annexureDraft.findFirst({
@@ -12601,8 +13115,16 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
 
   // Only generate sections that aren't using frozen claims
   let result: any = { success: true, generated: {}, debugSteps: [] }
+  if (skippedDrawingSections.length > 0) {
+    result.debugSteps.push({
+      step: 'figureless_sections_skipped',
+      status: 'ok',
+      meta: { skippedSections: skippedDrawingSections }
+    })
+  }
   
   if (sectionsToGenerate.length > 0) {
+    const initialDebugSteps = result.debugSteps || []
     result = await DraftingService.generateSections(
       sessionWithDrafts,
       sectionsToGenerate,
@@ -12613,10 +13135,17 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
       effectiveJurisdiction,
       preferredLanguage
     )
+    result.debugSteps = [...initialDebugSteps, ...(result.debugSteps || [])]
     if (!result.success) {
       const statusCode = result.retryAfter ? 429 : 400
       const headers = result.retryAfter ? { 'Retry-After': result.retryAfter.toString() } : undefined
-      return NextResponse.json({ error: result.error, debugSteps: result.debugSteps }, { status: statusCode, headers })
+      return NextResponse.json({
+        error: result.error,
+        debugSteps: result.debugSteps,
+        personaStyleApplied: result.personaStyleApplied || false,
+        personaProvenance: result.personaProvenance || {},
+        personaWarnings: result.personaWarnings || []
+      }, { status: statusCode, headers })
     }
   }
   
@@ -12644,6 +13173,17 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     
     result.generated = result.generated || {}
     result.generated.claims = claimsForDraft
+    result.personaProvenance = {
+      ...(result.personaProvenance || {}),
+      claims: {
+        styleEnabled: usePersonaStyle,
+        applied: false,
+        source: 'frozen_claims',
+        personaId: personaSelection?.primaryPersonaId,
+        message: 'Frozen claims were reused unchanged; persona style was not applied to claims.'
+      }
+    }
+    result.personaStyleApplied = Object.values(result.personaProvenance).some((p: any) => p?.applied)
     result.debugSteps = result.debugSteps || []
     result.debugSteps.push({ 
       step: 'frozen_claims_used', 
@@ -12666,6 +13206,9 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     
     // Normalize all generated keys using database-driven alias resolution
     const normalizedGenerated = result.generated ? await normalizeSectionKeys(result.generated as Record<string, any>) : {}
+    if (areFiguresSkipped(session)) {
+      delete (normalizedGenerated as Record<string, any>).briefDescriptionOfDrawings
+    }
     
     if (last && Object.keys(normalizedGenerated).length > 0) {
       const updateData: any = {}
@@ -12771,6 +13314,9 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
           debugSteps: result.debugSteps, 
           llmMeta: result.llmMeta,
           warnings: result.warnings,
+          personaStyleApplied: result.personaStyleApplied || false,
+          personaProvenance: result.personaProvenance || {},
+          personaWarnings: result.personaWarnings || [],
           quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
           quotaExceeded: true
         })
@@ -12786,7 +13332,10 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     generated: result.generated, 
     debugSteps: result.debugSteps, 
     llmMeta: result.llmMeta,
-    warnings: result.warnings // Context warnings (prior art, figures, components missing)
+    warnings: result.warnings, // Context warnings (prior art, figures, components missing)
+    personaStyleApplied: result.personaStyleApplied || false,
+    personaProvenance: result.personaProvenance || {},
+    personaWarnings: result.personaWarnings || []
   })
 }
 
@@ -12848,7 +13397,8 @@ async function handleCheckWarnings(user: any, patentId: string, data: any, reque
   const hasPriorArt = hasConfigSelectedPatents || hasManualPriorArt || hasUserSelectedPatents
 
   // Check figures availability
-  const hasFigures = !!((baseSession.figurePlans && baseSession.figurePlans.length > 0) ||
+  const figuresSkipped = areFiguresSkipped(baseSession)
+  const hasFigures = !figuresSkipped && !!((baseSession.figurePlans && baseSession.figurePlans.length > 0) ||
                        (baseSession.sketchRecords && baseSession.sketchRecords.length > 0))
 
   // Check components availability
@@ -12870,7 +13420,7 @@ async function handleCheckWarnings(user: any, patentId: string, data: any, reque
         })
       }
 
-      if (contextReq.requiresFigures && !hasFigures) {
+      if (!figuresSkipped && contextReq.requiresFigures && !hasFigures) {
         warnings.push({
           section,
           type: 'figures',
@@ -12918,6 +13468,9 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
   
   // Normalize patch keys using database-driven alias resolution
   const normalizedPatch = await normalizeSectionKeys(patch as Record<string, any>)
+  if (areFiguresSkipped(session)) {
+    delete (normalizedPatch as Record<string, any>).briefDescriptionOfDrawings
+  }
 
   // Get previous extra sections (extraSections is a JSON column for scalable section storage)
   const prevExtraSections = ((last as any)?.extraSections as Record<string, string>) || {}
@@ -12928,7 +13481,7 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
     fieldOfInvention: last?.fieldOfInvention || null,
     background: last?.background || null,
     summary: last?.summary || null,
-    briefDescriptionOfDrawings: last?.briefDescriptionOfDrawings || null,
+    briefDescriptionOfDrawings: areFiguresSkipped(session) ? null : (last?.briefDescriptionOfDrawings || null),
     detailedDescription: last?.detailedDescription || null,
     bestMethod: last?.bestMethod || null,
     claims: last?.claims || null,
@@ -12958,7 +13511,7 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
     extraSections.technicalSolution ? `TECHNICAL SOLUTION\n\n${extraSections.technicalSolution}` : '',
     extraSections.advantageousEffects ? `ADVANTAGEOUS EFFECTS\n\n${extraSections.advantageousEffects}` : '',
     merged.summary ? `SUMMARY\n\n${merged.summary}` : '',
-    merged.briefDescriptionOfDrawings ? `BRIEF DESCRIPTION OF DRAWINGS\n\n${merged.briefDescriptionOfDrawings}` : '',
+    !areFiguresSkipped(session) && merged.briefDescriptionOfDrawings ? `BRIEF DESCRIPTION OF DRAWINGS\n\n${merged.briefDescriptionOfDrawings}` : '',
     merged.detailedDescription ? `DETAILED DESCRIPTION\n\n${merged.detailedDescription}` : '',
     extraSections.modeOfCarryingOut ? `MODE(S) FOR CARRYING OUT THE INVENTION\n\n${extraSections.modeOfCarryingOut}` : '',
     merged.bestMethod ? `BEST METHOD\n\n${merged.bestMethod}` : '',
@@ -12983,7 +13536,7 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
       fieldOfInvention: merged.fieldOfInvention || undefined,
       background: merged.background || undefined,
       summary: merged.summary || undefined,
-      briefDescriptionOfDrawings: merged.briefDescriptionOfDrawings || undefined,
+      briefDescriptionOfDrawings: areFiguresSkipped(session) ? undefined : (merged.briefDescriptionOfDrawings || undefined),
       detailedDescription: merged.detailedDescription || undefined,
       bestMethod: merged.bestMethod || undefined,
       claims: merged.claims || undefined,
@@ -13241,6 +13794,7 @@ async function handleGenerateReferenceDraft(
     figureSequence: sequenceMeta?.figureSequence ?? (sessionData as any).figureSequence,
     figureSequenceFinalized: sequenceMeta?.figureSequenceFinalized ?? (sessionData as any).figureSequenceFinalized
   }
+  const figuresSkipped = areFiguresSkipped(session)
 
   // Get the selected jurisdictions (filter out 'REFERENCE' pseudo-jurisdiction)
   const selectedJurisdictions = (Array.isArray(session!.draftingJurisdictions) ? session!.draftingJurisdictions : [])
@@ -13298,7 +13852,7 @@ async function handleGenerateReferenceDraft(
 
   // Build full text for storage (only include generated sections)
   const fullDraftText = Object.entries(result.draft)
-    .filter(([_, value]) => value && value.trim()) // Only include non-empty sections
+    .filter(([key, value]) => (!figuresSkipped || !isDrawingSectionKey(key)) && value && value.trim()) // Only include non-empty sections
     .map(([key, value]) => `## ${key}\n\n${value}`)
     .join('\n\n---\n\n')
 
@@ -13319,7 +13873,7 @@ async function handleGenerateReferenceDraft(
       fieldOfInvention: result.draft.fieldOfInvention || '',
       background: result.draft.background || '',
       summary: result.draft.summary || '',
-      briefDescriptionOfDrawings: result.draft.briefDescriptionOfDrawings || '',
+      briefDescriptionOfDrawings: figuresSkipped ? '' : (result.draft.briefDescriptionOfDrawings || ''),
       detailedDescription: result.draft.detailedDescription || '',
       bestMethod: result.draft.bestMethod || result.draft.bestMode || '',
       claims: result.draft.claims || '',
@@ -13419,7 +13973,11 @@ async function handleGetReferenceSections(
 
   // Import and use getReferenceDraftSections
   const { getReferenceDraftSections } = await import('@/lib/multi-jurisdiction-service')
-  const { sections, sectionDetails } = await getReferenceDraftSections(selectedJurisdictions)
+  const referenceSections = await getReferenceDraftSections(selectedJurisdictions)
+  const sections = filterDrawingSectionKeys(session, referenceSections.sections)
+  const sectionDetails = Object.fromEntries(
+    Object.entries(referenceSections.sectionDetails || {}).filter(([key]) => !isDrawingSectionKey(key))
+  )
 
   // Get existing reference draft sections (if any)
   const existingDraft = await prisma.annexureDraft.findFirst({
@@ -13520,6 +14078,18 @@ async function handleGenerateReferenceSection(
     figureSequence: sequenceMeta?.figureSequence ?? (sessionData as any).figureSequence,
     figureSequenceFinalized: sequenceMeta?.figureSequenceFinalized ?? (sessionData as any).figureSequenceFinalized
   }
+  const figuresSkipped = areFiguresSkipped(session)
+  if (figuresSkipped && isDrawingSectionKey(sectionKey)) {
+    return NextResponse.json({
+      success: true,
+      sectionKey,
+      content: '',
+      skipped: true,
+      allSectionsComplete: false,
+      completedCount: 0,
+      requiredCount: 0
+    })
+  }
 
   const selectedJurisdictions = (Array.isArray(session.draftingJurisdictions) ? session.draftingJurisdictions : [])
     .filter((j: string) => j && j.toUpperCase() !== 'REFERENCE')
@@ -13541,7 +14111,7 @@ async function handleGenerateReferenceSection(
       ...(existingDraft.fieldOfInvention ? { fieldOfInvention: existingDraft.fieldOfInvention } : {}),
       ...(existingDraft.background ? { background: existingDraft.background } : {}),
       ...(existingDraft.summary ? { summary: existingDraft.summary } : {}),
-      ...(existingDraft.briefDescriptionOfDrawings ? { briefDescriptionOfDrawings: existingDraft.briefDescriptionOfDrawings } : {}),
+      ...(!figuresSkipped && existingDraft.briefDescriptionOfDrawings ? { briefDescriptionOfDrawings: existingDraft.briefDescriptionOfDrawings } : {}),
       ...(existingDraft.detailedDescription ? { detailedDescription: existingDraft.detailedDescription } : {}),
       ...(existingDraft.bestMethod ? { bestMethod: existingDraft.bestMethod, bestMode: existingDraft.bestMethod } : {}),
       ...(existingDraft.claims ? { claims: existingDraft.claims } : {}),
@@ -13655,7 +14225,8 @@ async function handleGenerateReferenceSection(
   // Check if all required sections are now complete
   // Get the list of required sections for the selected jurisdictions
   const { getReferenceDraftSections } = await import('@/lib/multi-jurisdiction-service')
-  const { sections: requiredSections } = await getReferenceDraftSections(selectedJurisdictions)
+  const { sections: rawRequiredSections } = await getReferenceDraftSections(selectedJurisdictions)
+  const requiredSections = filterDrawingSectionKeys(session, rawRequiredSections)
   
   // Check if all required sections have content in newRawDraft
   const completedSections = Object.keys(newRawDraft).filter(k => 
@@ -13737,6 +14308,7 @@ async function handleTranslateToJurisdiction(
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  const figuresSkipped = areFiguresSkipped(session)
 
   // Verify reference draft exists
   if (!session.referenceDraftComplete || !session.referenceDraftId) {
@@ -13789,6 +14361,9 @@ async function handleTranslateToJurisdiction(
     // Additional optional superset sections (EP/DE)
     listOfNumerals: extraSections.listOfNumerals || referenceDraft.listOfNumerals || ''
   }
+  if (figuresSkipped) {
+    delete (rawDraft as Record<string, any>).briefDescriptionOfDrawings
+  }
 
   // Translate to target jurisdiction with language support
   const result = await translateReferenceDraft(rawDraft, targetCode, resolvedLanguage, user.tenantId, requestHeaders)
@@ -13801,11 +14376,15 @@ async function handleTranslateToJurisdiction(
   }
 
   // Validate the translated draft
+  if (figuresSkipped) {
+    delete (result.draft as Record<string, any>).briefDescriptionOfDrawings
+  }
   const validationIssues = await validateDraft(result.draft, targetCode)
   const hasErrors = validationIssues.some(i => i.type === 'error')
 
   // Build full text
   const fullDraftText = Object.entries(result.draft)
+    .filter(([key]) => !figuresSkipped || !isDrawingSectionKey(key))
     .map(([key, value]) => `## ${key}\n\n${value}`)
     .join('\n\n---\n\n')
 
@@ -13832,7 +14411,7 @@ async function handleTranslateToJurisdiction(
       fieldOfInvention: mappedDraft.fieldOfInvention || mappedDraft.field || result.draft.field || '',
       background: mappedDraft.background || result.draft.background || '',
       summary: mappedDraft.summary || result.draft.summary || '',
-      briefDescriptionOfDrawings: mappedDraft.briefDescriptionOfDrawings || result.draft.briefDescriptionOfDrawings || '',
+      briefDescriptionOfDrawings: figuresSkipped ? '' : (mappedDraft.briefDescriptionOfDrawings || result.draft.briefDescriptionOfDrawings || ''),
       detailedDescription: mappedDraft.detailedDescription || result.draft.detailedDescription || '',
       bestMethod: mappedDraft.bestMethod || result.draft.bestMethod || '',
       claims: mappedDraft.claims || result.draft.claims || '',
@@ -13935,8 +14514,28 @@ async function handleValidateDraft(user: any, patentId: string, data: any) {
     }
   }
 
+  const figuresSkipped = areFiguresSkipped(session)
+  const draftForValidation = { ...draftToValidate }
+  if (figuresSkipped) {
+    delete draftForValidation.briefDescriptionOfDrawings
+  }
+
   // Run validation
-  const issues = await validateDraft(draftToValidate, jurisdiction.toUpperCase())
+  const issues = await validateDraft(draftForValidation, jurisdiction.toUpperCase())
+  if (figuresSkipped) {
+    const disabledFigureRef = /\b(?:FIG\.?\s*\d+|Figure\s+\d+|drawings?|diagrams?|sketches?)\b/i
+    for (const [sectionKey, content] of Object.entries(draftToValidate)) {
+      if (sectionKey === 'briefDescriptionOfDrawings') continue
+      if (disabledFigureRef.test(String(content || ''))) {
+        issues.push({
+          sectionKey,
+          type: 'error',
+          rule: 'figurelessReferences',
+          message: 'Figureless draft mode is enabled, but this section references figures, drawings, diagrams, or sketches.'
+        })
+      }
+    }
+  }
   
   return NextResponse.json({
     success: true,
@@ -14003,6 +14602,7 @@ async function handleRunAIReview(
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  const figuresSkipped = areFiguresSkipped(session)
 
   const code = jurisdiction.toUpperCase()
 
@@ -14034,15 +14634,21 @@ async function handleRunAIReview(
   if (Object.keys(draftContent).length === 0) {
     return NextResponse.json({ error: 'No draft content available for review' }, { status: 400 })
   }
+  if (figuresSkipped) {
+    draftContent = {
+      ...draftContent,
+      briefDescriptionOfDrawings: ''
+    }
+  }
 
   // ============================================================================
   // BUILD FIGURES IN USER-ARRANGED SEQUENCE ORDER
   // The figureSequence contains the user's preferred order of diagrams + sketches
   // ============================================================================
-  const figureSequence = session.figureSequence as any[] || []
-  const figurePlans = session!.figurePlans || []
-  const diagramSources = session!.diagramSources || []
-  const sketchRecords: SessionSketchRecord[] = ((session as any).sketchRecords || []).filter((s: any) => s.status === 'SUCCESS' && !s.isDeleted)
+  const figureSequence = figuresSkipped ? [] : (session.figureSequence as any[] || [])
+  const figurePlans = figuresSkipped ? [] : (session!.figurePlans || [])
+  const diagramSources = figuresSkipped ? [] : (session!.diagramSources || [])
+  const sketchRecords: SessionSketchRecord[] = figuresSkipped ? [] : ((session as any).sketchRecords || []).filter((s: any) => s.status === 'SUCCESS' && !s.isDeleted)
 
   // Build maps for quick lookup
   const figurePlanMap = new Map(figurePlans.map((fp: any) => [fp.id, fp]))
@@ -14182,6 +14788,7 @@ async function handleRunAIReview(
   const reviewResult = await runAIReview(
     {
       draft: draftContent,
+      figuresSkipped,
       figures,
       sketches,
       jurisdiction: code,
@@ -14343,6 +14950,12 @@ async function handleApplyAIFix(
   if (!session) {
     return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   }
+  const figuresSkipped = areFiguresSkipped(session)
+  if (figuresSkipped && isDrawingSectionKey(sectionKey)) {
+    return NextResponse.json({
+      error: 'Drawing sections are disabled for this figureless draft.'
+    }, { status: 400 })
+  }
 
   const code = jurisdiction.toUpperCase()
 
@@ -14363,7 +14976,7 @@ async function handleApplyAIFix(
   }
 
   // Extract figures (PlantUML) from diagram sources
-  const figures = (session!.diagramSources || []).map((ds: any) => ({
+  const figures = figuresSkipped ? [] : (session!.diagramSources || []).map((ds: any) => ({
     figureNo: ds.figureNo,
     title: `Figure ${ds.figureNo}`,
     plantuml: ds.plantumlCode || ''
@@ -14400,7 +15013,8 @@ async function handleApplyAIFix(
   // Build the fix prompt with full context including diagrams
   const fixPrompt = buildFixPrompt(content, normalizedIssue, {
     relatedContent,
-    figures: normalizedIssue.category === 'diagram' ? figures : undefined, // Only include diagrams for diagram-related issues
+    figures: !figuresSkipped && normalizedIssue.category === 'diagram' ? figures : undefined, // Only include diagrams for diagram-related issues
+    figuresSkipped,
     components,
     numberingStyle
   })

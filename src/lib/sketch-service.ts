@@ -349,7 +349,7 @@ function getLabelingRulesForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP_LABEL
 • Place labels clearly near their corresponding components`
     case 'NUMERIC_BUCKET':
     default:
-      return `• ONLY numeric reference labels are allowed (#100, #200, #300, etc.)
+      return `• ONLY the assigned numeric reference labels are allowed
 • Use the EXACT reference labels provided in the component list
 • NO alphabetic words or text descriptions may appear ANYWHERE in the drawing
 • NO part names, titles, or descriptors in the drawing
@@ -368,7 +368,7 @@ function getComplianceChecklistForStyle(numberingStyle: 'NUMERIC_BUCKET' | 'STEP
     ? 'S100, S200, etc.' 
     : numberingStyle === 'CONSTITUENT_LABEL' 
       ? '(a), (b), (c), etc.' 
-      : '#100, #200, etc.'
+      : 'assigned numeric labels'
   
   return `✔ Only listed components shown (no extras)
 ✔ Reference labels only (${labelExample}) — use exactly the labels from the provided list
@@ -496,7 +496,7 @@ ${context.keyComponents.map((c, i) => `- ${c}`).join('\n')}
     prompt += `REFERENCE LABELS (use ONLY these as labels):
 ${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} → ${name}`).join('\n')}
 
-IMPORTANT: In the drawing, use ONLY the reference labels shown above (100/200 for products, S100/S200 for processes, (a)/(b) for compositions), NOT the component names.
+IMPORTANT: In the drawing, use ONLY the exact reference labels shown above (assigned numeric labels for products/systems, S100/S200 for processes, (a)/(b) for compositions), NOT the component names.
 `
   }
 
@@ -580,7 +580,7 @@ INSTRUCTION PRIORITY (when user requests conflict with rules)
 
 EXAMPLES OF WHAT TO IGNORE:
 - User asks for color → Generate black and white only
-- User asks for text labels → Use reference labels only (${context.numberingStyle === 'STEP_LABEL' ? 'S100, S200...' : context.numberingStyle === 'CONSTITUENT_LABEL' ? '(a), (b), (c)...' : '#100, #200...'})
+- User asks for text labels → Use reference labels only (${context.numberingStyle === 'STEP_LABEL' ? 'S100, S200...' : context.numberingStyle === 'CONSTITUENT_LABEL' ? '(a), (b), (c)...' : 'the assigned numeric labels'})
 - User asks for components not in context → Do not add them
 - User asks for shading/gradients → Use line art only`
 }
@@ -654,7 +654,7 @@ CRITICAL: Convert ALL text labels in the uploaded sketch to the reference labels
     ? 'step labels (S100, S200, etc.)' 
     : context.numberingStyle === 'CONSTITUENT_LABEL' 
       ? 'constituent labels ((a), (b), (c), etc.)' 
-      : 'numeric reference labels (#100, #200, etc.)'
+      : 'assigned numeric reference labels'
 
   prompt += `═══════════════════════════════════════════════════════════════════════════════
 REFINEMENT TASKS
@@ -691,7 +691,7 @@ ${userPrompt}
     ? 'S100, S200, etc.' 
     : context.numberingStyle === 'CONSTITUENT_LABEL' 
       ? '(a), (b), (c), etc.' 
-      : '#100, #200, etc.'
+      : 'assigned numeric labels'
 
   prompt += `
 ═══════════════════════════════════════════════════════════════════════════════
@@ -742,7 +742,7 @@ ${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} →
     ? 'step labels (S100, S200, etc.)' 
     : context.numberingStyle === 'CONSTITUENT_LABEL' 
       ? 'constituent labels ((a), (b), (c), etc.)' 
-      : 'numeric reference labels (#100, #200, etc.)'
+      : 'assigned numeric reference labels'
 
   prompt += `═══════════════════════════════════════════════════════════════════════════════
 MODIFICATION INSTRUCTIONS
@@ -1800,7 +1800,7 @@ OFFICIAL REFERENCE LABELS (Use EXACTLY these labels)
 ${Object.entries(context.referenceNumerals).map(([label, name]) => `${label} → ${name}`).join('\n')}
 
 LABELING RULES:
-• Use ONLY the reference labels shown above (e.g., 100/200 for products, S100/S200 for processes, (a)/(b) for compositions)
+• Use ONLY the reference labels shown above (assigned numeric labels for products/systems, S100/S200 for processes, (a)/(b) for compositions)
 • NO text labels, part names, or descriptions in the drawing
 • NO invented labels for unlisted components
 • Each label must point to exactly the component it represents

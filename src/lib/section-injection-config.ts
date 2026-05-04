@@ -10,6 +10,9 @@
  * - Claim 1 is the legal truth once available
  */
 
+import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
+import { buildFigurelessDraftGuard } from '@/lib/figure-availability'
+
 export type Claim1Mode = 'bindingAnchor' | 'constraintOnly' | 'off'
 
 export interface SectionInjectionConfig {
@@ -458,9 +461,7 @@ export function buildNormalizedDataBlock(
   // Solution
   const solution = ideaData.solution || nd.solution || ideaData.description
   if (solution && typeof solution === 'string' && solution.trim()) {
-    // Truncate very long solutions
-    const truncated = solution.length > 500 ? solution.substring(0, 500) + '...' : solution
-    parts.push(`Solution: ${truncated.trim()}`)
+    parts.push(`Solution: ${solution.trim()}`)
   }
 
   // Field of Relevance
@@ -478,20 +479,35 @@ export function buildNormalizedDataBlock(
   // Components (if array)
   const components = ideaData.components || nd.components
   if (Array.isArray(components) && components.length > 0) {
-    const componentNames = components
-      .map((c: any) => c?.name || c)
-      .filter((n: any) => n && typeof n === 'string')
-      .slice(0, 10) // Limit to 10 components
-    if (componentNames.length > 0) {
-      parts.push(`Key Components: ${componentNames.join(', ')}`)
+    const componentLines = components
+      .map((c: any) => {
+        if (typeof c === 'string') return c.trim()
+        if (!c || typeof c !== 'object') return ''
+        const name = c.name || c.title || c.component
+        if (!name || typeof name !== 'string') return ''
+        const label = c.referenceLabel || c.numeral ? ` (${c.referenceLabel || c.numeral})` : ''
+        const description = c.description ? `: ${c.description}` : ''
+        const metadata = [
+          c.parent ? `parent=${c.parent}` : '',
+          typeof c.level === 'number' ? `level=${c.level}` : '',
+          c.inputs ? `inputs=${c.inputs}` : '',
+          c.outputs ? `outputs=${c.outputs}` : '',
+          c.dependencies ? `dependencies=${c.dependencies}` : '',
+          c.conditions ? `conditions=${c.conditions}` : '',
+          c.alternatives ? `alternatives=${c.alternatives}` : '',
+        ].filter(Boolean).join('; ')
+        return `- ${name.trim()}${label}${description}${metadata ? ` [${metadata}]` : ''}`
+      })
+      .filter(Boolean)
+    if (componentLines.length > 0) {
+      parts.push(`Key Components:\n${componentLines.join('\n')}`)
     }
   }
 
   // Logic/Process Flow
   const logic = ideaData.logic || nd.logic
   if (logic && typeof logic === 'string' && logic.trim()) {
-    const truncated = logic.length > 300 ? logic.substring(0, 300) + '...' : logic
-    parts.push(`Process Logic: ${truncated.trim()}`)
+    parts.push(`Process Logic: ${logic.trim()}`)
   }
 
   // Inputs
@@ -509,8 +525,15 @@ export function buildNormalizedDataBlock(
   // Best Method (brief)
   const bestMethod = ideaData.bestMethod || nd.bestMethod
   if (bestMethod && typeof bestMethod === 'string' && bestMethod.trim()) {
-    const truncated = bestMethod.length > 200 ? bestMethod.substring(0, 200) + '...' : bestMethod
-    parts.push(`Best Method: ${truncated.trim()}`)
+    parts.push(`Best Method: ${bestMethod.trim()}`)
+  }
+
+  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+    ideaData.sourceFactLedger || nd.sourceFactLedger,
+    'SOURCE FACT LEDGER (READ-ONLY SOURCE SUPPORT)'
+  )
+  if (sourceFactLedgerBlock) {
+    parts.push(sourceFactLedgerBlock)
   }
 
   // If no parts, return empty (no header, no placeholder)
@@ -631,11 +654,16 @@ export function buildUniversalDraftingBundle(
 export function buildAntiHallucinationGuards(
   hasFigures: boolean,
   hasPriorArt: boolean,
-  hasComponents: boolean
+  hasComponents: boolean,
+  options?: { figuresSkipped?: boolean }
 ): string {
   const guards: string[] = []
 
-  if (!hasFigures) {
+  if (options?.figuresSkipped) {
+    guards.push(buildFigurelessDraftGuard())
+  }
+
+  if (!options?.figuresSkipped && !hasFigures) {
     guards.push('• Do NOT invent figure numbers or titles that are not provided.')
   }
 
@@ -896,4 +924,3 @@ export function validateClaim1Extraction(
   
   return { valid, actual, expected: expectedClaim1Text }
 }
-

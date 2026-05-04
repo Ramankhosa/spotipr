@@ -67,6 +67,11 @@ import {
   isClaim1Available,
   getSectionInjectionConfig
 } from '@/lib/section-injection-config'
+import {
+  areFiguresSkipped,
+  filterDrawingSectionKeys,
+  isDrawingSectionKey
+} from '@/lib/figure-availability'
 import crypto from 'crypto'
 
 // ============================================================================
@@ -219,6 +224,9 @@ export function getFiguresForJurisdiction(
   // Validate inputs
   if (!session) {
     console.warn('[getFiguresForJurisdiction] Session is null/undefined - returning empty figures')
+    return []
+  }
+  if (areFiguresSkipped(session)) {
     return []
   }
   
@@ -1253,6 +1261,7 @@ export async function generateReferenceDraft(
   frozenClaimsText?: string
 ): Promise<ReferenceDraftResultExtended> {
   try {
+    const figuresSkipped = areFiguresSkipped(session)
     const idea = session.ideaRecord || {}
     const referenceMap = session.referenceMap || { components: [] }
     // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
@@ -1415,14 +1424,21 @@ export async function generateReferenceDraft(
       figures = [...planFigures, ...sketchFigures]
       console.log(`[ReferenceDraft] Fallback mode: ${planFigures.length} diagrams + ${sketchFigures.length} sketches`)
     }
+    if (figuresSkipped) {
+      figures = []
+    }
 
     // Determine the dynamic superset based on selected jurisdictions
     const selectedJurisdictions = jurisdictions?.length 
       ? jurisdictions 
       : (session.draftingJurisdictions || ['US']) // Fallback to session jurisdictions or US
     
-    const { sections: dynamicSections, sectionDetails, jurisdictionMappings } = 
+    let { sections: dynamicSections, sectionDetails, jurisdictionMappings } =
       await computeDynamicSuperset(selectedJurisdictions)
+    dynamicSections = filterDrawingSectionKeys(session, dynamicSections)
+    sectionDetails = Object.fromEntries(
+      Object.entries(sectionDetails).filter(([key]) => !isDrawingSectionKey(key))
+    )
 
     console.log(`[generateReferenceDraft] Generating ${dynamicSections.length} sections for jurisdictions: ${selectedJurisdictions.join(', ')}`)
 
@@ -1692,7 +1708,7 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
     }
     
     // Check figures requirements
-    if (figureSections.length > 0 && figures.length === 0) {
+    if (!figuresSkipped && figureSections.length > 0 && figures.length === 0) {
       for (const section of figureSections) {
         contextWarnings.push({
           section,
@@ -1770,7 +1786,9 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
     const hasFigures = figures.length > 0
     const hasPriorArt = !!(manualPriorArt?.manualPriorArtText || manualPriorArt?.text || selectedPriorArtPatents.length > 0)
     const hasComponents = components.length > 0
-    const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents)
+    const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
+      figuresSkipped
+    })
 
     // ══════════════════════════════════════════════════════════════════════════════
     // BUILD PROMPT - CRITICAL: No empty placeholders
@@ -1957,6 +1975,9 @@ OUTPUT FORMAT
     if (frozenClaimsText) {
       draft.claims = frozenClaimsText
     }
+    if (figuresSkipped) {
+      draft.briefDescriptionOfDrawings = ''
+    }
 
     return {
       success: true,
@@ -2004,6 +2025,15 @@ export async function generateReferenceDraftSection(
   error?: string
 }> {
   try {
+    const figuresSkipped = areFiguresSkipped(session)
+    if (figuresSkipped && isDrawingSectionKey(sectionKey)) {
+      return {
+        success: true,
+        content: '',
+        sectionKey
+      }
+    }
+
     const idea = session.ideaRecord || {}
     const referenceMap = session.referenceMap || { components: [] }
     // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
@@ -2105,6 +2135,9 @@ export async function generateReferenceDraftSection(
         type: 'diagram'
       })) : []
       figures = planFigures
+    }
+    if (figuresSkipped) {
+      figures = []
     }
 
     // Get dynamic superset sections and prompts
@@ -2340,7 +2373,9 @@ COMPONENTS REQUIREMENTS:
     const hasFigures = figures.length > 0
     const hasPriorArt = !!(manualPriorArt?.manualPriorArtText || manualPriorArt?.text || selectedPriorArtPatents.length > 0)
     const hasComponents = components.length > 0
-    const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents)
+    const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
+      figuresSkipped
+    })
 
     // ══════════════════════════════════════════════════════════════════════════════
     // BUILD PROMPT - CRITICAL: No empty placeholders

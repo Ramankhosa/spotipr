@@ -994,7 +994,7 @@ function NewPatentDraftPageContent() {
                     checked={allowRefine === true}
                     onChange={() => setAllowRefine(true)}
                   />
-                  Let Kisho improve/structure my idea
+                  Structure and polish my idea without adding technical facts
                 </label>
                 <label className="inline-flex items-center gap-2">
                   <input

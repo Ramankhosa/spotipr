@@ -58,6 +58,7 @@ export interface AIReviewResult {
 
 export interface ReviewContext {
   draft: Record<string, string>
+  figuresSkipped?: boolean
   figures: Array<{
     figureNo: number
     title: string
@@ -122,7 +123,7 @@ const SECTION_LABELS: Record<string, string> = {
 }
 
 const NUMBERING_STYLE_NOTES: Record<string, string> = {
-  NUMERIC_BUCKET: 'System/Product numbering: use 100/200/300 buckets; each component keeps its assigned numeral.',
+  NUMERIC_BUCKET: 'System/Product numbering: use numeric labels exactly as assigned; each component keeps its assigned numeral.',
   STEP_LABEL: 'Process numbering: use step labels (S100, S200, S300) in sequence; never switch to plain numerals.',
   CONSTITUENT_LABEL: 'Composition numbering: use constituent labels ((a), (b), (c)) for formulation elements; do not use numeric buckets.'
 }
@@ -180,7 +181,7 @@ export async function runAIReview(
   requestHeaders?: Record<string, string>
 ): Promise<AIReviewResult> {
   try {
-    const { draft, figures, jurisdiction, inventionTitle, components, sketches, sectionLimits, crossValidations, numberingStyle, patentTypePrimary } = context
+    const { draft, figures, figuresSkipped = false, jurisdiction, inventionTitle, components, sketches, sectionLimits, crossValidations, numberingStyle, patentTypePrimary } = context
 
     // Build comprehensive review prompt with all context
     const prompt = buildReviewPrompt(
@@ -193,7 +194,8 @@ export async function runAIReview(
       sectionLimits,
       crossValidations,
       numberingStyle,
-      patentTypePrimary || undefined
+      patentTypePrimary || undefined,
+      figuresSkipped
     )
     
     // Use LLM for review - uses admin-configured model via DRAFT_REVIEW stage
@@ -215,7 +217,8 @@ export async function runAIReview(
           purpose: 'ai_draft_review',
           jurisdiction,
           sectionsReviewed: Object.keys(draft).length,
-          figuresReviewed: figures.length
+          figuresReviewed: figuresSkipped ? 0 : figures.length,
+          figuresSkipped
         }
       }
     )
@@ -280,12 +283,13 @@ function buildReviewPrompt(
   sectionLimits?: Array<{ sectionKey: string; maxWords?: number; minWords?: number; recommendedWords?: number; maxChars?: number; maxCount?: number; maxIndependent?: number; wordLimitMessage?: string; charLimitMessage?: string; legalReference?: string }>,
   crossValidations?: Array<{ ruleKey: string; sourceSection: string; targetSection: string; ruleName: string; description: string; severity: string; validationLogic?: string }>,
   numberingStyle?: NumberingStyle | string,
-  patentTypePrimary?: PatentTypePrimary | string
+  patentTypePrimary?: PatentTypePrimary | string,
+  figuresSkipped: boolean = false
 ): string {
   // Build sections text - increased limit to 15000 chars per section for comprehensive review
   // Critical sections like claims and detailedDescription need full content for proper analysis
   const sectionsText = Object.entries(draft)
-    .filter(([_, content]) => content && content.trim().length > 0)
+    .filter(([key, content]) => (!figuresSkipped || key !== 'briefDescriptionOfDrawings') && content && content.trim().length > 0)
     .map(([key, content]) => {
       const maxLen = ['claims', 'detailedDescription', 'summary'].includes(key) ? 20000 : 10000
       const truncated = content.length > maxLen
@@ -294,13 +298,15 @@ function buildReviewPrompt(
     .join('\n\n')
 
   // Build comprehensive figures text with PlantUML and extracted elements
-  let figuresText = 'No figures provided'
-  if (figures.length > 0) {
+  let figuresText = figuresSkipped
+    ? 'Figures, drawings, diagrams, and sketches were intentionally skipped for this draft.'
+    : 'No figures provided'
+  if (!figuresSkipped && figures.length > 0) {
     const figureDetails = figures.map(f => {
       // Extract components and arrows from PlantUML
       const componentMatches = f.plantuml.match(/(?:rectangle|component|node|database|actor|usecase|storage|cloud|folder|frame|package)\s+["']?([^"'\[\]{}]+)["']?\s*(?:as\s+(\w+))?/gi) || []
       const arrowMatches = f.plantuml.match(/(\w+)\s*(?:-->|->|<--|<-|--|\.\.>|\.\.)\s*(\w+)/gi) || []
-      const numeralMatches = f.plantuml.match(/\((\d{2,3})\)/g) || []
+      const numeralMatches = f.plantuml.match(/\((\d+)\)/g) || []
       
       return `### Figure ${f.figureNo}: ${f.title}
 
@@ -325,7 +331,7 @@ ${figureDetails}`
 
   // Build sketches text - these are REAL figures but without PlantUML (images)
   let sketchesText = ''
-  if (sketches && sketches.length > 0) {
+  if (!figuresSkipped && sketches && sketches.length > 0) {
     const sketchDetails = sketches.map(s => 
       `- **FIG. ${s.figureNo}**: "${s.title}" — ${s.description || 'Hand-drawn sketch/illustration'}`
     ).join('\n')
@@ -445,9 +451,11 @@ PATENT FIGURES (Diagrams + Sketches)
 ${figuresText}
 ${sketchesText}
 
-**FIGURE VALIDATION NOTE:** When reviewing figure references in the draft, check against
+${figuresSkipped
+  ? '**FIGURELESS DRAFT NOTE:** Figures are intentionally unavailable. Do not recommend creating figures, drawing descriptions, diagrams, sketches, or Brief Description of Drawings text. Flag only accidental references to FIG. X, figures, drawings, diagrams, or sketches in the draft text.'
+  : `**FIGURE VALIDATION NOTE:** When reviewing figure references in the draft, check against
 BOTH the PlantUML diagrams above AND the sketch figures listed. A reference to "FIG. X"
-is valid if X appears in either the diagrams section OR the sketches section.
+is valid if X appears in either the diagrams section OR the sketches section.`}
 ${sectionLimitsText}
 ${crossValidationsText}
 
@@ -462,13 +470,16 @@ Analyze the draft for the following issues:
    - Check if claim limitations are properly disclosed
    - Identify any claim features missing from description
 
-2. **DIAGRAM-DESCRIPTION ALIGNMENT** (Analyze PlantUML code to understand diagrams)
+${figuresSkipped ? `2. **FIGURELESS DRAFT CHECK**
+   - Do NOT perform diagram-description alignment checks.
+   - Do NOT suggest adding figures, drawings, diagrams, sketches, or a Brief Description of Drawings section.
+   - Flag any draft language that refers to FIG. X, figures, drawings, diagrams, sketches, or drawing sheets because figures are disabled for this draft.` : `2. **DIAGRAM-DESCRIPTION ALIGNMENT** (Analyze PlantUML code to understand diagrams)
    - Compare PlantUML diagram structure with Brief Description of Drawings
    - Verify all reference numerals in PlantUML code appear in description text
    - Check if components shown in PlantUML match declared components above
    - Identify any diagram elements not explained in Detailed Description
    - Verify figure captions accurately describe what PlantUML shows
-   - Respect the declared numbering style for the patent type (NUMERIC_BUCKET: 100/200/300; STEP_LABEL: S100/S200; CONSTITUENT_LABEL: (a)/(b)). Flag any mixing or missing labels.
+   - Respect the declared numbering style for the patent type (NUMERIC_BUCKET: assigned numeric labels; STEP_LABEL: S100/S200; CONSTITUENT_LABEL: (a)/(b)). Flag any mixing or missing labels.`}
 
 3. **COMPLETENESS CHECKS**
    - Are all declared components (above) mentioned and explained?
@@ -477,7 +488,7 @@ Analyze the draft for the following issues:
    - Are reference numerals used consistently and in the declared style?
 
 4. **PATENT-TYPE APPROPRIATENESS**
-   - SYSTEM/PRODUCT: Confirm structural components and interactions are covered and numbered (100/200/300 style).
+   - SYSTEM/PRODUCT: Confirm structural components and interactions are covered and numbered with the assigned numeric labels.
    - PROCESS: Confirm step order and dependencies use S-prefixed labels and are fully described.
    - COMPOSITION: Confirm constituents are labeled (a)/(b)/(c) and composition ratios/roles are covered without mixing numeric labels.
 
@@ -1036,6 +1047,7 @@ function getDefaultRecommendation(errors: number, warnings: number): string {
 export interface FixContext {
   relatedContent?: Record<string, string>
   figures?: Array<{ figureNo: number; title: string; plantuml: string }>
+  figuresSkipped?: boolean
   components?: Array<{ name: string; numeral: string }>
   numberingStyle?: NumberingStyle | string
 }
@@ -1066,6 +1078,9 @@ export function buildFixPrompt(
     contextBlock += context.figures.map(f => 
       `Figure ${f.figureNo}: ${f.title}\n\`\`\`plantuml\n${f.plantuml.substring(0, 800)}\n\`\`\``
     ).join('\n\n')
+  }
+  if (context?.figuresSkipped) {
+    contextBlock += '\n\nFIGURELESS DRAFT MODE: Figures, drawings, diagrams, and sketches are intentionally disabled. Do not add or recommend FIG. X citations, drawing descriptions, diagrams, sketches, or a Brief Description of Drawings section.'
   }
 
   // Add components reference if available

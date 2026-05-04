@@ -152,9 +152,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     ...plan,
     title: sanitizeFigureLabel(plan.title) || `Figure ${plan.figureNo}`
   }))
+  const figuresSkipped = !!session?.figuresSkipped
   const hasExistingFigures = (session?.figurePlans?.length || 0) > 0 || diagramSources.length > 0
 
   const [isUploading, setIsUploading] = useState(false)
+  const [isSkippingFigures, setIsSkippingFigures] = useState(false)
+  const [isRestoringFigures, setIsRestoringFigures] = useState(false)
   const [uploaded, setUploaded] = useState<Record<string, boolean>>({})
   const [modifyIdx, setModifyIdx] = useState<number | null>(null)
   const [processingStatus, setProcessingStatus] = useState<Record<string, string>>({})
@@ -2030,6 +2033,34 @@ Now output the JSON array.`
     }
   }
 
+  const handleSkipFigures = async () => {
+    if (!session?.id) return
+    try {
+      setIsSkippingFigures(true)
+      setError(null)
+      await onComplete({ action: 'skip_figures', sessionId: session.id })
+      await onRefresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to continue without figures')
+    } finally {
+      setIsSkippingFigures(false)
+    }
+  }
+
+  const handleRestoreFigures = async () => {
+    if (!session?.id) return
+    try {
+      setIsRestoringFigures(true)
+      setError(null)
+      await onComplete({ action: 'restore_figures', sessionId: session.id })
+      await onRefresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to re-enable figures')
+    } finally {
+      setIsRestoringFigures(false)
+    }
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -2045,9 +2076,41 @@ Now output the JSON array.`
             Figure Planner
           </h2>
           <p className="text-gray-500 mt-2 text-lg">Design and generate intelligent patent diagrams.</p>
+        </div>
+
+        {!figuresSkipped && (
+          <Button
+            variant="outline"
+            onClick={handleSkipFigures}
+            disabled={isSkippingFigures}
+            className="border-amber-300 text-amber-800 hover:bg-amber-50"
+          >
+            {isSkippingFigures ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
+            Continue without figures
+          </Button>
+        )}
       </div>
 
-      </div>
+      {figuresSkipped && (
+        <Alert className="border-amber-200 bg-amber-50 text-amber-900">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <span>
+              Figureless draft mode is enabled. Existing diagrams and sketches are preserved but ignored during drafting, review, preview, and export.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRestoreFigures}
+              disabled={isRestoringFigures}
+              className="bg-white border-amber-300 text-amber-800 hover:bg-amber-100"
+            >
+              {isRestoringFigures ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RotateCcw className="w-4 h-4 mr-2" />}
+              Re-enable figures
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Main Tab Bar: Diagrams vs Sketches */}
       <div className="border-b border-gray-200">
@@ -3011,7 +3074,7 @@ Now output the JSON array.`
                 <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 space-y-1">
                   <p>• Original English diagrams are preserved</p>
                   <p>• Translated diagrams are stored separately</p>
-                  <p>• Reference numerals (100, 200, etc.) remain unchanged</p>
+                  <p>• Assigned reference numerals remain unchanged</p>
                   <p>• Drafting stage will auto-select by jurisdiction</p>
                 </div>
               </div>

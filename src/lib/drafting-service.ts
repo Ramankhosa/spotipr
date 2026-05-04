@@ -25,6 +25,17 @@ import {
   buildAntiHallucinationGuards
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
+import { buildIdeaNormalizationPrompt } from '@/lib/idea-normalization-prompt';
+import {
+  completeSourceFactLedger,
+  sourceMentionsBestMethod,
+  type SourceFactLedger,
+} from '@/lib/source-fact-ledger';
+import {
+  areFiguresSkipped,
+  filterDrawingSectionKeys,
+  filterDrawingSections
+} from '@/lib/figure-availability';
 import crypto from 'crypto';
 
 // NOTE: Legacy SUPERSET_PROMPTS removed - all prompts now come from database
@@ -97,6 +108,7 @@ export interface IdeaNormalizationResult {
     outputs?: string;
     variants?: string;
     inventionType?: string[];
+    patentTypePrimary?: PatentTypePrimary;
     bestMethod?: string;
     fieldOfRelevance?: string;
     subfield?: string;
@@ -104,10 +116,17 @@ export interface IdeaNormalizationResult {
     complianceNotes?: string;
     drawingsFocus?: string;
     claimStrategy?: string;
+    coreInventiveConcept?: string;
+    claimableFeatures?: string[];
+    fallbackLimitations?: string[];
+    doNotClaim?: string[];
     riskFlags?: string;
     abstract?: string;
     cpcCodes?: string[];
     ipcCodes?: string[];
+    sourceFactLedger?: SourceFactLedger;
+    normalizationReviewWarnings?: string[];
+    sourceHandlingMode?: 'PRESERVE' | 'STRUCTURE_ONLY';
   };
   llmPrompt?: string;
   llmResponse?: any;
@@ -188,6 +207,8 @@ export interface ComponentValidationResult {
   numberingStyle?: NumberingStyle;
 }
 
+const MAX_SAFE_REFERENCE_NUMERAL = Number.MAX_SAFE_INTEGER;
+
 export interface AnnexureDraftResult {
   success: boolean;
   draft?: {
@@ -240,6 +261,9 @@ export interface SectionGenerationResult {
   llmMeta?: { model?: string; promptHash?: string; params?: any };
   error?: string;
   retryAfter?: number;
+  personaStyleApplied?: boolean;
+  personaProvenance?: Record<string, any>;
+  personaWarnings?: any[];
   // Warnings about missing context (prior art, figures, components) - non-blocking
   warnings?: Array<{ section: string; type: 'priorArt' | 'figures' | 'components'; message: string; impact: string }>;
 }
@@ -264,6 +288,14 @@ export class DraftingService {
     advantageousEffects: ['advantageous_effects', 'advantages', 'effects_of_invention'],
     industrialApplicability: ['industrialApplicability', 'industrial_applicability', 'utility'],
     listOfNumerals: ['listOfNumerals', 'reference_numerals', 'reference_signs', 'list_of_numerals']
+  }
+
+  static normalizePatentTypePrimary(value: unknown): PatentTypePrimary | null {
+    const normalized = String(value || '').trim().toUpperCase()
+    const validTypes: PatentTypePrimary[] = ['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION']
+    return validTypes.includes(normalized as PatentTypePrimary)
+      ? normalized as PatentTypePrimary
+      : null
   }
 
   private static mapToInternalKey(candidate: string): string | undefined {
@@ -458,7 +490,7 @@ export class DraftingService {
         ? ''
         : '\n- Do NOT invent or add new components/claims beyond what is provided. Preserve the user-described invention faithfully; paraphrase only for clarity.';
 
-      const prompt = `You are an expert patent attorney specializing in drafting and structuring patent disclosures across all domains (mechanical, electrical, software, biotech, chemistry, medical devices, materials, aerospace, etc.)${domainExpertise}.
+      const legacyPrompt = `You are an expert patent attorney specializing in drafting and structuring patent disclosures across all domains (mechanical, electrical, software, biotech, chemistry, medical devices, materials, aerospace, etc.)${domainExpertise}.
 
 Read the invention description and return ONLY one JSON object with the fields defined below.
 
@@ -512,6 +544,15 @@ Respond in this exact JSON shape:
   "cpcCodes": ["primary CPC code like H04L 29/08", "optional secondary"],
   "ipcCodes": ["primary IPC code like G06F 17/30", "optional secondary"]
 }`;
+
+      void legacyPrompt;
+
+      const prompt = buildIdeaNormalizationPrompt({
+        rawIdea,
+        title,
+        areaOfInvention,
+        allowRefine,
+      });
 
       console.log('Calling LLM gateway with taskCode: LLM2_DRAFT, stageCode: DRAFT_IDEA_ENTRY');
       console.log('Prompt length:', prompt.length);
@@ -607,32 +648,36 @@ Respond in this exact JSON shape:
               console.log('Aggressive cleanup parsing succeeded');
             } catch (thirdErr) {
               console.error('All JSON parsing attempts failed, creating fallback response');
-              // Create a minimal fallback response to allow the process to continue
+              // Create a non-inventive fallback response to allow the process to continue
               normalizedData = {
                 searchQuery: title.toLowerCase().replace(/[^a-z0-9\s]/g, '').substring(0, 50),
-                problem: `Technical problem addressed by ${title}`,
-                objectives: `To provide ${title.toLowerCase()}`,
-                components: [{
-                  name: "Main Component",
-                  type: "OTHER",
-                  description: "Primary component of the invention"
-                }],
+                problem: "Extraction failed - review source text",
+                objectives: "Extraction failed - review source text",
+                components: [],
                 inventionType: ["GENERAL"],
-                logic: "Components work together to achieve the invention objectives",
-                inputs: "User inputs",
-                outputs: "System outputs",
-                variants: "Various embodiments possible",
-                bestMethod: "Preferred implementation",
-                fieldOfRelevance: "General Technology",
-                subfield: "Various applications",
-                recommendedFocus: "Core functionality",
-                complianceNotes: "None",
-                drawingsFocus: "System components",
-                claimStrategy: "Apparatus claims",
-                riskFlags: "None identified",
-                abstract: `${title}. A system that addresses technical challenges in the field.`,
+                patentTypePrimary: this.patentTypeFallbackFromText(rawIdea, title).primary,
+                logic: "Extraction failed - review source text",
+                inputs: "Not stated by source",
+                outputs: "Not stated by source",
+                variants: "Not stated by source",
+                bestMethod: "Not stated by source",
+                fieldOfRelevance: areaOfInvention || "Not stated by source",
+                subfield: "Not stated by source",
+                recommendedFocus: "Review source text before drafting",
+                complianceNotes: "Not stated by source",
+                drawingsFocus: "Review source text before figure planning",
+                claimStrategy: "Review source text before claim generation",
+                coreInventiveConcept: "Extraction failed - review source text",
+                claimableFeatures: [],
+                fallbackLimitations: [],
+                doNotClaim: ["Do not claim facts that were not verified from the source text."],
+                riskFlags: "LLM extraction failed; verify all source facts before drafting",
+                abstract: `${title}. Extraction failed; review the source disclosure before drafting.`,
                 cpcCodes: [],
-                ipcCodes: []
+                ipcCodes: [],
+                sourceHandlingMode: allowRefine ? "STRUCTURE_ONLY" : "PRESERVE",
+                sourceFactLedger: {},
+                normalizationReviewWarnings: ["LLM response could not be parsed. Please verify the comprehended invention before generating claims."]
               };
               console.log('Using fallback normalized data due to JSON parsing failure');
             }
@@ -685,7 +730,36 @@ Respond in this exact JSON shape:
         normalizedData?.inventionType,
         normalizedData?.fieldOfRelevance || areaOfInvention || ''
       )
+      const detectedPatentType = this.normalizePatentTypePrimary(normalizedData?.patentTypePrimary)
+        || this.patentTypeFallbackFromText(rawIdea, title).primary
       normalizedData.inventionType = detectedArchetype
+      normalizedData.patentTypePrimary = detectedPatentType
+      normalizedData.sourceHandlingMode = allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE'
+
+      if (!sourceMentionsBestMethod(rawIdea)) {
+        normalizedData.bestMethod = 'Not stated by source'
+      }
+
+      const normalizeStringArray = (value: unknown): string[] => Array.isArray(value)
+        ? value.map((item: any) => String(item).trim()).filter(Boolean)
+        : typeof value === 'string' && value.trim() && !/^not stated by source$/i.test(value.trim())
+          ? [value.trim()]
+          : []
+      normalizedData.coreInventiveConcept = typeof normalizedData.coreInventiveConcept === 'string' && normalizedData.coreInventiveConcept.trim()
+        ? normalizedData.coreInventiveConcept.trim()
+        : 'Not stated by source'
+      normalizedData.claimableFeatures = normalizeStringArray(normalizedData.claimableFeatures)
+      normalizedData.fallbackLimitations = normalizeStringArray(normalizedData.fallbackLimitations)
+      normalizedData.doNotClaim = normalizeStringArray(normalizedData.doNotClaim)
+
+      const sourceFactReview = completeSourceFactLedger(rawIdea, normalizedData)
+      normalizedData.sourceFactLedger = sourceFactReview.sourceFactLedger
+      normalizedData.normalizationReviewWarnings = Array.from(new Set([
+        ...sourceFactReview.normalizationReviewWarnings,
+        ...(Array.isArray(normalizedData.normalizationReviewWarnings)
+          ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
+          : [])
+      ]))
 
       const extractedFields = {
         searchQuery: typeof normalizedData.searchQuery === 'string' ? String(normalizedData.searchQuery).trim() : undefined,
@@ -697,6 +771,7 @@ Respond in this exact JSON shape:
         outputs: normalizedData.outputs,
         variants: normalizedData.variants,
         inventionType: detectedArchetype,
+        patentTypePrimary: detectedPatentType,
         bestMethod: normalizedData.bestMethod,
         fieldOfRelevance: normalizedData.fieldOfRelevance,
         subfield: normalizedData.subfield,
@@ -704,10 +779,17 @@ Respond in this exact JSON shape:
         complianceNotes: normalizedData.complianceNotes,
         drawingsFocus: normalizedData.drawingsFocus,
         claimStrategy: normalizedData.claimStrategy,
+        coreInventiveConcept: normalizedData.coreInventiveConcept,
+        claimableFeatures: normalizedData.claimableFeatures,
+        fallbackLimitations: normalizedData.fallbackLimitations,
+        doNotClaim: normalizedData.doNotClaim,
         riskFlags: normalizedData.riskFlags,
         abstract: normalizedData.abstract,
         cpcCodes: Array.isArray(normalizedData.cpcCodes) ? normalizedData.cpcCodes.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
-        ipcCodes: Array.isArray(normalizedData.ipcCodes) ? normalizedData.ipcCodes.map((s: any) => String(s).trim()).filter(Boolean) : undefined
+        ipcCodes: Array.isArray(normalizedData.ipcCodes) ? normalizedData.ipcCodes.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
+        sourceFactLedger: normalizedData.sourceFactLedger,
+        normalizationReviewWarnings: normalizedData.normalizationReviewWarnings,
+        sourceHandlingMode: normalizedData.sourceHandlingMode
       };
 
       return {
@@ -729,13 +811,8 @@ Respond in this exact JSON shape:
   }
 
   /**
-   * Decide patent type using a focused, single-purpose LLM prompt.
-   * 
-   * ARCHITECTURE NOTE:
-   * - This is NOT part of idea normalization (descriptive)
-   * - This is a DECISIONAL step that runs immediately before claim generation
-   * - Returns ONE value. No confidence. No reasoning. No fallback heuristics.
-   * - Stored on DraftingSession, NOT in normalizedData
+   * Legacy fallback-only helper retained for compatibility.
+   * Normal operation reads patentTypePrimary from Stage 0 normalization.
    */
   static async decidePatentType(
     context: {
@@ -748,86 +825,14 @@ Respond in this exact JSON shape:
     tenantId?: string,
     requestHeaders?: Record<string, string>
   ): Promise<{ primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' }> {
-    
-    const componentsList = (context.components || [])
-      .map((c: any) => `- ${c.name}: ${c.description || ''}`)
-      .join('\n');
-
-    const prompt = `You are a patent attorney determining the PRIMARY claim type for an invention.
-
-CONTEXT:
-Components:
-${componentsList || 'Not specified'}
-
-Technical Logic:
-${context.logic || 'Not specified'}
-
-${context.inputs ? `Inputs: ${context.inputs}` : ''}
-${context.outputs ? `Outputs: ${context.outputs}` : ''}
-${context.objectives ? `Objectives: ${context.objectives}` : ''}
-
-TASK:
-Decide the single best primary patent type for the FIRST independent claim.
-
-OPTIONS (pick exactly one):
-- PRODUCT: Physical device, article of manufacture, tangible thing
-- SYSTEM: Multi-component apparatus, networked arrangement, integrated assembly
-- PROCESS: Method, steps, procedure, technique
-- COMPOSITION: Chemical compound, formulation, material, mixture
-
-RULES:
-- Decide where the inventive step primarily resides (structure, interaction, steps, or composition)
-- When in doubt between PRODUCT and SYSTEM: choose SYSTEM if 3+ interacting components
-- Choose PRODUCT only if the novelty resides in a single physical article rather than interactions
-- If it's primarily steps/operations → PROCESS
-- If it's a substance/material → COMPOSITION
-
-OUTPUT:
-Return ONLY one word: PRODUCT, SYSTEM, PROCESS, or COMPOSITION
-No explanation. No alternatives. Just the word.`;
-
-    try {
-      const request = { headers: requestHeaders || {} };
-      const result = await llmGateway.executeLLMOperation(request, {
-        taskCode: 'LLM2_DRAFT',
-        stageCode: 'DRAFT_IDEA_ENTRY', // Same stage code as normalization
-        prompt,
-        parameters: { 
-          tenantId, 
-          temperature: 0.0,  // Deterministic
-          maxTokens: 10      // We only need one word
-        },
-        idempotencyKey: crypto.randomUUID()
-      });
-
-      if (!result.success || !result.response?.output) {
-        // Intelligent fallback based on context (not just SYSTEM)
-        console.warn('[decidePatentType] LLM failed, using context-based fallback');
-        return this.patentTypeFallback(context);
-      }
-
-      const output = result.response.output.trim().toUpperCase();
-      
-      // Validate output is one of the allowed values
-      const validTypes = ['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const;
-      if (validTypes.includes(output as any)) {
-        console.log(`[decidePatentType] Decided: ${output}`);
-        return { primary: output as typeof validTypes[number] };
-      }
-
-      // If LLM returned something unexpected, use fallback
-      console.warn(`[decidePatentType] Unexpected LLM output: "${output}", using fallback`);
-      return this.patentTypeFallback(context);
-      
-    } catch (error) {
-      console.error('[decidePatentType] Error:', error);
-      return this.patentTypeFallback(context);
-    }
+    void tenantId;
+    void requestHeaders;
+    return this.patentTypeFallback(context);
   }
 
   /**
-   * Context-aware fallback for patent type when LLM fails.
-   * Not heuristics for normal operation - only for error recovery.
+   * Context-aware fallback for legacy callers.
+   * Normal operation should use normalizedData.patentTypePrimary.
    */
   private static patentTypeFallback(context: {
     components: any[];
@@ -839,7 +844,7 @@ No explanation. No alternatives. Just the word.`;
     const logicLower = (context.logic || '').toLowerCase();
     
     // Check for composition indicators first (most specific)
-    if (/\b(composition|formulation|compound|mixture|substance|polymer|solution|pharmaceutical|drug|chemical)\b/i.test(logicLower)) {
+    if (/\b(composition|formulation|compound|mixture|substance|polymer|pharmaceutical|drug|chemical|excipient|solvent|dosage)\b/i.test(logicLower)) {
       return { primary: 'COMPOSITION' };
     }
     
@@ -858,7 +863,7 @@ No explanation. No alternatives. Just the word.`;
   }
 
   /**
-   * Generate hash of components + logic to detect changes for re-decision policy.
+   * Generate hash of components + logic for patent-type session bookkeeping.
    */
   static generatePatentTypeContextHash(components: any[], logic: string): string {
     const componentNames = (components || []).map((c: any) => c.name || '').sort().join('|');
@@ -867,91 +872,8 @@ No explanation. No alternatives. Just the word.`;
   }
 
   /**
-   * Classify patent type from raw idea text (before component extraction).
-   * Used during Stage 0 normalization to run patent type classification in parallel.
-   * This allows patent type to be available immediately when user enters Stage 1,
-   * without waiting for claim generation to trigger classification.
-   */
-  static async decidePatentTypeFromRawIdea(
-    rawIdea: string,
-    title: string,
-    areaOfInvention?: string,
-    tenantId?: string,
-    requestHeaders?: Record<string, string>
-  ): Promise<{ primary: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' }> {
-    
-    const prompt = `You are a patent attorney determining the PRIMARY claim type for an invention based on its description.
-
-INVENTION TITLE:
-${title}
-
-${areaOfInvention ? `AREA/FIELD: ${areaOfInvention}` : ''}
-
-INVENTION DESCRIPTION:
-${rawIdea.substring(0, 3000)} ${rawIdea.length > 3000 ? '...[truncated]' : ''}
-
-TASK:
-Decide the single best primary patent type for drafting the FIRST independent claim.
-
-OPTIONS (pick exactly one):
-- PRODUCT: Physical device, article of manufacture, tangible standalone thing
-- SYSTEM: Multi-component apparatus, networked arrangement, integrated assembly with interacting parts
-- PROCESS: Method, steps, procedure, technique, workflow
-- COMPOSITION: Chemical compound, formulation, material, mixture, pharmaceutical
-
-DECISION GUIDE:
-1. COMPOSITION: Choose if the invention IS a new substance, material, drug, chemical, formulation, or mixture
-2. PROCESS: Choose if the inventive novelty lies in HOW something is done (steps, procedure, method)
-3. PRODUCT: Choose if it's a single tangible article/device where novelty is in its structure
-4. SYSTEM: Choose if it involves multiple interacting components working together
-
-When uncertain between PRODUCT vs SYSTEM: prefer SYSTEM if the description mentions multiple distinct parts that interact.
-When uncertain between PROCESS vs SYSTEM: prefer PROCESS if the focus is on steps/operations.
-
-OUTPUT:
-Return ONLY one word: PRODUCT, SYSTEM, PROCESS, or COMPOSITION
-No explanation. No alternatives. Just the word.`;
-
-    try {
-      const request = { headers: requestHeaders || {} };
-      const result = await llmGateway.executeLLMOperation(request, {
-        taskCode: 'LLM2_DRAFT',
-        stageCode: 'DRAFT_IDEA_ENTRY', // Same stage code as normalization
-        prompt,
-        parameters: { 
-          tenantId, 
-          temperature: 0.0,  // Deterministic
-          maxTokens: 10      // We only need one word
-        },
-        idempotencyKey: crypto.randomUUID()
-      });
-
-      if (!result.success || !result.response?.output) {
-        console.warn('[decidePatentTypeFromRawIdea] LLM failed, using text-based fallback');
-        return this.patentTypeFallbackFromText(rawIdea, title);
-      }
-
-      const output = result.response.output.trim().toUpperCase();
-      
-      // Validate output is one of the allowed values
-      const validTypes = ['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const;
-      if (validTypes.includes(output as any)) {
-        console.log(`[decidePatentTypeFromRawIdea] Decided: ${output}`);
-        return { primary: output as typeof validTypes[number] };
-      }
-
-      // If LLM returned something unexpected, use fallback
-      console.warn(`[decidePatentTypeFromRawIdea] Unexpected LLM output: "${output}", using fallback`);
-      return this.patentTypeFallbackFromText(rawIdea, title);
-      
-    } catch (error) {
-      console.error('[decidePatentTypeFromRawIdea] Error:', error);
-      return this.patentTypeFallbackFromText(rawIdea, title);
-    }
-  }
-
-  /**
-   * Text-based fallback for patent type when raw idea LLM classification fails.
+   * Text-based fallback for patent type when Stage 0 returns a missing/invalid value.
+   * Normal operation should use normalizedData.patentTypePrimary.
    */
   static patentTypeFallbackFromText(
     rawIdea: string,
@@ -960,7 +882,7 @@ No explanation. No alternatives. Just the word.`;
     const text = `${title} ${rawIdea}`.toLowerCase();
     
     // Check for composition indicators first (most specific)
-    if (/\b(composition|formulation|compound|mixture|substance|polymer|solution|pharmaceutical|drug|chemical|reagent|catalyst|alloy)\b/.test(text)) {
+    if (/\b(composition|formulation|compound|mixture|substance|polymer|pharmaceutical|drug|chemical|reagent|catalyst|alloy|excipient|solvent|active ingredient|dosage)\b/.test(text)) {
       return { primary: 'COMPOSITION' };
     }
     
@@ -991,6 +913,28 @@ No explanation. No alternatives. Just the word.`;
   ): Promise<SectionGenerationResult> {
    const debugSteps: Array<{ step: string; status: 'ok'|'fail'|'warning'; meta?: any }> = []
     try {
+      const figuresSkipped = areFiguresSkipped(session)
+      const requestedSections = [...sections]
+      sections = filterDrawingSectionKeys(session, sections)
+      if (figuresSkipped && requestedSections.length !== sections.length) {
+        debugSteps.push({
+          step: 'figureless_sections_filtered',
+          status: 'ok',
+          meta: {
+            requestedSections,
+            generatedSections: sections,
+            skippedSections: requestedSections.filter(section => !sections.includes(section))
+          }
+        })
+      }
+      if (sections.length === 0) {
+        return {
+          success: true,
+          generated: {},
+          debugSteps
+        }
+      }
+
       // Step: gather context
       const idea = session.ideaRecord || {}
       const referenceMap = session.referenceMap || { components: [] }
@@ -1271,6 +1215,9 @@ No explanation. No alternatives. Just the word.`;
         for (const f of sketchFigures) mergedByNo.set(f.figureNo, f)
         figures = Array.from(mergedByNo.values()).sort((a:any,b:any)=>a.figureNo-b.figureNo)
       }
+      if (figuresSkipped) {
+        figures = []
+      }
       debugSteps.push({
         step: 'load_context',
         status: 'ok',
@@ -1323,7 +1270,7 @@ No explanation. No alternatives. Just the word.`;
       const inventionBasics = inventionBasicsParts.join('\n')
 
       // Build payload available across sections
-      const payload = { idea, referenceMap, figures, approved: session.annexureDrafts?.[0] || {}, instructions: instructions || {}, manualPriorArt, selectedPriorArtPatents, inventionBasics }
+      const payload = { idea, referenceMap, figures, figuresSkipped, approved: session.annexureDrafts?.[0] || {}, instructions: instructions || {}, manualPriorArt, selectedPriorArtPatents, inventionBasics }
 
       // ══════════════════════════════════════════════════════════════════════════════
       // DD USER DATA - Load sidecar data for detailedDescription section
@@ -1363,6 +1310,7 @@ No explanation. No alternatives. Just the word.`;
       // Step: call LLM per section with single-section schema
       const request = { headers: requestHeaders || {} }
       const generated: Record<string, string> = {}
+      const personaProvenance: Record<string, any> = {}
       let llmMeta: any = undefined
 
       for (const s of sections) {
@@ -1373,8 +1321,18 @@ No explanation. No alternatives. Just the word.`;
         if (usePersonaStyle && session?.userId) {
           try {
             // Pass personaSelection for multi-persona support (primary style + secondary terminology)
-            writingSample = await getWritingSample(session.userId, s, jurisdictionCode, personaSelection)
+            writingSample = await getWritingSample(session.userId, s, jurisdictionCode, personaSelection, (session as any).tenantId || tenantId)
             if (writingSample) {
+              personaProvenance[s] = {
+                styleEnabled: true,
+                applied: true,
+                source: writingSample.source || 'persona',
+                personaId: writingSample.personaId,
+                personaName: writingSample.personaName,
+                sampleId: writingSample.sampleId,
+                sampleJurisdiction: writingSample.jurisdiction,
+                isUniversal: writingSample.isUniversal
+              }
               debugSteps.push({ 
                 step: `writing_sample_${s}`, 
                 status: 'ok', 
@@ -1383,10 +1341,18 @@ No explanation. No alternatives. Just the word.`;
                   isUniversal: writingSample.isUniversal,
                   wordCount: writingSample.sampleText.split(/\s+/).length,
                   personaName: writingSample.personaName,
+                  source: writingSample.source,
                   hasPersonaSelection: !!personaSelection?.primaryPersonaId
                 } 
               })
             } else if (personaSelection?.primaryPersonaId) {
+              personaProvenance[s] = {
+                styleEnabled: true,
+                applied: false,
+                source: 'none',
+                personaId: personaSelection.primaryPersonaId,
+                message: `No writing sample found for "${s}" section in selected persona.`
+              }
               // Persona selected but no sample found for this section - add warning
               debugSteps.push({
                 step: `writing_sample_missing_${s}`,
@@ -1402,6 +1368,12 @@ No explanation. No alternatives. Just the word.`;
             }
           } catch (err) {
             console.warn(`[DraftingService] Failed to get writing sample for ${s}:`, err)
+          }
+        } else {
+          personaProvenance[s] = {
+            styleEnabled: false,
+            applied: false,
+            source: 'disabled'
           }
         }
 
@@ -1795,7 +1767,15 @@ No explanation. No alternatives. Just the word.`;
           impact: step.meta?.impact || ''
         }))
 
-      return { success: true, generated, debugSteps, llmMeta, warnings: warnings.length > 0 ? warnings : undefined }
+      return {
+        success: true,
+        generated,
+        debugSteps,
+        llmMeta,
+        warnings: warnings.length > 0 ? warnings : undefined,
+        personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
+        personaProvenance
+      }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : String(e)
       debugSteps.push({ step: 'exception', status: 'fail', meta: { message: errorMessage } })
@@ -2334,7 +2314,9 @@ ${writingSampleBlock}`
       const hasFigures = !!(figures && figures.length > 0)
       const hasPriorArt = !!(payload.manualPriorArt?.manualPriorArtText || (payload.selectedPriorArtPatents && payload.selectedPriorArtPatents.length > 0))
       const hasComponents = componentsList2.length > 0
-      const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents)
+      const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
+        figuresSkipped: payload.figuresSkipped === true
+      })
       
       // Extract base, top-up, and user prompts
       const basePrompt = promptInstruction
@@ -2820,8 +2802,8 @@ Use the Super Admin panel to add the missing prompt.
         const allowed = new Set(guardrailComps
           .filter((c:any) => c.referenceLabel || c.numeral)
           .map((c:any) => String(c.referenceLabel || c.numeral)))
-        // Match patterns: (100), (S100), (a), (b), etc.
-        const refs = Array.from(text.matchAll(/\(([S]?\d{2,3}|[a-z])\)/gi)).map(m => m[1])
+        // Match patterns: (100), (1000000), (S100), (a), (b), etc.
+        const refs = Array.from(text.matchAll(/\(([S]?\d+|[a-z])\)/gi)).map(m => m[1])
         if (refs.some(r => !allowed.has(r) && !allowed.has(`(${r})`))) return { ok: false, reason: 'List includes undeclared reference label' }
       }
     }
@@ -2833,8 +2815,8 @@ Use the Super Admin panel to add the missing prompt.
       if (guardrailComps.length > 0) {
         // Support all numbering styles: numeric (100), step labels (S100), constituent labels ((a))
         const allowedLabels = new Set(guardrailComps.map((c:any) => String(c.referenceLabel || c.numeral)))
-        // Match patterns: (100), (S100), (a), (b), etc.
-        const usedLabels = Array.from(text.matchAll(/\(([S]?\d{2,3}|[a-z])\)/gi)).map(m => m[1])
+        // Match patterns: (100), (1000000), (S100), (a), (b), etc.
+        const usedLabels = Array.from(text.matchAll(/\(([S]?\d+|[a-z])\)/gi)).map(m => m[1])
         if (usedLabels.some(l => !allowedLabels.has(l) && !allowedLabels.has(`(${l})`))) {
           return { ok: false, reason: 'Detailed Description uses undeclared reference label' }
         }
@@ -3065,12 +3047,23 @@ Use the Super Admin panel to add the missing prompt.
         continue;
       }
 
+      const rawNumeral = (comp as any).numeral;
+      const rawReferenceLabel = (comp as any).referenceLabel;
+      const parsedNumeral =
+        typeof rawNumeral === 'number' && Number.isFinite(rawNumeral)
+          ? rawNumeral
+          : typeof rawNumeral === 'string' && /^\d+$/.test(rawNumeral.trim())
+            ? Number(rawNumeral.trim())
+            : typeof rawReferenceLabel === 'string' && /^\d+$/.test(rawReferenceLabel.trim())
+              ? Number(rawReferenceLabel.trim())
+              : undefined;
+
       nodes[id] = {
         id,
         name: comp.name.trim(),
         description: comp.description || '',
         parentId: (comp as any).parentId || null,
-        numeral: typeof (comp as any).numeral === 'number' ? (comp as any).numeral : undefined,
+        numeral: parsedNumeral,
         type: componentType || 'OTHER',
         sequence: typeof comp.sequence === 'number' ? comp.sequence : undefined,
         children: []
@@ -3117,7 +3110,9 @@ Use the Super Admin panel to add the missing prompt.
     // =========================================================================
     
     if (numberingStyle === 'NUMERIC_BUCKET') {
-      // SYSTEM/PRODUCT: Assign numerals in 100-blocks per root hierarchically
+      // SYSTEM/PRODUCT: Use numeric reference labels. Auto-assign starts at
+      // 100, 200, 300... but manual user-entered numerals are not capped to
+      // those buckets.
       const usedNumerals = new Set<number>();
       let rootIndex = 1;
 
@@ -3125,14 +3120,10 @@ Use the Super Admin panel to add the missing prompt.
         let cursor = base;
 
         const dfs = (n: any) => {
-          if (cursor > base + 99) {
-            errors.push(`Too many subcomponents under root block ${base}`);
-            return;
-          }
           // Respect user-supplied numeral if valid and unique
           if (typeof n.numeral === 'number') {
-            if (n.numeral < 1 || n.numeral > 999) {
-              errors.push(`Component ${n.id} has invalid numeral ${n.numeral} - must be between 1 and 999`);
+            if (!Number.isInteger(n.numeral) || n.numeral < 1 || n.numeral > MAX_SAFE_REFERENCE_NUMERAL) {
+              errors.push(`Component ${n.id} has invalid numeral ${n.numeral} - must be a positive integer`);
             } else if (usedNumerals.has(n.numeral)) {
               errors.push(`Duplicate numeral ${n.numeral} detected for component ${n.id}`);
             } else {
@@ -3141,11 +3132,7 @@ Use the Super Admin panel to add the missing prompt.
             }
           } else {
             // Assign numeral automatically
-            while (usedNumerals.has(cursor) && cursor <= base + 99) cursor++;
-            if (cursor > base + 99) {
-              errors.push(`Cannot assign numeral to component ${n.id} - block ${base} is full`);
-              return;
-            }
+            while (usedNumerals.has(cursor)) cursor++;
             n.numeral = cursor;
             usedNumerals.add(cursor);
             cursor++;
@@ -3174,17 +3161,7 @@ Use the Super Admin panel to add the missing prompt.
       });
 
       for (const root of roots) {
-        let base = rootIndex * 100;
-        if (base > 900) {
-          base = 100;
-          while (base <= 900 && Array.from({ length: 100 }).some((_, i) => usedNumerals.has(base + i))) {
-            base += 100;
-          }
-          if (base > 900) {
-            errors.push('No available 100-blocks remain for numbering');
-            break;
-          }
-        }
+        const base = typeof root.numeral === 'number' ? root.numeral : rootIndex * 100;
         assignBlock(root, base);
         rootIndex++;
       }
@@ -3316,7 +3293,11 @@ Use the Super Admin panel to add the missing prompt.
     sourceJurisdiction?: string
   ): Promise<AnnexureDraftResult> {
     try {
-      const sectionDefs = await this.buildSectionDefinitions(jurisdiction)
+      const sectionDefs = filterDrawingSections(
+        session,
+        await this.buildSectionDefinitions(jurisdiction),
+        section => section.key
+      )
 
       // Build comprehensive prompt
       const prompt = await this.buildAnnexurePrompt(session, jurisdiction, filingType, sectionDefs, referenceDraft, preferredLanguage, sourceJurisdiction);
@@ -3557,6 +3538,8 @@ Use the Super Admin panel to add the missing prompt.
     sourceJurisdiction?: string
   ): Promise<string> {
     const idea = session.ideaRecord;
+    const figuresSkipped = areFiguresSkipped(session)
+    const effectiveSections = filterDrawingSections(session, sections, section => section.key)
     // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
     const rawRefMapComps = session.referenceMap?.components as any
     const components: any[] = Array.isArray(rawRefMapComps) 
@@ -3649,6 +3632,9 @@ Use the Super Admin panel to add the missing prompt.
       
       figures = Array.from(mergedByNo.values()).sort((a,b)=>a.figureNo-b.figureNo)
     }
+    if (figuresSkipped) {
+      figures = []
+    }
 
     let profile = await getCountryProfile(jurisdiction)
     if (profile && preferredLanguage) {
@@ -3688,12 +3674,12 @@ Use the Super Admin panel to add the missing prompt.
       `Avoid: ${Array.isArray(baseStyle?.avoid) ? baseStyle?.avoid.join(', ') : (baseStyle?.avoid || 'marketing language, unsupported advantages')}`
     ].join('\n')
 
-    const sectionLines = sections.map((s, idx) => {
+    const sectionLines = effectiveSections.map((s, idx) => {
       const constraintText = (s.constraints && s.constraints.length) ? `Constraints: ${s.constraints.join('; ')}` : ''
       return `${idx + 1}. ${s.label} (${s.key})${s.required ? ' [required]' : ''}${constraintText ? `\n   ${constraintText}` : ''}`
     }).join('\n')
 
-    const requiredKeys = sections.map(s => `"${s.key}"`).join(', ')
+    const requiredKeys = effectiveSections.map(s => `"${s.key}"`).join(', ')
 
     const referenceSource = (sourceJurisdiction || session?.jurisdictionDraftStatus?.__sourceOfTruth || session?.draftingJurisdictions?.[0] || jurisdiction || '').toString().toUpperCase()
     const referenceBlock = referenceDraft
@@ -3715,6 +3701,7 @@ ${idea.objectives ? `Objectives: ${idea.objectives}` : ''}
 ${components.length > 0 ? `Components: ${components.map(c => { const ref = c.referenceLabel || c.numeral; return ref ? `${c.name} (${ref})` : c.name; }).join(', ')}` : ''}
 ${idea.logic ? `Logic: ${idea.logic}` : ''}
 ${figures.length > 0 ? `Figures: ${figures.map(f => `Fig.${f.figureNo}: ${f.title}`).join(', ')}` : ''}
+${figuresSkipped ? 'Figureless draft mode: do not create, request, mention, or reference figures, drawings, diagrams, sketches, drawing sheets, FIG. X citations, or drawing descriptions.' : ''}
 ${priorArtSelections.length > 0 ? `Prior art for context (approved - ALL ${priorArtSelections.length} patents): ${priorArtSelections.map(p=>`${p.patentNumber}${p.title?`: ${p.title}`:''}`).join(' | ')}` : ''}
 
 ${referenceBlock}
@@ -3796,7 +3783,7 @@ OUTPUT FORMAT:
 
     try {
       // Extract all numerals from draft text
-      const numeralRegex = /\((\d{2,3})\)/g;
+      const numeralRegex = /\((\d+)\)/g;
       const usedNumerals = new Set<number>();
       let match;
 
@@ -3837,7 +3824,9 @@ OUTPUT FORMAT:
         referencedFigures.add(parseInt(match[1]));
       }
 
-      const availableFigures = new Set<number>((session.figurePlans?.map((f: any) => f.figureNo) || []));
+      const availableFigures = areFiguresSkipped(session)
+        ? new Set<number>()
+        : new Set<number>((session.figurePlans?.map((f: any) => f.figureNo) || []));
       referencedFigures.forEach((refFig: number) => {
         if (!availableFigures.has(refFig)) {
           (report.invalidReferences as Array<string | number>).push(`Figure ${refFig}`);
@@ -3883,6 +3872,7 @@ OUTPUT FORMAT:
     }
 
     const last = draftObj || {}
+    const figuresSkipped = areFiguresSkipped(session)
     const report: any = {
       wordCounts: {},
       abstract: {},
@@ -3963,7 +3953,7 @@ OUTPUT FORMAT:
     }
 
     // P0: BDOD format & coverage
-    const planFigures = (session.figurePlans || []).map((f:any)=>f.figureNo)
+    const planFigures = figuresSkipped ? [] : (session.figurePlans || []).map((f:any)=>f.figureNo)
     const bdodLines = bdod.split(/\n+/).map((l: string)=>l.trim()).filter(Boolean)
     const figRefRegex = /\b(Fig\.?|Figure)\s*0*(\d+)\b/i
     const normalizedLines = bdodLines.map((l: string) => l.replace(/^\s*(?:Figure|FIG\.|Fig\.)\s*0*(\d+)/i, (m: string, g1: string) => `Fig. ${g1}`))
@@ -3982,7 +3972,7 @@ OUTPUT FORMAT:
       seen.add(num)
     })
     planFigures.forEach((n: number) => { if (!seen.has(n)) missing.push(n) })
-    report.bdod = { missingFigures: missing, extraFigures: extra, overlengthLines: overlength, formatViolations }
+    report.bdod = { missingFigures: missing, extraFigures: extra, overlengthLines: overlength, formatViolations, figuresSkipped }
     if (missing.length>0 || extra.length>0 || overlength.length>0 || formatViolations.length>0) { report.hasIssues = true; report.complianceScore -= 10 }
 
     // P0: Industrial Applicability
@@ -4014,8 +4004,8 @@ OUTPUT FORMAT:
     const fullText = textNorm([
       title, fieldOfInvention, background, summary, normalizedLines.join('\n'), detailed, bestMethod, claims, industrial, numeralsList
     ].join('\n'))
-    // Match patterns: (100), (S100), (a), (b), etc.
-    const labelRegex = /\(([S]?\d{2,3}|[a-z])\)/gi
+    // Match patterns: (100), (1000000), (S100), (a), (b), etc.
+    const labelRegex = /\(([S]?\d+|[a-z])\)/gi
     let m: RegExpExecArray | null
     while ((m = labelRegex.exec(fullText)) !== null) {
       const label = m[1]; used.set(label, (used.get(label) || 0) + 1)
@@ -4098,7 +4088,7 @@ OUTPUT FORMAT:
 
     // P1: List of numerals hygiene
     const listLines = numeralsList.split(/\n+/).map((l: string)=>l.trim()).filter(Boolean)
-    const listNums = listLines.map((l: string) => { const m = l.match(/\((\d{1,5})\)\s*[G-]\s*/); return m?parseInt(m[1],10):null }).filter((n: number | null)=>n!==null) as number[]
+    const listNums = listLines.map((l: string) => { const m = l.match(/\((\d+)\)\s*[G-]\s*/); return m?parseInt(m[1],10):null }).filter((n: number | null)=>n!==null) as number[]
     const ascending = listNums.every((n: number, i: number, arr: number[])=> i===0 || arr[i-1]<=n)
     const dupList = listNums.filter((n: number, i: number, arr: number[])=> arr.indexOf(n) !== i)
     report.numerals.list = { ascending, duplicates: dupList }

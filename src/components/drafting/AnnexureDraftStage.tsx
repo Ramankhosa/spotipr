@@ -11,6 +11,7 @@ import WritingSamplesModal from './WritingSamplesModal'
 import PersonaManager, { type PersonaSelection } from './PersonaManager'
 // REMOVED: InlineSectionValidator - validation now handled by AI Review only
 import type { ValidationIssue as UnifiedValidationIssue } from '@/types/validation'
+import { isDrawingSectionKey } from '@/lib/figure-availability'
 
 // ============================================================================
 // AI Review Issue Type
@@ -1652,6 +1653,7 @@ const fallbackSections: SectionConfig[] = [
 ]
 
 export default function AnnexureDraftStage({ session, patent, onComplete, onRefresh }: AnnexureDraftStageProps) {
+  const figuresSkipped = !!session?.figuresSkipped
   const [generated, setGenerated] = useState<Record<string, string>>({})
   const [debugSteps, setDebugSteps] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
@@ -1694,6 +1696,20 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [profileLoading, setProfileLoading] = useState<boolean>(false)
   const [profileError, setProfileError] = useState<string | null>(null)
   const [usingFallback, setUsingFallback] = useState<boolean>(false)
+  const visibleSectionConfigs = useMemo(() => {
+    const source = sectionConfigs || fallbackSections
+    if (!figuresSkipped) return source
+    return source
+      .map(section => {
+        const keys = section.keys.filter(key => !isDrawingSectionKey(key))
+        return {
+          ...section,
+          keys,
+          label: keys.length === 1 ? (displayName[keys[0]] || section.label) : section.label
+        }
+      })
+      .filter(section => section.keys.length > 0)
+  }, [sectionConfigs, figuresSkipped])
   
   // Activity Panel Visibility
   const [showActivity, setShowActivity] = useState(true)
@@ -1899,6 +1915,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   // Returns { figures, hasAppended, missingCount } for warning computation
   // Now uses language-aware diagram selection based on active jurisdiction
   const figuresData = useMemo(() => {
+    if (figuresSkipped) {
+      return { figures: [], hasAppended: false, missingCount: 0 }
+    }
+
     const buildSketchImageUrl = (sketch: any): string | null => {
       const raw = typeof sketch?.imagePath === 'string'
         ? sketch.imagePath
@@ -2090,7 +2110,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     }
 
     return { figures, hasAppended, missingCount }
-  }, [figurePlans, diagramSources, sketchRecords, figureSequence, figureSequenceFinalized, patent, findBestDiagramSource])
+  }, [figuresSkipped, figurePlans, diagramSources, sketchRecords, figureSequence, figureSequenceFinalized, patent, findBestDiagramSource])
 
   // Extract figures and warning state from memoized data
   const unifiedFigures = figuresData.figures
@@ -2155,6 +2175,61 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     }
     await onComplete(payload)
     await onRefresh()
+  }
+
+  const persistPersonaConfig = async (enabled: boolean, selection?: PersonaSelection) => {
+    if (!session?.id) return null
+    const response = await onComplete({
+      action: 'update_persona_config',
+      sessionId: session.id,
+      enabled,
+      personaSelection: selection
+    })
+    if (response?.error) throw new Error(response.error)
+    setUsePersonaStyle(Boolean(response?.usePersonaStyle))
+    setPersonaSelection(response?.personaSelection?.primaryPersonaId ? response.personaSelection : selection)
+    return response
+  }
+
+  const formatPersonaCoverageWarning = (warnings: any[]) => {
+    const lines = (Array.isArray(warnings) ? warnings : [])
+      .map((warning: any) => {
+        const fallback = warning?.fallback === 'personal_sample'
+          ? 'personal non-persona sample will be used'
+          : 'no style block will be used'
+        return `- ${warning?.sectionKey || 'section'} (${warning?.jurisdiction || activeJurisdiction}): ${fallback}`
+      })
+      .join('\n')
+
+    return `The selected persona is missing writing samples for this generation.\n\n${lines || '- One or more sections have no persona sample.'}\n\nContinue without persona style for those missing sections?`
+  }
+
+  const generateSectionsWithPersonaHandling = async (payload: any) => {
+    let response = await onComplete(payload)
+    if (response?.code === 'PERSONA_COVERAGE_WARNING') {
+      const confirmed = window.confirm(formatPersonaCoverageWarning(response.personaWarnings || []))
+      if (!confirmed) return { cancelled: true }
+      response = await onComplete({ ...payload, acceptPersonaWarnings: true })
+    }
+    if (response?.error) throw new Error(response.error)
+    return response
+  }
+
+  const handleStyleToggle = async () => {
+    try {
+      if (usePersonaStyle) {
+        await persistPersonaConfig(false, personaSelection)
+        return
+      }
+      if (!personaSelection?.primaryPersonaId) {
+        setShowPersonaManager(true)
+        return
+      }
+      await persistPersonaConfig(true, personaSelection)
+    } catch (error) {
+      console.error('Failed to update persona style:', error)
+      alert(error instanceof Error ? error.message : 'Failed to update persona style.')
+    }
   }
 
   const handleSourceChange = async (code: string) => {
@@ -2259,11 +2334,21 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         advantageousEffects: isReference ? (rawDraft.advantageousEffects || extraSections.advantageousEffects || '') : (extraSections.advantageousEffects || ''),
         modeOfCarryingOut: isReference ? (rawDraft.modeOfCarryingOut || extraSections.modeOfCarryingOut || '') : (extraSections.modeOfCarryingOut || '')
       }
+      if (figuresSkipped) {
+        initial.briefDescriptionOfDrawings = ''
+      }
       setGenerated(initial)
     } else {
       setGenerated({})
     }
-  }, [latestDrafts, activeJurisdiction])
+  }, [latestDrafts, activeJurisdiction, figuresSkipped])
+
+  useEffect(() => {
+    const savedPersonaSelection = (session as any)?.personaSelection as PersonaSelection | undefined
+    const savedPersonaEnabled = Boolean((session as any)?.usePersonaStyle ?? (session as any)?.personaStyleEnabled)
+    setPersonaSelection(savedPersonaSelection?.primaryPersonaId ? savedPersonaSelection : undefined)
+    setUsePersonaStyle(Boolean(savedPersonaEnabled && savedPersonaSelection?.primaryPersonaId))
+  }, [session])
 
   // Sync active jurisdiction when session updates
   useEffect(() => {
@@ -2886,9 +2971,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     setShowActivity(true)
     setCurrentKeys(keys)
     try {
-      const sections = keys.filter(Boolean)
+      const sections = keys.filter(Boolean).filter(key => !figuresSkipped || !isDrawingSectionKey(key))
       if (sections.length === 0) {
-        throw new Error('No valid sections to generate')
+        setLoading(false)
+        setCurrentKeys(null)
+        return
       }
       
       const isReference = activeJurisdiction.toUpperCase() === 'REFERENCE'
@@ -2919,7 +3006,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         // Avoiding refresh reduces delay and prevents UI flicker
       } else {
         // Standard generation for non-REFERENCE jurisdictions
-        const res = await onComplete({
+        const res = await generateSectionsWithPersonaHandling({
           action: 'generate_sections',
           sessionId: session?.id,
           sections,
@@ -2927,6 +3014,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           personaSelection, // Pass selected personas for multi-persona style support
           jurisdiction: activeJurisdiction
         })
+        if (res?.cancelled) return
         const incoming = res?.generated || {}
         const filtered: Record<string, string> = {}
         Object.entries(incoming).forEach(([k, v]) => {
@@ -2963,7 +3051,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   }
   
   // Helper function to generate a single section (used by auto-mode)
-  const generateSingleSection = async (sectionKey: string, isReference: boolean): Promise<{ success: boolean; content?: string; error?: string }> => {
+  const generateSingleSection = async (sectionKey: string, isReference: boolean): Promise<{ success: boolean; content?: string; error?: string; cancelled?: boolean }> => {
     try {
       if (isReference) {
         // Use REFERENCE-specific API
@@ -2989,7 +3077,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         return { success: false, error: 'No content returned' }
       } else {
         // Standard generation
-        const res = await onComplete({
+        const res = await generateSectionsWithPersonaHandling({
           action: 'generate_sections',
           sessionId: session?.id,
           sections: [sectionKey],
@@ -2997,6 +3085,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           personaSelection, // Pass selected personas for multi-persona style support
           jurisdiction: activeJurisdiction
         })
+        if (res?.cancelled) {
+          return { success: false, cancelled: true, error: 'Generation cancelled' }
+        }
         const incoming = res?.generated || {}
         const value = typeof incoming?.[sectionKey] === 'string' ? incoming[sectionKey].trim() : ''
         if (value) {
@@ -3084,6 +3175,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         
         // First attempt
         let result = await generateSingleSection(sectionKey, isReference)
+        if (result.cancelled) {
+          autoModeCancelledRef.current = true
+          setSectionLoading(prev => ({ ...prev, [sectionKey]: false }))
+          break
+        }
         
         // If failed, retry once
         if (!result.success) {
@@ -3100,6 +3196,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           }
           
           result = await generateSingleSection(sectionKey, isReference)
+          if (result.cancelled) {
+            autoModeCancelledRef.current = true
+            setSectionLoading(prev => ({ ...prev, [sectionKey]: false }))
+            break
+          }
         }
         
         setSectionLoading(prev => ({ ...prev, [sectionKey]: false }))
@@ -3166,10 +3267,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const handleAutoGenerateAll = async () => {
     if (autoModeRunning || loading) return
 
-    if (!sectionConfigs) return
+    if (visibleSectionConfigs.length === 0) return
 
     // Get all section keys that don't have content yet
-    const pendingSections = sectionConfigs
+    const pendingSections = visibleSectionConfigs
       .map(s => s.keys[0])
       .filter(key => key && !generated?.[key]?.trim())
 
@@ -3247,7 +3348,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         // Standard regeneration for non-REFERENCE jurisdictions
         const instructions: Record<string, string> = {}
         if (regenRemarks[key]) instructions[key] = regenRemarks[key]
-        const res = await onComplete({
+        const res = await generateSectionsWithPersonaHandling({
           action: 'generate_sections',
           sessionId: session?.id,
           sections: [key],
@@ -3256,6 +3357,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           personaSelection, // Pass selected personas for multi-persona style support
           jurisdiction: activeJurisdiction
         })
+        if (res?.cancelled) return
         const incoming = res?.generated || {}
         const value = typeof incoming?.[key] === 'string' ? incoming[key].trim() : ''
         if (value) setGenerated(prev => ({ ...prev, [key]: value }))
@@ -3506,7 +3608,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   usePersonaStyle ? 'bg-emerald-50' : 'bg-gray-50'
                 }`}>
                   <button
-                    onClick={() => setUsePersonaStyle(!usePersonaStyle)}
+                    onClick={() => { void handleStyleToggle() }}
                     className={`relative w-9 h-5 rounded-full transition-colors ${
                       usePersonaStyle ? 'bg-emerald-500' : 'bg-gray-300'
                     }`}
@@ -3911,7 +4013,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         )}
 
         <div className="space-y-10">
-            {(sectionConfigs || fallbackSections).map((section, idx) => {
+            {visibleSectionConfigs.map((section, idx) => {
               const isGeneratingThis = loading && currentKeys?.join('|') === section.keys.join('|')
               const isRegeneratingThis = section.keys.some(k => sectionLoading[k])
               const isWorking = isGeneratingThis || isRegeneratingThis
@@ -4625,6 +4727,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             )})}
 
             {/* Drawings Section */}
+            {!figuresSkipped && (
             <div className="group relative hover:bg-gray-50/30 transition-colors -mx-4 px-4 py-2 rounded-lg mt-16 break-before-page">
                <div className="flex items-baseline justify-between mb-8">
                   <h3 className="text-lg font-bold text-gray-900 uppercase tracking-wide">
@@ -4707,6 +4810,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                  )}
                </div>
             </div>
+            )}
            
             {/* Validation & Export Section (Multi-jurisdiction - including Reference Draft) */}
             {isMultiJurisdiction && (
@@ -4813,10 +4917,18 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           showSelector={true}
           currentSelection={personaSelection}
           onSelectPersona={(selection) => {
-            setPersonaSelection(selection)
-            if (selection.primaryPersonaId) {
-              setUsePersonaStyle(true) // Auto-enable style when persona selected
-            }
+            void (async () => {
+              try {
+                if (selection.primaryPersonaId) {
+                  await persistPersonaConfig(true, selection)
+                } else {
+                  await persistPersonaConfig(false, selection)
+                }
+              } catch (error) {
+                console.error('Failed to save persona selection:', error)
+                alert(error instanceof Error ? error.message : 'Failed to save persona selection.')
+              }
+            })()
           }}
         />
       )}

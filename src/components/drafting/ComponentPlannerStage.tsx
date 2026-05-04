@@ -18,6 +18,16 @@ interface Component {
   referenceLabel?: string
   range?: string
   sequence?: number
+  inputs?: string
+  outputs?: string
+  dependencies?: string
+  figureHint?: string
+  parent?: string
+  level?: number
+  numberingHint?: string
+  conditions?: string
+  alternatives?: string
+  parentId?: string
 }
 
 type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'
@@ -74,41 +84,121 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     return []
   }
 
+  const normalizeNameKey = (value: any): string => String(value || '').trim().toLowerCase()
+
+  const isMeaningfulParent = (value: any): value is string => {
+    const normalized = normalizeNameKey(value)
+    return !!normalized && normalized !== 'not stated by source' && normalized !== 'none' && normalized !== 'n/a'
+  }
+
+  const makeUniqueId = (baseId: string, usedIds: Set<string>): string => {
+    let id = baseId
+    let suffix = 2
+    while (usedIds.has(id)) {
+      id = `${baseId}_${suffix}`
+      suffix++
+    }
+    usedIds.add(id)
+    return id
+  }
+
+  const buildComponentId = (value: any, index: number, usedIds: Set<string>): string => {
+    const base = String(value || `component_${index + 1}`)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || `component_${index + 1}`
+
+    return makeUniqueId(base, usedIds)
+  }
+
+  const normalizeComponentsForPlanner = (rawComponents: any[]): Component[] => {
+    const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER']
+    const usedIds = new Set<string>()
+
+    const normalized = rawComponents.map((comp: any, index: number) => {
+      const name = typeof comp?.name === 'string' && comp.name.trim()
+        ? comp.name.trim()
+        : `Component ${index + 1}`
+      const rawId = typeof comp?.id === 'string' ? comp.id.trim() : ''
+      const levelNumber = Number(comp?.level)
+
+      return {
+        ...comp,
+        id: rawId ? makeUniqueId(rawId, usedIds) : buildComponentId(name, index, usedIds),
+        name,
+        type: validTypes.includes(comp?.type) ? comp.type : 'OTHER',
+        description: typeof comp?.description === 'string' ? comp.description : '',
+        numeral: comp?.numeral,
+        referenceLabel: comp?.referenceLabel,
+        range: comp?.range,
+        sequence: typeof comp?.sequence === 'number' && comp.sequence > 0 ? comp.sequence : index + 1,
+        level: Number.isFinite(levelNumber) && levelNumber >= 0 ? Math.floor(levelNumber) : 0,
+        parentId: isMeaningfulParent(comp?.parentId) ? String(comp.parentId).trim() : undefined
+      }
+    })
+
+    const idSet = new Set(normalized.map((comp) => comp.id))
+    const lookup = new Map<string, string>()
+    normalized.forEach((comp) => {
+      lookup.set(normalizeNameKey(comp.id), comp.id)
+      lookup.set(normalizeNameKey(comp.name), comp.id)
+    })
+
+    const lastIdAtLevel = new Map<number, string>()
+    return normalized.map((comp, index) => {
+      let parentId = comp.parentId
+      if (parentId && !idSet.has(parentId)) {
+        parentId = lookup.get(normalizeNameKey(parentId))
+      }
+
+      const parentName = rawComponents[index]?.parent
+      if (!parentId && isMeaningfulParent(parentName)) {
+        parentId = lookup.get(normalizeNameKey(parentName))
+      }
+
+      if (!parentId && comp.level && comp.level > 0) {
+        for (let level = comp.level - 1; level >= 0; level--) {
+          const candidate = lastIdAtLevel.get(level)
+          if (candidate) {
+            parentId = candidate
+            break
+          }
+        }
+      }
+
+      if (parentId === comp.id) parentId = undefined
+
+      lastIdAtLevel.set(comp.level || 0, comp.id)
+      Array.from(lastIdAtLevel.keys()).forEach((level) => {
+        if (level > (comp.level || 0)) lastIdAtLevel.delete(level)
+      })
+
+      return {
+        ...comp,
+        parentId
+      }
+    })
+  }
+
   // Initialize components from referenceMap if available, otherwise from idea record
   const getInitialComponents = () => {
-    const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
-    
     // Try referenceMap first
     const refMapComponents = extractComponentsFromReferenceMap(session?.referenceMap)
     if (refMapComponents.length > 0) {
-      // Normalize existing components from referenceMap
-      return refMapComponents.map((comp: any) => ({
-        ...comp,
-        type: validTypes.includes(comp.type) ? comp.type : 'OTHER',
-        description: comp.description || ''
-      }))
+      return normalizeComponentsForPlanner(refMapComponents)
     }
 
     // Convert idea record components to component planner format
     const ideaComponents = session?.ideaRecord?.components
     if (Array.isArray(ideaComponents) && ideaComponents.length > 0) {
-      return ideaComponents.map((comp: any, index: number) => {
-        const normalizedType = validTypes.includes(comp.type) ? comp.type : 'OTHER';
-        return {
-          id: comp.name?.toLowerCase().replace(/\s+/g, '_') || `component_${index}`,
-          name: comp.name || `Component ${index + 1}`,
-          type: normalizedType,
-          description: comp.description || '',
-          numeral: undefined,
-          range: undefined
-        };
-      })
+      return normalizeComponentsForPlanner(ideaComponents)
     }
 
     return []
   }
 
-  const [components, setComponents] = useState<Component[]>(getInitialComponents())
+  const [components, setComponents] = useState<Component[]>(() => getInitialComponents())
   const [isProcessing, setIsProcessing] = useState(false)
   const [isDirty, setIsDirty] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -138,6 +228,33 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     session?.referenceMap?.numberingStyle || null
   )
   const effectiveNumberingStyle = numberingStyleOverride || deriveDefaultNumberingStyle()
+
+  const applyReferenceMapResult = (result: any, fallbackError: string): boolean => {
+    if (!result) {
+      setError(fallbackError)
+      return false
+    }
+
+    if (result.error) {
+      setError(typeof result.error === 'string' ? result.error : String(result.error))
+      const details = Array.isArray(result.details)
+        ? result.details.map((detail: any) => typeof detail === 'string' ? detail : JSON.stringify(detail))
+        : result.details
+          ? [String(result.details)]
+          : []
+      setValidationErrors(details)
+      return false
+    }
+
+    if (result.referenceMap) {
+      // Extract components array from response (handles nested structure)
+      const comps = extractComponentsFromReferenceMap(result.referenceMap)
+      setComponents(comps)
+      setValidationErrors([])
+    }
+
+    return true
+  }
 
   const addComponent = () => {
     const newComponent: Component = {
@@ -212,11 +329,13 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           const normalizedType = validTypes.includes(comp.type) ? comp.type : 'OTHER';
           
           return {
+            ...comp,
             id: comp.id,
             name: comp.name.trim(),
             type: normalizedType,
             description: (comp.description || '').trim(),
-            numeral: typeof comp.numeral === 'number' ? comp.numeral : undefined,
+            numeral: undefined,
+            referenceLabel: undefined,
             // @ts-ignore include optional parentId for submodules
             parentId: (comp as any).parentId || undefined
           };
@@ -234,15 +353,11 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         action: 'update_component_map',
         sessionId: session?.id,
         components: validComponents,
+        autoAssign: true,
         numberingStyleOverride: numberingStyleOverride // Pass user override if set
       })
 
-      if (result.referenceMap) {
-        // Extract components array from response (handles nested structure)
-        const comps = extractComponentsFromReferenceMap(result.referenceMap)
-        setComponents(comps)
-        setValidationErrors([])
-      }
+      applyReferenceMapResult(result, 'Failed to assign numerals. Please check the page error above and retry.')
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to assign numerals'
       setError(errorMessage)
@@ -265,10 +380,10 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     comp.name.trim() && comp.numeral !== undefined
   )
 
-  const handleSaveComponents = async () => {
+  const handleSaveComponents = async (): Promise<boolean> => {
     if (components.length === 0) {
       setError('Add at least one component first')
-      return
+      return false
     }
     setIsProcessing(true)
     setError(null)
@@ -277,6 +392,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       const validComponents = components
         .filter(comp => comp.name && comp.name.trim())
         .map(comp => ({
+          ...comp,
           id: comp.id,
           name: comp.name.trim(),
           type: comp.type,
@@ -291,7 +407,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       if (validComponents.length === 0) {
         setError('No valid components found. Please ensure all components have names.');
         setIsProcessing(false);
-        return;
+        return false;
       }
 
       const result = await onComplete({
@@ -300,12 +416,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         components: validComponents,
         numberingStyleOverride: numberingStyleOverride // Pass user override if set
       })
-      if (result.referenceMap) {
-        // Extract components array from response (handles nested structure)
-        const comps = extractComponentsFromReferenceMap(result.referenceMap)
-        setComponents(comps)
-        setValidationErrors([])
-      }
+      return applyReferenceMapResult(result, 'Failed to save components. Please check the page error above and retry.')
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to save components'
       setError(errorMessage)
@@ -317,6 +428,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           setValidationErrors([errorMessage])
         }
       }
+      return false
     } finally {
       setIsProcessing(false)
     }
@@ -395,7 +507,6 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             <input
               type="number"
               min={1}
-              max={999}
               value={node.numeral ?? ''}
               onChange={(e) => {
                 const num = e.target.value === '' ? undefined : Number(e.target.value)
@@ -745,7 +856,8 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           </button>
           <button
             onClick={async () => {
-              await handleSaveComponents()
+              const saved = await handleSaveComponents()
+              if (!saved) return
               await onComplete({ action: 'set_stage', sessionId: session?.id, stage: 'FIGURE_PLANNER' })
             }}
             disabled={!canProceed}

@@ -112,8 +112,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [showClaimsSection, setShowClaimsSection] = useState(true)
   const claimsEditorRef = useRef<RichTextEditorRef>(null)
   const [isEditingClaims, setIsEditingClaims] = useState(false)
+  const [claimGenerationQuality, setClaimGenerationQuality] = useState<any>(null)
 
-  // Patent Type state (decided pre-claims, stored on session - NOT normalizedData)
+  // Patent type state (returned by Stage 0 normalization, stored on session, editable by user)
   const [patentType, setPatentType] = useState<'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null>(null)
   const [isUpdatingPatentType, setIsUpdatingPatentType] = useState(false)
   const [showPatentTypeDropdown, setShowPatentTypeDropdown] = useState(false)
@@ -155,7 +156,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   // Jurisdiction info
   const activeJurisdiction = (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase()
   const allJurisdictions = session?.draftingJurisdictions || [activeJurisdiction]
-  const allowRefine = session?.ideaRecord?.allowRefine !== false // Default to true
+  const normalizedRecord = (session?.ideaRecord?.normalizedData as any) || {}
+  const sourceHandlingMode = normalizedRecord.sourceHandlingMode
+  const allowRefine = sourceHandlingMode === 'PRESERVE' ? false : true
 
   // Load normalized data and claims on component mount
   useEffect(() => {
@@ -173,7 +176,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
           bestMethod: session.ideaRecord.bestMethod,
           abstract: session.ideaRecord.abstract,
           cpcCodes: session.ideaRecord.cpcCodes,
-          ipcCodes: session.ideaRecord.ipcCodes
+          ipcCodes: session.ideaRecord.ipcCodes,
+          sourceFactLedger: session.ideaRecord.normalizedData?.sourceFactLedger,
+          normalizationReviewWarnings: session.ideaRecord.normalizedData?.normalizationReviewWarnings,
+          sourceHandlingMode: session.ideaRecord.normalizedData?.sourceHandlingMode
         }
       })
       setShowNormalized(true)
@@ -206,6 +212,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         setClaimsText(savedClaims)
       }
     }
+    setClaimGenerationQuality(normalizedData.claimGenerationQuality || null)
     
     // Check if claims are frozen
     if (normalizedData.claimsApprovedAt) {
@@ -217,9 +224,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
     if (normalizedData.userClaimRemarks) {
       setUserClaimRemarks(normalizedData.userClaimRemarks)
     }
+
+    const savedPersonaSelection = (session as any)?.personaSelection as PersonaSelection | undefined
+    const savedPersonaEnabled = Boolean((session as any)?.usePersonaStyle ?? (session as any)?.personaStyleEnabled)
+    setPersonaSelection(savedPersonaSelection?.primaryPersonaId ? savedPersonaSelection : undefined)
+    setUsePersonaStyle(Boolean(savedPersonaEnabled && savedPersonaSelection?.primaryPersonaId))
   }, [session])
 
-  // Load patent type from session (stored on session, NOT normalizedData)
+  // Load patent type from session
   useEffect(() => {
     if (session?.patentTypePrimary) {
       setPatentType(session.patentTypePrimary as any)
@@ -261,6 +273,17 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const strippedClaims = typeof claimsText === 'string' ? claimsText.replace(/<[^>]*>/g, '').trim() : ''
   const hasClaims = strippedClaims.length > 0 || claims.length > 0
   const canProceed = !!normalizedData && hasClaims
+  const qualityStatus = claimGenerationQuality?.status as string | undefined
+  const qualityWarnings = Array.isArray(claimGenerationQuality?.warnings)
+    ? claimGenerationQuality.warnings
+    : []
+  const qualityBadge = qualityStatus === 'source_supported'
+    ? { label: 'Source-supported', className: 'bg-emerald-100 text-emerald-700 border-emerald-200' }
+    : qualityStatus === 'thin_disclosure'
+      ? { label: 'Thin disclosure', className: 'bg-amber-100 text-amber-800 border-amber-200' }
+      : qualityStatus === 'needs_review'
+        ? { label: 'Needs review', className: 'bg-rose-100 text-rose-700 border-rose-200' }
+        : null
 
   // Check for available personas
   const checkPersonasAvailable = async (): Promise<boolean> => {
@@ -301,22 +324,58 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
     }
   }
 
+  const persistPersonaConfig = async (enabled: boolean, selection?: PersonaSelection) => {
+    if (!session?.id) return null
+    const response = await onComplete({
+      action: 'update_persona_config',
+      sessionId: session.id,
+      enabled,
+      personaSelection: selection
+    })
+    if (response?.error) throw new Error(response.error)
+    setUsePersonaStyle(Boolean(response?.usePersonaStyle))
+    setPersonaSelection(response?.personaSelection?.primaryPersonaId ? response.personaSelection : selection)
+    return response
+  }
+
+  const formatPersonaCoverageWarning = (warnings: any[]) => {
+    const lines = (Array.isArray(warnings) ? warnings : [])
+      .map((warning: any) => {
+        const fallback = warning?.fallback === 'personal_sample'
+          ? 'personal non-persona sample will be used'
+          : 'no style block will be used'
+        return `- ${warning?.sectionKey || 'section'} (${warning?.jurisdiction || activeJurisdiction}): ${fallback}`
+      })
+      .join('\n')
+
+    return `The selected persona is missing writing samples for this generation.\n\n${lines || '- One or more sections have no persona sample.'}\n\nContinue without persona style for those missing sections?`
+  }
+
   // Handle style toggle - check if personas exist when enabling
   const handleStyleToggle = async () => {
-    if (!usePersonaStyle) {
-      // Trying to enable style - check if personas available
+    try {
+      setError(null)
+      if (usePersonaStyle) {
+        await persistPersonaConfig(false, personaSelection)
+        return
+      }
+
       const hasPersonas = await checkPersonasAvailable()
       if (!hasPersonas) {
         setShowNoPersonasModal(true)
         return
       }
-      // If no persona selected yet, prompt to select one
+
       if (!personaSelection?.primaryPersonaId) {
         setShowPersonaManager(true)
         return
       }
+
+      await persistPersonaConfig(true, personaSelection)
+    } catch (e) {
+      console.error('Failed to update persona style:', e)
+      setError(e instanceof Error ? e.message : 'Failed to update persona style.')
     }
-    setUsePersonaStyle(!usePersonaStyle)
   }
 
   // Generate claims using jurisdiction-aware rules
@@ -326,8 +385,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
     try {
       setIsGeneratingClaims(true)
       setError(null)
+      const currentNormalizedData = normalizedData?.normalizedData || normalizedRecord
 
-      const response = await onComplete({
+      const payload = {
         action: 'generate_claims',
         sessionId: session.id,
         jurisdiction: activeJurisdiction,
@@ -338,14 +398,29 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         personaSelection,
         ideaContext: {
           title,
+          rawIdea,
           problem,
           objectives,
           logic,
           components,
           bestMethod,
-          abstract: abstractText
+          abstract: abstractText,
+          coreInventiveConcept: currentNormalizedData.coreInventiveConcept,
+          claimableFeatures: currentNormalizedData.claimableFeatures,
+          fallbackLimitations: currentNormalizedData.fallbackLimitations,
+          doNotClaim: currentNormalizedData.doNotClaim,
+          sourceFactLedger: currentNormalizedData.sourceFactLedger,
+          normalizationReviewWarnings: currentNormalizedData.normalizationReviewWarnings
         }
-      })
+      }
+
+      let response = await onComplete(payload)
+
+      if (response?.code === 'PERSONA_COVERAGE_WARNING') {
+        const confirmed = window.confirm(formatPersonaCoverageWarning(response.personaWarnings || []))
+        if (!confirmed) return
+        response = await onComplete({ ...payload, acceptPersonaWarnings: true })
+      }
 
       if (response?.error) {
         throw new Error(response.error)
@@ -379,13 +454,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       if (response?.patentType) {
         setPatentType(response.patentType as any)
       }
+      setClaimGenerationQuality(response.claimGenerationQuality || null)
 
       await onRefresh()
       // Clear instructions after successful regeneration
       setRegenerateInstructions('')
     } catch (e) {
       console.error('Failed to generate claims:', e)
-      setError('Failed to generate claims. Please try again.')
+      setError(e instanceof Error ? e.message : 'Failed to generate claims. Please try again.')
     } finally {
       setIsGeneratingClaims(false)
     }
@@ -617,7 +693,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
               {allowRefine ? (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  Kisho Enhanced
+                  Structured by Kisho
                 </>
               ) : (
                 <>
@@ -728,7 +804,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                     Invention Structure
                   </h3>
                   <Badge variant="secondary" className="text-xs">
-                    {allowRefine ? 'AI Enhanced' : 'Parsed'}
+                    {allowRefine ? 'Structured' : 'Parsed'}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-2">
@@ -775,7 +851,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 action: 'normalize_idea',
                                 sessionId: session.id,
                                 rawIdea: currentRaw,
-                                title: currentTitle
+                                title: currentTitle,
+                                allowRefine
                               })
                               await onRefresh()
                               setShowNormalized(true)
@@ -787,14 +864,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                           }}
                           className="inline-flex items-center px-2 py-1.5 text-xs font-medium rounded-md text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-60"
                           disabled={isRegenerating}
-                          title="Regenerate AI Structure"
+                          title="Regenerate Structure"
                         >
                           <RefreshCw className={`w-3 h-3 ${isRegenerating ? 'animate-spin' : ''}`} />
                         </button>
                       </div>
                     </div>
 
-                    <div className="p-6 space-y-6 max-h-[600px] overflow-y-auto">
+                    <div className="p-6 space-y-6 max-h-[1200px] overflow-y-auto">
                       {/* Experimental Data Reminder */}
                       <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md text-xs text-blue-700">
                         <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -908,7 +985,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         
                         {isEditing ? (
                           // Editable components list
-                          <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                          <div className="space-y-2 max-h-[800px] overflow-y-auto">
                             {components?.length > 0 ? (
                               components.map((comp: any, idx: number) => (
                                 <div key={idx} className="p-3 bg-gray-50 rounded-lg border border-gray-200 space-y-2">
@@ -1007,7 +1084,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                           // Read-only display
                           components?.length > 0 ? (
                             <div className="grid grid-cols-2 gap-2">
-                              {components.slice(0, 6).map((comp: any, idx: number) => (
+                              {components.map((comp: any, idx: number) => (
                                 <div key={idx} className="p-2 bg-gray-50 rounded border border-gray-100 text-xs">
                                   <span className="font-medium text-gray-900">{comp.name}</span>
                                   {comp.type && (
@@ -1015,11 +1092,6 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                   )}
                                 </div>
                               ))}
-                              {components.length > 6 && (
-                                <div className="p-2 text-xs text-gray-500">
-                                  +{components.length - 6} more...
-                                </div>
-                              )}
                             </div>
                           ) : (
                             <p className="text-sm text-gray-500 italic">No components identified</p>
@@ -1368,7 +1440,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         
                         <div className="text-center">
                           <Button
-                            onClick={handleGenerateClaims}
+                            onClick={() => handleGenerateClaims()}
                             className="bg-amber-600 hover:bg-amber-700 text-white"
                             disabled={!normalizedData}
                           >
@@ -1404,6 +1476,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                     Edit Mode
                                   </Badge>
                                 )}
+                                {qualityBadge && !isEditingClaims && (
+                                  <Badge variant="outline" className={`text-xs border ${qualityBadge.className}`}>
+                                    {qualityBadge.label}
+                                  </Badge>
+                                )}
                               </div>
                               
                               {/* Edit Toggle Button */}
@@ -1433,6 +1510,22 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 </div>
                               )}
                             </div>
+
+                            {qualityWarnings.length > 0 && (
+                              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                                <div className="flex items-start gap-2">
+                                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
+                                  <div className="space-y-1">
+                                    <p className="font-medium">Claim quality warnings</p>
+                                    <ul className="list-disc pl-4 text-xs leading-relaxed">
+                                      {qualityWarnings.slice(0, 3).map((warning: any, idx: number) => (
+                                        <li key={idx}>{warning?.message || String(warning)}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
 
                             {/* Claims Display/Editor */}
                             {isEditingClaims ? (
@@ -1489,7 +1582,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={handleGenerateClaims}
+                                  onClick={() => handleGenerateClaims()}
                                   disabled={claimsFrozen || isGeneratingClaims}
                                 >
                                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
@@ -1618,10 +1711,19 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
           showSelector={true}
           currentSelection={personaSelection}
           onSelectPersona={(selection) => {
-            setPersonaSelection(selection)
-            if (selection.primaryPersonaId) {
-              setUsePersonaStyle(true) // Auto-enable style when persona selected
-            }
+            void (async () => {
+              try {
+                setError(null)
+                if (selection.primaryPersonaId) {
+                  await persistPersonaConfig(true, selection)
+                } else {
+                  await persistPersonaConfig(false, selection)
+                }
+              } catch (e) {
+                console.error('Failed to save persona selection:', e)
+                setError(e instanceof Error ? e.message : 'Failed to save persona selection.')
+              }
+            })()
           }}
         />
       )}

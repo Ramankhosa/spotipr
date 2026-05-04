@@ -336,20 +336,42 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
     try {
       setLoadingPreview(true)
       setError(null)
-      const resp = await onComplete({
+      const formatPersonaCoverageWarning = (warnings: any[]) => {
+        const jurisdiction = (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase()
+        const lines = (Array.isArray(warnings) ? warnings : [])
+          .map((warning: any) => {
+            const fallback = warning?.fallback === 'personal_sample'
+              ? 'personal non-persona sample will be used'
+              : 'no style block will be used'
+            return `- ${warning?.sectionKey || 'claims'} (${warning?.jurisdiction || jurisdiction}): ${fallback}`
+          })
+          .join('\n')
+
+        return `The selected persona is missing writing samples for claim refinement.\n\n${lines || '- Claims have no persona sample.'}\n\nContinue without persona style for the missing sample?`
+      }
+
+      const payload = {
         action: 'claim_refinement_preview',
         sessionId: session.id,
         useAuto,
         useManual,
         selectedPatents,
         additionalInstructions: showAdditionalInstructions ? additionalInstructions : ''
-      })
+      }
+
+      let resp = await onComplete(payload)
+      if (resp?.code === 'PERSONA_COVERAGE_WARNING') {
+        const confirmed = window.confirm(formatPersonaCoverageWarning(resp.personaWarnings || []))
+        if (!confirmed) return
+        resp = await onComplete({ ...payload, acceptPersonaWarnings: true })
+      }
+      if (resp?.error) throw new Error(resp.error)
       if (resp?.preview) {
         setPreview(resp.preview)
       }
     } catch (e) {
       console.error('Preview failed', e)
-      setError('Failed to generate refinement preview.')
+      setError(e instanceof Error ? e.message : 'Failed to generate refinement preview.')
     } finally {
       setLoadingPreview(false)
     }

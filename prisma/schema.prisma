@@ -1760,6 +1760,12 @@ model DraftingSession {
   manualPriorArt Json?
   priorArtConfig Json? @map("prior_art_config")
 
+  // Writing persona configuration for claim/draft generation
+  personaStyleEnabled   Boolean   @default(false) @map("persona_style_enabled")
+  primaryPersonaId      String?   @map("primary_persona_id")
+  secondaryPersonaIds   String[]  @default([]) @map("secondary_persona_ids")
+  personaStyleUpdatedAt DateTime? @map("persona_style_updated_at")
+
   // AI analysis data for related art (Stage 3.5)
   aiAnalysisData          Json?
   // Per-jurisdiction draft status (e.g., {"IN":{status:"done",latestVersion:2}})
@@ -1798,6 +1804,8 @@ model DraftingSession {
   // Array of { type: 'diagram'|'sketch', sourceId: string, finalFigNo: number }
   figureSequence          Json?
   figureSequenceFinalized Boolean @default(false) @map("figure_sequence_finalized")
+  figuresSkipped          Boolean @default(false) @map("figures_skipped")
+  figuresSkippedAt        DateTime? @map("figures_skipped_at")
 
   // Patent Type Decision (separate from idea normalization - decided pre-claims)
   // Stores: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'

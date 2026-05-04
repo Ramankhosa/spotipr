@@ -6,6 +6,19 @@ export type DraftClaim = {
   category?: 'method' | 'system' | 'apparatus' | 'composition' | 'product'
 }
 
+export type DraftClaimSupportMatrixItem = {
+  claimNumber: number
+  supportRefs: string[]
+  supportSummary?: string
+  sourceFields?: string[]
+}
+
+export type DraftClaimsGenerationPayload = {
+  claims: DraftClaim[]
+  supportMatrix: DraftClaimSupportMatrixItem[]
+  qualityWarnings: string[]
+}
+
 export class DraftClaimsParseError extends Error {
   constructor(message = 'Could not parse generated claims from the LLM response.') {
     super(message)
@@ -235,6 +248,66 @@ function normalizeClaimsFromParsed(parsed: any): DraftClaim[] {
     .filter(Boolean) as DraftClaim[]
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(item => typeof item === 'string' ? item.trim() : item == null ? '' : String(item).trim())
+    .filter(Boolean)
+}
+
+function normalizeSupportMatrixItem(raw: any): DraftClaimSupportMatrixItem | null {
+  if (!raw || typeof raw !== 'object') return null
+  const claimNumber = Number(raw.claimNumber ?? raw.claim_number ?? raw.number ?? raw.claim)
+  if (!Number.isFinite(claimNumber) || claimNumber <= 0) return null
+
+  const supportRefs = toStringArray(raw.supportRefs ?? raw.support_refs ?? raw.sourceFactIds ?? raw.source_fact_ids ?? raw.refs)
+  const sourceFields = toStringArray(raw.sourceFields ?? raw.source_fields ?? raw.fields)
+  const supportSummary = typeof raw.supportSummary === 'string'
+    ? raw.supportSummary.trim()
+    : typeof raw.support_summary === 'string'
+      ? raw.support_summary.trim()
+      : typeof raw.summary === 'string'
+        ? raw.summary.trim()
+        : undefined
+
+  return {
+    claimNumber,
+    supportRefs,
+    ...(supportSummary ? { supportSummary } : {}),
+    ...(sourceFields.length ? { sourceFields } : {}),
+  }
+}
+
+function normalizeSupportMatrix(value: unknown): DraftClaimSupportMatrixItem[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(normalizeSupportMatrixItem)
+    .filter(Boolean) as DraftClaimSupportMatrixItem[]
+}
+
+function normalizeQualityWarnings(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(item => {
+      if (typeof item === 'string') return item.trim()
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>
+        const message = record.message || record.warning || record.reason || record.title
+        return typeof message === 'string' ? message.trim() : JSON.stringify(item)
+      }
+      return item == null ? '' : String(item).trim()
+    })
+    .filter(Boolean)
+}
+
+function normalizePayloadFromParsed(parsed: any): DraftClaimsGenerationPayload {
+  return {
+    claims: sortAndDedupeClaims(normalizeClaimsFromParsed(parsed)),
+    supportMatrix: normalizeSupportMatrix(parsed?.supportMatrix ?? parsed?.support_matrix ?? parsed?.claimSupportMatrix),
+    qualityWarnings: normalizeQualityWarnings(parsed?.qualityWarnings ?? parsed?.quality_warnings ?? parsed?.warnings),
+  }
+}
+
 function parseClaimsFromNumberedText(output: string): DraftClaim[] {
   const text = output
     .replace(/```(?:text|claims)?\s*/gi, '')
@@ -277,6 +350,10 @@ function sortAndDedupeClaims(claims: DraftClaim[]) {
 }
 
 export function parseGeneratedClaimsFromLLMOutput(output: string): DraftClaim[] {
+  return parseGeneratedClaimsPayloadFromLLMOutput(output).claims
+}
+
+export function parseGeneratedClaimsPayloadFromLLMOutput(output: string): DraftClaimsGenerationPayload {
   if (!output || !output.trim()) {
     throw new DraftClaimsParseError('The LLM returned an empty claims response.')
   }
@@ -285,12 +362,18 @@ export function parseGeneratedClaimsFromLLMOutput(output: string): DraftClaim[] 
     const parsed = parseJsonCandidate(candidate)
     if (!parsed) continue
 
-    const claims = sortAndDedupeClaims(normalizeClaimsFromParsed(parsed))
-    if (claims.length > 0) return claims
+    const payload = normalizePayloadFromParsed(parsed)
+    if (payload.claims.length > 0) return payload
   }
 
   const textClaims = sortAndDedupeClaims(parseClaimsFromNumberedText(output))
-  if (textClaims.length > 0) return textClaims
+  if (textClaims.length > 0) {
+    return {
+      claims: textClaims,
+      supportMatrix: [],
+      qualityWarnings: [],
+    }
+  }
 
   throw new DraftClaimsParseError()
 }

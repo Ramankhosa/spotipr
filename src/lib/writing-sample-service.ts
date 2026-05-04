@@ -22,11 +22,185 @@ export interface WritingSampleContext {
   isUniversal: boolean
   personaName?: string
   personaId?: string
+  sampleId?: string
+  sectionKey?: string
+  source?: 'persona' | 'personal' | 'personal_fallback'
 }
 
 export interface PersonaSelection {
   primaryPersonaId?: string    // Main style - structure and tone
+  primaryPersonaName?: string
   secondaryPersonaIds?: string[] // Additional styles - domain terminology
+  secondaryPersonaNames?: string[]
+}
+
+export interface ResolvedPersonaSelection {
+  primaryPersonaId?: string
+  primaryPersonaName?: string
+  secondaryPersonaIds: string[]
+  secondaryPersonaNames: string[]
+}
+
+export interface PersonaCoverageWarning {
+  sectionKey: string
+  jurisdiction: string
+  primaryPersonaId: string
+  primaryPersonaName?: string
+  fallback: 'personal_sample' | 'none'
+  message: string
+}
+
+export class PersonaAccessError extends Error {
+  status = 403
+  code = 'PERSONA_ACCESS_DENIED'
+
+  constructor(message = 'Persona not found or access denied') {
+    super(message)
+    this.name = 'PersonaAccessError'
+  }
+}
+
+function uniqueIds(ids: Array<string | undefined | null>): string[] {
+  return Array.from(new Set(
+    ids
+      .map(id => typeof id === 'string' ? id.trim() : '')
+      .filter(Boolean)
+  ))
+}
+
+export function normalizePersonaSelectionInput(selection?: PersonaSelection | null): PersonaSelection | undefined {
+  if (!selection) return undefined
+  const primaryPersonaId = typeof selection.primaryPersonaId === 'string'
+    ? selection.primaryPersonaId.trim()
+    : undefined
+  const secondaryPersonaIds = uniqueIds(selection.secondaryPersonaIds || [])
+    .filter(id => id !== primaryPersonaId)
+
+  if (!primaryPersonaId && secondaryPersonaIds.length === 0) return undefined
+
+  return {
+    primaryPersonaId: primaryPersonaId || undefined,
+    primaryPersonaName: selection.primaryPersonaName,
+    secondaryPersonaIds,
+    secondaryPersonaNames: Array.isArray(selection.secondaryPersonaNames) ? selection.secondaryPersonaNames : []
+  }
+}
+
+export function getPersonaSelectionFromSession(session: any): PersonaSelection | undefined {
+  const primaryPersonaId = typeof session?.primaryPersonaId === 'string' ? session.primaryPersonaId : undefined
+  const secondaryPersonaIds = Array.isArray(session?.secondaryPersonaIds) ? session.secondaryPersonaIds : []
+  return normalizePersonaSelectionInput({ primaryPersonaId, secondaryPersonaIds })
+}
+
+export async function validatePersonaSelectionForUser(
+  userId: string,
+  tenantId: string | null | undefined,
+  selection?: PersonaSelection | null
+): Promise<ResolvedPersonaSelection | undefined> {
+  const normalized = normalizePersonaSelectionInput(selection)
+  if (!normalized?.primaryPersonaId) return undefined
+
+  const ids = uniqueIds([normalized.primaryPersonaId, ...(normalized.secondaryPersonaIds || [])])
+  const accessConditions: any[] = [{ createdBy: userId }]
+  if (tenantId) {
+    accessConditions.push({ tenantId, visibility: 'ORGANIZATION' })
+  }
+
+  const personas = await prisma.writingPersona.findMany({
+    where: {
+      id: { in: ids },
+      isActive: true,
+      OR: accessConditions
+    },
+    select: { id: true, name: true }
+  })
+
+  const byId = new Map(personas.map(p => [p.id, p]))
+  const missing = ids.filter(id => !byId.has(id))
+  if (missing.length > 0) {
+    throw new PersonaAccessError()
+  }
+
+  return {
+    primaryPersonaId: normalized.primaryPersonaId,
+    primaryPersonaName: byId.get(normalized.primaryPersonaId)?.name,
+    secondaryPersonaIds: (normalized.secondaryPersonaIds || []).filter(id => id !== normalized.primaryPersonaId),
+    secondaryPersonaNames: (normalized.secondaryPersonaIds || [])
+      .filter(id => id !== normalized.primaryPersonaId)
+      .map(id => byId.get(id)?.name)
+      .filter(Boolean) as string[]
+  }
+}
+
+export async function hydratePersonaSelectionForUser(
+  userId: string,
+  tenantId: string | null | undefined,
+  selection?: PersonaSelection | null
+): Promise<ResolvedPersonaSelection | undefined> {
+  return validatePersonaSelectionForUser(userId, tenantId, selection)
+}
+
+async function findPrimaryPersonaSample(personaId: string, sectionKey: string, jurisdiction: string) {
+  const samples = await prisma.writingSample.findMany({
+    where: {
+      personaId,
+      sectionKey,
+      jurisdiction: { in: [jurisdiction, '*'] },
+      isActive: true
+    },
+    include: { persona: { select: { name: true, createdBy: true } } }
+  })
+
+  return samples.find(s => s.jurisdiction === jurisdiction) || samples.find(s => s.jurisdiction === '*') || null
+}
+
+async function findDirectUserSample(userId: string, sectionKey: string, jurisdiction: string) {
+  const samples = await prisma.writingSample.findMany({
+    where: {
+      userId,
+      sectionKey,
+      personaId: null,
+      jurisdiction: { in: [jurisdiction, '*'] },
+      isActive: true
+    },
+    include: { persona: { select: { name: true } } }
+  })
+
+  return samples.find(s => s.jurisdiction === jurisdiction) || samples.find(s => s.jurisdiction === '*') || null
+}
+
+export async function getPersonaCoverageWarnings(
+  userId: string,
+  tenantId: string | null | undefined,
+  sectionKeys: string[],
+  jurisdiction: string,
+  selection?: PersonaSelection | null
+): Promise<PersonaCoverageWarning[]> {
+  const resolved = await validatePersonaSelectionForUser(userId, tenantId, selection)
+  if (!resolved?.primaryPersonaId) return []
+
+  const normalizedJurisdiction = jurisdiction.toUpperCase()
+  const uniqueSections = uniqueIds(sectionKeys)
+  const warnings: PersonaCoverageWarning[] = []
+
+  for (const sectionKey of uniqueSections) {
+    const personaSample = await findPrimaryPersonaSample(resolved.primaryPersonaId, sectionKey, normalizedJurisdiction)
+    if (personaSample) continue
+
+    const fallbackSample = await findDirectUserSample(userId, sectionKey, normalizedJurisdiction)
+    warnings.push({
+      sectionKey,
+      jurisdiction: normalizedJurisdiction,
+      primaryPersonaId: resolved.primaryPersonaId,
+      primaryPersonaName: resolved.primaryPersonaName,
+      fallback: fallbackSample ? 'personal_sample' : 'none',
+      message: fallbackSample
+        ? `Selected persona has no "${sectionKey}" sample for ${normalizedJurisdiction}; personal non-persona sample will be used if you continue.`
+        : `Selected persona has no "${sectionKey}" sample for ${normalizedJurisdiction}; this section will be generated without persona style if you continue.`
+    })
+  }
+
+  return warnings
 }
 
 /**
@@ -48,13 +222,14 @@ export async function getWritingSample(
   userId: string,
   sectionKey: string,
   jurisdiction: string,
-  personaSelection?: PersonaSelection
+  personaSelection?: PersonaSelection,
+  tenantId?: string | null
 ): Promise<WritingSampleContext | null> {
   const normalizedJurisdiction = jurisdiction.toUpperCase()
   
   // If persona selection provided, use persona-aware fetching
   if (personaSelection?.primaryPersonaId) {
-    return getWritingSampleWithPersona(userId, sectionKey, normalizedJurisdiction, personaSelection)
+    return getWritingSampleWithPersona(userId, sectionKey, normalizedJurisdiction, personaSelection, tenantId)
   }
 
   const cacheKey = `${userId}:${normalizedJurisdiction}`
@@ -68,7 +243,9 @@ export async function getWritingSample(
       return {
         sampleText: jurisdictionSample,
         jurisdiction: normalizedJurisdiction,
-        isUniversal: false
+        isUniversal: false,
+        sectionKey,
+        source: 'personal'
       }
     }
     // Fall back to universal
@@ -77,7 +254,9 @@ export async function getWritingSample(
       return {
         sampleText: universalSample,
         jurisdiction: '*',
-        isUniversal: true
+        isUniversal: true,
+        sectionKey,
+        source: 'personal'
       }
     }
     return null
@@ -91,6 +270,7 @@ export async function getWritingSample(
         userId,
         sectionKey,
         jurisdiction: normalizedJurisdiction,
+        personaId: null,
         isActive: true
       },
       include: { persona: { select: { name: true } } }
@@ -102,7 +282,10 @@ export async function getWritingSample(
         jurisdiction: normalizedJurisdiction,
         isUniversal: false,
         personaName: sample.persona?.name || sample.personaName,
-        personaId: sample.personaId || undefined
+        personaId: sample.personaId || undefined,
+        sampleId: sample.id,
+        sectionKey,
+        source: 'personal'
       }
     }
 
@@ -112,6 +295,7 @@ export async function getWritingSample(
         userId,
         sectionKey,
         jurisdiction: '*',
+        personaId: null,
         isActive: true
       },
       include: { persona: { select: { name: true } } }
@@ -123,7 +307,10 @@ export async function getWritingSample(
         jurisdiction: '*',
         isUniversal: true,
         personaName: sample.persona?.name || sample.personaName,
-        personaId: sample.personaId || undefined
+        personaId: sample.personaId || undefined,
+        sampleId: sample.id,
+        sectionKey,
+        source: 'personal'
       }
     }
   } catch (error) {
@@ -141,63 +328,21 @@ async function getWritingSampleWithPersona(
   userId: string,
   sectionKey: string,
   jurisdiction: string,
-  personaSelection: PersonaSelection
+  personaSelection: PersonaSelection,
+  tenantId?: string | null
 ): Promise<WritingSampleContext | null> {
   try {
-    const { primaryPersonaId, secondaryPersonaIds = [] } = personaSelection
+    const resolved = await validatePersonaSelectionForUser(userId, tenantId, personaSelection)
+    if (!resolved?.primaryPersonaId) return null
+    const { primaryPersonaId, secondaryPersonaIds = [] } = resolved
 
     // Get primary persona sample (for structure and tone)
-    let primarySample = await prisma.writingSample.findFirst({
-      where: {
-        personaId: primaryPersonaId,
-        sectionKey,
-        jurisdiction,
-        isActive: true
-      },
-      include: { persona: { select: { name: true, createdBy: true } } }
-    })
-
-    // Fall back to universal for primary persona
-    if (!primarySample) {
-      primarySample = await prisma.writingSample.findFirst({
-        where: {
-          personaId: primaryPersonaId,
-          sectionKey,
-          jurisdiction: '*',
-          isActive: true
-        },
-        include: { persona: { select: { name: true, createdBy: true } } }
-      })
-    }
+    let primarySample = await findPrimaryPersonaSample(primaryPersonaId, sectionKey, jurisdiction)
 
     // If no persona sample found, fall back to user's own samples (without persona linkage)
     // This provides a graceful degradation when personas don't have all sections populated
     if (!primarySample) {
-      // Try jurisdiction-specific user sample first
-      let userSample = await prisma.writingSample.findFirst({
-        where: {
-          userId,
-          sectionKey,
-          jurisdiction,
-          personaId: null, // Only user's direct samples, not persona-linked
-          isActive: true
-        },
-        include: { persona: { select: { name: true } } }
-      })
-
-      // Fall back to universal user sample
-      if (!userSample) {
-        userSample = await prisma.writingSample.findFirst({
-          where: {
-            userId,
-            sectionKey,
-            jurisdiction: '*',
-            personaId: null,
-            isActive: true
-          },
-          include: { persona: { select: { name: true } } }
-        })
-      }
+      const userSample = await findDirectUserSample(userId, sectionKey, jurisdiction)
 
       if (userSample) {
         console.log(`[WritingSampleService] Persona sample not found for ${sectionKey}, falling back to user's own sample`)
@@ -206,7 +351,10 @@ async function getWritingSampleWithPersona(
           jurisdiction: userSample.jurisdiction,
           isUniversal: userSample.jurisdiction === '*',
           personaName: 'Personal Style (fallback)',
-          personaId: undefined
+          personaId: undefined,
+          sampleId: userSample.id,
+          sectionKey,
+          source: 'personal_fallback'
         }
       }
 
@@ -237,7 +385,7 @@ async function getWritingSampleWithPersona(
       }
 
       for (const s of Array.from(byPersona.values())) {
-        secondarySamples.push(`[${s.persona?.name || 'Additional Style'}]: ${s.sampleText}`)
+        secondarySamples.push(`[Additional style]: ${s.sampleText}`)
       }
     }
 
@@ -252,10 +400,14 @@ async function getWritingSampleWithPersona(
       jurisdiction: primarySample.jurisdiction,
       isUniversal: primarySample.jurisdiction === '*',
       personaName: primarySample.persona?.name || primarySample.personaName,
-      personaId: primarySample.personaId || undefined
+      personaId: primarySample.personaId || undefined,
+      sampleId: primarySample.id,
+      sectionKey,
+      source: 'persona'
     }
 
   } catch (error) {
+    if (error instanceof PersonaAccessError) throw error
     console.warn('[WritingSampleService] Failed to get persona sample:', error)
     return null
   }
@@ -274,6 +426,7 @@ export async function getAllWritingSamples(
   try {
     const where: any = {
       userId,
+      personaId: null,
       isActive: true
     }
 
@@ -343,10 +496,6 @@ export function buildWritingSampleBlock(
     ? '(universal style, applies to all jurisdictions)'
     : `(${sample.jurisdiction}-specific style)`
 
-  const personaNote = sample.personaName 
-    ? `Style: "${sample.personaName}"`
-    : ''
-
   // Check if this is a multi-persona sample (contains secondary styles)
   const hasSecondaryStyles = sample.sampleText.includes('--- ADDITIONAL DOMAIN STYLES ---')
 
@@ -375,7 +524,7 @@ You MUST closely mimic their style, including:
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║  YOUR WRITING STYLE - MIMIC THIS EXACTLY                                  ║
 ║  ${jurisdictionNote.padEnd(69)}║
-${personaNote ? `║  ${personaNote.padEnd(69)}║\n` : ''}╚═══════════════════════════════════════════════════════════════════════════╝
+╚═══════════════════════════════════════════════════════════════════════════╝
 
 ${styleExplanation}
 

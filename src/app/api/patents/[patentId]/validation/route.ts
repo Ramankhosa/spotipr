@@ -170,7 +170,8 @@ export async function POST(
       userId: authResult.user.id,
       sessionId: session?.id,
       referenceNumerals: referenceNumerals.length > 0 ? new Set<number>(referenceNumerals) : undefined,
-      figurePlans: session?.figurePlans?.map(f => ({ figureNo: f.figureNo }))
+      figurePlans: (session as any)?.figuresSkipped ? [] : session?.figurePlans?.map(f => ({ figureNo: f.figureNo })),
+      figuresSkipped: (session as any)?.figuresSkipped === true
     }
 
     switch (action) {
@@ -276,4 +277,3 @@ export async function POST(
     )
   }
 }
-

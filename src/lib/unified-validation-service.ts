@@ -288,12 +288,14 @@ export async function validateFullDraft(
     sessionId?: string
     referenceNumerals?: Set<number>
     figurePlans?: Array<{ figureNo: number }>
+    figuresSkipped?: boolean
   }
 ): Promise<ValidationIssue[]> {
   const allIssues: ValidationIssue[] = []
 
   // Validate each section
   for (const [sectionKey, content] of Object.entries(draft)) {
+    if (options?.figuresSkipped && sectionKey === 'briefDescriptionOfDrawings') continue
     if (!content || content.trim().length === 0) continue
     
     const sectionIssues = await validateSection(sectionKey, content, countryCode, options)
@@ -421,6 +423,7 @@ async function validateCrossSections(
   options?: {
     referenceNumerals?: Set<number>
     figurePlans?: Array<{ figureNo: number }>
+    figuresSkipped?: boolean
   }
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = []
@@ -428,7 +431,7 @@ async function validateCrossSections(
   // Numeral consistency check
   if (options?.referenceNumerals && options.referenceNumerals.size > 0) {
     const fullText = Object.values(draft).join('\n')
-    const numeralRegex = /\((\d{2,3})\)/g
+    const numeralRegex = /\((\d+)\)/g
     const usedNumerals = new Set<number>()
     let match
     while ((match = numeralRegex.exec(fullText)) !== null) {
@@ -467,7 +470,24 @@ async function validateCrossSections(
   }
 
   // Figure reference validation
-  if (options?.figurePlans && options.figurePlans.length > 0) {
+  if (options?.figuresSkipped) {
+    const figurelessText = Object.entries(draft)
+      .filter(([key]) => key !== 'briefDescriptionOfDrawings')
+      .map(([, value]) => value)
+      .join('\n')
+    const disabledFigureRef = /\b(?:FIG\.?\s*\d+|Figure\s+\d+|drawings?|diagrams?|sketches?)\b/i
+    if (disabledFigureRef.test(figurelessText)) {
+      issues.push({
+        id: `cross-figureless-reference-${Date.now()}`,
+        sectionId: 'detailedDescription',
+        severity: 'error',
+        code: VALIDATION_CODES.MISSING_FIGURE_REFERENCE,
+        message: 'Figureless draft mode is enabled, but the draft references figures, drawings, diagrams, or sketches.',
+        suggestedFix: 'Remove figure, drawing, diagram, and sketch references from the figureless draft text.',
+        category: 'diagram'
+      })
+    }
+  } else if (options?.figurePlans && options.figurePlans.length > 0) {
     const fullText = Object.values(draft).join('\n')
     const figureRegex = /\bFig\.?\s*(\d+)\b/gi
     const referencedFigures = new Set<number>()

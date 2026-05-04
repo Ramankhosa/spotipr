@@ -3,6 +3,7 @@ import {
   DraftClaimsParseError,
   formatDraftClaimsAsHtml,
   parseGeneratedClaimsFromLLMOutput,
+  parseGeneratedClaimsPayloadFromLLMOutput,
 } from '@/lib/draft-claims-parser'
 
 describe('draft claims parser', () => {
@@ -80,5 +81,30 @@ Here is the claim set:
     ])
 
     expect(html).toBe('<p><strong>1.</strong> A system comprising a controller.</p>')
+  })
+
+  test('parses support matrix and quality warnings from claims JSON', () => {
+    const payload = parseGeneratedClaimsPayloadFromLLMOutput(JSON.stringify({
+      claims: [
+        { number: 1, type: 'independent', category: 'system', text: 'A system comprising a moisture sensor and a valve.' },
+      ],
+      supportMatrix: [
+        {
+          claimNumber: 1,
+          supportRefs: ['SF-componentsAndSubcomponents-1'],
+          supportSummary: 'Supported by source components.',
+          sourceFields: ['components'],
+        },
+      ],
+      qualityWarnings: ['Review breadth of Claim 1.'],
+    }))
+
+    expect(payload.claims).toHaveLength(1)
+    expect(payload.supportMatrix[0]).toMatchObject({
+      claimNumber: 1,
+      supportRefs: ['SF-componentsAndSubcomponents-1'],
+      sourceFields: ['components'],
+    })
+    expect(payload.qualityWarnings).toContain('Review breadth of Claim 1.')
   })
 })
