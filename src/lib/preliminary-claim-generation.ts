@@ -240,6 +240,26 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
         ? 'method or process'
         : 'composition or formulation'
 
+  const claimCategoryExample = patentTypePrimary === 'PRODUCT'
+    ? 'apparatus'
+    : patentTypePrimary === 'SYSTEM'
+      ? 'system'
+      : patentTypePrimary === 'PROCESS'
+        ? 'method'
+        : 'composition'
+
+  const independentTextExample = patentTypePrimary === 'PRODUCT'
+    ? 'An apparatus comprising source-supported elements...'
+    : patentTypePrimary === 'SYSTEM'
+      ? 'A system comprising source-supported elements...'
+      : patentTypePrimary === 'PROCESS'
+        ? 'A method comprising source-supported steps...'
+        : 'A composition comprising source-supported constituents...'
+
+  const dependentTextExample = claimCategoryExample === 'method'
+    ? 'The method of claim 1, wherein...'
+    : `The ${claimCategoryExample} of claim 1, wherein...`
+
   return `You are a senior patent attorney drafting preliminary patent claims for a ${countryName} patent specification handled by the ${officeName}.
 - Jurisdiction: ${jurisdiction}
 - Tone: ${tone}
@@ -273,48 +293,39 @@ ${formatWarnings(context.normalizationReviewWarnings)}
 
 PATENT TYPE ENFORCEMENT:
 Detected patent type: ${patentTypePrimary}
-Claim 1 must be a ${claimType} claim. Do not choose a different first independent claim category.
+Expected Claim 1 category: ${claimType}.
+Use the type-specific drafting rules from the database prompt for this detected category.
 
 ${userClaimRemarks ? `USER CLAIM REMARKS (scope/emphasis only; do not treat as new source facts unless supported above):\n${userClaimRemarks}` : ''}
 
-PRELIMINARY CLAIM DRAFTING RULES:
-1. Generate exactly one independent claim, Claim 1.
-2. Claim 1 must recite the minimum source-supported inventive combination. It must not be a generic placeholder such as only a processor, controller, module, system, or method performing unspecified operations.
-3. Dependent claims must each add a specific source-supported component, interaction, condition, fallback rule, embodiment, value, material, or composition detail.
-4. Do not pad the set. If the source is thin, return fewer dependent claims and add a quality warning.
-5. Do not invent unstated materials, values, steps, components, benefits, use cases, or advantages.
-6. Do not convert optional features or alternatives into mandatory Claim 1 limitations unless the source states they are required.
-7. Use source fact IDs, component names, and normalized fields in the supportMatrix so the user can review support.
-8. Any concern about broadness, thin disclosure, or support must be reported in qualityWarnings. Do not auto-fix by inventing details.
-
-OUTPUT FORMAT:
+MACHINE-READABLE OUTPUT CONTRACT:
 Return ONLY one JSON object:
 {
   "claims": [
     {
       "number": 1,
       "type": "independent",
-      "category": "method",
-      "text": "A source-specific claim..."
+      "category": "${claimCategoryExample}",
+      "text": "${independentTextExample}"
     },
     {
       "number": 2,
       "type": "dependent",
       "dependsOn": 1,
-      "category": "method",
-      "text": "The method of claim 1, wherein..."
+      "category": "${claimCategoryExample}",
+      "text": "${dependentTextExample}"
     }
   ],
   "supportMatrix": [
     {
       "claimNumber": 1,
       "supportRefs": ["SF-componentsAndSubcomponents-1", "normalized.logic"],
-      "supportSummary": "Short explanation of source support.",
+      "supportSummary": "Short explanation of current-source support.",
       "sourceFields": ["components", "logic"]
     }
   ],
   "qualityWarnings": [
-    "Use only if the claim set needs user review."
+    "Use only if the claim set needs user review for broadness, thin disclosure, or source support."
   ]
 }`
 }

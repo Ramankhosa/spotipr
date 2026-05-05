@@ -1082,7 +1082,9 @@ You will receive:
 - Claim 1 (frozen legal anchor)
 - Optional injected context (figures, components, numerals) if enabled
 
-All injected content is authoritative.
+Claim 1 and the Normalized Data define the invention.
+Injected figures, components, and numerals are authoritative only for entities already supported by Claim 1 and the Normalized Data.
+If injected context includes any figure, component, numeral, named entity, product, person, organization, prior-art system, environment, use case, or example not supported by Claim 1 and the Normalized Data, ignore it.
 Do NOT invent missing elements or details.
 
 ────────────────────────────────────────
@@ -1106,17 +1108,55 @@ TERMINOLOGY DISCIPLINE
 - Do NOT replace Claim 1 terms with synonyms.
 - If Claim 1 uses a term, that term must be used consistently.
 
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+INVENTION MEMBERSHIP GATE (CRITICAL)
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+- Before drafting, identify the allowed invention set from Claim 1 and the Normalized Data.
+- Use injected components, numerals, and figures only when they map to that allowed invention set.
+- Do NOT use figure titles, figure descriptions, sketches, reference numerals, illustrative data, or user instructions as an independent source for adding subject matter.
+- If a supplied entity is merely environmental, prior-art, comparative, administrative, regulatory, user-specific, brand-specific, or otherwise outside the invention, do not mention it.
+- If in doubt whether an entity is part of the invention, omit it.
+
+----------------------------------------
+PATENT TYPE AND FIELD ADAPTATION (CRITICAL)
+----------------------------------------
+Adapt the Detailed Description to the patent type and invention field while preserving patent drafting norms.
+The patent type and field change the disclosure language; they do NOT expand the invention.
+
+If Claim 1 is a SYSTEM:
+- Draft in terms of components, modules, interfaces, processors, memory, sensors, actuators, circuitry, signal paths, or cooperating subsystems only when supported.
+- Use coupling, communication, signal, data, or structural-cooperation language as appropriate to the field.
+
+If Claim 1 is a PRODUCT or APPARATUS:
+- Draft in terms of physical structure, assembly, members, housings, surfaces, supports, connections, movement, mounting, or materials only when supported.
+- Avoid method-flow or platform language unless the product claim expressly requires implemented logic.
+
+If Claim 1 is a PROCESS or METHOD:
+- Draft in terms of process steps, inputs, outputs, sequence, conditions, actors, tools, and transformations.
+- Interpret any "system overview" requirement as a process implementation overview, not as permission to add apparatus elements.
+
+If Claim 1 is a COMPOSITION:
+- Draft in terms of constituents, constituent classes, compounds, formulations, mixtures, material structures, or preparation context only when supported.
+- Interpret any "system overview" requirement as a composition overview, not as system architecture.
+
+Field-language discipline:
+- For software or AI inventions, anchor functional language to processors, memory, instructions, data structures, interfaces, or networked resources only where supported.
+- For mechanical inventions, prefer structural and kinematic language, but do not invent geometry, materials, or dimensions.
+- For electrical inventions, prefer circuit, sensor, signal, power, switching, controller, and communication terminology, but do not invent ratings or values.
+- For chemical, material, biological, or medical-device inventions, use field-specific enablement language only to the extent Claim 1 and the Normalized Data support it.
+
 ────────────────────────────────────────
 MANDATORY OUTPUT FORMAT
 ────────────────────────────────────────
 - Output MUST consist of multiple paragraphs separated by a BLANK LINE.
-- Each paragraph MUST contain EXACTLY TWO sentences.
+- Each paragraph MUST contain BETWEEN TWO AND FOUR sentences.
 - Paragraph boundaries MUST be preserved using two newline characters.
 
 ────────────────────────────────────────
 PARAGRAPH DISCIPLINE (NON-NEGOTIABLE)
 ────────────────────────────────────────
-- ONE paragraph = ONE disclosure unit only.
+- ONE paragraph = ONE aspect of a disclosure unit.
+- Paragraph boundaries are structural only and do NOT imply separate inventive concepts, claim scope expansion, or introduction of new subject matter.
 
 A disclosure unit may be:
 (a) one system or apparatus element,
@@ -1128,14 +1168,15 @@ SENTENCE RULES:
 - Sentence 1: Identify the element or interaction using canonical terminology.
 - Sentence 2: State ONLY its structural or functional role, then STOP.
 - If additional detail is needed, create a NEW paragraph.
+- Paragraph boundaries are used only to separate elements, interactions, or variations.
 
 ────────────────────────────────────────
 PERMITTED LEVEL OF TECHNICAL DETAIL
 ────────────────────────────────────────
 - Functional "configured to" descriptions are permitted.
 - Interface-level interactions (inputs, outputs, cooperation) are permitted.
-- Internal algorithms, control logic, decision trees, or computation steps
-  are NOT permitted unless explicitly required by Claim 1.
+- Internal algorithms, control logic, and calculation steps are permitted and required
+  if necessary to explain how a result is achieved, provided they align with Claim 1.
 
 ────────────────────────────────────────
 FIGURE REFERENCE RULE
@@ -1143,6 +1184,9 @@ FIGURE REFERENCE RULE
 Figures may be referenced ONLY as parentheticals:
 - (FIG. X) or (see FIG. X)
 
+Reference a figure ONLY if FIG. X is present in the injected figure context and the figure relates to an allowed Claim 1 or Normalized Data element.
+If no figure context is injected, do NOT mention figures, drawings, diagrams, sketches, or FIG. X citations.
+Do NOT use a figure to introduce a component, entity, feature, environment, or use case absent from Claim 1 and the Normalized Data.
 Do NOT narrate or describe figures.
 
 ────────────────────────────────────────
@@ -1150,7 +1194,13 @@ CONTENT SEQUENCE (STRICT)
 ────────────────────────────────────────
 Draft paragraphs in the following order ONLY:
 
-A) One system overview paragraph (components only, no interactions).
+A0) MANDATORY OPENING ANCHOR PARAGRAPH (UNIVERSAL)
+
+The Detailed Description MUST begin with a single opening paragraph that anchors the invention at a system, apparatus, method, composition, or implemented-arrangement level as appropriate to Claim 1.
+This paragraph MUST state the general implementation modality without describing internal workflows, processing logic, benefits, use-case outcomes, or operational steps.
+This paragraph MUST establish that the invention components are operatively, structurally, or communicatively arranged to cooperate as described in subsequent paragraphs.
+
+A) One system overview paragraph listing only invention-scoped components and defining their physical or implemented form appropriate to Claim 1.
 B) One paragraph for each major element of Claim 1.
 C) Up to FOUR paragraphs describing claim-relevant interactions.
 D) Up to SIX paragraphs describing optional variations that preserve scope.
@@ -1162,7 +1212,9 @@ PROHIBITED CONTENT
 Do NOT:
 - Explain motivations, design reasoning, benefits, or results.
 - Use evaluative or comparative language.
-- Introduce new components, figures, or numerals not provided.
+- Introduce new components, figures, numerals, entities, examples, or use cases not supported by Claim 1 and the Normalized Data.
+- Refer to a provided figure, component, or numeral if it is outside the invention-scoped set.
+- Treat drawings, sketches, figure titles, or reference numerals as independent technical disclosure.
 
 ────────────────────────────────────────
 SELF-CHECK (INTERNAL ONLY)
@@ -1171,6 +1223,7 @@ Before finalizing, ensure:
 - Every major Claim 1 element appears at least once.
 - Every Claim 1 functional relationship has at least one interaction paragraph.
 - No paragraph introduces unsupported subject matter.
+- Every reference numeral and FIG. X citation used is both injected and mapped to an allowed invention element.
 
 Do NOT output the self-check.
 
@@ -1180,8 +1233,10 @@ OUTPUT CONTROL
 Return ONLY a valid JSON object exactly matching this schema:
 { "detailedDescription": "..." }
 
-Do NOT include any other keys.`,
-    constraints: ["Enable skilled person to practice","Reference figures with numerals","Include multiple embodiments","Describe best mode"]
+Do NOT include any other keys. Paragraph separation MUST be implemented using explicit
+double newline characters ("\\n\\n") within the JSON string.
+Failure to include "\\n\\n" constitutes invalid output.`,
+    constraints: ["Support Claim 1 elements","Use only invention-scoped figures and numerals","Maintain canonical terminology","Preserve paragraph discipline"]
   },
   {
     sectionKey: 'bestMode',
@@ -2706,4 +2761,3 @@ async function main() {
 }
 
 main();
-

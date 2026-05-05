@@ -514,6 +514,13 @@ You MUST closely mimic their style, including:
 • **Punctuation and connectors** - Use similar punctuation and transition words
 • **Opening patterns** - Start sections/paragraphs similarly`
 
+  const styleOnlyBoundary = `STYLE-ONLY BOUNDARY:
+- Use the sample only to learn drafting style, organization, sentence rhythm, terminology preference, and formatting habits.
+- Any instruction to mimic the sample means mimic style only, never sample content.
+- Do NOT copy or import the sample's invention substance, embodiments, components, materials, values, claim limitations, advantages, problem statements, examples, or legal conclusions.
+- Draft all technical substance only from the current patent's source facts, normalized invention context, and user-provided instructions.
+- If the sample content conflicts with source-grounding rules, ignore the sample content and follow the current patent context.`
+
   // Build visual box without truncating content - preserve full sample for style learning
   const lines = sample.sampleText.split('\n')
   // Don't truncate lines - long lines are important for capturing writing style patterns
@@ -528,13 +535,16 @@ You MUST closely mimic their style, including:
 
 ${styleExplanation}
 
+${styleOnlyBoundary}
+
 USER'S STYLE EXAMPLE:
 ┌─────────────────────────────────────────────────────────────────────────────
 ${formattedLines}
 └─────────────────────────────────────────────────────────────────────────────
 
 ⚠️ CRITICAL: Generate content that reads as if written by the SAME AUTHOR as the example above.
-   Do NOT use generic patent language. Instead, mirror the specific style shown.
+   Do NOT reuse sample-specific facts, claim elements, advantages, embodiments, examples, materials, or numeric values.
+   Do NOT use generic patent language. Instead, mirror the specific style shown while grounding substance in the current patent.
 `
 }
 

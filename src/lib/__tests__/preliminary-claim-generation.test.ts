@@ -12,7 +12,7 @@ const basePromptParams = {
   tone: 'technical, neutral, precise',
   voice: 'impersonal third person',
   avoid: 'marketing language',
-  baseInstruction: 'Draft preliminary claims.',
+  baseInstruction: 'Draft preliminary claims. Claim 1 must recite the minimum source-supported inventive combination. Do not pad the set.',
   rulesBlock: 'JURISDICTION RULES (US):\n- Use comprising.',
   constraintsBlock: 'CONSTRAINTS:\n- Maintain antecedent basis.',
   context: {
@@ -38,9 +38,23 @@ describe('preliminary claim generation helper', () => {
 
     expect(prompt).toContain('minimum source-supported inventive combination')
     expect(prompt).toContain('Do not pad the set')
+    expect(prompt).toContain('Expected Claim 1 category: system or apparatus')
+    expect(prompt).toContain('"category": "system"')
+    expect(prompt).not.toContain('PRELIMINARY CLAIM DRAFTING RULES')
     expect(prompt).toContain('supportMatrix')
     expect(prompt).toContain('qualityWarnings')
     expect(prompt).toContain('SF-numericValuesAndUnits-1')
+  })
+
+  test('uses patent-type-specific output examples', () => {
+    const compositionPrompt = buildPreliminaryClaimsPrompt({
+      ...basePromptParams,
+      patentTypePrimary: 'COMPOSITION',
+    })
+
+    expect(compositionPrompt).toContain('Expected Claim 1 category: composition or formulation')
+    expect(compositionPrompt).toContain('"category": "composition"')
+    expect(compositionPrompt).toContain('A composition comprising source-supported constituents')
   })
 
   test('warns for generic broad Claim 1', () => {

@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest'
-import { buildNormalizedDataBlock } from '@/lib/section-injection-config'
+import {
+  buildDetailedDescriptionScopeContext,
+  buildNormalizedDataBlock
+} from '@/lib/section-injection-config'
 
 describe('normalized data section injection', () => {
   test('passes source fact ledger and component metadata into section context', () => {
@@ -38,5 +41,43 @@ describe('normalized data section injection', () => {
     expect(block).toContain('SOURCE FACT LEDGER')
     expect(block).toContain('18 percent')
     expect(block).toContain('unless rain is forecast')
+  })
+
+  test('limits detailed description figure and numeral context to the invention scope', () => {
+    const normalizedData = {
+      claimsApprovedAt: '2026-05-05T00:00:00.000Z',
+      claimsStructuredFinal: [
+        {
+          number: 1,
+          type: 'independent',
+          category: 'system',
+          text: 'A system comprising a moisture sensor and an irrigation valve configured to activate drip irrigation when soil moisture is below 18 percent.'
+        }
+      ],
+      components: [
+        { name: 'moisture sensor', description: 'detects soil moisture' },
+        { name: 'irrigation valve', description: 'controls drip irrigation' }
+      ],
+      logic: 'The irrigation valve activates drip irrigation based on the moisture sensor output.'
+    }
+
+    const context = buildDetailedDescriptionScopeContext(
+      normalizedData,
+      null,
+      [
+        { name: 'moisture sensor', referenceLabel: '100' },
+        { name: 'irrigation valve', referenceLabel: '200' },
+        { name: 'weather satellite gateway', referenceLabel: '900' }
+      ],
+      [
+        { figureNo: 1, title: 'System architecture' },
+        { figureNo: 2, title: 'Weather satellite gateway integration' }
+      ]
+    )
+
+    expect(context.allowedReferenceLabels).toEqual(['100', '200'])
+    expect(context.allowedFigureNumbers).toEqual([1])
+    expect(context.guard).toContain('Allowed component/reference context')
+    expect(context.guard.includes('No figure references')).toBe(false)
   })
 })

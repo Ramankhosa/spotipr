@@ -22,7 +22,8 @@ import {
 import { getSectionStageCode } from '@/lib/metering/section-stage-mapping';
 import {
   buildUniversalDraftingBundle,
-  buildAntiHallucinationGuards
+  buildAntiHallucinationGuards,
+  buildDetailedDescriptionScopeContext
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import { buildIdeaNormalizationPrompt } from '@/lib/idea-normalization-prompt';
@@ -53,6 +54,9 @@ INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
 DATA PRIORITY NOTICE (CRITICAL):
 Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
 This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
+This data MUST NOT be used to add components, figures, reference numerals, named entities,
+products, persons, organizations, environments, use cases, examples, or operating conditions
+that are not already supported by Claim 1 and the normalized invention context.
 
 ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
 - Use ONLY the exact data values, measurements, and observations provided below.
@@ -60,6 +64,7 @@ ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
 - Do NOT create hypothetical examples or sample data.
 - If the data is incomplete, describe only what is provided; do NOT fill gaps with assumptions.
 - Reproduce the data faithfully; paraphrasing is permitted but fabrication is STRICTLY PROHIBITED.
+- Ignore any data item that concerns an entity outside the allowed invention scope.
 
 NON-GENERALIZATION RULE (CRITICAL):
 - Do NOT generalize inventor-provided data to all embodiments.
@@ -1268,9 +1273,24 @@ Respond in this exact JSON shape:
       if (idea?.solution || idea?.description) inventionBasicsParts.push(`Solution: ${idea.solution || idea.description}`)
       if (componentsList) inventionBasicsParts.push(`Key components: ${componentsList}`)
       const inventionBasics = inventionBasicsParts.join('\n')
+      const patentTypePrimary = this.normalizePatentTypePrimary(
+        (session as any)?.patentTypePrimary ||
+        (idea as any)?.patentTypePrimary ||
+        (idea as any)?.normalizedData?.patentTypePrimary
+      ) || this.patentTypeFallbackFromText(
+        [
+          (idea as any)?.rawInput,
+          (idea as any)?.description,
+          (idea as any)?.solution,
+          (idea as any)?.logic,
+          (idea as any)?.normalizedData?.logic,
+          (idea as any)?.normalizedData?.solution
+        ].filter(Boolean).join(' '),
+        (idea as any)?.title || (idea as any)?.normalizedData?.title || ''
+      ).primary
 
       // Build payload available across sections
-      const payload = { idea, referenceMap, figures, figuresSkipped, approved: session.annexureDrafts?.[0] || {}, instructions: instructions || {}, manualPriorArt, selectedPriorArtPatents, inventionBasics }
+      const payload = { idea, referenceMap, figures, figuresSkipped, approved: session.annexureDrafts?.[0] || {}, instructions: instructions || {}, manualPriorArt, selectedPriorArtPatents, inventionBasics, patentTypePrimary }
 
       // ══════════════════════════════════════════════════════════════════════════════
       // DD USER DATA - Load sidecar data for detailedDescription section
@@ -1683,16 +1703,32 @@ Respond in this exact JSON shape:
           debugSteps.push({ step: `fallback_${s}`, status: 'ok', meta: { used: true } })
         }
         const approvedTitle = s === 'abstract' ? (payload.approved?.title || idea?.title) : undefined
+        const detailedScopeForValidation = s === 'detailedDescription'
+          ? buildDetailedDescriptionScopeContext(
+              this.normalizeClaimsData(((idea as any)?.normalizedData as any) || {}),
+              idea,
+              refMapComponentsArray,
+              payload.figures || [],
+              { figuresSkipped: payload.figuresSkipped === true }
+            )
+          : null
+        const guardrailContext = {
+          sectionChecks: sectionResources[s]?.checks,
+          claimsRules: sectionResources[s]?.claimsRules,
+          figures: detailedScopeForValidation?.scopedFigures || payload.figures,
+          figuresSkipped: payload.figuresSkipped === true,
+          scopedComponents: detailedScopeForValidation?.scopedComponents
+        }
         let check = this.guardrailCheck(
           s,
           val,
           referenceMap,
           approvedTitle,
-          { sectionChecks: sectionResources[s]?.checks, claimsRules: sectionResources[s]?.claimsRules }
+          guardrailContext
         )
         if (!check.ok) {
           debugSteps.push({ step: `critic_${s}`, status: 'fail', meta: { reason: check.reason } })
-          const fixed = this.minimalFix(s, val, { reason: check.reason, approvedTitle, referenceMap, figures: payload.figures, sectionChecks: sectionResources[s]?.checks, claimsRules: sectionResources[s]?.claimsRules })
+          const fixed = this.minimalFix(s, val, { reason: check.reason, approvedTitle, referenceMap, figures: guardrailContext.figures, figuresSkipped: guardrailContext.figuresSkipped, scopedComponents: guardrailContext.scopedComponents, sectionChecks: sectionResources[s]?.checks, claimsRules: sectionResources[s]?.claimsRules })
           if (fixed && fixed.trim() && fixed !== val) {
             val = fixed.trim()
             const recheck = this.guardrailCheck(
@@ -1700,7 +1736,7 @@ Respond in this exact JSON shape:
               val,
               referenceMap,
               approvedTitle,
-              { sectionChecks: sectionResources[s]?.checks, claimsRules: sectionResources[s]?.claimsRules }
+              guardrailContext
             )
             if (recheck.ok) {
               debugSteps.push({ step: `fixer_${s}`, status: 'ok', meta: { applied: true, fixedTo: val.substring(0, 100) + '...' } })
@@ -1983,6 +2019,74 @@ Respond in this exact JSON shape:
     return instructions
   }
 
+  private static getDetailedDescriptionPatentTypeGuidance(
+    patentTypePrimary: PatentTypePrimary,
+    archetypeList: string[],
+    fieldDescriptor: string
+  ): string {
+    const archetypes = new Set(archetypeList.map(type => String(type || '').toUpperCase()))
+
+    const patentTypeLines: Record<PatentTypePrimary, string[]> = {
+      SYSTEM: [
+        '- Draft as a system or apparatus disclosure using components, modules, interfaces, processors, memory, sensors, actuators, signal paths, or cooperating subsystems only when supported.',
+        '- Treat each Claim 1 component as a disclosure unit and describe operative, structural, or communicative coupling without turning the paragraph into claim language.',
+        '- Interaction paragraphs may describe data, signal, control, or mechanical cooperation between claimed components.'
+      ],
+      PRODUCT: [
+        '- Draft as an apparatus, device, article, assembly, or product disclosure centered on physical structure and structural cooperation.',
+        '- Describe shape, arrangement, connection, movement, material, or mounting only when Claim 1 or Normalized Data supports it.',
+        '- Avoid platform/module/process language unless the claimed product expressly includes such implemented features.'
+      ],
+      PROCESS: [
+        '- Draft as a method, process, workflow, manufacturing method, control method, or data-processing method disclosure.',
+        '- Interpret any system overview requirement as an implementation overview that identifies only the claimed process, required actors/tools, and step labels supplied in context.',
+        '- Use step/action terminology, inputs, outputs, sequence, conditions, and result-generating logic only to the extent required by Claim 1; do not convert optional conditions into mandatory steps.'
+      ],
+      COMPOSITION: [
+        '- Draft as a composition, formulation, material, compound, biological composition, or mixture disclosure.',
+        '- Interpret any system overview requirement as a composition overview that identifies only claimed constituents, constituent classes, structural formulae, proportions, or preparation context supplied by Claim 1 or Normalized Data.',
+        '- Use constituent labels and composition terminology instead of system architecture language; do not add concentrations, ranges, excipients, assays, or preparation conditions unless supplied.'
+      ]
+    }
+
+    const fieldLines: string[] = []
+    if (archetypes.has('SOFTWARE')) {
+      fieldLines.push('- For software or AI inventions, anchor functional language to processors, memory, instructions, data structures, interfaces, or networked resources only where supported; explain data flow or control logic when needed for enablement.')
+    }
+    if (archetypes.has('MECHANICAL')) {
+      fieldLines.push('- For mechanical inventions, prefer structural terms such as member, housing, support, actuator, linkage, fastener, passage, surface, and coupling; describe relative positioning or motion only when source-supported.')
+    }
+    if (archetypes.has('ELECTRICAL')) {
+      fieldLines.push('- For electrical inventions, use circuit, sensor, signal, conductor, controller, power, communication interface, and switching terminology where supported; avoid unsupported ratings or signal values.')
+    }
+    if (archetypes.has('CHEMICAL')) {
+      fieldLines.push('- For chemical or material inventions, use constituent, compound, matrix, carrier, reagent, reaction condition, and material-property terminology only when supported; do not invent ranges or preferred values.')
+    }
+    if (archetypes.has('BIO')) {
+      fieldLines.push('- For biological or medical-device inventions, use biological entity, sample, reagent, assay, sequence, cell, protein, delivery, or detection terminology only when supported; avoid therapeutic or diagnostic conclusions beyond Claim 1.')
+    }
+    if (fieldLines.length === 0) {
+      fieldLines.push('- Use field-appropriate patent terminology from the Normalized Data and Claim 1 without importing examples, standards, commercial entities, or implementation details from outside the invention.')
+    }
+
+    return `
+DETAILED DESCRIPTION TYPE AND FIELD ADAPTATION (MANDATORY)
+Patent type: ${patentTypePrimary}
+Invention field: ${fieldDescriptor || 'general technology'}
+
+Patent-type drafting rules:
+${patentTypeLines[patentTypePrimary].join('\n')}
+
+Field-language rules:
+${fieldLines.join('\n')}
+
+Norms:
+- Adapt terminology to the patent type and field, but never add subject matter beyond Claim 1 and the Normalized Data.
+- Use the same canonical terminology as Claim 1 even if a field synonym would otherwise sound natural.
+- Keep enablement detail sufficient for the claimed type while avoiding advantages, motivation, commercial framing, or unsupported best-mode language.
+`.trim()
+  }
+
   /**
    * Build section-specific context block with only necessary facts.
    * 
@@ -2080,14 +2184,49 @@ Respond in this exact JSON shape:
       idea?.fieldOfRelevance || idea?.normalizedData?.fieldOfRelevance || ''
     )
     const archetype = archetypeList.join('+') || 'GENERAL'
+    const patentTypePrimary = this.normalizePatentTypePrimary(
+      (payload as any)?.patentTypePrimary ??
+      idea?.patentTypePrimary ??
+      idea?.normalizedData?.patentTypePrimary
+    ) || this.patentTypeFallbackFromText(
+      [
+        idea?.rawInput,
+        idea?.description,
+        idea?.solution,
+        idea?.logic,
+        idea?.normalizedData?.logic,
+        idea?.normalizedData?.solution
+      ].filter(Boolean).join(' '),
+      idea?.title || idea?.normalizedData?.title || ''
+    ).primary
+    const fieldDescriptor = [
+      idea?.fieldOfRelevance || idea?.normalizedData?.fieldOfRelevance,
+      idea?.subfield || idea?.normalizedData?.subfield
+    ].filter(Boolean).join(' / ')
+    const detailedDescriptionTypeGuidance = section === 'detailedDescription'
+      ? this.getDetailedDescriptionPatentTypeGuidance(patentTypePrimary, archetypeList, fieldDescriptor)
+      : ''
+
+    const normalizedDataForDetailScope = this.normalizeClaimsData((idea as any)?.normalizedData || {})
+    const detailedDescriptionScope = section === 'detailedDescription'
+      ? buildDetailedDescriptionScopeContext(
+          normalizedDataForDetailScope,
+          idea,
+          componentsList2,
+          figures || [],
+          { figuresSkipped: payload.figuresSkipped === true }
+        )
+      : null
+    const componentsForContext = detailedDescriptionScope?.scopedComponents || componentsList2
+    const figuresForContext = detailedDescriptionScope?.scopedFigures || (figures || [])
 
     // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
     // Handle edge case where both referenceLabel and numeral are missing
-    const numeralsContext = componentsList2.map((c: any) => {
+    const numeralsContext = componentsForContext.map((c: any) => {
       const ref = c.referenceLabel || c.numeral
       return ref ? `${c.name} (${ref})` : c.name
     }).join(', ')
-    const figs = (figures || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
+    const figs = (figuresForContext || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
     const instr = (instructions && instructions[section]) ? String(instructions[section]) : 'none'
 
     const jurisdiction = (ctx?.jurisdiction || 'IN').toUpperCase()
@@ -2218,10 +2357,12 @@ You are a senior patent attorney drafting the "${sectionLabel}" section for a ${
 - Tone: ${tone}
 - Voice: ${voice}
 - Archetype: ${archetype}
+${section === 'detailedDescription' ? `- Patent Type: ${patentTypePrimary}\n- Invention Field: ${fieldDescriptor || 'general technology'}` : ''}
 - Avoid: ${avoid}
 ${targetDisplay}
 ${ruleBlock ? `${ruleBlock}\n` : ''}
 Ensure the writing is objective, precise, and ready for filing.
+${detailedDescriptionTypeGuidance ? `${detailedDescriptionTypeGuidance}\n` : ''}
 ${writingSampleBlock}`
 
     // CRITICAL: If database has a custom prompt instruction, use it as PRIMARY
@@ -2311,9 +2452,13 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       // ANTI-HALLUCINATION GUARDS (automatic, not admin-controlled)
       // ══════════════════════════════════════════════════════════════════════════════
-      const hasFigures = !!(figures && figures.length > 0)
+      const hasFigures = section === 'detailedDescription'
+        ? !!(detailedDescriptionScope?.scopedFigures.length)
+        : !!(figures && figures.length > 0)
       const hasPriorArt = !!(payload.manualPriorArt?.manualPriorArtText || (payload.selectedPriorArtPatents && payload.selectedPriorArtPatents.length > 0))
-      const hasComponents = componentsList2.length > 0
+      const hasComponents = section === 'detailedDescription'
+        ? !!(detailedDescriptionScope?.scopedComponents.length)
+        : componentsList2.length > 0
       const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
         figuresSkipped: payload.figuresSkipped === true
       })
@@ -2378,6 +2523,14 @@ ${userPrompt}`)
       // Universal Drafting Bundle (ND + C1)
       if (udbResult.block) {
         promptParts.push(udbResult.block)
+      }
+
+      if (detailedDescriptionScope?.guard) {
+        promptParts.push(`
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+INVENTION-SCOPED DETAILED DESCRIPTION GUARD
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+${detailedDescriptionScope.guard}`)
       }
 
       // Additional section-specific context (figures, numerals, prior art)
@@ -2710,7 +2863,13 @@ Use the Super Admin panel to add the missing prompt.
     text: string,
     referenceMap: any,
     approvedTitle?: string,
-    ctx?: { sectionChecks?: any[]; claimsRules?: any }
+    ctx?: {
+      sectionChecks?: any[]
+      claimsRules?: any
+      figures?: any[]
+      figuresSkipped?: boolean
+      scopedComponents?: any[] | null
+    }
   ): { ok: boolean; reason?: string } {
     // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
     const rawGuardrailComps = referenceMap?.components as any
@@ -2809,17 +2968,37 @@ Use the Super Admin panel to add the missing prompt.
     }
     if (section === 'detailedDescription') {
       // Enforce: no undeclared numerals/labels
-      // Figure reference validation removed - now handled through separate LLM review
+      const allowedFigures = new Set((ctx?.figures || [])
+        .map((f: any) => String(f?.figureNo || '').replace(/^0+/, '') || String(f?.figureNo || ''))
+        .filter(Boolean))
+      const figureRefs = Array.from(text.matchAll(/\b(?:FIG\.?|Fig\.?|Figure)\s*0*(\d+)\b/gi)).map(m => String(Number(m[1])))
+      const drawingReferencePresent = /\b(drawings?|diagrams?|sketches?)\b/i.test(text)
+      if (ctx?.figuresSkipped && (figureRefs.length > 0 || drawingReferencePresent)) {
+        return { ok: false, reason: 'Detailed Description references figures while figureless mode is enabled' }
+      }
+      if (allowedFigures.size === 0 && drawingReferencePresent) {
+        return { ok: false, reason: 'Detailed Description references drawings without an invention-scoped figure list' }
+      }
+      if (!ctx?.figuresSkipped && figureRefs.some(fig => !allowedFigures.has(fig))) {
+        return { ok: false, reason: 'Detailed Description references a figure outside the invention-scoped figure list' }
+      }
 
       // Only check if there are declared components
-      if (guardrailComps.length > 0) {
+      const allowedComponents = Array.isArray(ctx?.scopedComponents)
+        ? ctx?.scopedComponents || []
+        : guardrailComps
+      if (allowedComponents.length > 0) {
         // Support all numbering styles: numeric (100), step labels (S100), constituent labels ((a))
-        const allowedLabels = new Set(guardrailComps.map((c:any) => String(c.referenceLabel || c.numeral)))
+        const allowedLabels = new Set(allowedComponents
+          .map((c:any) => String(c.referenceLabel || c.numeral || '').replace(/^\((.*)\)$/, '$1'))
+          .filter(Boolean))
         // Match patterns: (100), (1000000), (S100), (a), (b), etc.
         const usedLabels = Array.from(text.matchAll(/\(([S]?\d+|[a-z])\)/gi)).map(m => m[1])
-        if (usedLabels.some(l => !allowedLabels.has(l) && !allowedLabels.has(`(${l})`))) {
-          return { ok: false, reason: 'Detailed Description uses undeclared reference label' }
+        if (usedLabels.some(l => !allowedLabels.has(l))) {
+          return { ok: false, reason: 'Detailed Description uses a reference label outside the invention-scoped component list' }
         }
+      } else if (/\(([S]?\d+|[a-z])\)/gi.test(text)) {
+        return { ok: false, reason: 'Detailed Description uses reference labels without invention-scoped component context' }
       }
     }
     if (section === 'industrialApplicability') {
@@ -2831,7 +3010,16 @@ Use the Super Admin panel to add the missing prompt.
   private static minimalFix(
     section: string,
     text: string,
-    ctx: { reason?: string; approvedTitle?: string; referenceMap?: any; figures?: any[]; sectionChecks?: any[]; claimsRules?: any }
+    ctx: {
+      reason?: string
+      approvedTitle?: string
+      referenceMap?: any
+      figures?: any[]
+      figuresSkipped?: boolean
+      scopedComponents?: any[] | null
+      sectionChecks?: any[]
+      claimsRules?: any
+    }
   ): string | null {
     let out = String(text || '')
     const extractLimit = (checks: any[] | undefined, type: 'maxWords' | 'maxChars') => {
@@ -2887,6 +3075,47 @@ Use the Super Admin panel to add the missing prompt.
       return figuresArray.length > 0 
         ? figuresArray.map((f: any) => `FIG. ${f.figureNo} is ${f.title || 'a view of the invention'}.`).join('\n\n')
         : out || 'Brief description of drawings will be added when figures are available.'
+    }
+    if (section === 'detailedDescription') {
+      const figuresArray = ctx.figures || []
+      const allowedFigures = new Set(figuresArray
+        .map((f: any) => String(f?.figureNo || '').replace(/^0+/, '') || String(f?.figureNo || ''))
+        .filter(Boolean))
+      let fixed = out
+
+      if (ctx.figuresSkipped || allowedFigures.size === 0) {
+        fixed = fixed
+          .replace(/\s*\((?:see\s+)?FIG\.?\s*0*\d+\)/gi, '')
+          .replace(/\b(?:FIG\.?|Fig\.?|Figure)\s*0*\d+\b/gi, '')
+          .replace(/\b(?:as\s+)?(?:shown|illustrated|depicted|represented)\s+in\s+(?:the\s+)?(?:drawings?|diagrams?|sketches?)\b/gi, '')
+          .replace(/\b(?:drawings?|diagrams?|sketches?)\b/gi, '')
+      } else {
+        fixed = fixed
+          .replace(/\s*\((?:see\s+)?FIG\.?\s*0*(\d+)\)/gi, (match, figNo) => {
+            return allowedFigures.has(String(Number(figNo))) ? match : ''
+          })
+          .replace(/\b(FIG\.?|Fig\.?|Figure)\s*0*(\d+)\b/gi, (match, prefix, figNo) => {
+            return allowedFigures.has(String(Number(figNo))) ? `FIG. ${Number(figNo)}` : ''
+          })
+      }
+
+      const scopedComponents = Array.isArray(ctx.scopedComponents) ? ctx.scopedComponents : []
+      const allowedLabels = new Set(scopedComponents
+        .map((c: any) => String(c?.referenceLabel || c?.numeral || '').replace(/^\((.*)\)$/, '$1'))
+        .filter(Boolean))
+
+      fixed = fixed.replace(/\(([S]?\d+|[a-z])\)/gi, (match, label) => {
+        return allowedLabels.has(label) ? match : ''
+      })
+
+      fixed = fixed
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\s+\./g, '.')
+        .replace(/\s+,/g, ',')
+        .replace(/\(\s*\)/g, '')
+        .trim()
+
+      return fixed || null
     }
     if (section === 'claims') {
       // Normalize parentheses around claim numbers in text body

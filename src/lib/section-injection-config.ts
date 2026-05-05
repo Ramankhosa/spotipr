@@ -10,7 +10,10 @@
  * - Claim 1 is the legal truth once available
  */
 
-import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
+import {
+  buildSourceFactLedgerEntries,
+  buildSourceFactLedgerPromptBlock
+} from '@/lib/source-fact-ledger'
 import { buildFigurelessDraftGuard } from '@/lib/figure-availability'
 
 export type Claim1Mode = 'bindingAnchor' | 'constraintOnly' | 'off'
@@ -683,6 +686,354 @@ ANTI-HALLUCINATION GUARDS (MANDATORY)
 ════════════════════════════════════════════════════════════════════════════════
 ${guards.join('\n')}
 `
+}
+
+type DetailedDescriptionScopeOptions = {
+  figuresSkipped?: boolean
+}
+
+export type DetailedDescriptionScopeContext = {
+  guard: string
+  scopeText: string
+  scopedComponents: any[]
+  scopedFigures: any[]
+  allowedReferenceLabels: string[]
+  allowedFigureNumbers: number[]
+}
+
+const SCOPE_STOPWORDS = new Set([
+  'about',
+  'above',
+  'after',
+  'also',
+  'and',
+  'are',
+  'based',
+  'being',
+  'below',
+  'between',
+  'claim',
+  'claims',
+  'comprising',
+  'configured',
+  'data',
+  'each',
+  'from',
+  'having',
+  'include',
+  'includes',
+  'including',
+  'into',
+  'method',
+  'module',
+  'more',
+  'one',
+  'only',
+  'or',
+  'said',
+  'system',
+  'that',
+  'the',
+  'thereof',
+  'through',
+  'unit',
+  'wherein',
+  'with'
+])
+
+const GENERIC_FIGURE_TOKENS = new Set([
+  'activity',
+  'apparatus',
+  'architecture',
+  'arrangement',
+  'block',
+  'composition',
+  'constituent',
+  'diagram',
+  'drawing',
+  'embodiment',
+  'figure',
+  'flow',
+  'formulation',
+  'front',
+  'method',
+  'overview',
+  'perspective',
+  'process',
+  'schematic',
+  'sequence',
+  'side',
+  'system',
+  'top',
+  'view'
+])
+
+function normalizeScopeText(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function padScopeText(value: unknown): string {
+  const normalized = normalizeScopeText(value)
+  return normalized ? ` ${normalized} ` : ''
+}
+
+function uniqueStrings(values: string[]) {
+  const seen = new Set<string>()
+  const out: string[] = []
+  values.forEach(value => {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+    const key = normalized.toLowerCase()
+    if (!normalized || seen.has(key)) return
+    seen.add(key)
+    out.push(normalized)
+  })
+  return out
+}
+
+function toScopeValues(value: unknown): string[] {
+  if (!value) return []
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed || /^not stated by source$/i.test(trimmed)) return []
+    return [trimmed]
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return [String(value)]
+  if (Array.isArray(value)) return value.flatMap(item => toScopeValues(item))
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return [
+      ...toScopeValues(record.name),
+      ...toScopeValues(record.title),
+      ...toScopeValues(record.component),
+      ...toScopeValues(record.description),
+      ...toScopeValues(record.inputs),
+      ...toScopeValues(record.outputs),
+      ...toScopeValues(record.dependencies),
+      ...toScopeValues(record.conditions),
+      ...toScopeValues(record.alternatives),
+      ...toScopeValues(record.parent)
+    ]
+  }
+  return []
+}
+
+function distinctiveScopeTokens(value: unknown) {
+  return uniqueStrings(
+    normalizeScopeText(value)
+      .split(' ')
+      .filter(token => token.length > 2 && !/^\d+$/.test(token) && !SCOPE_STOPWORDS.has(token))
+  )
+}
+
+function scopeContainsCandidate(paddedScopeText: string, candidate: unknown): boolean {
+  const normalizedCandidate = normalizeScopeText(candidate)
+  if (!paddedScopeText || !normalizedCandidate || /^not stated by source$/i.test(normalizedCandidate)) {
+    return false
+  }
+
+  if (normalizedCandidate.length >= 4 && paddedScopeText.includes(` ${normalizedCandidate} `)) {
+    return true
+  }
+
+  const tokens = distinctiveScopeTokens(candidate)
+  if (!tokens.length) return false
+  const hits = tokens.filter(token => paddedScopeText.includes(` ${token} `)).length
+  return tokens.length === 1 ? hits === 1 : hits >= Math.min(2, tokens.length)
+}
+
+function formatReferenceLabel(label: unknown): string {
+  const raw = String(label || '').trim()
+  if (!raw) return ''
+  return raw.replace(/^\((.*)\)$/, '$1')
+}
+
+function componentName(component: any): string {
+  return String(component?.name || component?.title || component?.component || '').trim()
+}
+
+function componentReferenceLabel(component: any): string {
+  return formatReferenceLabel(component?.referenceLabel || component?.numeral)
+}
+
+export function buildDetailedDescriptionScopeText(
+  normalizedData: Record<string, any> | null | undefined,
+  idea: Record<string, any> | null | undefined
+): string {
+  const nd = normalizedData || {}
+  const ideaData = idea || {}
+  const claim1 = extractClaim1(nd) || ''
+
+  const fields = [
+    claim1,
+    ideaData.title,
+    nd.title,
+    ideaData.problem,
+    ideaData.problemStatement,
+    nd.problem,
+    ideaData.objectives,
+    nd.objectives,
+    ideaData.solution,
+    nd.solution,
+    ideaData.description,
+    nd.description,
+    ideaData.fieldOfRelevance,
+    nd.fieldOfRelevance,
+    ideaData.subfield,
+    nd.subfield,
+    ideaData.logic,
+    nd.logic,
+    ideaData.inputs,
+    nd.inputs,
+    ideaData.outputs,
+    nd.outputs,
+    ideaData.variants,
+    nd.variants,
+    ideaData.bestMethod,
+    nd.bestMethod,
+    ideaData.coreInventiveConcept,
+    nd.coreInventiveConcept,
+    ideaData.drawingsFocus,
+    nd.drawingsFocus,
+    ideaData.claimStrategy,
+    nd.claimStrategy,
+    ...toScopeValues(ideaData.components),
+    ...toScopeValues(nd.components),
+    ...toScopeValues(ideaData.claimableFeatures),
+    ...toScopeValues(nd.claimableFeatures),
+    ...toScopeValues(ideaData.fallbackLimitations),
+    ...toScopeValues(nd.fallbackLimitations),
+    ...buildSourceFactLedgerEntries(ideaData.sourceFactLedger || nd.sourceFactLedger).map(entry => entry.value)
+  ]
+
+  return padScopeText(uniqueStrings(fields.filter(Boolean).map(String)).join(' '))
+}
+
+export function filterComponentsByInventionScope(
+  components: any[] | null | undefined,
+  normalizedData: Record<string, any> | null | undefined,
+  idea: Record<string, any> | null | undefined
+): any[] {
+  const list = Array.isArray(components) ? components : []
+  if (!list.length) return []
+
+  const scopeText = buildDetailedDescriptionScopeText(normalizedData, idea)
+  if (!scopeText) return []
+
+  return list.filter(component => {
+    const name = componentName(component)
+    if (!name) return false
+    return scopeContainsCandidate(scopeText, name)
+  })
+}
+
+function isFigureInInventionScope(
+  figure: any,
+  scopeText: string,
+  scopedComponents: any[]
+): boolean {
+  const title = String(figure?.title || '').trim()
+  const description = String(figure?.description || '').trim()
+  const figureText = `${title} ${description}`.trim()
+  if (!figureText) return false
+
+  const paddedFigureText = padScopeText(figureText)
+  const componentMatch = scopedComponents.some(component => {
+    const name = componentName(component)
+    return name && scopeContainsCandidate(paddedFigureText, name)
+  })
+  if (componentMatch) return true
+
+  const tokens = distinctiveScopeTokens(figureText)
+    .filter(token => !GENERIC_FIGURE_TOKENS.has(token))
+
+  if (!tokens.length) return true
+  const hits = tokens.filter(token => scopeText.includes(` ${token} `)).length
+  return hits >= Math.min(2, tokens.length)
+}
+
+export function filterFiguresByInventionScope(
+  figures: any[] | null | undefined,
+  normalizedData: Record<string, any> | null | undefined,
+  idea: Record<string, any> | null | undefined,
+  scopedComponents: any[] | null | undefined,
+  options?: DetailedDescriptionScopeOptions
+): any[] {
+  if (options?.figuresSkipped) return []
+  const list = Array.isArray(figures) ? figures : []
+  if (!list.length) return []
+
+  const scopeText = buildDetailedDescriptionScopeText(normalizedData, idea)
+  if (!scopeText) return []
+
+  const components = Array.isArray(scopedComponents) ? scopedComponents : []
+  return list.filter(figure => isFigureInInventionScope(figure, scopeText, components))
+}
+
+export function buildDetailedDescriptionScopeContext(
+  normalizedData: Record<string, any> | null | undefined,
+  idea: Record<string, any> | null | undefined,
+  components: any[] | null | undefined,
+  figures: any[] | null | undefined,
+  options?: DetailedDescriptionScopeOptions
+): DetailedDescriptionScopeContext {
+  const scopeText = buildDetailedDescriptionScopeText(normalizedData, idea)
+  const scopedComponents = filterComponentsByInventionScope(components, normalizedData, idea)
+  const scopedFigures = filterFiguresByInventionScope(figures, normalizedData, idea, scopedComponents, options)
+  const allowedReferenceLabels = uniqueStrings(
+    scopedComponents.map(componentReferenceLabel).filter(Boolean)
+  )
+  const allowedFigureNumbers = uniqueStrings(
+    scopedFigures
+      .map((figure: any) => String(figure?.figureNo || '').trim())
+      .filter(Boolean)
+  ).map(value => Number(value)).filter(Number.isFinite)
+
+  const componentLine = scopedComponents.length
+    ? scopedComponents
+        .slice(0, 80)
+        .map(component => {
+          const name = componentName(component)
+          const label = componentReferenceLabel(component)
+          return label ? `${name} (${label})` : name
+        })
+        .filter(Boolean)
+        .join('; ')
+    : 'No component/reference-numeral entries are authorized beyond the Claim 1 and Normalized Data terminology.'
+
+  const figureLine = allowedFigureNumbers.length
+    ? allowedFigureNumbers.map(number => `FIG. ${number}`).join(', ')
+    : 'No figure references are authorized for this section.'
+
+  const guard = `
+DETAILED DESCRIPTION INVENTION-SCOPE GUARD (CRITICAL)
+- The allowed invention is limited to Frozen Claim 1 and the Normalized Data.
+- Additional context supplies labels and citations only; it does not expand the invention.
+- Ignore any supplied component, reference numeral, figure, person, organization, product, prior-art system, environment, use case, example, or named entity that is not supported by Claim 1 or the Normalized Data.
+- Do NOT use figure titles, figure descriptions, sketches, or reference numerals as an independent source for adding entities to the invention.
+- Use only the allowed component/reference context listed below when adding reference labels.
+- Use only the allowed figure references listed below, and only as parentheticals.
+
+Allowed component/reference context:
+${componentLine}
+
+Allowed figure references:
+${figureLine}
+`.trim()
+
+  return {
+    guard,
+    scopeText,
+    scopedComponents,
+    scopedFigures,
+    allowedReferenceLabels,
+    allowedFigureNumbers
+  }
 }
 
 /**

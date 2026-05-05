@@ -127,19 +127,6 @@ async function reactivateFiguresForSession(sessionId: string) {
   })
 }
 
-function buildNormalizationWarningsPromptBlock(warnings: unknown): string {
-  if (!Array.isArray(warnings) || warnings.length === 0) return ''
-  const lines = warnings
-    .map(w => String(w).trim())
-    .filter(Boolean)
-    .slice(0, 20)
-    .map(w => `- ${w}`)
-  if (lines.length === 0) return ''
-  return `NORMALIZATION REVIEW WARNINGS (ADVISORY)
-These are non-blocking hints that source details may need verification before claim drafting.
-${lines.join('\n')}`
-}
-
 function personaCoverageResponse(warnings: any[]) {
   return NextResponse.json({
     error: 'Selected persona is missing writing samples for one or more requested sections.',
@@ -4810,27 +4797,6 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings
     }
 
-    const componentsList = Array.isArray(context.components)
-      ? context.components.map((c: any) => {
-          const label = (c.referenceLabel || c.numeral) ? ` (${c.referenceLabel || c.numeral})` : ''
-          const desc = c.description ? `: ${c.description}` : ''
-          const details = [
-            c.inputs ? `inputs=${c.inputs}` : '',
-            c.outputs ? `outputs=${c.outputs}` : '',
-            c.dependencies ? `depends=${c.dependencies}` : '',
-            c.parent ? `parent=${c.parent}` : '',
-          ].filter(Boolean).join('; ')
-          return `- ${c.name}${label}${desc}${details ? ` [${details}]` : ''}`
-        }).join('\n')
-      : ''
-    const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
-      context.sourceFactLedger || existingNormalized.sourceFactLedger,
-      'SOURCE FACT LEDGER FOR CLAIM SUPPORT'
-    )
-    const normalizationWarningsBlock = buildNormalizationWarningsPromptBlock(
-      context.normalizationReviewWarnings || existingNormalized.normalizationReviewWarnings
-    )
-
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
     const ruleLines: string[] = []
     
@@ -4896,91 +4862,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     const mergedConstraints = mergedClaimsPrompt.constraints || []
     const constraintsBlock = mergedConstraints.length > 0 ? `CONSTRAINTS:\n${mergedConstraints.map(c => `- ${c}`).join('\n')}` : ''
 
-    // Legacy prompt retained only as a no-op reference while the preliminary prompt is built by the helper below.
-    const legacyClaimsPrompt = () => `You are a senior patent attorney drafting the "Claims" section for a ${countryName} patent specification handled by the ${officeName}.
-- Jurisdiction: ${activeJurisdiction}
-- Tone: ${tone}
-- Voice: ${voice}
-- Avoid: ${avoid}
-
-${baseInstruction}
-
-${rulesBlock}
-
-${constraintsBlock}
-${writingSampleBlock}
-
-INVENTION CONTEXT:
-${context.title ? `Title: ${context.title}` : ''}
-${context.problem ? `Problem: ${context.problem}` : ''}
-${context.objectives ? `Objectives: ${context.objectives}` : ''}
-${context.logic ? `Technical Logic: ${context.logic}` : ''}
-${componentsList ? `Key Components:\n${componentsList}` : ''}
-${context.bestMethod ? `Best Method: ${context.bestMethod}` : ''}
-${context.abstract ? `Abstract: ${context.abstract}` : ''}
-${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
-${normalizationWarningsBlock ? `\n${normalizationWarningsBlock}` : ''}
-
-═══════════════════════════════════════════════════════════════════════════════
-PATENT TYPE ENFORCEMENT (MANDATORY - DO NOT DEVIATE)
-═══════════════════════════════════════════════════════════════════════════════
-Detected Patent Type: ${patentTypePrimary}
-
-The FIRST independent claim (Claim 1) MUST be a ${
-  patentTypePrimary === 'PRODUCT' ? 'product or device' :
-  patentTypePrimary === 'SYSTEM' ? 'system or apparatus' :
-  patentTypePrimary === 'PROCESS' ? 'method' :
-  patentTypePrimary === 'COMPOSITION' ? 'composition or formulation' :
-  'system or apparatus'
-} claim.
-
-This is non-negotiable. The category of Claim 1 must match the patent type.
-═══════════════════════════════════════════════════════════════════════════════
-
-${existingNormalized.userClaimRemarks ? `
-USER REMARKS (consider for scope/emphasis, NOT for patent type):
-${existingNormalized.userClaimRemarks}
-` : ''}
-
-${patentTypePrimary === 'COMPOSITION' ? `
-COMPOSITION-SPECIFIC DEPENDENT CLAIM GUIDANCE:
-Include dependent claims that narrow ingredient ranges and specify preferred weight percentages or ratios where supported by the invention context.
-` : ''}
-
-CLAIM GENERATION REQUIREMENTS:
-1. Generate a comprehensive claim set appropriate for this invention's complexity
-2. The FIRST independent claim MUST match the patent type above
-3. Generate exactly ONE independent claim (Claim 1). Generate dependent claims only.
-4. Add 6-12 dependent claims total (or fewer if context is thin)
-5. Each claim must be complete, self-contained, and properly numbered
-6. Maintain strict antecedent basis throughout all claims
-7. Reference components by name consistently
-8. Protect the core innovation and key variations
-9. Use source fact ledger facts as source support for dependent claims, alternatives, embodiments, thresholds, fallback rules, and optional features; do not force every ledger item into Claim 1
-10. Do not add claim limitations or technical facts that are absent from the invention context and source fact ledger
-
-OUTPUT FORMAT:
-Return a JSON object with this structure:
-{
-  "claims": [
-    {
-      "number": 1,
-      "type": "independent",
-      "category": "method",
-      "text": "A method for... comprising: a) first step...; b) second step..."
-    },
-    {
-      "number": 2,
-      "type": "dependent",
-      "dependsOn": 1,
-      "category": "method",
-      "text": "The method of claim 1, wherein..."
-    }
-  ]
-}
-
-Return ONLY the JSON object, no markdown fencing or explanation.`
-    void legacyClaimsPrompt
+    // Build final prompt from database-managed drafting policy plus runtime context/schema.
     const prompt = buildPreliminaryClaimsPrompt({
       jurisdiction: activeJurisdiction,
       countryName,

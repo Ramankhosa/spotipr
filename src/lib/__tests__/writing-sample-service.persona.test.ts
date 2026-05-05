@@ -196,5 +196,9 @@ describe('writing sample persona resolution', () => {
 
     expect(block).not.toContain('Confidential Persona Name')
     expect(block).toContain('A device comprising a processor and a memory.')
+    expect(block).toContain('STYLE-ONLY BOUNDARY')
+    expect(block).toContain('mimic style only, never sample content')
+    expect(block).toContain('Do NOT copy or import the sample')
+    expect(block).toContain("Draft all technical substance only from the current patent's source facts")
   })
 })
