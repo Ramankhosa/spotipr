@@ -356,23 +356,43 @@ export function extractClaim1(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TEXT CLEANUP
+  // INDEPENDENT CLAIMS WRAPPER -- combine all independents into one block
   // ═══════════════════════════════════════════════════════════════════════════
-  
-  let cleanedText = claim1.text
-    .replace(/<[^>]*>/g, '') // Remove HTML tags
-    .replace(/^\s*\d+\.\s*/, '') // Remove leading claim number if present (e.g., "1. ")
-    .trim()
-  
-  // Decode HTML entities
-  cleanedText = decodeHtmlEntities(cleanedText)
-  
-  // Final whitespace cleanup (collapse multiple spaces)
-  cleanedText = cleanedText.replace(/\s+/g, ' ').trim()
 
-  if (!cleanedText) return null
+  const cleanClaimText = (c: any): string => {
+    let text = (c.text || '')
+      .replace(/<[^>]*>/g, '')
+      .replace(/^\s*\d+\.\s*/, '')
+      .trim()
+    text = decodeHtmlEntities(text)
+    return text.replace(/\s+/g, ' ').trim()
+  }
 
-  return cleanedText
+  const allIndependents = structuredClaims
+    .filter((c: any) => c && c.type === 'independent' && c.text && typeof c.text === 'string')
+    .map((c: any) => ({
+      number: parseStrictClaimNumber(c.number) || 0,
+      category: c.category || '',
+      text: cleanClaimText(c),
+    }))
+    .filter((c: any) => c.text)
+    .sort((a: any, b: any) => a.number - b.number)
+
+  if (allIndependents.length === 0) {
+    const cleaned = cleanClaimText(claim1)
+    return cleaned || null
+  }
+
+  if (allIndependents.length === 1) {
+    return allIndependents[0].text
+  }
+
+  return allIndependents
+    .map((c: any) => {
+      const label = c.category ? ` (${c.category})` : ''
+      return `Claim ${c.number}${label}:\n${c.text}`
+    })
+    .join('\n\n')
 }
 
 /**
@@ -564,32 +584,34 @@ export function buildClaim1Block(
 ): string {
   if (mode === 'off') return ''
 
-  const claim1Text = extractClaim1(normalizedData)
-  if (!claim1Text) return ''
+  const claimsText = extractClaim1(normalizedData)
+  if (!claimsText) return ''
 
   const isFrozen = areClaimsFrozen(normalizedData)
   const statusLabel = isFrozen ? '(FROZEN - LEGAL AUTHORITY)' : '(WORKING - FOR ALIGNMENT)'
+  const hasMultiple = claimsText.includes('\n\nClaim ')
+  const heading = hasMultiple ? 'INDEPENDENT CLAIMS' : 'CLAIM 1'
 
   let modeInstruction = ''
   if (mode === 'bindingAnchor') {
     modeInstruction = `
-CLAIM 1 BINDING INSTRUCTION:
-- Do NOT add elements not supported by Claim 1
-- Keep terminology EXACTLY consistent with Claim 1
-- All features described must trace back to Claim 1 language`
+${heading} BINDING INSTRUCTION:
+- Do NOT add elements not supported by the independent claims
+- Keep terminology EXACTLY consistent with the independent claims
+- All features described must trace back to independent claim language`
   } else if (mode === 'constraintOnly') {
     modeInstruction = `
-CLAIM 1 CONSTRAINT INSTRUCTION:
-- Use Claim 1 ONLY for terminology consistency
+${heading} CONSTRAINT INSTRUCTION:
+- Use independent claims ONLY for terminology consistency
 - Do NOT enumerate or restate claim features
-- Avoid contradiction with Claim 1 scope`
+- Avoid contradiction with independent claim scope`
   }
 
   return `
 ════════════════════════════════════════════════════════════════════════════════
-CLAIM 1 ${statusLabel}
+${heading} ${statusLabel}
 ════════════════════════════════════════════════════════════════════════════════
-${claim1Text}
+${claimsText}
 ${modeInstruction}
 `
 }

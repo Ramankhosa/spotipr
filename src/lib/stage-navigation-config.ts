@@ -102,10 +102,10 @@ export interface JurisdictionDraftInfo {
 export const STAGE_DEFINITIONS: StageDefinition[] = [
   {
     key: 'IDEA_ENTRY',
-    label: 'Idea & Claims',
+    label: 'Invention Structure',
     icon: Lightbulb,
-    description: 'Define your invention and initial claims',
-    weight: 15,
+    description: 'Define and review your invention structure',
+    weight: 10,
     subStages: [
       {
         key: 'invention_details',
@@ -148,21 +148,6 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         }
       },
       {
-        key: 'claims_draft',
-        label: 'Claims Draft',
-        icon: Scale,
-        description: 'Initial claims generation',
-        required: true,
-        getStatus: (session) => {
-          const normalized = session?.ideaRecord?.normalizedData || {}
-          const hasClaims = !!normalized.claims || !!normalized.claimsProvisional
-          // Claims draft is complete when claims exist (regardless of frozen state)
-          // Freezing is tracked separately in CLAIM_REFINEMENT stage if that stage is used
-          if (hasClaims) return 'completed'
-          return 'pending'
-        }
-      },
-      {
         key: 'jurisdiction_select',
         label: 'Jurisdiction Selection',
         icon: Globe,
@@ -171,6 +156,39 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         getStatus: (session) => {
           const jurisdictions = session?.draftingJurisdictions || []
           return jurisdictions.length > 0 ? 'completed' : 'pending'
+        }
+      }
+    ]
+  },
+  {
+    key: 'PRELIMINARY_CLAIMS',
+    label: 'Preliminary Claims',
+    icon: Scale,
+    description: 'Generate and review initial patent claims',
+    weight: 12,
+    subStages: [
+      {
+        key: 'claims_draft',
+        label: 'Claims Draft',
+        icon: Scale,
+        description: 'Generate jurisdiction-aware claims',
+        required: true,
+        getStatus: (session) => {
+          const normalized = session?.ideaRecord?.normalizedData || {}
+          const hasClaims = !!normalized.claims || !!normalized.claimsProvisional
+          if (hasClaims) return 'completed'
+          return 'pending'
+        }
+      },
+      {
+        key: 'claims_freeze',
+        label: 'Freeze Claims',
+        icon: Lock,
+        description: 'Lock claims for downstream drafting',
+        required: false,
+        getStatus: (session) => {
+          const normalized = session?.ideaRecord?.normalizedData || {}
+          return normalized.claimsApprovedAt ? 'completed' : 'pending'
         }
       }
     ]

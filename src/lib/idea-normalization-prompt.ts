@@ -92,8 +92,6 @@ Respond in this exact JSON shape:
   "bestMethod": "source-stated preferred/best implementation only, or Not stated by source",
   "fieldOfRelevance": "primary domain (e.g., Mechanical, Electrical, Software, Medical Device, Biotech, Chemistry, Materials, Aerospace, Civil, Agriculture)",
   "subfield": "more specific area, or Not stated by source",
-  "recommendedFocus": "drafting focus based only on source-stated invention facts",
-  "complianceNotes": "source-stated regulatory, safety, standard, or compliance notes, or Not stated by source",
   "drawingsFocus": "figures should emphasize only source-supported components, flows, embodiments, and fallback paths",
   "claimStrategy": "high-level claim approach based only on source-stated facts and patent type",
   "coreInventiveConcept": "minimum source-supported inventive combination for Claim 1, or Not stated by source",
@@ -104,7 +102,6 @@ Respond in this exact JSON shape:
   "abstract": "<= 150-word abstract that begins exactly with the title; neutral tone; no unsupported advantages",
   "cpcCodes": ["primary CPC code like H04L 29/08", "optional secondary"],
   "ipcCodes": ["primary IPC code like G06F 17/30", "optional secondary"],
-  "sourceHandlingMode": "${sourceMode}",
   "sourceFactLedger": {
     "componentsAndSubcomponents": ["every source-stated component/subcomponent detail relevant to claims or figures"],
     "materialsOrCompositions": ["materials, ingredients, formulations, biological entities, compounds, concentrations, excipients, cells, sequences"],

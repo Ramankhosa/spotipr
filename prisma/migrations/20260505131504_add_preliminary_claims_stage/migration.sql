@@ -1,0 +1,2 @@
+-- AlterEnum: Add PRELIMINARY_CLAIMS value to DraftingSessionStatus after IDEA_ENTRY
+ALTER TYPE "DraftingSessionStatus" ADD VALUE IF NOT EXISTS 'PRELIMINARY_CLAIMS' AFTER 'IDEA_ENTRY';

@@ -117,6 +117,127 @@ function makeElementId(label: string, sourceType: ScopeSourceType, index: number
   return `${sourceType}_${base}_${index + 1}`
 }
 
+function buildComponentLookup(normalizedComponents: any[]): Map<string, any> {
+  const componentByLabel = new Map<string, any>()
+  normalizedComponents.forEach((component) => {
+    const keys = [
+      component?.name,
+      component?.label,
+      component?.title,
+      component?.id,
+    ].map(scopeElementKey).filter(Boolean)
+
+    keys.forEach((key) => {
+      if (!componentByLabel.has(key)) componentByLabel.set(key, component)
+    })
+  })
+  return componentByLabel
+}
+
+function findComponentBySourceRefs(sourceRefs: string[], normalizedComponents: any[]): any | undefined {
+  for (const sourceRef of sourceRefs) {
+    const match = sourceRef.match(/\bcomponents\[(\d+)\]/i)
+    if (!match) continue
+    const index = Number(match[1])
+    if (Number.isInteger(index) && normalizedComponents[index]) {
+      return normalizedComponents[index]
+    }
+  }
+  return undefined
+}
+
+function componentsFromSourceRefs(sourceRefs: string[], normalizedComponents: any[]): any[] {
+  const components: any[] = []
+  const seen = new Set<number>()
+  for (const sourceRef of sourceRefs) {
+    const match = sourceRef.match(/\bcomponents\[(\d+)\]/i)
+    if (!match) continue
+    const index = Number(match[1])
+    if (!Number.isInteger(index) || seen.has(index) || !normalizedComponents[index]) continue
+    seen.add(index)
+    components.push(normalizedComponents[index])
+  }
+  return components
+}
+
+function nameWithoutParenthetical(value: unknown): string {
+  return clean(value).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function meaningfulParentName(value: unknown): string {
+  const normalized = clean(value)
+  if (!normalized || /^not stated by source$/i.test(normalized) || /^(none|n\/a)$/i.test(normalized)) return ''
+  return normalized
+}
+
+function sourceRefOverlap(component: any, element: ScopeRecommendationElement): number {
+  const labelTokens = new Set(scopeElementKey(element.label).split(' ').filter(token => token.length > 2))
+  const componentTokens = scopeElementKey(component?.name || component?.title || component?.label)
+    .split(' ')
+    .filter(token => token.length > 2)
+  return componentTokens.filter(token => labelTokens.has(token)).length
+}
+
+function hasStrongSourceNameMatch(component: any, element: ScopeRecommendationElement): boolean {
+  const labelKey = scopeElementKey(element.label)
+  const idKey = scopeElementKey(element.id)
+  const componentKey = scopeElementKey(nameWithoutParenthetical(component?.name || component?.title || component?.label))
+  if (!componentKey) return false
+  return labelKey.includes(componentKey) || idKey.includes(componentKey) || componentKey.includes(idKey)
+}
+
+function hasPrefixSourceNameMatch(component: any, element: ScopeRecommendationElement): boolean {
+  const labelKey = scopeElementKey(element.label)
+  const idKey = scopeElementKey(element.id)
+  const componentKey = scopeElementKey(nameWithoutParenthetical(component?.name || component?.title || component?.label))
+  if (!componentKey) return false
+  return labelKey === componentKey
+    || labelKey.startsWith(`${componentKey} `)
+    || idKey === componentKey
+    || idKey.startsWith(`${componentKey} `)
+}
+
+export function scopeTitleFromElement(element: ScopeRecommendationElement): string {
+  const rawId = clean(element.id)
+    .replace(/_[0-9]+$/g, '')
+    .replace(/_/g, ' ')
+  const title = clean(rawId)
+  if (!title || title === element.sourceType) return element.label
+  return title.charAt(0).toUpperCase() + title.slice(1)
+}
+
+export function sourceComponentForScopeElement(
+  element: ScopeRecommendationElement,
+  normalizedComponents: any[] = [],
+  componentByLabel = buildComponentLookup(normalizedComponents)
+): any | undefined {
+  const sourceCandidates = componentsFromSourceRefs(element.sourceRefs, normalizedComponents)
+
+  if (sourceCandidates.length >= 3) {
+    const parentName = meaningfulParentName(sourceCandidates[0]?.parent)
+    if (parentName && sourceCandidates.every(component => meaningfulParentName(component?.parent) === parentName)) {
+      const parent = componentByLabel.get(scopeElementKey(parentName))
+      if (parent) return parent
+    }
+  }
+
+  if (sourceCandidates.length > 1) {
+    const prefixCandidates = sourceCandidates.filter(component => hasPrefixSourceNameMatch(component, element))
+    if (prefixCandidates.length === 1) return prefixCandidates[0]
+
+    const overlappingCandidates = sourceCandidates.filter(component => sourceRefOverlap(component, element) >= 2)
+    if (overlappingCandidates.length > 1) return undefined
+
+    const matchedCandidates = sourceCandidates.filter(component => hasStrongSourceNameMatch(component, element))
+    if (matchedCandidates.length === 1) return matchedCandidates[0]
+  }
+
+  return sourceCandidates[0]
+    || findComponentBySourceRefs(element.sourceRefs, normalizedComponents)
+    || componentByLabel.get(scopeElementKey(element.label))
+    || componentByLabel.get(scopeElementKey(element.id))
+}
+
 function normalizeSelection(value: unknown): ScopeUseSelection {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   return {
@@ -239,11 +360,7 @@ export function componentsFromScopeRecommendations(
   normalizedComponents: any[] = []
 ): any[] {
   if (!isScopeRecommendations(scopeRecommendations)) return []
-  const componentByLabel = new Map<string, any>()
-  normalizedComponents.forEach((component) => {
-    const key = scopeElementKey(component?.name || component?.label || component?.title)
-    if (key && !componentByLabel.has(key)) componentByLabel.set(key, component)
-  })
+  const componentByLabel = buildComponentLookup(normalizedComponents)
 
   return scopeRecommendations.elements
     .filter((element) => {
@@ -251,16 +368,20 @@ export function componentsFromScopeRecommendations(
       return effective.numbering === 'number' && effective.description !== 'exclude'
     })
     .map((element, index) => {
-      const existing = componentByLabel.get(scopeElementKey(element.label)) || {}
+      const existing = sourceComponentForScopeElement(element, normalizedComponents, componentByLabel) || {}
       return {
         ...existing,
         id: existing.id || element.id,
-        name: existing.name || element.label,
+        name: existing.name || existing.title || existing.label || (
+          element.sourceRefs.length > 1 ? scopeTitleFromElement(element) : element.label
+        ),
         type: existing.type || 'OTHER',
         description: existing.description || element.reason,
         sequence: existing.sequence || index + 1,
         sourceType: element.sourceType,
         sourceScopeId: element.id,
+        sourceRefs: element.sourceRefs,
+        scopeLabel: element.label,
       }
     })
 }

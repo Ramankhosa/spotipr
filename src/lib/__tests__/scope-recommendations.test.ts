@@ -109,6 +109,54 @@ describe('scope recommendations helpers', () => {
     expect(componentsFromScopeRecommendations(scope).map(component => component.name)).toEqual(['moisture sensor'])
   })
 
+  test('uses source component titles when scope labels are claim-like descriptions', () => {
+    const scope = coerceScopeRecommendations({
+      ...rawScope,
+      elements: [
+        {
+          ...rawScope.elements[0],
+          id: 'sensor_scope',
+          label: 'Moisture sensor configured to detect soil moisture and trigger irrigation control',
+          reason: 'Core claim element and figure anchor.',
+          sourceRefs: ['components[0]'],
+        },
+      ],
+    })!
+
+    const seeds = componentsFromScopeRecommendations(scope, [
+      {
+        name: 'Moisture sensor',
+        description: 'Sensor that detects soil moisture.',
+      },
+    ])
+
+    expect(seeds[0].name).toBe('Moisture sensor')
+    expect(seeds[0].description).toBe('Sensor that detects soil moisture.')
+    expect(seeds[0].scopeLabel).toBe('Moisture sensor configured to detect soil moisture and trigger irrigation control')
+  })
+
+  test('uses concise scope titles for composite labels that cite multiple subparts', () => {
+    const scope = coerceScopeRecommendations({
+      ...rawScope,
+      elements: [
+        {
+          ...rawScope.elements[0],
+          id: 'two_layer_coating',
+          label: 'Pellets having an inner barrier layer and an outer enteric layer',
+          reason: 'Composite coating feature.',
+          sourceRefs: ['components[0]', 'components[1]'],
+        },
+      ],
+    })!
+
+    const seeds = componentsFromScopeRecommendations(scope, [
+      { name: 'Inner barrier layer', description: 'Inner coating.' },
+      { name: 'Outer enteric layer', description: 'Outer coating.' },
+    ])
+
+    expect(seeds[0].name).toBe('Two layer coating')
+  })
+
   test('builds claim and figure scope prompt blocks', () => {
     const scope = coerceScopeRecommendations(rawScope)!
 

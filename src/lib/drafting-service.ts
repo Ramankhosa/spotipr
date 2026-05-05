@@ -208,6 +208,9 @@ export interface ProcessedComponent {
   range?: string;             // Only for NUMERIC_BUCKET
   parentId?: string;
   sequence?: number;          // Explicit ordering (for PROCESS/COMPOSITION)
+  sourceScopeId?: string;
+  sourceRefs?: string[];
+  scopeLabel?: string;
 }
 
 export interface ComponentValidationResult {
@@ -575,7 +578,7 @@ Respond in this exact JSON shape:
         taskCode: 'LLM2_DRAFT',
         stageCode: 'DRAFT_IDEA_ENTRY', // Stage for idea normalization
         prompt,
-        parameters: { tenantId, ...(allowRefine ? { temperature: 0.4 } : { temperature: 0.0 }) },
+        parameters: { tenantId, ...(allowRefine ? { temperature: 0.2 } : { temperature: 0.0 }) },
         idempotencyKey: crypto.randomUUID()
       });
 
@@ -3305,6 +3308,15 @@ Use the Super Admin panel to add the missing prompt.
         numeral: parsedNumeral,
         type: componentType || 'OTHER',
         sequence: typeof comp.sequence === 'number' ? comp.sequence : undefined,
+        sourceScopeId: typeof (comp as any).sourceScopeId === 'string'
+          ? (comp as any).sourceScopeId
+          : typeof (comp as any).scopeRecommendationId === 'string'
+            ? (comp as any).scopeRecommendationId
+            : undefined,
+        sourceRefs: Array.isArray((comp as any).sourceRefs)
+          ? (comp as any).sourceRefs.filter((ref: any) => typeof ref === 'string')
+          : undefined,
+        scopeLabel: typeof (comp as any).scopeLabel === 'string' ? (comp as any).scopeLabel : undefined,
         children: []
       };
     }
@@ -3416,7 +3428,10 @@ Use the Super Admin panel to add the missing prompt.
           referenceLabel: String(n.numeral), // NUMERIC_BUCKET: referenceLabel = numeral string
           range: `${Math.floor(n.numeral / 100) * 100}s`,
           parentId: n.parentId || undefined,
-          sequence: n.sequence
+          sequence: n.sequence,
+          sourceScopeId: n.sourceScopeId,
+          sourceRefs: n.sourceRefs,
+          scopeLabel: n.scopeLabel
         });
         n.children?.forEach((c: any) => collect(c));
       };
@@ -3446,7 +3461,10 @@ Use the Super Admin panel to add the missing prompt.
           referenceLabel,
           range: undefined,
           parentId: n.parentId || undefined,
-          sequence: idx + 1
+          sequence: idx + 1,
+          sourceScopeId: n.sourceScopeId,
+          sourceRefs: n.sourceRefs,
+          scopeLabel: n.scopeLabel
         });
       });
 
@@ -3506,7 +3524,10 @@ Use the Super Admin panel to add the missing prompt.
           referenceLabel,
           range: undefined,
           parentId: n.parentId || undefined,
-          sequence: idx + 1
+          sequence: idx + 1,
+          sourceScopeId: n.sourceScopeId,
+          sourceRefs: n.sourceRefs,
+          scopeLabel: n.scopeLabel
         });
       });
     }

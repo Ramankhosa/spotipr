@@ -18,6 +18,7 @@ import AnnexureDraftStage from '@/components/drafting/AnnexureDraftStage'
 // @ts-ignore - file added dynamically during session; type generation will catch up
 import RelatedArtStage from '@/components/drafting/RelatedArtStage'
 import CountryWiseDraftStage from '@/components/drafting/CountryWiseDraftStage'
+import PreliminaryClaimsStage from '@/components/drafting/PreliminaryClaimsStage'
 // Vertical Stage Navigation (replaces FloatingStageNavigation)
 import VerticalStageNav from '@/components/drafting/VerticalStageNav'
 // Floating forward/backward navigation buttons
@@ -64,45 +65,47 @@ interface PatentUsageMetrics {
 
 const STAGE_COMPONENTS = {
   IDEA_ENTRY: IdeaEntryStage,
+  PRELIMINARY_CLAIMS: PreliminaryClaimsStage,
   RELATED_ART: RelatedArtStage,
   CLAIM_REFINEMENT: ClaimRefinementStage,
   COMPONENT_PLANNER: ComponentPlannerStage,
   FIGURE_PLANNER: FigurePlannerStage,
-  COUNTRY_WISE_DRAFTING: CountryWiseDraftStage, // Kept for backward compatibility
+  COUNTRY_WISE_DRAFTING: CountryWiseDraftStage,
   ANNEXURE_DRAFT: AnnexureDraftStage,
   COMPLETED: AnnexureDraftStage
 }
 
 const STAGE_LABELS = {
-  IDEA_ENTRY: 'Idea & Claims',  // Updated: Now includes claims generation
+  IDEA_ENTRY: 'Invention Structure',
+  PRELIMINARY_CLAIMS: 'Preliminary Claims',
   RELATED_ART: 'Prior Art Analysis',
   CLAIM_REFINEMENT: 'Claim Refinement',
   COMPONENT_PLANNER: 'Component Planner',
   FIGURE_PLANNER: 'Figure Planner',
-  COUNTRY_WISE_DRAFTING: 'Jurisdiction Setup', // Legacy - jurisdiction now selected in Stage 0
-  ANNEXURE_DRAFT: 'Draft Sections',  // Updated: More descriptive
+  COUNTRY_WISE_DRAFTING: 'Jurisdiction Setup',
+  ANNEXURE_DRAFT: 'Draft Sections',
   COMPLETED: 'Completed'
 }
 
 const STAGE_PROGRESS = {
-  IDEA_ENTRY: 15,  // Updated percentages for new flow
-  RELATED_ART: 30,
+  IDEA_ENTRY: 10,
+  PRELIMINARY_CLAIMS: 22,
+  RELATED_ART: 35,
   CLAIM_REFINEMENT: 45,
-  COMPONENT_PLANNER: 60,
+  COMPONENT_PLANNER: 58,
   FIGURE_PLANNER: 70,
-  COUNTRY_WISE_DRAFTING: 55, // Same as RELATED_ART since it's skipped in normal flow
-  ANNEXURE_DRAFT: 80,
+  COUNTRY_WISE_DRAFTING: 55,
+  ANNEXURE_DRAFT: 82,
   COMPLETED: 100
 }
 
-// Stage order - COUNTRY_WISE_DRAFTING removed since jurisdiction is selected in Stage 0
 const STAGE_ORDER: Array<keyof typeof STAGE_COMPONENTS> = [
   'IDEA_ENTRY',
+  'PRELIMINARY_CLAIMS',
   'RELATED_ART',
   'CLAIM_REFINEMENT',
   'COMPONENT_PLANNER',
   'FIGURE_PLANNER',
-  // 'COUNTRY_WISE_DRAFTING' - Removed: Jurisdiction is now selected before drafting starts
   'ANNEXURE_DRAFT',
   'COMPLETED'
 ]
@@ -545,7 +548,7 @@ export default function PatentDraftingPage() {
 
     if (getCurrentStage() === 'COMPONENT_PLANNER') {
       if (priorArtSkipped) {
-        setNavNotice('Prior art was skipped earlier, so returning to Idea & Claims.')
+        setNavNotice('Prior art was skipped earlier, so returning to Invention Structure.')
       } else if (claimRefinementSkipped) {
         setNavNotice('Claim refinement was skipped, so returning to Related Art stage.')
       } else {
@@ -633,7 +636,8 @@ export default function PatentDraftingPage() {
   
   // Stage labels for floating buttons
   const stageLabels: Record<string, string> = {
-    IDEA_ENTRY: 'Idea & Claims',
+    IDEA_ENTRY: 'Invention Structure',
+    PRELIMINARY_CLAIMS: 'Preliminary Claims',
     RELATED_ART: 'Prior Art',
     CLAIM_REFINEMENT: 'Claim Refinement',
     COMPONENT_PLANNER: 'Components',

@@ -51,6 +51,7 @@ type PreliminaryClaimContext = {
   sourceFactLedger?: unknown
   scopeRecommendations?: unknown
   normalizationReviewWarnings?: unknown
+  inventionType?: unknown
 }
 
 type BuildPreliminaryClaimsPromptParams = {
@@ -243,7 +244,7 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
         ? 'method or process'
         : 'composition or formulation'
 
-  const claimCategoryExample = patentTypePrimary === 'PRODUCT'
+  const primaryCategory = patentTypePrimary === 'PRODUCT'
     ? 'apparatus'
     : patentTypePrimary === 'SYSTEM'
       ? 'system'
@@ -251,17 +252,23 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
         ? 'method'
         : 'composition'
 
-  const independentTextExample = patentTypePrimary === 'PRODUCT'
-    ? 'An apparatus comprising source-supported elements...'
-    : patentTypePrimary === 'SYSTEM'
-      ? 'A system comprising source-supported elements...'
-      : patentTypePrimary === 'PROCESS'
-        ? 'A method comprising source-supported steps...'
-        : 'A composition comprising source-supported constituents...'
+  const secondaryCategory = patentTypePrimary === 'PROCESS'
+    ? 'system'
+    : patentTypePrimary === 'COMPOSITION'
+      ? 'method'
+      : 'method'
 
-  const dependentTextExample = claimCategoryExample === 'method'
-    ? 'The method of claim 1, wherein...'
-    : `The ${claimCategoryExample} of claim 1, wherein...`
+  const inventionTypes = toStringArray((context as any).inventionType)
+  const isSoftware = inventionTypes.some(t => /software/i.test(t))
+
+  const multiIndependentGuidance = isSoftware
+    ? `The calling system expressly permits and requests 3 independent claims in different statutory categories:
+1. An independent ${primaryCategory} claim (Claim 1) with its dependent claims.
+2. An independent ${secondaryCategory} claim targeting the same inventive concept from a ${secondaryCategory} perspective, with its dependent claims.
+3. An independent computer-readable medium (CRM) claim reciting instructions that, when executed, cause a processor to perform the method, with its dependent claims.`
+    : `The calling system expressly permits and requests 2 independent claims in different statutory categories:
+1. An independent ${primaryCategory} claim (Claim 1) with its dependent claims.
+2. An independent ${secondaryCategory} claim targeting the same inventive concept from a ${secondaryCategory} perspective, with its dependent claims.`
 
   return `You are a senior patent attorney drafting preliminary patent claims for a ${countryName} patent specification handled by the ${officeName}.
 - Jurisdiction: ${jurisdiction}
@@ -296,29 +303,63 @@ ${formatListBlock('Do Not Claim / Missing Facts', context.doNotClaim)}
 ${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 ${formatWarnings(context.normalizationReviewWarnings)}
 
+SOURCE SUPPORT DISCIPLINE:
+Every claim element MUST map to at least one source fact (SF-ID or normalized field).
+Cite specific SF-IDs (e.g., SF-componentsAndSubcomponents-1) in the supportMatrix for each claim.
+If you cannot map a claim element to a source fact, do NOT include it in the claim.
+
 PATENT TYPE ENFORCEMENT:
 Detected patent type: ${patentTypePrimary}
 Expected Claim 1 category: ${claimType}.
 Use the type-specific drafting rules from the database prompt for this detected category.
 
+MULTI-INDEPENDENT CLAIM ARCHITECTURE:
+${multiIndependentGuidance}
+Each independent claim targets the SAME inventive concept from a different statutory angle.
+Number all claims sequentially (1, 2, 3, ...) regardless of category.
+
+CLAIM NARROWING STRATEGY:
+For dependent claims under each independent claim:
+- Order from broadest narrowing to most specific.
+- First dependents: add the most commercially valuable limitations.
+- Middle dependents: add structural/operational detail from claimableFeatures.
+- Final dependents: add fallback limitations, specific ranges, or embodiment details from fallbackLimitations.
+- Each dependent adds exactly ONE limitation — no compound narrowing.
+
 ${userClaimRemarks ? `USER CLAIM REMARKS (scope/emphasis only; do not treat as new source facts unless supported above):\n${userClaimRemarks}` : ''}
 
 MACHINE-READABLE OUTPUT CONTRACT:
+IMPORTANT: If any prior instruction specifies a different output schema, IGNORE it.
+Use ONLY the schema below.
+
 Return ONLY one JSON object:
 {
   "claims": [
     {
       "number": 1,
       "type": "independent",
-      "category": "${claimCategoryExample}",
-      "text": "${independentTextExample}"
+      "category": "${primaryCategory}",
+      "text": "A ${primaryCategory} comprising source-supported elements..."
     },
     {
       "number": 2,
       "type": "dependent",
       "dependsOn": 1,
-      "category": "${claimCategoryExample}",
-      "text": "${dependentTextExample}"
+      "category": "${primaryCategory}",
+      "text": "The ${primaryCategory} of claim 1, wherein..."
+    },
+    {
+      "number": 5,
+      "type": "independent",
+      "category": "${secondaryCategory}",
+      "text": "A ${secondaryCategory} comprising source-supported steps..."
+    },
+    {
+      "number": 6,
+      "type": "dependent",
+      "dependsOn": 5,
+      "category": "${secondaryCategory}",
+      "text": "The ${secondaryCategory} of claim 5, wherein..."
     }
   ],
   "supportMatrix": [
@@ -498,6 +539,26 @@ function mergeSupportMatrix(
   })
 }
 
+function escapeForRegex(str: string) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getClaimChainText(claim: DraftClaim, allClaims: DraftClaim[]): string {
+  const chain: string[] = []
+  let current: DraftClaim | undefined = claim
+  const visited = new Set<number>()
+  while (current && !visited.has(current.number)) {
+    visited.add(current.number)
+    chain.unshift(current.text)
+    if (current.type === 'dependent' && current.dependsOn) {
+      current = allClaims.find(c => c.number === current!.dependsOn)
+    } else {
+      break
+    }
+  }
+  return chain.join(' ')
+}
+
 export function analyzePreliminaryClaimQuality(params: AnalyzePreliminaryClaimQualityParams): PreliminaryClaimGenerationQuality {
   const { claims, patentTypePrimary, context, llmSupportMatrix = [], llmQualityWarnings = [] } = params
   const supportEntries = supportEntriesFromContext(context)
@@ -514,11 +575,11 @@ export function analyzePreliminaryClaimQuality(params: AnalyzePreliminaryClaimQu
   })
 
   const independentClaims = claims.filter(claim => claim.type === 'independent')
-  if (independentClaims.length !== 1) {
+  if (independentClaims.length < 2) {
     warnings.push({
       code: 'INDEPENDENT_CLAIM_COUNT',
       severity: 'warning',
-      message: `Expected exactly one independent preliminary claim; found ${independentClaims.length}.`,
+      message: `Expected at least 2 independent claims in different categories; found ${independentClaims.length}.`,
     })
   }
 
@@ -586,6 +647,30 @@ export function analyzePreliminaryClaimQuality(params: AnalyzePreliminaryClaimQu
           message: `Claim ${claim.number} includes material "${material}" that was not found in the source context.`,
         })
       }
+    })
+
+    if (/\bmeans\s+for\b/i.test(claim.text)) {
+      warnings.push({
+        code: 'MEANS_PLUS_FUNCTION',
+        severity: 'warning',
+        claimNumber: claim.number,
+        message: `Claim ${claim.number} uses "means for" language which may invoke 112(f) narrowing to disclosed structure + equivalents.`,
+      })
+    }
+
+    const claimChainText = getClaimChainText(claim, claims)
+    const theRefs = claim.text.match(/\bthe\s+([a-z]+(?:\s+[a-z]+)?)\b/gi) || []
+    theRefs.forEach((ref) => {
+      const noun = ref.replace(/^the\s+/i, '').toLowerCase()
+      if (/^(invention|claim|method|system|apparatus|composition|device|step|present)$/.test(noun)) return
+      if (new RegExp(`\\b(a|an)\\s+${escapeForRegex(noun)}\\b`, 'i').test(claimChainText)) return
+      if (new RegExp(`\\b${escapeForRegex(noun)}\\b`, 'i').test(claimChainText.split(claim.text)[0] || '')) return
+      warnings.push({
+        code: 'ANTECEDENT_BASIS',
+        severity: 'warning',
+        claimNumber: claim.number,
+        message: `Claim ${claim.number}: "the ${noun}" may lack antecedent basis (no prior "a/an ${noun}" found in claim chain).`,
+      })
     })
   })
 

@@ -1698,6 +1698,7 @@ model FeatureMappingCache {
 
 enum DraftingSessionStatus {
   IDEA_ENTRY
+  PRELIMINARY_CLAIMS
   RELATED_ART
   CLAIM_REFINEMENT
   COMPONENT_PLANNER

@@ -4811,7 +4811,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       doNotClaim: ideaContext?.doNotClaim ?? existingNormalized.doNotClaim,
       sourceFactLedger: ideaContext?.sourceFactLedger ?? existingNormalized.sourceFactLedger,
       scopeRecommendations: ideaContext?.scopeRecommendations ?? existingNormalized.scopeRecommendations,
-      normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings
+      normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings,
+      inventionType: existingNormalized.inventionType
     }
 
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
@@ -5814,6 +5815,7 @@ async function handleSetStage(user: any, patentId: string, data: any) {
   // COUNTRY_WISE_DRAFTING kept for backward compatibility with existing sessions
   const allowedStages = [
     'IDEA_ENTRY',
+    'PRELIMINARY_CLAIMS',
     'RELATED_ART',
     'CLAIM_REFINEMENT',
     'COMPONENT_PLANNER',
@@ -5854,7 +5856,7 @@ async function handleSetStage(user: any, patentId: string, data: any) {
   // Prepare update data
   const updateData: any = { status: stage }
 
-  const stageFlow = ['IDEA_ENTRY', 'RELATED_ART', 'CLAIM_REFINEMENT', 'COMPONENT_PLANNER', 'FIGURE_PLANNER', 'ANNEXURE_DRAFT', 'COMPLETED']
+  const stageFlow = ['IDEA_ENTRY', 'PRELIMINARY_CLAIMS', 'RELATED_ART', 'CLAIM_REFINEMENT', 'COMPONENT_PLANNER', 'FIGURE_PLANNER', 'ANNEXURE_DRAFT', 'COMPLETED']
   const legacyStageMap: Record<string, (typeof stageFlow)[number]> = {
     REVIEW_FIX: 'ANNEXURE_DRAFT',
     EXPORT_READY: 'ANNEXURE_DRAFT'
@@ -5872,6 +5874,16 @@ async function handleSetStage(user: any, patentId: string, data: any) {
   if (stage === currentStage) {
     allowed = true
   } else if (currentStage === 'IDEA_ENTRY') {
+    if (stage === 'PRELIMINARY_CLAIMS') {
+      allowed = true
+    } else if (stage === 'RELATED_ART') {
+      allowed = true
+    } else if (stage === 'COMPONENT_PLANNER' && isSkippingPriorArt) {
+      allowed = true
+    } else {
+      allowed = false
+    }
+  } else if (currentStage === 'PRELIMINARY_CLAIMS') {
     if (stage === 'RELATED_ART') {
       allowed = true
     } else if (stage === 'COMPONENT_PLANNER' && isSkippingPriorArt) {

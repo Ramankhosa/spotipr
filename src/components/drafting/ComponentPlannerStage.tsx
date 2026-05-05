@@ -1,7 +1,13 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { componentsFromScopeRecommendations } from '@/lib/scope-recommendations'
+import {
+  componentsFromScopeRecommendations,
+  isScopeRecommendations,
+  scopeElementKey,
+  scopeTitleFromElement,
+  sourceComponentForScopeElement,
+} from '@/lib/scope-recommendations'
 
 interface ComponentPlannerStageProps {
   session: any
@@ -29,6 +35,9 @@ interface Component {
   conditions?: string
   alternatives?: string
   parentId?: string
+  sourceScopeId?: string
+  sourceRefs?: string[]
+  scopeLabel?: string
 }
 
 type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'
@@ -90,6 +99,73 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   const isMeaningfulParent = (value: any): value is string => {
     const normalized = normalizeNameKey(value)
     return !!normalized && normalized !== 'not stated by source' && normalized !== 'none' && normalized !== 'n/a'
+  }
+
+  const getNormalizedIdeaData = () => session?.ideaRecord?.normalizedData || {}
+
+  const getIdeaComponentsForScope = (): any[] => {
+    const normalized = getNormalizedIdeaData()
+    return Array.isArray(session?.ideaRecord?.components)
+      ? session.ideaRecord.components
+      : Array.isArray(normalized?.components)
+        ? normalized.components
+        : []
+  }
+
+  const hydrateComponentTitlesFromScope = (rawComponents: any[]): any[] => {
+    const normalized = getNormalizedIdeaData()
+    const scopeRecommendations = normalized?.scopeRecommendations
+    const ideaComponents = getIdeaComponentsForScope()
+
+    if (!isScopeRecommendations(scopeRecommendations) || ideaComponents.length === 0) {
+      return rawComponents
+    }
+
+    const elementsById = new Map(scopeRecommendations.elements.map((element) => [element.id, element]))
+
+    return rawComponents.map((component) => {
+      const scopeId = String(component?.sourceScopeId || component?.scopeRecommendationId || component?.id || '')
+      const element = elementsById.get(scopeId)
+        || scopeRecommendations.elements.find((candidate) => {
+          const componentLabel = component?.scopeLabel || component?.name
+          return scopeElementKey(candidate.label) === scopeElementKey(componentLabel)
+        })
+
+      if (!element) return component
+
+      const sourceComponent = sourceComponentForScopeElement(element, ideaComponents)
+      const sourceName = String(
+        sourceComponent?.name
+        || sourceComponent?.title
+        || sourceComponent?.label
+        || scopeTitleFromElement(element)
+        || ''
+      ).trim()
+      if (!sourceName) return component
+
+      const currentNameKey = scopeElementKey(component?.name)
+      const scopeLabelKey = scopeElementKey(element.label)
+      const shouldUseSourceName = !currentNameKey || currentNameKey === scopeLabelKey
+
+      const currentDescriptionKey = scopeElementKey(component?.description)
+      const reasonKey = scopeElementKey(element.reason)
+      const sourceDescription = typeof sourceComponent?.description === 'string'
+        ? sourceComponent.description.trim()
+        : ''
+
+      return {
+        ...component,
+        name: shouldUseSourceName ? sourceName : component.name,
+        description: (!currentDescriptionKey || currentDescriptionKey === reasonKey) && sourceDescription
+          ? sourceDescription
+          : component.description,
+        sourceScopeId: element.id,
+        sourceRefs: Array.isArray(component?.sourceRefs) && component.sourceRefs.length
+          ? component.sourceRefs
+          : element.sourceRefs,
+        scopeLabel: component?.scopeLabel || element.label,
+      }
+    })
   }
 
   const makeUniqueId = (baseId: string, usedIds: Set<string>): string => {
@@ -187,16 +263,12 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     // Try referenceMap first
     const refMapComponents = extractComponentsFromReferenceMap(session?.referenceMap)
     if (refMapComponents.length > 0) {
-      return normalizeComponentsForPlanner(refMapComponents)
+      return normalizeComponentsForPlanner(hydrateComponentTitlesFromScope(refMapComponents))
     }
 
     // Prefer user-approved/LLM-recommended scope selections for new numbering maps.
-    const normalized = session?.ideaRecord?.normalizedData || {}
-    const ideaComponents = Array.isArray(session?.ideaRecord?.components)
-      ? session.ideaRecord.components
-      : Array.isArray(normalized?.components)
-        ? normalized.components
-        : []
+    const normalized = getNormalizedIdeaData()
+    const ideaComponents = getIdeaComponentsForScope()
     const scopedComponents = componentsFromScopeRecommendations(
       normalized?.scopeRecommendations,
       ideaComponents
@@ -604,9 +676,23 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
 
   return (
     <div className="px-6 py-8 max-w-[1200px] mx-auto">
-      <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="mb-8 flex flex-col md:flex-row md:items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Component Planning</h2>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <h2 className="text-xl font-semibold text-gray-900">Component Planning</h2>
+            <select
+              aria-label="Reference label style"
+              value={numberingStyleOverride || deriveDefaultNumberingStyle()}
+              onChange={(e) => setNumberingStyleOverride(e.target.value as NumberingStyle)}
+              className="w-full sm:w-auto px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
+            >
+              {NUMBERING_STYLES.map((style) => (
+                <option key={style.value} value={style.value}>
+                  {style.label} {style.value === deriveDefaultNumberingStyle() && !numberingStyleOverride ? '(Auto)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
           <p className="text-sm text-gray-500 mt-1">
             Define invention components and assign reference labels.
           </p>
@@ -637,37 +723,6 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           >
             Label Guide
           </button>
-        </div>
-      </div>
-
-      {/* Numbering Style Selector */}
-      <div className="mb-6 bg-white border border-gray-200 rounded-lg shadow-sm p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h3 className="text-sm font-medium text-gray-900">Reference Label Style</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {patentTypePrimary 
-                ? `Auto-detected from patent type: ${patentTypePrimary}` 
-                : 'Select labeling format for your components'}
-            </p>
-          </div>
-          <select
-            value={numberingStyleOverride || deriveDefaultNumberingStyle()}
-            onChange={(e) => setNumberingStyleOverride(e.target.value as NumberingStyle)}
-            className="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-          >
-            {NUMBERING_STYLES.map((style) => (
-              <option key={style.value} value={style.value}>
-                {style.label} {style.value === deriveDefaultNumberingStyle() && !numberingStyleOverride ? '(Auto)' : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="mt-2 text-xs text-gray-500">
-          {NUMBERING_STYLES.find(s => s.value === effectiveNumberingStyle)?.description}
-          <span className="block mt-1 font-mono text-indigo-600">
-            Example: {NUMBERING_STYLES.find(s => s.value === effectiveNumberingStyle)?.example}
-          </span>
         </div>
       </div>
 
@@ -728,26 +783,6 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           </div>
         </div>
       )}
-
-      {/* Assignment Mode Help */}
-      <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
-        <div className="flex items-start gap-3">
-          <svg className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <div className="text-sm text-blue-800">
-            <p className="font-medium mb-1">Reference Label Assignment</p>
-            <ul className="text-xs text-blue-700 space-y-0.5">
-              <li><strong>Manual:</strong> Type directly in the Reference column ({
-                effectiveNumberingStyle === 'NUMERIC_BUCKET' ? 'e.g., 100, 101, 200' :
-                effectiveNumberingStyle === 'STEP_LABEL' ? 'e.g., S100, S200, S300' :
-                'e.g., (a), (b), (c)'
-              })</li>
-              <li><strong>Auto Assign:</strong> Click the button below to automatically assign based on the selected style</li>
-            </ul>
-          </div>
-        </div>
-      </div>
 
       {/* Components Table Card */}
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden mb-8">
