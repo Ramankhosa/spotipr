@@ -24,6 +24,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import KishoNormalizationLoader from '@/components/ui/kisho-normalization-loader'
 import PersonaManager, { type PersonaSelection } from '@/components/drafting/PersonaManager'
 import { useAuth } from '@/lib/auth-context'
+import {
+  coerceScopeRecommendations,
+  getEffectiveScopeUse,
+  type ScopeRecommendationElement,
+  type ScopeRecommendations,
+  type ScopeUseSelection
+} from '@/lib/scope-recommendations'
 
 // Tooltip wrapper component for hover explanations
 const Tooltip = ({ children, content, position = 'bottom' }: { children: React.ReactNode; content: string; position?: 'top' | 'bottom' | 'left' | 'right' }) => (
@@ -140,6 +147,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [logic, setLogic] = useState('')
   const [bestMethod, setBestMethod] = useState('')
   const [components, setComponents] = useState<any[]>([])
+  const [scopeRecommendations, setScopeRecommendations] = useState<ScopeRecommendations | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [abstractText, setAbstractText] = useState('')
   const [cpcCodes, setCpcCodes] = useState<string[]>([])
@@ -178,6 +186,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
           cpcCodes: session.ideaRecord.cpcCodes,
           ipcCodes: session.ideaRecord.ipcCodes,
           sourceFactLedger: session.ideaRecord.normalizedData?.sourceFactLedger,
+          scopeRecommendations: session.ideaRecord.normalizedData?.scopeRecommendations,
           normalizationReviewWarnings: session.ideaRecord.normalizedData?.normalizationReviewWarnings,
           sourceHandlingMode: session.ideaRecord.normalizedData?.sourceHandlingMode
         }
@@ -190,6 +199,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       setLogic(session.ideaRecord.logic || '')
       setBestMethod(session.ideaRecord.bestMethod || '')
       setComponents(Array.isArray(session.ideaRecord.components) ? session.ideaRecord.components : [])
+      setScopeRecommendations(coerceScopeRecommendations(session.ideaRecord.normalizedData?.scopeRecommendations, session.ideaRecord.normalizedData) || null)
       setSearchQuery((session as any)?.ideaRecord?.searchQuery || '')
       setAbstractText(session.ideaRecord.abstract || '')
       setCpcCodes(Array.isArray(session.ideaRecord.cpcCodes) ? session.ideaRecord.cpcCodes : [])
@@ -284,6 +294,143 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       : qualityStatus === 'needs_review'
         ? { label: 'Needs review', className: 'bg-rose-100 text-rose-700 border-rose-200' }
         : null
+
+  const scopeSourceTypes = [
+    'component', 'subcomponent', 'process_step', 'method_step', 'constituent', 'compound',
+    'formulation', 'material', 'biological_entity', 'sequence', 'cell', 'protein',
+    'reagent', 'sample', 'assay_step', 'therapeutic_step', 'diagnostic_marker',
+    'manufacturing_step', 'condition', 'range', 'data_field', 'interface',
+    'use_case', 'environment', 'other'
+  ]
+
+  const updateScopeElement = (
+    elementId: string,
+    field: keyof ScopeUseSelection | 'label' | 'sourceType',
+    value: string
+  ) => {
+    setScopeRecommendations((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        elements: prev.elements.map((element) => {
+          if (element.id !== elementId) return element
+          if (field === 'label') return { ...element, label: value }
+          if (field === 'sourceType') return { ...element, sourceType: value as any }
+          return {
+            ...element,
+            user: {
+              ...(element.user || {}),
+              [field]: value
+            }
+          }
+        })
+      }
+    })
+  }
+
+  const resetScopeOverrides = () => {
+    setScopeRecommendations((prev) => prev ? {
+      ...prev,
+      elements: prev.elements.map((element) => {
+        const { user, ...rest } = element
+        return rest
+      })
+    } : prev)
+  }
+
+  const claimCoreOnly = () => {
+    setScopeRecommendations((prev) => prev ? {
+      ...prev,
+      elements: prev.elements.map((element) => {
+        const effective = getEffectiveScopeUse(element)
+        return {
+          ...element,
+          user: {
+            ...(element.user || {}),
+            claim: effective.claim === 'claim_1' ? 'claim_1' : 'none'
+          }
+        }
+      })
+    } : prev)
+  }
+
+  const excludeEnvironmentUseCases = () => {
+    setScopeRecommendations((prev) => prev ? {
+      ...prev,
+      elements: prev.elements.map((element) => {
+        if (element.sourceType !== 'environment' && element.sourceType !== 'use_case') return element
+        return {
+          ...element,
+          user: {
+            ...(element.user || {}),
+            claim: 'none',
+            numbering: 'do_not_number',
+            figures: 'do_not_show',
+            description: 'exclude'
+          }
+        }
+      })
+    } : prev)
+  }
+
+  const removeScopeElement = (elementId: string) => {
+    setScopeRecommendations((prev) => prev ? {
+      ...prev,
+      elements: prev.elements.map((element) => element.id === elementId
+        ? {
+            ...element,
+            user: {
+              ...(element.user || {}),
+              claim: 'none',
+              numbering: 'do_not_number',
+              figures: 'do_not_show',
+              description: 'exclude'
+            }
+          }
+        : element)
+    } : prev)
+  }
+
+  const addScopeElement = () => {
+    const basis = {
+      patentTypePrimary: patentType || normalizedRecord.patentTypePrimary || 'SYSTEM',
+      inventionType: Array.isArray(normalizedRecord.inventionType) ? normalizedRecord.inventionType : ['GENERAL'],
+      fieldOfRelevance: normalizedRecord.fieldOfRelevance,
+      subfield: normalizedRecord.subfield
+    }
+    setScopeRecommendations((prev) => {
+      const current = prev || {
+        version: 1 as const,
+        generatedAt: new Date().toISOString(),
+        basis,
+        elements: []
+      }
+      const nextIndex = current.elements.length + 1
+      const newElement: ScopeRecommendationElement = {
+        id: `user_scope_${Date.now()}`,
+        label: `New scope element ${nextIndex}`,
+        sourceType: 'other',
+        recommended: {
+          claim: 'dependent_claim',
+          numbering: 'number',
+          figures: 'optional',
+          description: 'include'
+        },
+        user: {
+          claim: 'dependent_claim',
+          numbering: 'number',
+          figures: 'optional',
+          description: 'include'
+        },
+        reason: 'User-added scope element.',
+        sourceRefs: ['user.stage0.scopeRecommendations']
+      }
+      return {
+        ...current,
+        elements: [...current.elements, newElement]
+      }
+    })
+  }
 
   // Check for available personas
   const checkPersonasAvailable = async (): Promise<boolean> => {
@@ -410,6 +557,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
           fallbackLimitations: currentNormalizedData.fallbackLimitations,
           doNotClaim: currentNormalizedData.doNotClaim,
           sourceFactLedger: currentNormalizedData.sourceFactLedger,
+          scopeRecommendations: scopeRecommendations || currentNormalizedData.scopeRecommendations,
           normalizationReviewWarnings: currentNormalizedData.normalizationReviewWarnings
         }
       }
@@ -1106,6 +1254,147 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         )}
                       </div>
 
+                      {/* Scope Recommendations */}
+                      {(scopeRecommendations?.elements?.length || isEditing) && (
+                        <div className="pt-4 border-t border-gray-100">
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-900">
+                                Scope Recommendations <span className="text-gray-400 font-normal text-xs">({scopeRecommendations?.elements?.length || 0})</span>
+                              </h4>
+                              <p className="text-[11px] text-gray-500 mt-0.5">
+                                Controls what Stage 1 may claim, number, draw, or describe.
+                              </p>
+                            </div>
+                            {isEditing && (
+                              <button
+                                type="button"
+                                onClick={addScopeElement}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                              >
+                                <span className="text-lg leading-none">+</span> Add Element
+                              </button>
+                            )}
+                          </div>
+
+                          {isEditing && scopeRecommendations?.elements?.length ? (
+                            <div className="flex flex-wrap gap-2 mb-3">
+                              <button type="button" onClick={resetScopeOverrides} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                                Accept recommendations
+                              </button>
+                              <button type="button" onClick={claimCoreOnly} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                                Claim core only
+                              </button>
+                              <button type="button" onClick={excludeEnvironmentUseCases} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                                Exclude environment/use-case items
+                              </button>
+                              <button type="button" onClick={resetScopeOverrides} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                                Reset AI recommendations
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {scopeRecommendations?.elements?.length ? (
+                            <div className="space-y-2 max-h-[520px] overflow-y-auto">
+                              {scopeRecommendations.elements.map((element) => {
+                                const effective = getEffectiveScopeUse(element)
+                                return (
+                                  <div key={element.id} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0 flex-1">
+                                        {isEditing ? (
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                            <input
+                                              type="text"
+                                              value={element.label}
+                                              onChange={(e) => updateScopeElement(element.id, 'label', e.target.value)}
+                                              className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                            />
+                                            <select
+                                              value={element.sourceType}
+                                              onChange={(e) => updateScopeElement(element.id, 'sourceType', e.target.value)}
+                                              className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white focus:ring-indigo-500 focus:border-indigo-500"
+                                            >
+                                              {scopeSourceTypes.map((sourceType) => (
+                                                <option key={sourceType} value={sourceType}>{sourceType.replace(/_/g, ' ')}</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                        ) : (
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-medium text-gray-900 text-sm">{element.label}</span>
+                                            <span className="text-[10px] uppercase tracking-wide text-gray-500 bg-white border border-gray-200 rounded px-1.5 py-0.5">
+                                              {element.sourceType.replace(/_/g, ' ')}
+                                            </span>
+                                          </div>
+                                        )}
+                                        {element.reason && (
+                                          <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">{element.reason}</p>
+                                        )}
+                                      </div>
+                                      {isEditing && (
+                                        <button
+                                          type="button"
+                                          onClick={() => removeScopeElement(element.id)}
+                                          className="text-[11px] text-red-600 hover:text-red-700"
+                                        >
+                                          Remove
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    {isEditing ? (
+                                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
+                                        <label className="block">
+                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Claim</span>
+                                          <select value={effective.claim} onChange={(e) => updateScopeElement(element.id, 'claim', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                            <option value="claim_1">Claim 1</option>
+                                            <option value="dependent_claim">Dependent</option>
+                                            <option value="none">No claim</option>
+                                          </select>
+                                        </label>
+                                        <label className="block">
+                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Numbering</span>
+                                          <select value={effective.numbering} onChange={(e) => updateScopeElement(element.id, 'numbering', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                            <option value="number">Number</option>
+                                            <option value="do_not_number">No number</option>
+                                          </select>
+                                        </label>
+                                        <label className="block">
+                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Figures</span>
+                                          <select value={effective.figures} onChange={(e) => updateScopeElement(element.id, 'figures', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                            <option value="include">Show</option>
+                                            <option value="optional">Optional</option>
+                                            <option value="do_not_show">Do not show</option>
+                                          </select>
+                                        </label>
+                                        <label className="block">
+                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Description</span>
+                                          <select value={effective.description} onChange={(e) => updateScopeElement(element.id, 'description', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                            <option value="include">Include</option>
+                                            <option value="optional">Optional</option>
+                                            <option value="exclude">Exclude</option>
+                                          </select>
+                                        </label>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
+                                        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">Claim: {effective.claim === 'claim_1' ? 'Claim 1' : effective.claim === 'dependent_claim' ? 'Dependent' : 'No claim'}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-slate-50 text-slate-700 border border-slate-100">Numbering: {effective.numbering === 'number' ? 'Number' : 'No number'}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-100">Figures: {effective.figures === 'include' ? 'Show' : effective.figures === 'optional' ? 'Optional' : 'Do not show'}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-100">Description: {effective.description}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">No scope recommendations available. Click "Add Element" while editing to create user-selected scope.</p>
+                          )}
+                        </div>
+                      )}
+
                       {/* Best Method */}
                       <div>
                         <h4 className="text-sm font-medium text-gray-900 mb-1.5">Best Method</h4>
@@ -1160,7 +1449,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 patch: {
                                   problem, objectives, logic, bestMethod, 
                                   components: validComponents,
-                                  searchQuery, abstract: abstractText, cpcCodes, ipcCodes
+                                  searchQuery, abstract: abstractText, cpcCodes, ipcCodes,
+                                  scopeRecommendations
                                 }
                               })
                               

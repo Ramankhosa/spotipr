@@ -31,7 +31,7 @@ Rules (must follow strictly):
 - Preserve all numerical values exactly as stated, including units, ranges, inequality signs, concentrations, temperatures, pressures, voltages, times, percentages, ratios, pH, scores, and durations.
 - If a field is not stated by the source, write "Not stated by source". Do not fill gaps with assumptions.
 - Populate "bestMethod" ONLY if the source explicitly states a preferred/best mode, preferred implementation, or best method. Otherwise use "Not stated by source".
-- Keep each top-level field as a string except: "components" (array of objects), "cpcCodes" (array of strings), "ipcCodes" (array of strings), "inventionType" (array of archetype tags), "claimableFeatures" (array of strings), "fallbackLimitations" (array of strings), "doNotClaim" (array of strings), "sourceFactLedger" (object of arrays), and "normalizationReviewWarnings" (array of strings).
+- Keep each top-level field as a string except: "components" (array of objects), "cpcCodes" (array of strings), "ipcCodes" (array of strings), "inventionType" (array of archetype tags), "claimableFeatures" (array of strings), "fallbackLimitations" (array of strings), "doNotClaim" (array of strings), "sourceFactLedger" (object of arrays), "scopeRecommendations" (object), and "normalizationReviewWarnings" (array of strings).
 - Components: include every source-stated component/subcomponent that may support claims or figures. Use hierarchy when helpful. Do not cap the list. Keep metadata such as parent, level, inputs, outputs, dependencies, alternatives, conditions, and figure hints when stated.
 - Include "inventionType" as the archetype classification (one or more of: MECHANICAL, ELECTRICAL, SOFTWARE, CHEMICAL, BIO, GENERAL). Allow multiple using either an array or a "+"-joined string (e.g., "MECHANICAL+SOFTWARE"); uppercase the values.
 - Include "patentTypePrimary" as the best primary independent claim category, exactly one of: PRODUCT, SYSTEM, PROCESS, COMPOSITION.
@@ -48,6 +48,14 @@ Rules (must follow strictly):
 - Include "claimableFeatures" as source-stated features that can support dependent claims. Use concise phrases and keep source-specific details.
 - Include "fallbackLimitations" for source-stated fallback rules, safety rules, thresholds, optional narrowing features, and conditions that may be useful if broad claims need review.
 - Include "doNotClaim" for important missing, unsupported, expressly optional, or expressly excluded facts that claims should not present as required.
+- Include "scopeRecommendations" using patent-drafting judgment for the detected patentTypePrimary, inventionType, fieldOfRelevance, and subfield. This is an LLM recommendation layer, not a code-derived list.
+- Scope recommendation rules:
+  - Stage 0 remains broad: include source-stated elements, steps, constituents, biological entities, ranges, data fields, environments, and use cases when relevant for audit.
+  - For "claim": use "claim_1" only for source-supported core elements, steps, constituents, entities, or relationships needed for the broad independent claim. Use "dependent_claim" for optional features, fallback limits, ranges, conditions, subcomponents, or narrowing details. Use "none" for environment, use-case context, unsupported facts, missing facts, or items that should not be promoted into claims.
+  - For "numbering": use "number" for elements that should be eligible for patent reference labels. Use "do_not_number" for ranges, conditions, pure data fields, environments, use cases, missing facts, unsupported facts, and non-visual abstractions.
+  - For "figures": use "include" for preferred figure content, "optional" only where useful for clarity, and "do_not_show" for environment/use-case/missing/unsupported/non-invention items.
+  - For "description": use "include" for invention-supporting disclosure, "optional" for contextual non-claim material, and "exclude" for unsupported or expressly non-invention material.
+  - Recommendations must work across all patent types and fields, including mechanical, software, electrical, chemical, pharmaceutical, biotech, medical device, material, process, composition, diagnostic, therapeutic, and mixed inventions.
 - Use double-quoted keys and strings; avoid line breaks mid-sentence when possible.
 
 TITLE: ${title}
@@ -109,6 +117,29 @@ Respond in this exact JSON shape:
     "dataFieldsOrMetadata": ["source-stated data fields, metadata, identifiers, payload fields, confidence scores, timestamps"],
     "claimSeeds": ["short claim-support phrases taken from source-stated inventive features"],
     "notStated": ["important patent facts that are not stated by source and must not be invented"]
+  },
+  "scopeRecommendations": {
+    "version": 1,
+    "generatedAt": "",
+    "basis": {
+      "patentTypePrimary": "PRODUCT|SYSTEM|PROCESS|COMPOSITION",
+      "inventionType": ["MECHANICAL|ELECTRICAL|SOFTWARE|CHEMICAL|BIO|GENERAL"],
+      "fieldOfRelevance": "same value as fieldOfRelevance",
+      "subfield": "same value as subfield"
+    },
+    "elements": [{
+      "id": "short_stable_snake_case_id",
+      "label": "source-stated element, step, constituent, entity, condition, range, data field, environment, or use-case label",
+      "sourceType": "component|subcomponent|process_step|method_step|constituent|compound|formulation|material|biological_entity|sequence|cell|protein|reagent|sample|assay_step|therapeutic_step|diagnostic_marker|manufacturing_step|condition|range|data_field|interface|use_case|environment|other",
+      "recommended": {
+        "claim": "claim_1|dependent_claim|none",
+        "numbering": "number|do_not_number",
+        "figures": "include|optional|do_not_show",
+        "description": "include|optional|exclude"
+      },
+      "reason": "brief patent-drafting reason based on patent type, invention field, and source support",
+      "sourceRefs": ["components[0]", "sourceFactLedger.componentsAndSubcomponents[0]", "claimableFeatures[0]"]
+    }]
   },
   "normalizationReviewWarnings": []
 }`

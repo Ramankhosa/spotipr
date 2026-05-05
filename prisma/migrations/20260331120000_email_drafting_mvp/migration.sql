@@ -162,12 +162,10 @@ CREATE INDEX IF NOT EXISTS "tenant_inbound_aliases_tenantId_isActive_idx"
 ON "tenant_inbound_aliases"("tenantId", "isActive");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "email_draft_requests_patentId_key"
-ON "email_draft_requests"("patentId")
-WHERE "patentId" IS NOT NULL;
+ON "email_draft_requests"("patentId");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "email_draft_requests_sessionId_key"
-ON "email_draft_requests"("sessionId")
-WHERE "sessionId" IS NOT NULL;
+ON "email_draft_requests"("sessionId");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "email_draft_requests_dedupeKey_key"
 ON "email_draft_requests"("dedupeKey");

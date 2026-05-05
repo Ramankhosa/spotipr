@@ -15,6 +15,7 @@ import {
   buildSourceFactLedgerPromptBlock
 } from '@/lib/source-fact-ledger'
 import { buildFigurelessDraftGuard } from '@/lib/figure-availability'
+import { filterComponentsByScopeForDescription } from '@/lib/scope-recommendations'
 
 export type Claim1Mode = 'bindingAnchor' | 'constraintOnly' | 'off'
 
@@ -983,7 +984,11 @@ export function buildDetailedDescriptionScopeContext(
   options?: DetailedDescriptionScopeOptions
 ): DetailedDescriptionScopeContext {
   const scopeText = buildDetailedDescriptionScopeText(normalizedData, idea)
-  const scopedComponents = filterComponentsByInventionScope(components, normalizedData, idea)
+  const descriptionSelectedComponents = filterComponentsByScopeForDescription(
+    Array.isArray(components) ? components : [],
+    normalizedData?.scopeRecommendations
+  )
+  const scopedComponents = filterComponentsByInventionScope(descriptionSelectedComponents, normalizedData, idea)
   const scopedFigures = filterFiguresByInventionScope(figures, normalizedData, idea, scopedComponents, options)
   const allowedReferenceLabels = uniqueStrings(
     scopedComponents.map(componentReferenceLabel).filter(Boolean)

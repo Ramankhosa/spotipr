@@ -6,6 +6,7 @@ import {
   buildSourceFactLedgerEntries,
   buildSourceFactLedgerPromptBlock,
 } from '@/lib/source-fact-ledger'
+import { buildClaimScopePromptBlock } from '@/lib/scope-recommendations'
 
 export type PreliminaryPatentType = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
 
@@ -48,6 +49,7 @@ type PreliminaryClaimContext = {
   fallbackLimitations?: unknown
   doNotClaim?: unknown
   sourceFactLedger?: unknown
+  scopeRecommendations?: unknown
   normalizationReviewWarnings?: unknown
 }
 
@@ -231,6 +233,7 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     context.sourceFactLedger,
     'SOURCE FACT LEDGER FOR CLAIM SUPPORT'
   )
+  const claimScopeBlock = buildClaimScopePromptBlock(context.scopeRecommendations)
 
   const claimType = patentTypePrimary === 'PRODUCT'
     ? 'product, device, article, or apparatus'
@@ -275,6 +278,8 @@ ${writingSampleBlock || ''}
 
 ORIGINAL SOURCE EXCERPT:
 ${context.rawIdea || 'Not provided'}
+
+${claimScopeBlock ? `${claimScopeBlock}\n` : ''}
 
 NORMALIZED INVENTION CONTEXT:
 ${context.title ? `Title: ${context.title}` : ''}
@@ -397,6 +402,20 @@ function supportEntriesFromContext(context: PreliminaryClaimContext): SupportEnt
   toStringArray(context.fallbackLimitations).forEach((value, index) => {
     entries.push({ id: `normalized.fallbackLimitations-${index + 1}`, value, sourceField: 'fallbackLimitations' })
   })
+
+  const scope = context.scopeRecommendations as any
+  if (scope && Array.isArray(scope.elements)) {
+    scope.elements.forEach((element: any, index: number) => {
+      const effectiveClaim = element?.user?.claim ?? element?.recommended?.claim
+      if ((effectiveClaim === 'claim_1' || effectiveClaim === 'dependent_claim') && typeof element?.label === 'string' && element.label.trim()) {
+        entries.push({
+          id: `scopeRecommendations.elements-${index + 1}`,
+          value: element.label.trim(),
+          sourceField: `scopeRecommendations.${effectiveClaim}`,
+        })
+      }
+    })
+  }
 
   return entries
 }

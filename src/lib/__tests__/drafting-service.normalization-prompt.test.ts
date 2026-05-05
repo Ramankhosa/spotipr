@@ -19,6 +19,8 @@ describe('idea normalization prompt', () => {
     expect(prompt).toContain('"patentTypePrimary"')
     expect(prompt).toContain('Do NOT classify a device as SYSTEM merely because it has multiple internal parts')
     expect(prompt).toContain('"sourceFactLedger"')
+    expect(prompt).toContain('"scopeRecommendations"')
+    expect(prompt).toContain('This is an LLM recommendation layer')
     expect(prompt).toContain('"normalizationReviewWarnings"')
     expect(prompt).toContain('"coreInventiveConcept"')
     expect(prompt).toContain('"claimableFeatures"')

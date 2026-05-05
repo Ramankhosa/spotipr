@@ -69,6 +69,11 @@ import { imageSize } from 'image-size';
 import { normalizeFigureSequence } from '@/lib/figure-sequence'
 import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
 import {
+  buildFigureScopePromptBlock,
+  coerceScopeRecommendations,
+  filterComponentsByScopeForFigures
+} from '@/lib/scope-recommendations'
+import {
   areFiguresSkipped,
   filterDrawingSections,
   filterDrawingSectionKeys,
@@ -4407,7 +4412,7 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
     if (key in patch) updateData[key] = patch[key]
   }
 
-  if (Object.keys(updateData).length === 0) {
+  if (Object.keys(updateData).length === 0 && !('scopeRecommendations' in patch)) {
     return NextResponse.json(
       { error: 'Nothing to update' },
       { status: 400 }
@@ -4421,7 +4426,7 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   const normalizedMergeKeys = [
     'problem','objectives','components','logic','inputs','outputs','variants','bestMethod',
     'fieldOfRelevance','subfield','recommendedFocus','complianceNotes','drawingsFocus','claimStrategy','riskFlags',
-    'abstract','cpcCodes','ipcCodes'
+    'abstract','cpcCodes','ipcCodes','scopeRecommendations'
   ] as const
 
   const baseNormalized = (existing?.normalizedData as any) || {}
@@ -4429,6 +4434,17 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   normalizedMergeKeys.forEach((k) => {
     if (k in patch) normalizedPatch[k] = (patch as any)[k]
   })
+  if ('scopeRecommendations' in normalizedPatch) {
+    const coercedScopeRecommendations = coerceScopeRecommendations(
+      normalizedPatch.scopeRecommendations,
+      { ...baseNormalized, ...normalizedPatch }
+    )
+    if (coercedScopeRecommendations) {
+      normalizedPatch.scopeRecommendations = coercedScopeRecommendations
+    } else {
+      delete normalizedPatch.scopeRecommendations
+    }
+  }
   const mergedNormalized = { ...baseNormalized, ...normalizedPatch }
 
   const ideaRecord = await prisma.ideaRecord.upsert({
@@ -4794,6 +4810,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       fallbackLimitations: ideaContext?.fallbackLimitations ?? existingNormalized.fallbackLimitations,
       doNotClaim: ideaContext?.doNotClaim ?? existingNormalized.doNotClaim,
       sourceFactLedger: ideaContext?.sourceFactLedger ?? existingNormalized.sourceFactLedger,
+      scopeRecommendations: ideaContext?.scopeRecommendations ?? existingNormalized.scopeRecommendations,
       normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings
     }
 
@@ -7796,7 +7813,12 @@ async function handlePlanFiguresLLM(
 
   // Extract invention context
   const idea = session.ideaRecord?.normalizedData as any
-  const components = extractComponentsArray(session.referenceMap)
+  const figureScope = filterComponentsByScopeForFigures(
+    extractComponentsArray(session.referenceMap),
+    idea?.scopeRecommendations
+  )
+  const components = figureScope.components
+  const figureScopeBlock = buildFigureScopePromptBlock(idea?.scopeRecommendations)
   const claims = idea?.claimsStructured || []
   const claimsText = idea?.claims || ''
   const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
@@ -7861,6 +7883,7 @@ TECHNICAL SOLUTION:
 ${idea?.logic || idea?.objectives || 'Not specified'}
 
 ${sourceFactLedgerBlock ? `${sourceFactLedgerBlock}\n` : ''}
+${figureScopeBlock ? `${figureScopeBlock}\n` : ''}
 
 COMPONENTS (with reference labels):
 ${componentsContext}
@@ -8062,6 +8085,20 @@ Return ONLY the JSON object. No markdown, no commentary.`
     return NextResponse.json({ error: 'Planning did not produce valid figure plan' }, { status: 400 })
   }
 
+  if (figureScope.excludedLabels.length > 0) {
+    const excluded = figureScope.excludedLabels.map((label) => String(label || '').toLowerCase())
+    plan = {
+      ...plan,
+      diagrams: plan.diagrams.map((diagram) => ({
+        ...diagram,
+        include: (diagram.include || []).filter((item) => {
+          const normalizedItem = String(item || '').toLowerCase()
+          return !excluded.some(label => label && normalizedItem.includes(label))
+        })
+      }))
+    }
+  }
+
   // Store the plan in session for use by generation stage
   // We use aiAnalysisData field to store the plan temporarily (it's a Json field)
   // Note: Sketch suggestions are generated separately via 'generate_sketch_suggestions' action
@@ -8196,6 +8233,7 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
     normalizedIdea?.sourceFactLedger,
     'SOURCE FACT LEDGER FOR DIAGRAM GENERATION'
   )
+  const generationFigureScopeBlock = buildFigureScopePromptBlock(normalizedIdea?.scopeRecommendations)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // PLAN-BASED GENERATION (Stage 2 of two-stage approach)
@@ -8221,7 +8259,12 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
     }
 
     // Build components context with referenceLabel
-    const components = extractComponentsArray(session.referenceMap)
+    const figureScope = filterComponentsByScopeForFigures(
+      extractComponentsArray(session.referenceMap),
+      normalizedIdea?.scopeRecommendations
+    )
+    const components = figureScope.components
+    const figureScopeBlock = buildFigureScopePromptBlock(normalizedIdea?.scopeRecommendations)
     const componentsContext = components.length > 0
       ? components.map((c: any) => `- ${c.name} [ref=${c.referenceLabel || c.numeral || '?'}]`).join('\n')
       : 'No components defined.'
@@ -8269,6 +8312,7 @@ GLOBAL RULES (NON-NEGOTIABLE)
 AVAILABLE COMPONENTS (Use ONLY these - do not invent new ones)
 ═══════════════════════════════════════════════════════════════════════════════
 ${componentsContext}
+${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 ${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8482,8 +8526,12 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
     nomenclature += ' Use: Reagent, Compound, Stage, Phase, Catalyst, Reactor (and similar domain entities).'
   }
 
-  if (!usePlan && sourceFactLedgerBlock) {
-    effectivePrompt = `${effectivePrompt}\n\n${sourceFactLedgerBlock}`
+  if (!usePlan && (sourceFactLedgerBlock || generationFigureScopeBlock)) {
+    effectivePrompt = [
+      effectivePrompt,
+      generationFigureScopeBlock,
+      sourceFactLedgerBlock,
+    ].filter(Boolean).join('\n\n')
   }
 
   const finalPrompt = `${effectivePrompt}
@@ -9004,7 +9052,12 @@ async function generateSketchSuggestionsInBackground(
  */
 function buildSketchSuggestionsPrompt(session: any, existingDiagrams?: string[], referenceFigures?: { title: string; description?: string }[], existingSketches?: string[]): string {
   const idea = session.ideaRecord?.normalizedData as any
-  const components = extractComponentsArray(session.referenceMap)
+  const figureScope = filterComponentsByScopeForFigures(
+    extractComponentsArray(session.referenceMap),
+    idea?.scopeRecommendations
+  )
+  const components = figureScope.components
+  const figureScopeBlock = buildFigureScopePromptBlock(idea?.scopeRecommendations)
   
   // Extract invention type for intelligent decision making
   const inventionTypes = Array.isArray(idea?.inventionType) 
@@ -9131,6 +9184,7 @@ INVENTION TYPE: ${inventionTypeStr}
 
 OFFICIAL COMPONENT REGISTRY (Use ONLY these - no additions):
 ${componentList || 'No components defined yet'}
+${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 ${existingDiagramsSection}${existingSketchesSection}${referenceFiguresSection}
 ═══════════════════════════════════════════════════════════════════════════════
 YOUR TASK

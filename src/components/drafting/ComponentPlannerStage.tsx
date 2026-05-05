@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
+import { componentsFromScopeRecommendations } from '@/lib/scope-recommendations'
 
 interface ComponentPlannerStageProps {
   session: any
@@ -189,8 +190,22 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       return normalizeComponentsForPlanner(refMapComponents)
     }
 
-    // Convert idea record components to component planner format
-    const ideaComponents = session?.ideaRecord?.components
+    // Prefer user-approved/LLM-recommended scope selections for new numbering maps.
+    const normalized = session?.ideaRecord?.normalizedData || {}
+    const ideaComponents = Array.isArray(session?.ideaRecord?.components)
+      ? session.ideaRecord.components
+      : Array.isArray(normalized?.components)
+        ? normalized.components
+        : []
+    const scopedComponents = componentsFromScopeRecommendations(
+      normalized?.scopeRecommendations,
+      ideaComponents
+    )
+    if (scopedComponents.length > 0) {
+      return normalizeComponentsForPlanner(scopedComponents)
+    }
+
+    // Legacy fallback for sessions without scopeRecommendations.
     if (Array.isArray(ideaComponents) && ideaComponents.length > 0) {
       return normalizeComponentsForPlanner(ideaComponents)
     }

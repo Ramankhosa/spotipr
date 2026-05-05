@@ -57,6 +57,44 @@ describe('preliminary claim generation helper', () => {
     expect(compositionPrompt).toContain('A composition comprising source-supported constituents')
   })
 
+  test('injects user-approved claim scope when scope recommendations exist', () => {
+    const prompt = buildPreliminaryClaimsPrompt({
+      ...basePromptParams,
+      context: {
+        ...basePromptParams.context,
+        scopeRecommendations: {
+          version: 1,
+          generatedAt: '2026-05-05T00:00:00.000Z',
+          basis: { patentTypePrimary: 'SYSTEM', inventionType: ['SOFTWARE'] },
+          elements: [
+            {
+              id: 'sensor',
+              label: 'moisture sensor',
+              sourceType: 'component',
+              recommended: { claim: 'claim_1', numbering: 'number', figures: 'include', description: 'include' },
+              reason: 'Core component.',
+              sourceRefs: ['components[0]'],
+            },
+            {
+              id: 'garden',
+              label: 'garden use case',
+              sourceType: 'use_case',
+              recommended: { claim: 'none', numbering: 'do_not_number', figures: 'do_not_show', description: 'optional' },
+              reason: 'Use case only.',
+              sourceRefs: ['sourceFactLedger.examplesAndUseCases[0]'],
+            },
+          ],
+        },
+      },
+    })
+
+    expect(prompt).toContain('USER-APPROVED CLAIM SCOPE')
+    expect(prompt).toContain('CLAIM 1 SCOPE')
+    expect(prompt).toContain('moisture sensor')
+    expect(prompt).toContain('DO NOT PROMOTE INTO CLAIMS')
+    expect(prompt).toContain('garden use case')
+  })
+
   test('warns for generic broad Claim 1', () => {
     const claims: DraftClaim[] = [
       {

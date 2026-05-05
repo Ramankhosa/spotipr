@@ -12,7 +12,14 @@
 ALTER TYPE "FeatureCode" ADD VALUE IF NOT EXISTS 'IDEATION';
 
 -- Add IDEATION to ServiceType enum (used by service access tables)
-ALTER TYPE "ServiceType" ADD VALUE IF NOT EXISTS 'IDEATION';
+-- ServiceType may not exist yet (created in a later migration with IDEATION already included).
+-- Use a conditional check to avoid errors on fresh/shadow databases.
+DO $outer$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ServiceType') THEN
+    EXECUTE $inner$ALTER TYPE "ServiceType" ADD VALUE IF NOT EXISTS 'IDEATION'$inner$;
+  END IF;
+END $outer$;
 
 -- Add IDEATION task codes to TaskCode enum (used by tasks and workflow stages)
 ALTER TYPE "TaskCode" ADD VALUE IF NOT EXISTS 'IDEATION_NORMALIZE';

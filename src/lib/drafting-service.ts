@@ -33,6 +33,10 @@ import {
   type SourceFactLedger,
 } from '@/lib/source-fact-ledger';
 import {
+  coerceScopeRecommendations,
+  type ScopeRecommendations,
+} from '@/lib/scope-recommendations';
+import {
   areFiguresSkipped,
   filterDrawingSectionKeys,
   filterDrawingSections
@@ -131,6 +135,7 @@ export interface IdeaNormalizationResult {
     ipcCodes?: string[];
     sourceFactLedger?: SourceFactLedger;
     normalizationReviewWarnings?: string[];
+    scopeRecommendations?: ScopeRecommendations;
     sourceHandlingMode?: 'PRESERVE' | 'STRUCTURE_ONLY';
   };
   llmPrompt?: string;
@@ -765,6 +770,10 @@ Respond in this exact JSON shape:
           ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
           : [])
       ]))
+      normalizedData.scopeRecommendations = coerceScopeRecommendations(
+        normalizedData.scopeRecommendations,
+        normalizedData
+      )
 
       const extractedFields = {
         searchQuery: typeof normalizedData.searchQuery === 'string' ? String(normalizedData.searchQuery).trim() : undefined,
@@ -794,6 +803,7 @@ Respond in this exact JSON shape:
         ipcCodes: Array.isArray(normalizedData.ipcCodes) ? normalizedData.ipcCodes.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
         sourceFactLedger: normalizedData.sourceFactLedger,
         normalizationReviewWarnings: normalizedData.normalizationReviewWarnings,
+        scopeRecommendations: normalizedData.scopeRecommendations,
         sourceHandlingMode: normalizedData.sourceHandlingMode
       };
 

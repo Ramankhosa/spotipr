@@ -71,6 +71,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import dynamic from 'next/dynamic'
+import {
+  buildFigureScopePromptBlock,
+  filterComponentsByScopeForFigures
+} from '@/lib/scope-recommendations'
 
 // Dynamic import for ImageEditor (opens miniPaint for image editing)
 const ImageEditor = dynamic(() => import('@/components/ui/ImageEditor'), {
@@ -154,6 +158,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   }))
   const figuresSkipped = !!session?.figuresSkipped
   const hasExistingFigures = (session?.figurePlans?.length || 0) > 0 || diagramSources.length > 0
+  const extractComponentsFromReferenceMap = (referenceMap: any): any[] => {
+    if (!referenceMap?.components) return []
+    if (referenceMap.components.components && Array.isArray(referenceMap.components.components)) {
+      return referenceMap.components.components
+    }
+    if (Array.isArray(referenceMap.components)) return referenceMap.components
+    return []
+  }
 
   const [isUploading, setIsUploading] = useState(false)
   const [isSkippingFigures, setIsSkippingFigures] = useState(false)
@@ -1489,7 +1501,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       const overrideList = overrideInputs.filter(Boolean)
       if (mode === 'manual' && overrideCount > 0 && overrideList.length > 0) {
         // Build the same rich context and prompt as AI mode, but use user-provided instructions
-        const components = session?.referenceMap?.components || []
+        const normalizedIdea = session?.ideaRecord?.normalizedData || {}
+        const figureScope = filterComponentsByScopeForFigures(
+          extractComponentsFromReferenceMap(session?.referenceMap),
+          normalizedIdea?.scopeRecommendations
+        )
+        const components = figureScope.components
+        const figureScopeBlock = buildFigureScopePromptBlock(normalizedIdea?.scopeRecommendations)
         // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
         const numeralsPreview = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
 
@@ -1565,6 +1583,7 @@ IMPORTANT: New figures should continue the "zoom-in" progression. If existing fi
 COMPONENTS / NUMERALS
 ═══════════════════════════════════════════════════════════════════════════════
 Available numbered components: ${numeralsPreview}.
+${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 
 **NUMBERED ELEMENT RULE (STRICT):**
 - Use ONLY the provided **numbered** components and their numerals listed above.
