@@ -182,6 +182,19 @@ function normalizeCategory(value: unknown, text: string): DraftClaim['category']
   return inferCategory(text)
 }
 
+export function stripTrailingClaimDependencyLabel(value: string) {
+  return value
+    .replace(/\s*\(\s*Claim\s*\d+\s*\)\s*$/i, '')
+    .trim()
+}
+
+export function stripTrailingClaimDependencyLabelsFromHtml(value: string) {
+  return value
+    .replace(/\s*\(\s*Claim\s*\d+\s*\)\s*(<\/p>)/gi, '$1')
+    .replace(/\s*\(\s*Claim\s*\d+\s*\)\s*$/i, '')
+    .trim()
+}
+
 function cleanClaimText(value: string, number?: number) {
   let text = value
     .replace(/<[^>]*>/g, ' ')
@@ -193,7 +206,7 @@ function cleanClaimText(value: string, number?: number) {
     text = text.replace(new RegExp(`^(?:claim\\s*)?${number}\\s*[.):\\-]?\\s*`, 'i'), '').trim()
   }
 
-  return text
+  return stripTrailingClaimDependencyLabel(text)
 }
 
 function normalizeClaim(raw: any, index: number): DraftClaim | null {
@@ -380,6 +393,6 @@ export function parseGeneratedClaimsPayloadFromLLMOutput(output: string): DraftC
 
 export function formatDraftClaimsAsHtml(claims: DraftClaim[]) {
   return claims
-    .map(claim => `<p><strong>${claim.number}.</strong> ${claim.text}</p>`)
+    .map(claim => `<p><strong>${claim.number}.</strong> ${stripTrailingClaimDependencyLabel(claim.text)}</p>`)
     .join('\n')
 }

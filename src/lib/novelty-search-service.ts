@@ -3,7 +3,7 @@ import { llmGateway } from './metering/gateway';
 import { prisma } from './prisma';
 import { TaskCode, NoveltySearchStatus, NoveltySearchStage } from '@prisma/client';
 import { IdeaBankService } from './idea-bank-service';
-import { ideaBankFunnel, type IdeaFunnelInput, type PriorArtAnalysisItem } from './idea-bank-funnel';
+import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from './idea-bank-funnel';
 import { checkServiceQuota, trackServiceUsage } from './service-usage-tracker';
 import crypto from 'crypto';
 
@@ -4024,6 +4024,7 @@ OUTPUT JSON:
       basePrompt += "\n- Decision policy: If any single patent covers \u2265 60% of features AND all critical features, default to 'Not Novel' unless a concrete, technical differentiator is clearly evidenced.";
       basePrompt += "\n- If features are scattered across multiple patents without integration, state this plainly; do not imply novelty unless integration is truly absent in prior art.";
 
+      if (isIdeaBankGenerationEnabled()) {
       // Request new patent ideas for the Idea Bank using the same creative brief used in drafting's AI relevance review
       const __ideaGenRefs = (enhancedReportInputs.patent_details || [])
         .map((p: any) => `PN: ${p.patent_number}\nTitle: ${p.title}\nAbstract: ${String(p.abstract||'').slice(0,400)}`)
@@ -4067,6 +4068,7 @@ OUTPUT JSON:
       basePrompt += `}\n`;
 
       basePrompt += `\nREFERENCE SNAPSHOTS (Analyze these to find what to AVOID or DISRUPT):\n${__ideaGenRefs}`;
+      }
 
       // If no intersecting patents, add explicit instruction for the report
       if (!selectedPatents || selectedPatents.length === 0) {
@@ -4145,31 +4147,36 @@ OUTPUT JSON:
         })).filter((x: any) => x.title);
       };
       // Extract ideas from report (fallback if dedicated call fails)
-      const reportIdeas = extractIdeas(reportData);
+      const ideaBankGenerationEnabled = isIdeaBankGenerationEnabled();
+      const reportIdeas = ideaBankGenerationEnabled ? extractIdeas(reportData) : [];
 
       // === DEDICATED IDEA BANK GENERATION ===
       // Use IDEA_BANK_GENERATION stage for unified management with drafting pipeline
       // This allows admins to configure idea generation model from one place
       let ideaBank = reportIdeas; // Default to ideas from report
       
-      try {
-        console.log('[Stage4] Generating ideas via dedicated IDEA_BANK_GENERATION stage...');
-        const ideaGenResult = await this.generateIdeaBankSuggestions(
-          searchRun,
-          stage0Data,
-          enhancedReportInputs.patent_details || [],
-          requestHeaders
-        );
-        
-        if (ideaGenResult && ideaGenResult.length > 0) {
-          console.log(`[Stage4] Dedicated idea generation produced ${ideaGenResult.length} ideas`);
-          ideaBank = ideaGenResult;
-        } else if (reportIdeas.length > 0) {
-          console.log(`[Stage4] Using ${reportIdeas.length} ideas from report (fallback)`);
+      if (ideaBankGenerationEnabled) {
+        try {
+          console.log('[Stage4] Generating ideas via dedicated IDEA_BANK_GENERATION stage...');
+          const ideaGenResult = await this.generateIdeaBankSuggestions(
+            searchRun,
+            stage0Data,
+            enhancedReportInputs.patent_details || [],
+            requestHeaders
+          );
+          
+          if (ideaGenResult && ideaGenResult.length > 0) {
+            console.log(`[Stage4] Dedicated idea generation produced ${ideaGenResult.length} ideas`);
+            ideaBank = ideaGenResult;
+          } else if (reportIdeas.length > 0) {
+            console.log(`[Stage4] Using ${reportIdeas.length} ideas from report (fallback)`);
+          }
+        } catch (ideaGenError) {
+          console.warn('[Stage4] Dedicated idea generation failed, using report ideas:', ideaGenError);
+          // Fall back to ideas extracted from report
         }
-      } catch (ideaGenError) {
-        console.warn('[Stage4] Dedicated idea generation failed, using report ideas:', ideaGenError);
-        // Fall back to ideas extracted from report
+      } else {
+        console.log('[Stage4] Idea Bank generation disabled; skipping idea suggestions.');
       }
 
       const finalReportData = {
@@ -4182,7 +4189,7 @@ OUTPUT JSON:
       // - Stream A: Cross-Domain Applications
       // - Stream B: Technology Combinations  
       // - Stream C: LLM Validation Layer (approves/rejects before persistence)
-      if (searchRun.userId && aggRes.per_patent_coverage?.length > 0) {
+      if (ideaBankGenerationEnabled && searchRun.userId && aggRes.per_patent_coverage?.length > 0) {
         // Build prior art analysis in unified format for the funnel
         const priorArtForFunnel: PriorArtAnalysisItem[] = (enhancedReportInputs.patent_details || []).map((p: any, idx: number) => {
           const coverage = aggRes.per_patent_coverage?.[idx];
@@ -4272,6 +4279,11 @@ OUTPUT JSON:
     tags: string[];
     non_obvious_extension: string;
   }>> {
+    if (!isIdeaBankGenerationEnabled()) {
+      console.log('[IdeaBankGeneration] Disabled; skipping dedicated idea generation');
+      return [];
+    }
+
     const title = String(searchRun.title || '');
     const query = String((stage0Data as any)?.searchQuery || '');
     

@@ -4,6 +4,7 @@ import {
   formatDraftClaimsAsHtml,
   parseGeneratedClaimsFromLLMOutput,
   parseGeneratedClaimsPayloadFromLLMOutput,
+  stripTrailingClaimDependencyLabelsFromHtml,
 } from '@/lib/draft-claims-parser'
 
 describe('draft claims parser', () => {
@@ -81,6 +82,14 @@ Here is the claim set:
     ])
 
     expect(html).toBe('<p><strong>1.</strong> A system comprising a controller.</p>')
+  })
+
+  test('removes generated trailing claim dependency labels only', () => {
+    const html = stripTrailingClaimDependencyLabelsFromHtml(
+      '<p><strong>2.</strong> The system of claim 1, wherein the controller filters signals. (Claim 1)</p>'
+    )
+
+    expect(html).toBe('<p><strong>2.</strong> The system of claim 1, wherein the controller filters signals.</p>')
   })
 
   test('parses support matrix and quality warnings from claims JSON', () => {

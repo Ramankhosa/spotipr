@@ -218,6 +218,57 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
   const hasAutoUnfrozenRef = useRef(false)
   const userJustFrozeRef = useRef(false)
   const initialFrozenStateRef = useRef<boolean | null>(null)
+  const refreezeOnLeaveArmedRef = useRef(false)
+  const onCompleteRef = useRef(onComplete)
+  const latestClaimsRef = useRef<{
+    sessionId?: string
+    claimsHtml: string
+    claimsStructured?: any[]
+    jurisdiction: string
+    hasClaims: boolean
+  }>({
+    sessionId: session?.id,
+    claimsHtml: currentClaimsHtml,
+    claimsStructured: structured && structured.length ? structured : undefined,
+    jurisdiction: (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase(),
+    hasClaims: stripTags(currentClaimsHtml).length > 0 || (Array.isArray(structured) && structured.length > 0)
+  })
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete
+  }, [onComplete])
+
+  useEffect(() => {
+    latestClaimsRef.current = {
+      sessionId: session?.id,
+      claimsHtml: currentClaimsHtml,
+      claimsStructured: structured && structured.length ? structured : undefined,
+      jurisdiction: (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase(),
+      hasClaims: stripTags(currentClaimsHtml).length > 0 || (Array.isArray(structured) && structured.length > 0)
+    }
+  })
+
+  useEffect(() => {
+    const armTimer = window.setTimeout(() => {
+      refreezeOnLeaveArmedRef.current = true
+    }, 0)
+
+    return () => {
+      window.clearTimeout(armTimer)
+      const latest = latestClaimsRef.current
+      if (!refreezeOnLeaveArmedRef.current || !latest.sessionId || !latest.hasClaims || userJustFrozeRef.current) return
+
+      void onCompleteRef.current({
+        action: 'freeze_claims',
+        sessionId: latest.sessionId,
+        claims: latest.claimsHtml,
+        claimsStructured: latest.claimsStructured,
+        jurisdiction: latest.jurisdiction
+      }).catch((e) => {
+        console.error('[ClaimRefinementStage] Failed to re-freeze claims while leaving stage:', e)
+      })
+    }
+  }, [])
   
   // Capture the initial frozen state on first render
   useEffect(() => {
@@ -377,6 +428,40 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
     }
   }
 
+  const freezeClaimsAndProceed = async (claimsOverride?: string, structuredOverride?: any[]) => {
+    if (!session?.id) return
+    try {
+      setFreezing(true)
+      setError(null)
+
+      userJustFrozeRef.current = true
+      console.log('[ClaimRefinementStage] User manually freezing claims - auto-unfreeze disabled')
+
+      await onComplete({
+        action: 'freeze_claims',
+        sessionId: session.id,
+        claims: claimsOverride || normalized.claims || normalized.claimsFinal || normalized.claimsProvisional || currentClaimsHtml,
+        claimsStructured: structuredOverride || (structured && structured.length ? structured : undefined),
+        jurisdiction: (session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
+      })
+      await onComplete({
+        action: 'set_stage',
+        sessionId: session.id,
+        stage: 'COMPONENT_PLANNER'
+      })
+      await onRefresh()
+      setSuccessMessage('Claims frozen and ready for next stage!')
+      setTimeout(() => setSuccessMessage(null), 3000)
+    } catch (e) {
+      console.error('Freeze failed', e)
+      setError('Failed to freeze claims.')
+      userJustFrozeRef.current = false
+      throw e
+    } finally {
+      setFreezing(false)
+    }
+  }
+
   const handleApply = async () => {
     if (!session?.id) return
     try {
@@ -385,35 +470,30 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
       setSuccessMessage(null)
       const accepted = Object.entries(acceptMap).filter(([, v]) => v).map(([k]) => Number(k))
 
-      // Store original claims for comparison feedback
-      const originalClaims = baseClaims
-
-      await onComplete({
+      const applyResponse = await onComplete({
         action: 'claim_refinement_apply',
         sessionId: session.id,
-        acceptedClaimNumbers: accepted
+        acceptedClaimNumbers: accepted,
+        acceptAll: false
       })
-      await onRefresh()
+      if (applyResponse?.error) throw new Error(applyResponse.error)
 
-      // Enhanced feedback: Show what was changed
       const claimCount = accepted.length
-      if (claimCount === 0) {
-        setSuccessMessage('✓ No changes applied - all refinements were rejected.')
-      } else {
-        // Count how many claims were actually modified
-        const refinedClaims = preview?.refinedClaims || []
-        const modifiedCount = accepted.filter(claimNum =>
-          refinedClaims.find((r: any) => Number(r.number) === claimNum)?.refined_text
-        ).length
+      const refinedClaims = preview?.refinedClaims || []
+      const modifiedCount = accepted.filter(claimNum =>
+        refinedClaims.find((r: any) => Number(r.number) === claimNum)?.refined_text
+      ).length
 
-        const message = `✓ Applied ${claimCount} claim refinement${claimCount !== 1 ? 's' : ''}${modifiedCount > 0 ? ` (${modifiedCount} claim${modifiedCount !== 1 ? 's' : ''} modified)` : ''}. Claims have been updated and are ready for final approval.`
-        setSuccessMessage(message)
-      }
+      await freezeClaimsAndProceed(applyResponse?.claimsHtml, applyResponse?.claims)
 
-      setTimeout(() => setSuccessMessage(null), 8000) // Extended duration for better visibility
+      const message = claimCount === 0
+        ? 'No selected refinements were applied. Claims have still been frozen and the workflow has advanced.'
+        : `Applied ${claimCount} claim refinement${claimCount !== 1 ? 's' : ''}${modifiedCount > 0 ? ` (${modifiedCount} claim${modifiedCount !== 1 ? 's' : ''} modified)` : ''}. Claims frozen and ready for next stage.`
+      setSuccessMessage(message)
+      setTimeout(() => setSuccessMessage(null), 8000)
     } catch (e) {
       console.error('Apply failed', e)
-      setError('Failed to apply refinements.')
+      setError(e instanceof Error ? e.message : 'Failed to apply refinements.')
     } finally {
       setApplying(false)
     }
@@ -431,38 +511,7 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
         await new Promise(resolve => setTimeout(resolve, 500))
       }
     }
-    
-    try {
-      setFreezing(true)
-      setError(null)
-      
-      // CRITICAL: Mark that user manually froze claims to prevent auto-unfreeze
-      userJustFrozeRef.current = true
-      console.log('[ClaimRefinementStage] User manually freezing claims - auto-unfreeze disabled')
-      
-      await onComplete({
-        action: 'freeze_claims',
-        sessionId: session.id,
-        claims: normalized.claims || normalized.claimsFinal || normalized.claimsProvisional || currentClaimsHtml,
-        claimsStructured: structured && structured.length ? structured : undefined,
-        jurisdiction: (session.activeJurisdiction || session.draftingJurisdictions?.[0] || 'US').toUpperCase()
-      })
-      await onComplete({
-        action: 'set_stage',
-        sessionId: session.id,
-        stage: 'COMPONENT_PLANNER'
-      })
-      await onRefresh()
-      setSuccessMessage('Claims frozen and ready for next stage!')
-      setTimeout(() => setSuccessMessage(null), 3000)
-    } catch (e) {
-      console.error('Freeze failed', e)
-      setError('Failed to freeze claims.')
-      // Reset the flag on failure so auto-unfreeze can work if needed
-      userJustFrozeRef.current = false
-    } finally {
-      setFreezing(false)
-    }
+    await freezeClaimsAndProceed()
   }
 
   const handleUnfreeze = async () => {
@@ -512,7 +561,7 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
               : 'bg-amber-50 text-amber-700 border border-amber-200'
           }`}>
-            {isFrozen ? '✓ Claims Finalized' : '○ Draft Mode'}
+            {isFrozen ? 'Claims Frozen' : 'Draft Mode'}
           </div>
         </div>
 
@@ -759,11 +808,11 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
                 {/* Step 2 */}
                 <button
                   onClick={handleApply}
-                  disabled={applying || !preview || isFrozen}
+                  disabled={applying || freezing || !preview || isFrozen}
                   className="w-full group"
                 >
                   <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
-                    applying 
+                    applying || freezing
                       ? 'border-violet-300 bg-violet-50' 
                       : !preview 
                         ? 'border-slate-100 bg-slate-50 opacity-60' 
@@ -776,9 +825,9 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
                     </div>
                     <div className="flex-1 text-left">
                       <div className="font-medium text-slate-900 text-sm">Apply Changes</div>
-                      <div className="text-xs text-slate-500">Accept selected refinements</div>
+                      <div className="text-xs text-slate-500">Accept selected refinements and freeze claims</div>
                     </div>
-                    {applying ? (
+                    {(applying || freezing) ? (
                       <div className="w-5 h-5 border-2 border-violet-600 border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <CheckCircle2 className={`w-5 h-5 transition-colors ${preview ? 'text-slate-400 group-hover:text-violet-600' : 'text-slate-300'}`} />
@@ -809,7 +858,7 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
                     </div>
                     <div className="flex-1 text-left">
                       <div className="font-medium text-slate-900 text-sm">
-                        {isFrozen ? 'Unlock Claims' : 'Finalize Claims'}
+                        {isFrozen ? 'Unlock Claims' : 'Freeze Claims'}
                       </div>
                       <div className="text-xs text-slate-500">
                         {isFrozen ? 'Unlock to make more changes' : 'Lock and proceed to next stage'}

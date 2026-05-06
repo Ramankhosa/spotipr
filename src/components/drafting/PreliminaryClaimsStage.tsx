@@ -14,7 +14,9 @@ import {
   AlertCircle,
   Globe,
   Lightbulb,
-  Scale
+  Scale,
+  Info,
+  Trash2
 } from 'lucide-react'
 import { ClaimsEditor, RichTextEditorRef } from '@/components/ui/rich-text-editor'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +24,10 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import PersonaManager, { type PersonaSelection } from '@/components/drafting/PersonaManager'
 import { useAuth } from '@/lib/auth-context'
+import {
+  stripTrailingClaimDependencyLabel,
+  stripTrailingClaimDependencyLabelsFromHtml
+} from '@/lib/draft-claims-parser'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,7 +79,7 @@ const parseClaimsFromHtml = (html: string): Claim[] => {
     const match = plain.match(/^(\d+)\.?\s*(.+)$/)
     if (match) {
       const number = Number(match[1])
-      const text = match[2].trim()
+      const text = stripTrailingClaimDependencyLabel(match[2].trim())
 
       const depMatch = text.match(/(?:claim|claims?)\s+(\d+)/i)
       const dependsOn = depMatch ? Number(depMatch[1]) : undefined
@@ -102,10 +108,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const [claimsFrozen, setClaimsFrozen] = useState(false)
   const [claimsFrozenAt, setClaimsFrozenAt] = useState<string | null>(null)
   const [isGeneratingClaims, setIsGeneratingClaims] = useState(false)
+  const [isResettingClaims, setIsResettingClaims] = useState(false)
   const claimsEditorRef = useRef<RichTextEditorRef>(null)
   const [isEditingClaims, setIsEditingClaims] = useState(false)
   const [claimGenerationQuality, setClaimGenerationQuality] = useState<any>(null)
   const [showClaimsDetails, setShowClaimsDetails] = useState(true)
+  const [showQualityObservations, setShowQualityObservations] = useState(false)
+  const [showFreezeHelp, setShowFreezeHelp] = useState(false)
 
   // ---- Patent type state ----
   const [patentType, setPatentType] = useState<'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION' | null>(null)
@@ -156,29 +165,39 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     const nd = (session?.ideaRecord?.normalizedData as any) || {}
 
     if (nd.claims) {
-      const savedClaims = nd.claims
+        const savedClaims = typeof nd.claims === 'string'
+          ? stripTrailingClaimDependencyLabelsFromHtml(nd.claims)
+          : nd.claims
       if (Array.isArray(savedClaims)) {
         setClaims(savedClaims)
         const claimsTextContent = savedClaims
           .map((c: Claim) => {
-            const prefix = c.type === 'dependent' && c.dependsOn ? `(Claim ${c.dependsOn}) ` : ''
-            return `${c.number}. ${prefix}${c.text}`
+            return `${c.number}. ${stripTrailingClaimDependencyLabel(c.text)}`
           })
           .join('\n\n')
         setClaimsText(claimsTextContent)
       } else if (typeof savedClaims === 'string') {
-        setClaimsText(savedClaims)
+        setClaims(parseClaimsFromHtml(savedClaims))
+        setClaimsText(stripTrailingClaimDependencyLabelsFromHtml(savedClaims))
       }
+    } else {
+      setClaims([])
+      setClaimsText('')
     }
     setClaimGenerationQuality(nd.claimGenerationQuality || null)
 
     if (nd.claimsApprovedAt) {
       setClaimsFrozen(true)
       setClaimsFrozenAt(nd.claimsApprovedAt)
+    } else {
+      setClaimsFrozen(false)
+      setClaimsFrozenAt(null)
     }
 
     if (nd.userClaimRemarks) {
       setUserClaimRemarks(nd.userClaimRemarks)
+    } else {
+      setUserClaimRemarks('')
     }
 
     const savedPersonaSelection = (session as any)?.personaSelection as PersonaSelection | undefined
@@ -222,7 +241,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     if (draftSaved) {
       setDraftSaved(false)
     }
-  }, [claimsText])
+  }, [claimsText, draftSaved])
 
   // ---- Derived flags ----
   const strippedClaims = typeof claimsText === 'string' ? claimsText.replace(/<[^>]*>/g, '').trim() : ''
@@ -449,6 +468,43 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     }
   }
 
+  const handleResetClaims = async () => {
+    if (!session?.id || !hasClaims) return
+    const confirmed = window.confirm(
+      'Reset claims?\n\nThis will delete generated, edited, frozen, and refined claim data for this Stage 1 claim set. This cannot be undone.'
+    )
+    if (!confirmed) return
+
+    try {
+      setIsResettingClaims(true)
+      setError(null)
+      const response = await onComplete({
+        action: 'reset_claims',
+        sessionId: session.id
+      })
+
+      if (response?.error) throw new Error(response.error)
+      if (!response) throw new Error('Failed to reset claims.')
+
+      setClaims([])
+      setClaimsText('')
+      setClaimGenerationQuality(null)
+      setClaimsFrozen(false)
+      setClaimsFrozenAt(null)
+      setIsEditingClaims(false)
+      setRegenerateInstructions('')
+      setDraftSaved(false)
+      setSkipPriorArtClicked(false)
+      setUseInitialClaimsForDraft(false)
+      await onRefresh()
+    } catch (e) {
+      console.error('Failed to reset claims:', e)
+      setError(e instanceof Error ? e.message : 'Failed to reset claims.')
+    } finally {
+      setIsResettingClaims(false)
+    }
+  }
+
   const handleDoneEditing = async () => {
     if (!session?.id) return
     try {
@@ -623,7 +679,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       <div className="grid grid-cols-1 gap-6">
         {/* ========== Claims Panel ========== */}
         <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
             {/* Claims Header */}
             <button
               onClick={() => setShowClaimsDetails(!showClaimsDetails)}
@@ -648,13 +704,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
               </div>
             </button>
 
-            {/* Patent Type Badge + Persona Style Controls */}
+            {/* Compact metadata, status, and style controls */}
             {showClaimsDetails && (
-              <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100">
-                {/* Row 1: Patent Type (editable with dropdown) */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-gray-600">Invention Type:</span>
+              <div className="px-5 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-gray-600">Invention Type</span>
                     <div className="relative" data-patent-type-dropdown>
                       <Tooltip content="Click to change the invention type if the AI classification is incorrect" position="bottom">
                         <button
@@ -731,21 +787,43 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                     {!patentType && (
                       <span className="text-[10px] text-gray-400">(Classifying...)</span>
                     )}
-                  </div>
-                  {!claimsFrozen && (
-                    <span className="text-[10px] text-gray-400">Click to override</span>
-                  )}
-                </div>
+                    </div>
 
-                {/* Row 2: Writing Style Controls */}
-                <div className="flex items-center justify-between">
-                  <div className="text-xs text-gray-600">
-                    <span className="font-medium">Writing Style:</span>{' '}
-                    {usePersonaStyle
-                      ? (personaSelection?.primaryPersonaName || 'Enabled')
-                      : 'Off (default style)'}
+                    <div className="flex items-center gap-2 text-xs text-gray-600">
+                      <span className="font-medium">Writing Style</span>
+                      <span className="text-gray-500">
+                        {usePersonaStyle
+                          ? (personaSelection?.primaryPersonaName || 'Enabled')
+                          : 'Off'}
+                      </span>
+                    </div>
+
+                    <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
+                      claimsFrozen
+                        ? 'border-green-200 bg-green-50 text-green-700'
+                        : 'border-amber-200 bg-amber-50 text-amber-700'
+                    }`}>
+                      {claimsFrozen ? <Check className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                      <span>
+                        {claimsFrozen && claimsFrozenAt
+                          ? `Frozen ${new Date(claimsFrozenAt).toLocaleDateString()}`
+                          : 'Freeze before proceeding'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {claimsFrozen && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleUnfreezeClaims}
+                        className="h-8 text-amber-700 hover:text-amber-800 hover:bg-amber-50"
+                      >
+                        <Unlock className="w-3 h-3 mr-1" />
+                        Unfreeze to Edit
+                      </Button>
+                    )}
                     <Tooltip content={usePersonaStyle
                       ? "Persona style is ON - Claims will be generated using your selected writing style"
                       : "Enable to generate claims in your preferred writing style"
@@ -802,39 +880,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                   transition={{ duration: 0.2 }}
                   className="overflow-hidden"
                 >
-                  {/* Claims Status Banner */}
-                  {!claimsFrozen && (
-                    <div className="px-6 py-3 bg-amber-50 border-b border-amber-100">
-                      <div className="flex items-center gap-2 text-sm text-amber-800">
-                        <AlertCircle className="w-4 h-4" />
-                        <span>Claims must be frozen before proceeding. They will be used throughout the drafting pipeline.</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {claimsFrozen && claimsFrozenAt && (
-                    <div className="px-6 py-3 bg-green-50 border-b border-green-100">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-sm text-green-800">
-                          <Check className="w-4 h-4" />
-                          <span>Claims frozen on {new Date(claimsFrozenAt).toLocaleDateString()}</span>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={handleUnfreezeClaims}
-                          className="text-amber-700 hover:text-amber-800 hover:bg-amber-50"
-                        >
-                          <Unlock className="w-3 h-3 mr-1" />
-                          Unfreeze to Edit
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
                   {/* Multi-Jurisdiction Notice */}
                   {allJurisdictions.length > 1 && (
-                    <div className="px-6 py-3 bg-blue-50 border-b border-blue-100">
+                    <div className="px-5 py-2 bg-blue-50 border-b border-blue-100">
                       <div className="flex items-start gap-2 text-sm text-blue-800">
                         <Globe className="w-4 h-4 mt-0.5 flex-shrink-0" />
                         <div>
@@ -918,47 +966,89 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                 )}
                               </div>
 
-                              {/* Edit Toggle Button */}
-                              {!claimsFrozen && (
-                                <div className="flex items-center gap-2">
-                                  {!isEditingClaims ? (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => setIsEditingClaims(true)}
-                                      className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
-                                    >
-                                      <Edit2 className="w-3.5 h-3.5 mr-1.5" />
-                                      Edit Claims
-                                    </Button>
-                                  ) : (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={handleDoneEditing}
-                                      className="text-green-600 border-green-200 hover:bg-green-50"
-                                    >
-                                      <Check className="w-3.5 h-3.5 mr-1.5" />
-                                      Done Editing
-                                    </Button>
-                                  )}
-                                </div>
-                              )}
+                              {/* Claim action buttons */}
+                              <div className="flex items-center gap-2">
+                                {!claimsFrozen && !isEditingClaims && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setIsEditingClaims(true)}
+                                    disabled={isResettingClaims}
+                                    className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5 mr-1.5" />
+                                    Edit Claims
+                                  </Button>
+                                )}
+                                {!claimsFrozen && isEditingClaims && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleDoneEditing}
+                                    disabled={isResettingClaims}
+                                    className="text-green-600 border-green-200 hover:bg-green-50"
+                                  >
+                                    <Check className="w-3.5 h-3.5 mr-1.5" />
+                                    Done Editing
+                                  </Button>
+                                )}
+                                {hasClaims && !isGeneratingClaims && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleResetClaims}
+                                    disabled={isResettingClaims}
+                                    className="text-red-600 border-red-200 hover:bg-red-50"
+                                  >
+                                    {isResettingClaims ? (
+                                      <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                                    )}
+                                    Reset Claims
+                                  </Button>
+                                )}
+                              </div>
                             </div>
 
                             {qualityWarnings.length > 0 && (
-                              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                                <div className="flex items-start gap-2">
-                                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
-                                  <div className="space-y-1">
-                                    <p className="font-medium">Claim quality warnings</p>
-                                    <ul className="list-disc pl-4 text-xs leading-relaxed">
-                                      {qualityWarnings.slice(0, 3).map((warning: any, idx: number) => (
-                                        <li key={idx}>{warning?.message || String(warning)}</li>
-                                      ))}
-                                    </ul>
-                                  </div>
-                                </div>
+                              <div className="rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowQualityObservations(!showQualityObservations)}
+                                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-amber-100/60 transition-colors"
+                                  aria-expanded={showQualityObservations}
+                                >
+                                  <span className="flex items-center gap-2 font-medium">
+                                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-600" />
+                                    Claim Quality Observations
+                                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                                      {qualityWarnings.length}
+                                    </span>
+                                  </span>
+                                  {showQualityObservations ? (
+                                    <ChevronDown className="h-4 w-4 flex-shrink-0 text-amber-700" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-amber-700" />
+                                  )}
+                                </button>
+                                <AnimatePresence initial={false}>
+                                  {showQualityObservations && (
+                                    <motion.div
+                                      initial={{ height: 0, opacity: 0 }}
+                                      animate={{ height: 'auto', opacity: 1 }}
+                                      exit={{ height: 0, opacity: 0 }}
+                                      transition={{ duration: 0.18 }}
+                                      className="overflow-hidden"
+                                    >
+                                      <ul className="list-disc border-t border-amber-200 px-4 py-3 pl-10 text-xs leading-relaxed">
+                                        {qualityWarnings.map((warning: any, idx: number) => (
+                                          <li key={idx}>{warning?.message || String(warning)}</li>
+                                        ))}
+                                      </ul>
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
                               </div>
                             )}
 
@@ -1007,13 +1097,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                   onChange={(e) => setRegenerateInstructions(e.target.value)}
                                   placeholder="Enter instructions for claim regeneration (optional)"
                                   className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                                  disabled={claimsFrozen || isGeneratingClaims}
+                                  disabled={claimsFrozen || isGeneratingClaims || isResettingClaims}
                                 />
                                 <Button
                                   variant="outline"
                                   size="sm"
                                   onClick={() => handleGenerateClaims()}
-                                  disabled={claimsFrozen || isGeneratingClaims}
+                                  disabled={claimsFrozen || isGeneratingClaims || isResettingClaims}
                                 >
                                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
                                   Regenerate
@@ -1028,6 +1118,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                         variant="outline"
                                         size="sm"
                                         onClick={handleDoneEditing}
+                                        disabled={isResettingClaims}
                                         className={draftSaved ? "bg-green-50 border-green-200 text-green-700" : "text-green-600 border-green-200 hover:bg-green-50"}
                                       >
                                         {draftSaved ? (
@@ -1046,11 +1137,39 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                     <Button
                                       size="sm"
                                       onClick={handleFreezeClaims}
+                                      disabled={isResettingClaims}
                                       className="bg-green-600 hover:bg-green-700 text-white"
                                     >
                                       <Lock className="w-3.5 h-3.5 mr-1.5" />
                                       Freeze Initial Claims
                                     </Button>
+                                    <div
+                                      className="relative"
+                                      onMouseEnter={() => setShowFreezeHelp(true)}
+                                      onMouseLeave={() => setShowFreezeHelp(false)}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowFreezeHelp(!showFreezeHelp)}
+                                        className="flex h-8 w-8 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-blue-700 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                                        aria-label="Why freeze claims?"
+                                        aria-expanded={showFreezeHelp}
+                                      >
+                                        <Info className="h-4 w-4" />
+                                      </button>
+                                      {showFreezeHelp && (
+                                        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-80 -translate-x-1/2 rounded-lg border border-blue-200 bg-blue-50 p-4 text-left shadow-lg">
+                                          <h4 className="mb-2 text-sm font-semibold text-blue-900">Why freeze claims?</h4>
+                                          <ul className="list-disc space-y-1 pl-4 text-xs text-blue-800">
+                                            <li>Claims define the legal scope of your patent protection</li>
+                                            <li>Frozen claims will be used in Figure Planner for relevant diagrams</li>
+                                            <li>Prior Art analysis will compare patents against your specific claims</li>
+                                            <li>Final draft will use these exact claims (no regeneration)</li>
+                                            <li>Multi-jurisdiction support: claims transform to country-specific style</li>
+                                          </ul>
+                                        </div>
+                                      )}
+                                    </div>
                                   </>
                                 )}
                               </div>
@@ -1065,17 +1184,6 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
             </AnimatePresence>
           </div>
 
-          {/* "Why freeze claims?" Info Box */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h4 className="text-sm font-semibold text-blue-900 mb-2">Why freeze claims?</h4>
-            <ul className="text-xs text-blue-800 space-y-1">
-              <li>• Claims define the legal scope of your patent protection</li>
-              <li>• Frozen claims will be used in Figure Planner for relevant diagrams</li>
-              <li>• Prior Art analysis will compare patents against your specific claims</li>
-              <li>• Final draft will use these exact claims (no regeneration)</li>
-              <li>• Multi-jurisdiction support: claims transform to country-specific style</li>
-            </ul>
-          </div>
         </div>
       </div>
 
@@ -1104,7 +1212,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                 </label>
                 <Button
                   onClick={skipPriorArtAndFreeze}
-                  disabled={!canProceed || isNavigating}
+                  disabled={!canProceed || isNavigating || isResettingClaims}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
                   Next
@@ -1115,7 +1223,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
               <>
                 <Button
                   onClick={handleSkipClick}
-                  disabled={!canProceed || isNavigating}
+                  disabled={!canProceed || isNavigating || isResettingClaims}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
                   Skip Prior Art Stage
@@ -1124,7 +1232,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                 <Button
                   variant="outline"
                   onClick={proceedToPriorArt}
-                  disabled={!canProceed || isNavigating}
+                  disabled={!canProceed || isNavigating || isResettingClaims}
                 >
                   Next: Prior Art
                   <ChevronRight className="w-4 h-4 ml-2" />

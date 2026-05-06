@@ -308,6 +308,16 @@ Return ONLY valid JSON:
 // IDEA BANK FUNNEL SERVICE
 // ============================================================================
 
+export function isIdeaBankGenerationEnabled(): boolean {
+  // Disabled by default. Set either env var to "true" to re-enable idea-bank generation.
+  return process.env.IDEA_BANK_GENERATION_ENABLED === 'true' ||
+    process.env.IDEA_BANK_FUNNEL_ENABLED === 'true';
+}
+
+export function isIdeaBankFunnelEnabled(): boolean {
+  return isIdeaBankGenerationEnabled();
+}
+
 export class IdeaBankFunnelService {
   private ideaBankService: IdeaBankService;
   
@@ -320,6 +330,11 @@ export class IdeaBankFunnelService {
    * This runs asynchronously and doesn't block the caller
    */
   async processIdeasAsync(input: IdeaFunnelInput): Promise<void> {
+    if (!isIdeaBankFunnelEnabled()) {
+      console.log(`[IdeaBankFunnel] Disabled; skipping async funnel for ${input.source}`);
+      return;
+    }
+
     // Fire and forget - don't await
     this.processFunnel(input).catch(err => {
       console.error('[IdeaBankFunnel] Async processing failed:', err);
@@ -330,6 +345,17 @@ export class IdeaBankFunnelService {
    * Process the funnel synchronously (for testing or when result is needed)
    */
   async processFunnel(input: IdeaFunnelInput): Promise<IdeaFunnelResult> {
+    if (!isIdeaBankFunnelEnabled()) {
+      console.log(`[IdeaBankFunnel] Disabled; skipping funnel for ${input.source}`);
+      return {
+        success: false,
+        stats: { generated: 0, approved: 0, rejected: 0 },
+        approvedIdeas: [],
+        rejectedIdeas: [],
+        errors: ['Idea Bank Funnel is disabled']
+      };
+    }
+
     console.log(`[IdeaBankFunnel] Starting funnel for ${input.source}`);
     console.log(`[IdeaBankFunnel] Invention: ${input.invention.title}`);
     console.log(`[IdeaBankFunnel] Prior art items: ${input.priorArtAnalysis.length}`);

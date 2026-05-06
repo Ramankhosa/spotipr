@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest'
 import {
   analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
+  resetPreliminaryClaimFields,
+  shouldBlockPreliminaryClaimReset,
 } from '@/lib/preliminary-claim-generation'
 import type { DraftClaim } from '@/lib/draft-claims-parser'
 
@@ -179,5 +181,79 @@ describe('preliminary claim generation helper', () => {
 
     expect(quality.status).toBe('thin_disclosure')
     expect(quality.warnings.some(warning => warning.code === 'THIN_DISCLOSURE')).toBe(true)
+  })
+
+  test('resets claim fields while preserving normalized idea data and user preferences', () => {
+    const reset = resetPreliminaryClaimFields({
+      title: 'Irrigation Controller',
+      problem: 'Water waste from irrigation.',
+      userClaimRemarks: 'Keep claim 1 broad.',
+      patentTypePrimary: 'SYSTEM',
+      claims: '<p>1. A system...</p>',
+      claimsStructured: [{ number: 1, text: 'A system...' }],
+      claimsProvisional: '<p>1. A system...</p>',
+      claimsStructuredProvisional: [{ number: 1, text: 'A system...' }],
+      claimsFinal: '<p>1. A system...</p>',
+      claimsStructuredFinal: [{ number: 1, text: 'A system...' }],
+      claimsApprovedAt: '2026-05-06T00:00:00.000Z',
+      claimsApprovedBy: 'user-1',
+      claimsGeneratedAt: '2026-05-06T00:00:00.000Z',
+      claimsLastSavedAt: '2026-05-06T00:00:00.000Z',
+      claimsJurisdiction: 'US',
+      claimGenerationQuality: { status: 'source_supported' },
+      claimsRefinementPreview: { refinedClaims: [] },
+      claimsRefinementApplied: true,
+      claimsRefinementNotes: 'Claim 1 refined.',
+      claimsRefinementSource: { mode: 'AUTO' },
+    })
+
+    expect(reset).toMatchObject({
+      title: 'Irrigation Controller',
+      problem: 'Water waste from irrigation.',
+      userClaimRemarks: 'Keep claim 1 broad.',
+      patentTypePrimary: 'SYSTEM',
+    })
+    expect(reset).not.toHaveProperty('claims')
+    expect(reset).not.toHaveProperty('claimsStructured')
+    expect(reset).not.toHaveProperty('claimsProvisional')
+    expect(reset).not.toHaveProperty('claimsStructuredProvisional')
+    expect(reset).not.toHaveProperty('claimsFinal')
+    expect(reset).not.toHaveProperty('claimsStructuredFinal')
+    expect(reset).not.toHaveProperty('claimsApprovedAt')
+    expect(reset).not.toHaveProperty('claimsApprovedBy')
+    expect(reset).not.toHaveProperty('claimsGeneratedAt')
+    expect(reset).not.toHaveProperty('claimsLastSavedAt')
+    expect(reset).not.toHaveProperty('claimsJurisdiction')
+    expect(reset).not.toHaveProperty('claimGenerationQuality')
+    expect(reset).not.toHaveProperty('claimsRefinementPreview')
+    expect(reset).not.toHaveProperty('claimsRefinementApplied')
+    expect(reset).not.toHaveProperty('claimsRefinementNotes')
+    expect(reset).not.toHaveProperty('claimsRefinementSource')
+  })
+
+  test('allows claim reset only before downstream stages or artifacts exist', () => {
+    expect(shouldBlockPreliminaryClaimReset({
+      status: 'PRELIMINARY_CLAIMS',
+      normalizedData: { claims: '<p>1. A system...</p>' },
+    })).toBe(false)
+
+    expect(shouldBlockPreliminaryClaimReset({
+      status: 'RELATED_ART',
+      normalizedData: { claims: '<p>1. A system...</p>' },
+    })).toBe(true)
+
+    expect(shouldBlockPreliminaryClaimReset({
+      status: 'PRELIMINARY_CLAIMS',
+      normalizedData: { claims: '<p>1. A system...</p>' },
+      relatedArtRunCount: 1,
+    })).toBe(true)
+
+    expect(shouldBlockPreliminaryClaimReset({
+      status: 'PRELIMINARY_CLAIMS',
+      normalizedData: {
+        claims: '<p>1. A system...</p>',
+        claimsRefinementPreview: { refinedClaims: [] },
+      },
+    })).toBe(true)
   })
 })

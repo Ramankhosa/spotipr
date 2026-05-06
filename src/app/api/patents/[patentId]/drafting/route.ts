@@ -7,7 +7,7 @@ import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import { DraftingService, deriveNumberingStyle } from '@/lib/drafting-service';
 import { IdeaBankService } from '@/lib/idea-bank-service';
-import { ideaBankFunnel, type IdeaFunnelInput, type PriorArtAnalysisItem } from '@/lib/idea-bank-funnel';
+import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from '@/lib/idea-bank-funnel';
 import { llmGateway } from '@/lib/metering/gateway';
 // NOTE: Old document-based style learning (getGatedStyleInstructions) has been removed
 // The new Writing Personas system uses writing samples directly in DraftingService
@@ -35,10 +35,14 @@ import {
   DraftClaimsParseError,
   formatDraftClaimsAsHtml,
   parseGeneratedClaimsPayloadFromLLMOutput,
+  stripTrailingClaimDependencyLabel,
+  stripTrailingClaimDependencyLabelsFromHtml,
 } from '@/lib/draft-claims-parser';
 import {
   analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
+  resetPreliminaryClaimFields,
+  shouldBlockPreliminaryClaimReset,
 } from '@/lib/preliminary-claim-generation';
 import {
   generateSketch,
@@ -994,6 +998,9 @@ export async function POST(
       case 'save_claims':
         return await handleSaveClaims(authResult.user, patentId, data);
 
+      case 'reset_claims':
+        return await handleResetClaims(authResult.user, patentId, data);
+
       case 'freeze_claims':
         return await handleFreezeClaims(authResult.user, patentId, data);
 
@@ -1492,6 +1499,7 @@ ${batchText}`
 
   // Build response - old synchronous idea bank persistence removed
   // Now handled asynchronously by unified Idea Bank Funnel (Stream A, B, C)
+  const ideaFunnelEnabled = isIdeaBankGenerationEnabled()
 
   const response = {
     reviewed: allDecisions.length,
@@ -1499,7 +1507,7 @@ ${batchText}`
     autoSelect: autoUse,
     runId: useRunId,
     // ideaBankSuggestions removed - now generated asynchronously via unified funnel
-    ideaFunnelTriggered: true  // Indicates async idea generation is in progress
+    ideaFunnelTriggered: ideaFunnelEnabled  // Indicates async idea generation is in progress
   }
   console.log('API Response structure:', {
     reviewed: response.reviewed,
@@ -1508,46 +1516,50 @@ ${batchText}`
     runId: response.runId
   })
 
-  // Trigger Idea Bank Funnel asynchronously (fire and forget)
-  // This runs in the background after returning response to user
-  // Ideas are validated through Stream A (Cross-Domain), Stream B (Tech Combinations),
-  // and Stream C (Validation Layer) before being persisted to the idea bank
-  const funnelInput: IdeaFunnelInput = {
-    source: 'drafting_pipeline',
-    invention: {
-      title: title || 'Untitled Invention',
-      abstract: (session?.ideaRecord as any)?.abstract || '',
-      claims: claimsText || '',
-      features: Array.isArray(frozenClaims) ? frozenClaims.map((c: any) => c.text || '').filter(Boolean) : [],
-      searchQuery: query || ''
-    },
-    priorArtAnalysis: allDecisions
-      .filter(d => d.pn && d.relevance >= 0.3) // Only include relevant patents with valid PN
-      .map(d => ({
-        pn: d.pn || '',
-        title: d.title || 'Untitled Patent',
-        relevance: typeof d.relevance === 'number' ? d.relevance : 0.5,
-        novelty_threat: d.novelty_threat || 'adjacent',
-        summary: d.summary || '',
-        detailedAnalysis: d.detailedAnalysis || {
+  if (ideaFunnelEnabled) {
+    // Trigger Idea Bank Funnel asynchronously (fire and forget)
+    // This runs in the background after returning response to user
+    // Ideas are validated through Stream A (Cross-Domain), Stream B (Tech Combinations),
+    // and Stream C (Validation Layer) before being persisted to the idea bank
+    const funnelInput: IdeaFunnelInput = {
+      source: 'drafting_pipeline',
+      invention: {
+        title: title || 'Untitled Invention',
+        abstract: (session?.ideaRecord as any)?.abstract || '',
+        claims: claimsText || '',
+        features: Array.isArray(frozenClaims) ? frozenClaims.map((c: any) => c.text || '').filter(Boolean) : [],
+        searchQuery: query || ''
+      },
+      priorArtAnalysis: allDecisions
+        .filter(d => d.pn && d.relevance >= 0.3) // Only include relevant patents with valid PN
+        .map(d => ({
+          pn: d.pn || '',
+          title: d.title || 'Untitled Patent',
+          relevance: typeof d.relevance === 'number' ? d.relevance : 0.5,
+          novelty_threat: d.novelty_threat || 'adjacent',
           summary: d.summary || '',
-          relevant_parts: [],
-          irrelevant_parts: [],
-          novelty_comparison: ''
-        }
-      } as PriorArtAnalysisItem)),
-    userId: user.id,
-    patentId,
-    sessionId,
-    runId: useRunId,
-    requestHeaders
-  }
+          detailedAnalysis: d.detailedAnalysis || {
+            summary: d.summary || '',
+            relevant_parts: [],
+            irrelevant_parts: [],
+            novelty_comparison: ''
+          }
+        } as PriorArtAnalysisItem)),
+      userId: user.id,
+      patentId,
+      sessionId,
+      runId: useRunId,
+      requestHeaders
+    }
 
-  // Fire and forget - don't await
-  console.log('[Prior Art Review] Triggering Idea Bank Funnel asynchronously...')
-  ideaBankFunnel.processIdeasAsync(funnelInput).catch(err => {
-    console.error('[Prior Art Review] Idea Bank Funnel failed:', err)
-  })
+    // Fire and forget - don't await
+    console.log('[Prior Art Review] Triggering Idea Bank Funnel asynchronously...')
+    ideaBankFunnel.processIdeasAsync(funnelInput).catch(err => {
+      console.error('[Prior Art Review] Idea Bank Funnel failed:', err)
+    })
+  } else {
+    console.log('[Prior Art Review] Idea Bank Funnel disabled; skipping idea generation.')
+  }
 
   return NextResponse.json(response)
 }
@@ -4579,9 +4591,13 @@ const structuredClaimsToHtml = (claims: any[] | undefined | null): string => {
   if (!Array.isArray(claims)) return ''
   return claims.map((c: any) => {
     const num = typeof c.number === 'number' || typeof c.number === 'string' ? c.number : ''
-    const typeLabel = c.type === 'dependent' && c.dependsOn ? `(Claim ${c.dependsOn})` : `(${c.category || 'independent'})`
-    return `<p><strong>${num}.</strong> ${c.text || ''}${typeLabel ? ` ${typeLabel}` : ''}</p>`
+    return `<p><strong>${num}.</strong> ${stripTrailingClaimDependencyLabel(c.text || '')}</p>`
   }).join('\n')
+}
+
+const sanitizeClaimsHtml = (claims?: string | null): string => {
+  if (!claims) return ''
+  return stripTrailingClaimDependencyLabelsFromHtml(String(claims))
 }
 
 const htmlToPlainText = (html?: string | null): string => {
@@ -4607,9 +4623,11 @@ const normalizeClaimsForSession = (normalized: Record<string, any> = {}) => {
 
 const getWorkingClaims = (normalized: Record<string, any> = {}) => {
   const structured = normalized.claimsStructured || normalized.claimsStructuredFinal || normalized.claimsStructuredProvisional || []
-  const html = normalized.claims || normalized.claimsFinal || normalized.claimsProvisional || structuredClaimsToHtml(structured)
+  const html = sanitizeClaimsHtml(normalized.claims || normalized.claimsFinal || normalized.claimsProvisional) || structuredClaimsToHtml(structured)
   return { structured, html }
 }
+
+const CLAIMS_RESET_BLOCKED_DOWNSTREAM_ERROR = 'Claims cannot be reset after downstream stages have started. You can unfreeze or edit claims instead.'
 
 async function handleGenerateClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const { 
@@ -5017,7 +5035,7 @@ async function handleSaveClaims(user: any, patentId: string, data: any) {
   }
 
   // Update claims in normalizedData
-  const nextClaims = claims || existingNormalized.claims
+  const nextClaims = sanitizeClaimsHtml(claims || existingNormalized.claims)
   const nextStructured = claimsStructured || existingNormalized.claimsStructured
   const updatedNormalized: Record<string, any> = {
     ...existingNormalized,
@@ -5038,6 +5056,75 @@ async function handleSaveClaims(user: any, patentId: string, data: any) {
   })
 
   return NextResponse.json({ success: true, savedAt: updatedNormalized.claimsLastSavedAt })
+}
+
+async function handleResetClaims(user: any, patentId: string, data: any) {
+  const { sessionId } = data
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { ideaRecord: true }
+  })
+
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  if (!session.ideaRecord) {
+    return NextResponse.json({ error: 'Idea record not found for this session' }, { status: 404 })
+  }
+
+  const existingNormalized = (session.ideaRecord.normalizedData as any) || {}
+  const [
+    relatedArtRunCount,
+    relatedArtSelectionCount,
+    referenceMapCount,
+    figurePlanCount,
+    annexureDraftCount,
+  ] = await Promise.all([
+    prisma.relatedArtRun.count({ where: { sessionId } }),
+    prisma.relatedArtSelection.count({ where: { sessionId } }),
+    prisma.referenceMap.count({ where: { sessionId } }),
+    prisma.figurePlan.count({ where: { sessionId } }),
+    prisma.annexureDraft.count({ where: { sessionId } }),
+  ])
+
+  const downstreamStarted = shouldBlockPreliminaryClaimReset({
+    status: session.status,
+    normalizedData: existingNormalized,
+    relatedArtRunCount,
+    relatedArtSelectionCount,
+    referenceMapCount,
+    figurePlanCount,
+    annexureDraftCount,
+  })
+
+  if (downstreamStarted) {
+    return NextResponse.json({
+      error: CLAIMS_RESET_BLOCKED_DOWNSTREAM_ERROR,
+      code: 'CLAIMS_RESET_BLOCKED_DOWNSTREAM'
+    }, { status: 400 })
+  }
+
+  const resetAt = new Date().toISOString()
+  const resetNormalized = resetPreliminaryClaimFields(existingNormalized)
+
+  await prisma.$transaction([
+    prisma.ideaRecord.update({
+      where: { sessionId },
+      data: { normalizedData: resetNormalized }
+    }),
+    prisma.draftingSession.update({
+      where: { id: sessionId },
+      data: { patentTypeFrozenAt: null } as any
+    })
+  ])
+
+  return NextResponse.json({ success: true, resetAt })
 }
 
 async function handleFreezeClaims(user: any, patentId: string, data: any) {
@@ -5063,7 +5150,7 @@ async function handleFreezeClaims(user: any, patentId: string, data: any) {
   const patentTypePrimary = (session as any).patentTypePrimary
   
   // Validate claims content
-  const claimsContent = claims || existingNormalized.claims || existingNormalized.claimsFinal || existingNormalized.claimsProvisional
+  const claimsContent = sanitizeClaimsHtml(claims || existingNormalized.claims || existingNormalized.claimsFinal || existingNormalized.claimsProvisional)
   if (!claimsContent || (typeof claimsContent === 'string' && claimsContent.trim() === '')) {
     return NextResponse.json({ error: 'Cannot freeze empty claims' }, { status: 400 })
   }
@@ -5459,7 +5546,7 @@ Return ONLY valid JSON:
 }
 
 async function handleClaimRefinementApply(user: any, patentId: string, data: any) {
-  const { sessionId, acceptedClaimNumbers } = data
+  const { sessionId, acceptedClaimNumbers, acceptAll: requestedAcceptAll } = data
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
 
   const session = await prisma.draftingSession.findFirst({
@@ -5493,7 +5580,7 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
       ? acceptedClaimNumbers.map((n: any) => Number(n))
       : []
   )
-  const acceptAll = acceptedSet.size === 0
+  const acceptAll = requestedAcceptAll === true || !Array.isArray(acceptedClaimNumbers)
 
   const merged = workingStructured.map((c: any) => {
     const match = preview.refinedClaims.find((r: any) => Number(r.number) === Number(c.number))
@@ -5875,8 +5962,14 @@ async function handleSetStage(user: any, patentId: string, data: any) {
   // Check if claim refinement is being skipped in THIS request
   const isSkippingPriorArt = !!(skipPriorArt || useInitialClaimsForDrafting || priorArtSkipped)
   const isSkippingClaimRefinement = !!(data.claimRefinementSkipped || data.priorArtConfig?.skippedClaimRefinement || claimRefinementSkipped)
+  const currentIdx = stageFlow.indexOf(currentStage)
+  const targetIdx = stageFlow.indexOf(stage)
+  const isKnownStagePair = currentIdx !== -1 && targetIdx !== -1
+  const isBackwardNavigation = isKnownStagePair && targetIdx < currentIdx
 
   if (stage === currentStage) {
+    allowed = true
+  } else if (isBackwardNavigation) {
     allowed = true
   } else if (currentStage === 'IDEA_ENTRY') {
     if (stage === 'PRELIMINARY_CLAIMS') {
@@ -5930,25 +6023,17 @@ async function handleSetStage(user: any, patentId: string, data: any) {
       // Always allow forward progression
       allowed = true
     } else {
-      const currentIdx = stageFlow.indexOf(currentStage)
-      const targetIdx = stageFlow.indexOf(stage)
       allowed = currentIdx !== -1 && targetIdx !== -1
     }
   } else if (currentStage === 'FIGURE_PLANNER') {
     // From FIGURE_PLANNER: allow back to any previous stage or forward to ANNEXURE_DRAFT
-    const currentIdx = stageFlow.indexOf(currentStage)
-    const targetIdx = stageFlow.indexOf(stage)
     // Allow any valid stage transition (forward or backward)
     allowed = currentIdx !== -1 && targetIdx !== -1
   } else if (currentStage === 'ANNEXURE_DRAFT') {
     // From ANNEXURE_DRAFT: allow back to any previous stage or forward to COMPLETED
-    const currentIdx = stageFlow.indexOf(currentStage)
-    const targetIdx = stageFlow.indexOf(stage)
     // Allow any valid stage transition (forward or backward)
     allowed = currentIdx !== -1 && targetIdx !== -1
   } else {
-    const currentIdx = stageFlow.indexOf(currentStage)
-    const targetIdx = stageFlow.indexOf(stage)
     // Allow any valid stage transition
     allowed = currentIdx !== -1 && targetIdx !== -1
   }
@@ -6652,7 +6737,7 @@ async function handleValidateComponentPlanLLM(user: any, patentId: string, data:
   }
 
   const claimsStructured = normalized.claimsStructuredFinal || normalized.claimsStructured || normalized.claimsStructuredProvisional || []
-  const claimsHtml = normalized.claimsFinal || normalized.claims || normalized.claimsProvisional || structuredClaimsToHtml(claimsStructured)
+  const claimsHtml = sanitizeClaimsHtml(normalized.claimsFinal || normalized.claims || normalized.claimsProvisional) || structuredClaimsToHtml(claimsStructured)
   const claimsPlain = htmlToPlainText(claimsHtml)
 
   if (!claimsPlain) {

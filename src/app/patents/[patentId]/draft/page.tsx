@@ -1,12 +1,13 @@
 'use client'
 
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { PageLoadingBird } from '@/components/ui/loading-bird'
+import { getStageNavigationPath } from '@/lib/stage-navigation-path'
 
 // Stage components
 import IdeaEntryStage from '@/components/drafting/IdeaEntryStage'
@@ -140,6 +141,7 @@ export default function PatentDraftingPage() {
     quotaInfo?: { remainingDaily: number | null; remainingMonthly: number | null; source: string }
   } | null>(null)
   const [navNotice, setNavNotice] = useState<string | null>(null)
+  const stageNavigationInFlightRef = useRef(false)
 
   const resumeSession = useCallback(async () => {
     try {
@@ -381,6 +383,7 @@ export default function PatentDraftingPage() {
         // of only setting a page-level error. This lets the active stage show the actionable message.
         const componentOwnedErrorActions = [
           'generate_claims',
+          'reset_claims',
           'claim_refinement_preview',
           'generate_sections',
           'update_persona_config',
@@ -602,32 +605,31 @@ export default function PatentDraftingPage() {
 
   // Handler for stage navigation from sidebar
   const handleNavigateToStage = async (stageKey: string) => {
-    if (!session) return
+    if (!session || stageNavigationInFlightRef.current) return
 
     const targetStage = normalizeStage(stageKey)
     const current = getCurrentStage()
     if (targetStage === current) return
 
     const order = getVisibleStageOrder()
-    const currentIndex = order.indexOf(current as keyof typeof STAGE_COMPONENTS)
-    const targetIndex = order.indexOf(targetStage as keyof typeof STAGE_COMPONENTS)
 
-    // The API enforces some sequential transitions from early stages. When the
-    // sidebar jumps forward multiple stages, walk through the visible path so
-    // clicking a later stage behaves like repeated Next clicks.
-    const stagesToVisit =
-      currentIndex !== -1 && targetIndex !== -1 && targetIndex > currentIndex + 1
-        ? order.slice(currentIndex + 1, targetIndex + 1)
-        : [targetStage]
+    // Walk through the visible path so a sidebar click behaves like repeated
+    // arrow navigation instead of depending on direct transition pairs.
+    const stagesToVisit = getStageNavigationPath(order, current as keyof typeof STAGE_COMPONENTS, targetStage)
 
     setNavNotice(null)
-    for (const nextStage of stagesToVisit) {
-      const result = await handleStageComplete({
-        action: 'set_stage',
-        sessionId: session.id,
-        stage: nextStage
-      })
-      if (!result) break
+    stageNavigationInFlightRef.current = true
+    try {
+      for (const nextStage of stagesToVisit) {
+        const result = await handleStageComplete({
+          action: 'set_stage',
+          sessionId: session.id,
+          stage: nextStage
+        })
+        if (!result) break
+      }
+    } finally {
+      stageNavigationInFlightRef.current = false
     }
   }
 

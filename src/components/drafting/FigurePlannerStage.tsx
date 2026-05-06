@@ -2052,6 +2052,35 @@ Now output the JSON array.`
     }
   }
 
+  const handleDownloadFigureImage = async (imageUrl: string | null, figureNo: number, language?: string) => {
+    if (!imageUrl) return
+    try {
+      setError(null)
+      const headers: HeadersInit = imageUrl.startsWith('blob:')
+        ? {}
+        : { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+      const resp = await fetch(imageUrl, { headers })
+      if (!resp.ok) throw new Error('Failed to download image')
+
+      const blob = await resp.blob()
+      const mime = blob.type || resp.headers.get('content-type') || 'image/png'
+      const extension = mime.includes('svg') ? 'svg' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png'
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `figure-${figureNo}-${language || 'en'}.${extension}`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => {
+        try { URL.revokeObjectURL(url) } catch {}
+      }, 1000)
+    } catch (e) {
+      console.error('Figure image download failed:', e)
+      setError(e instanceof Error ? e.message : 'Unable to download image')
+    }
+  }
+
   const handleSkipFigures = async () => {
     if (!session?.id) return
     try {
@@ -2687,7 +2716,7 @@ Now output the JSON array.`
                   )
                 })()}
 
-                <div className="p-3 bg-white border-t grid grid-cols-3 gap-2">
+                <div className="p-3 bg-white border-t grid grid-cols-4 gap-2">
                   <Button variant="ghost" size="sm" className="w-full" onClick={() => { setModifyFigNo(figNo); setModifyTextSaved('') }}>
                     <Edit2 className="w-4 h-4 mr-2" /> Modify
                   </Button>
@@ -2703,6 +2732,17 @@ Now output the JSON array.`
                     title="Translate diagram labels to another language"
                   >
                     <Languages className="w-4 h-4 mr-2" /> Translate
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-slate-600 hover:text-slate-800 hover:bg-slate-50"
+                    // @ts-ignore
+                    onClick={() => handleDownloadFigureImage(displayUrl, figNo, selectedLang as any)}
+                    disabled={!displayUrl}
+                    title="Download rendered figure image"
+                  >
+                    <Download className="w-4 h-4 mr-2" /> Download
                   </Button>
                   <Button variant="ghost" size="sm" className="w-full text-red-600 hover:text-red-700 hover:bg-red-50" 
                     onClick={async () => {
@@ -2726,7 +2766,7 @@ Now output the JSON array.`
                   </Button>
                   
                   {selectedSource.plantumlCode && (
-                    <div className="col-span-2">
+                    <div className="col-span-4">
                         <Button 
                           variant="ghost" 
                           size="sm" 
@@ -3822,25 +3862,25 @@ Now output the JSON array.`
                         </p>
 
                         {/* Actions */}
-                        <div className="flex items-center gap-1 mt-2">
+                        <div className="flex items-center gap-2 mt-2">
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 w-8 p-0"
+                            className="h-10 w-10 p-0"
                             onClick={() => handleToggleFavorite(sketch.id)}
                             title="Toggle favorite"
                           >
                             {sketch.isFavorite ? (
-                              <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
+                              <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
                             ) : (
-                              <StarOff className="w-4 h-4 text-gray-400" />
+                              <StarOff className="w-5 h-5 text-gray-400" />
                             )}
                           </Button>
                           {/* Edit Image button */}
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 w-8 p-0"
+                            className="h-10 w-10 p-0"
                             onClick={() => {
                               if (sketchImageUrl) {
                                 openImageEditor('sketch', sketch.id, sketchImageUrl, sketch.title, sketch.originalImagePath)
@@ -3849,12 +3889,12 @@ Now output the JSON array.`
                             disabled={!sketchImageUrl || sketch.status !== 'SUCCESS'}
                             title="Edit image in miniPaint"
                           >
-                            <Paintbrush className={`w-4 h-4 ${sketchImageUrl && sketch.status === 'SUCCESS' ? 'text-indigo-500' : 'text-gray-300'}`} />
+                            <Paintbrush className={`w-5 h-5 ${sketchImageUrl && sketch.status === 'SUCCESS' ? 'text-indigo-500' : 'text-gray-300'}`} />
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 w-8 p-0"
+                            className="h-10 w-10 p-0"
                             onClick={() => {
                               setModifyingSketchId(sketch.id)
                               setModifySketchPrompt('')
@@ -3862,16 +3902,16 @@ Now output the JSON array.`
                             disabled={sketch.status !== 'SUCCESS'}
                             title="Modify with AI"
                           >
-                            <Edit2 className="w-4 h-4 text-gray-400" />
+                            <Edit2 className="w-5 h-5 text-gray-400" />
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 w-8 p-0"
+                            className="h-10 w-10 p-0"
                             onClick={() => handleDeleteSketch(sketch.id)}
                             title="Delete sketch"
                           >
-                            <Trash2 className="w-4 h-4 text-gray-400" />
+                            <Trash2 className="w-5 h-5 text-gray-400" />
                           </Button>
                         </div>
                       </CardContent>

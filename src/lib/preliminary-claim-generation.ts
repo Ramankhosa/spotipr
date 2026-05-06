@@ -35,6 +35,63 @@ export type PreliminaryClaimGenerationQuality = {
   source: 'static' | 'llm_and_static'
 }
 
+export const PRELIMINARY_CLAIM_RESET_KEYS = [
+  'claims',
+  'claimsStructured',
+  'claimsProvisional',
+  'claimsStructuredProvisional',
+  'claimsFinal',
+  'claimsStructuredFinal',
+  'claimsApprovedAt',
+  'claimsApprovedBy',
+  'claimsGeneratedAt',
+  'claimsLastSavedAt',
+  'claimsJurisdiction',
+  'claimGenerationQuality',
+  'claimsRefinementPreview',
+  'claimsRefinementApplied',
+  'claimsRefinementNotes',
+  'claimsRefinementSource',
+] as const
+
+export function resetPreliminaryClaimFields(normalizedData: Record<string, any> | null | undefined): Record<string, any> {
+  const next = { ...(normalizedData || {}) }
+  PRELIMINARY_CLAIM_RESET_KEYS.forEach((key) => {
+    delete next[key]
+  })
+  return next
+}
+
+export type PreliminaryClaimResetBlockInput = {
+  status?: string | null
+  normalizedData?: Record<string, any> | null
+  relatedArtRunCount?: number
+  relatedArtSelectionCount?: number
+  referenceMapCount?: number
+  figurePlanCount?: number
+  annexureDraftCount?: number
+}
+
+export function shouldBlockPreliminaryClaimReset(input: PreliminaryClaimResetBlockInput): boolean {
+  const normalized = input.normalizedData || {}
+  const hasClaimRefinementMetadata = [
+    'claimsRefinementPreview',
+    'claimsRefinementApplied',
+    'claimsRefinementNotes',
+    'claimsRefinementSource',
+  ].some((key) => normalized[key] !== undefined && normalized[key] !== null)
+
+  return (
+    input.status !== 'PRELIMINARY_CLAIMS' ||
+    (input.relatedArtRunCount || 0) > 0 ||
+    (input.relatedArtSelectionCount || 0) > 0 ||
+    (input.referenceMapCount || 0) > 0 ||
+    (input.figurePlanCount || 0) > 0 ||
+    (input.annexureDraftCount || 0) > 0 ||
+    hasClaimRefinementMetadata
+  )
+}
+
 type PreliminaryClaimContext = {
   title?: string
   rawIdea?: string
