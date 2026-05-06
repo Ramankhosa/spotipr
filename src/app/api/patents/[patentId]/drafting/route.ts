@@ -71,7 +71,9 @@ import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
 import {
   buildFigureScopePromptBlock,
   coerceScopeRecommendations,
-  filterComponentsByScopeForFigures
+  componentsFromFrozenClaimsAndStage0,
+  filterComponentsByScopeForFigures,
+  scopeElementKey
 } from '@/lib/scope-recommendations'
 import {
   areFiguresSkipped,
@@ -776,6 +778,9 @@ export async function POST(
 
       case 'update_component_map':
         return await handleUpdateComponentMap(authResult.user, patentId, data);
+
+      case 'validate_component_plan_llm':
+        return await handleValidateComponentPlanLLM(authResult.user, patentId, data, requestHeaders);
 
       case 'update_figure_plan':
         return await handleUpdateFigurePlan(authResult.user, patentId, data);
@@ -6618,6 +6623,228 @@ async function handleUpdateComponentMap(user: any, patentId: string, data: any) 
       newStyle: validation.numberingStyle
     } : {})
   });
+}
+
+async function handleValidateComponentPlanLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const { sessionId, components = [] } = data
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { ideaRecord: true, referenceMap: true }
+  })
+
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  const normalized = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
+  const stage0Components = Array.isArray(normalized.components)
+    ? normalized.components
+    : Array.isArray((session.ideaRecord as any)?.components)
+      ? (session.ideaRecord as any).components
+      : []
+
+  if (!stage0Components.length) {
+    return NextResponse.json({ error: 'No Stage 0 components are available to review.' }, { status: 400 })
+  }
+
+  const claimsStructured = normalized.claimsStructuredFinal || normalized.claimsStructured || normalized.claimsStructuredProvisional || []
+  const claimsHtml = normalized.claimsFinal || normalized.claims || normalized.claimsProvisional || structuredClaimsToHtml(claimsStructured)
+  const claimsPlain = htmlToPlainText(claimsHtml)
+
+  if (!claimsPlain) {
+    return NextResponse.json({ error: 'Claims are required before AI component validation.' }, { status: 400 })
+  }
+
+  const currentComponents = Array.isArray(components) && components.length
+    ? components
+    : extractComponentsArray(session.referenceMap)
+  const currentKeys = new Set(
+    (Array.isArray(currentComponents) ? currentComponents : [])
+      .map((component: any) => scopeElementKey(component?.name || component?.title || component?.label))
+      .filter(Boolean)
+  )
+
+  const deterministicSeeds = componentsFromFrozenClaimsAndStage0({
+    normalizedComponents: stage0Components,
+    scopeRecommendations: normalized.scopeRecommendations,
+    claims: claimsStructured,
+    claimsText: claimsHtml,
+  })
+  const deterministicSupportByIndex = new Map<number, any>()
+  deterministicSeeds.forEach((component: any) => {
+    const index = component?.claimSupport?.stage0ComponentIndex
+    if (Number.isInteger(index)) deterministicSupportByIndex.set(index, component.claimSupport)
+  })
+
+  const stage0List = stage0Components
+    .map((component: any, index: number) => {
+      const fields = [
+        `index=${index}`,
+        `name=${component?.name || component?.title || component?.label || 'Untitled component'}`,
+        component?.description ? `description=${String(component.description).slice(0, 300)}` : '',
+        component?.parent ? `parent=${component.parent}` : '',
+        component?.type ? `type=${component.type}` : '',
+      ].filter(Boolean)
+      return `- ${fields.join(' | ')}`
+    })
+    .join('\n')
+
+  const currentList = currentComponents.length
+    ? currentComponents
+        .map((component: any, index: number) => `- currentIndex=${index} | name=${component?.name || component?.title || component?.label || 'Untitled component'}${component?.referenceLabel || component?.numeral ? ` | ref=${component.referenceLabel || component.numeral}` : ''}`)
+        .join('\n')
+    : '- No current planner components.'
+
+  const prompt = `You are a patent component-planning reviewer.
+Use ONLY the Stage 0 component list below as the source of components. Do not invent components.
+Compare the frozen/current claims with the current Component Planning list.
+Return JSON only.
+
+TASK:
+1. Identify Stage 0 components that are relevant to the claims but missing from the current Component Planning list.
+2. Flag claim terms that appear to need a component but cannot be mapped to any Stage 0 component.
+3. Do not suggest ranges, conditions, use cases, environments, pure data fields, or unsupported abstractions as components.
+4. If a currently missing item is not in Stage 0, put it in missingClaimTerms instead of creating a component.
+
+OUTPUT JSON SHAPE:
+{
+  "summary": "short review summary",
+  "addStage0ComponentIndexes": [
+    {
+      "index": 0,
+      "matchedClaims": [1],
+      "claimRole": "claim_1",
+      "confidence": "high",
+      "matchedText": "claim phrase or component name",
+      "reason": "why this Stage 0 component should be added"
+    }
+  ],
+  "missingClaimTerms": [
+    {
+      "term": "claim term not found in Stage 0 components",
+      "claimNumbers": [1],
+      "reason": "why manual review may be needed"
+    }
+  ],
+  "warnings": []
+}
+
+Allowed claimRole values: claim_1, dependent_claim.
+Allowed confidence values: high, medium, low.
+Use zero-based Stage 0 indexes exactly as listed. If no additions are needed, return an empty addStage0ComponentIndexes array.
+
+CLAIMS:
+${claimsStructured.length ? JSON.stringify(claimsStructured, null, 2).slice(0, 6000) : claimsPlain.slice(0, 6000)}
+
+CURRENT COMPONENT PLANNING LIST:
+${currentList}
+
+STAGE 0 COMPONENT LIST:
+${stage0List}`
+
+  const result = await llmGateway.executeLLMOperation({ headers: requestHeaders || {} }, {
+    taskCode: 'LLM3_DIAGRAM',
+    stageCode: 'DRAFT_DIAGRAM_GENERATION',
+    prompt,
+    idempotencyKey: crypto.randomUUID(),
+    inputTokens: 6000,
+    parameters: {
+      maxOutputTokens: 3000
+    },
+    metadata: {
+      patentId,
+      sessionId,
+      purpose: 'validate_component_plan_llm'
+    }
+  })
+
+  if (!result.success || !result.response) {
+    return NextResponse.json({ error: result.error?.message || 'AI component validation failed' }, { status: 400 })
+  }
+
+  let review: any
+  try {
+    const text = String(result.response.output || '').trim()
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start === -1 || end === -1 || end <= start) throw new Error('No JSON object found')
+    review = JSON.parse(text.substring(start, end + 1))
+  } catch (error) {
+    console.error('[ComponentPlanLLM] Failed to parse response:', error)
+    return NextResponse.json({ error: 'AI component validation returned an invalid format.' }, { status: 400 })
+  }
+
+  const reviewedAt = new Date().toISOString()
+  const suggestions = (Array.isArray(review?.addStage0ComponentIndexes) ? review.addStage0ComponentIndexes : [])
+    .map((item: any) => ({
+      ...item,
+      index: Number.isInteger(item?.index) ? item.index : Number.isInteger(item?.stage0Index) ? item.stage0Index : Number(item?.index)
+    }))
+    .filter((item: any) => Number.isInteger(item.index) && item.index >= 0 && item.index < stage0Components.length)
+    .filter((item: any) => {
+      const component = stage0Components[item.index]
+      const key = scopeElementKey(component?.name || component?.title || component?.label)
+      return key && !currentKeys.has(key)
+    })
+    .map((item: any) => {
+      const component = stage0Components[item.index]
+      const matchedClaims = Array.isArray(item.matchedClaims)
+        ? item.matchedClaims.map((value: any) => Number(value)).filter((value: number) => Number.isFinite(value) && value > 0)
+        : []
+      const baseSupport = deterministicSupportByIndex.get(item.index) || {}
+      return {
+        ...component,
+        sequence: typeof component?.sequence === 'number' ? component.sequence : item.index + 1,
+        claimSupport: {
+          ...baseSupport,
+          source: 'frozen_claims',
+          basis: baseSupport.basis || 'stage0_component_claim_match',
+          matchedClaims: matchedClaims.length ? matchedClaims : baseSupport.matchedClaims || [],
+          claimRole: item.claimRole === 'claim_1' ? 'claim_1' : 'dependent_claim',
+          confidence: ['high', 'medium', 'low'].includes(item.confidence) ? item.confidence : baseSupport.confidence || 'medium',
+          matchedText: String(item.matchedText || baseSupport.matchedText || component?.name || component?.title || component?.label || ''),
+          reason: String(item.reason || baseSupport.reason || 'AI review found this Stage 0 component relevant to the claims.'),
+          stage0ComponentIndex: item.index,
+          llmScope: baseSupport.llmScope,
+          llmReview: {
+            source: 'component_planning_llm',
+            taskCode: 'LLM3_DIAGRAM',
+            stageCode: 'DRAFT_DIAGRAM_GENERATION',
+            reviewedAt,
+            reason: String(item.reason || 'AI component-plan validation suggested this Stage 0 component.')
+          }
+        }
+      }
+    })
+
+  const missingClaimTerms = Array.isArray(review?.missingClaimTerms)
+    ? review.missingClaimTerms.slice(0, 20).map((item: any) => ({
+        term: String(item?.term || '').trim(),
+        claimNumbers: Array.isArray(item?.claimNumbers)
+          ? item.claimNumbers.map((value: any) => Number(value)).filter((value: number) => Number.isFinite(value) && value > 0)
+          : [],
+        reason: String(item?.reason || '').trim()
+      })).filter((item: any) => item.term)
+    : []
+
+  const warnings = Array.isArray(review?.warnings)
+    ? review.warnings.map((warning: any) => String(warning || '').trim()).filter(Boolean).slice(0, 20)
+    : []
+
+  return NextResponse.json({
+    summary: String(review?.summary || '').trim(),
+    suggestedComponents: suggestions,
+    missingClaimTerms,
+    warnings,
+    llmControl: {
+      taskCode: 'LLM3_DIAGRAM',
+      stageCode: 'DRAFT_DIAGRAM_GENERATION'
+    }
+  })
 }
 
 async function handleSkipFigures(user: any, patentId: string, data: any) {

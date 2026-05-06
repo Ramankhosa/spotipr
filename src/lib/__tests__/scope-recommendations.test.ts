@@ -3,6 +3,7 @@ import {
   buildClaimScopePromptBlock,
   buildFigureScopePromptBlock,
   coerceScopeRecommendations,
+  componentsFromFrozenClaimsAndStage0,
   componentsFromScopeRecommendations,
   filterComponentsByScopeForFigures,
   filterComponentsByScopeForNumbering,
@@ -107,6 +108,43 @@ describe('scope recommendations helpers', () => {
     const scope = coerceScopeRecommendations(rawScope)!
 
     expect(componentsFromScopeRecommendations(scope).map(component => component.name)).toEqual(['moisture sensor'])
+  })
+
+  test('builds component planner seeds from frozen claims using Stage 0 components only', () => {
+    const scope = coerceScopeRecommendations(rawScope)!
+    const components = [
+      { name: 'moisture sensor', description: 'Sensor that detects soil moisture.' },
+      { name: 'valve driver', description: 'Drives an irrigation valve.' },
+    ]
+
+    const seeds = componentsFromFrozenClaimsAndStage0({
+      normalizedComponents: components,
+      scopeRecommendations: scope,
+      claims: [
+        {
+          number: 1,
+          type: 'independent',
+          text: 'A system comprising a moisture sensor configured to detect soil moisture and a controller.',
+        },
+      ],
+    })
+
+    expect(seeds.map(component => component.name)).toEqual(['moisture sensor'])
+    expect(seeds[0].claimSupport).toMatchObject({
+      source: 'frozen_claims',
+      matchedClaims: [1],
+      claimRole: 'claim_1',
+    })
+  })
+
+  test('does not create planner components from claim text absent from Stage 0', () => {
+    const seeds = componentsFromFrozenClaimsAndStage0({
+      normalizedComponents: [{ name: 'moisture sensor' }],
+      scopeRecommendations: coerceScopeRecommendations(rawScope),
+      claimsText: '1. A system comprising a moisture sensor and a controller.',
+    })
+
+    expect(seeds.map(component => component.name)).toEqual(['moisture sensor'])
   })
 
   test('uses source component titles when scope labels are claim-like descriptions', () => {

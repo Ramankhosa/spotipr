@@ -34,6 +34,7 @@ import {
 } from '@/lib/source-fact-ledger';
 import {
   coerceScopeRecommendations,
+  type ClaimSupportMetadata,
   type ScopeRecommendations,
 } from '@/lib/scope-recommendations';
 import {
@@ -208,9 +209,11 @@ export interface ProcessedComponent {
   range?: string;             // Only for NUMERIC_BUCKET
   parentId?: string;
   sequence?: number;          // Explicit ordering (for PROCESS/COMPOSITION)
+  sourceType?: string;
   sourceScopeId?: string;
   sourceRefs?: string[];
   scopeLabel?: string;
+  claimSupport?: ClaimSupportMetadata;
 }
 
 export interface ComponentValidationResult {
@@ -3308,6 +3311,7 @@ Use the Super Admin panel to add the missing prompt.
         numeral: parsedNumeral,
         type: componentType || 'OTHER',
         sequence: typeof comp.sequence === 'number' ? comp.sequence : undefined,
+        sourceType: typeof (comp as any).sourceType === 'string' ? (comp as any).sourceType : undefined,
         sourceScopeId: typeof (comp as any).sourceScopeId === 'string'
           ? (comp as any).sourceScopeId
           : typeof (comp as any).scopeRecommendationId === 'string'
@@ -3317,6 +3321,9 @@ Use the Super Admin panel to add the missing prompt.
           ? (comp as any).sourceRefs.filter((ref: any) => typeof ref === 'string')
           : undefined,
         scopeLabel: typeof (comp as any).scopeLabel === 'string' ? (comp as any).scopeLabel : undefined,
+        claimSupport: (comp as any).claimSupport && typeof (comp as any).claimSupport === 'object' && !Array.isArray((comp as any).claimSupport)
+          ? (comp as any).claimSupport
+          : undefined,
         children: []
       };
     }
@@ -3429,9 +3436,11 @@ Use the Super Admin panel to add the missing prompt.
           range: `${Math.floor(n.numeral / 100) * 100}s`,
           parentId: n.parentId || undefined,
           sequence: n.sequence,
+          sourceType: n.sourceType,
           sourceScopeId: n.sourceScopeId,
           sourceRefs: n.sourceRefs,
-          scopeLabel: n.scopeLabel
+          scopeLabel: n.scopeLabel,
+          claimSupport: n.claimSupport
         });
         n.children?.forEach((c: any) => collect(c));
       };
@@ -3462,9 +3471,11 @@ Use the Super Admin panel to add the missing prompt.
           range: undefined,
           parentId: n.parentId || undefined,
           sequence: idx + 1,
+          sourceType: n.sourceType,
           sourceScopeId: n.sourceScopeId,
           sourceRefs: n.sourceRefs,
-          scopeLabel: n.scopeLabel
+          scopeLabel: n.scopeLabel,
+          claimSupport: n.claimSupport
         });
       });
 
@@ -3525,9 +3536,11 @@ Use the Super Admin panel to add the missing prompt.
           range: undefined,
           parentId: n.parentId || undefined,
           sequence: idx + 1,
+          sourceType: n.sourceType,
           sourceScopeId: n.sourceScopeId,
           sourceRefs: n.sourceRefs,
-          scopeLabel: n.scopeLabel
+          scopeLabel: n.scopeLabel,
+          claimSupport: n.claimSupport
         });
       });
     }

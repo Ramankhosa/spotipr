@@ -54,6 +54,15 @@ function safeJsonParse<T>(value: unknown, fallback: T): T {
   }
 }
 
+function extractReferenceMapComponents(value: unknown): any[] {
+  const parsed = typeof value === 'string' ? safeJsonParse<any>(value, null) : value
+  if (Array.isArray(parsed)) return parsed
+  if (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).components)) {
+    return (parsed as any).components
+  }
+  return []
+}
+
 export interface SubStageDefinition {
   key: string
   label: string
@@ -360,8 +369,8 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         getStatus: (session) => {
           const components = session?.referenceMap?.components
           if (!components) return 'pending'
-          const parsed = typeof components === 'string' ? safeJsonParse<any[]>(components, []) : components
-          return Array.isArray(parsed) && parsed.length > 0 ? 'completed' : 'pending'
+          const parsed = extractReferenceMapComponents(components)
+          return parsed.length > 0 ? 'completed' : 'pending'
         }
       },
       {
@@ -373,9 +382,9 @@ export const STAGE_DEFINITIONS: StageDefinition[] = [
         getStatus: (session) => {
           const components = session?.referenceMap?.components
           if (!components) return 'pending'
-          const parsed = typeof components === 'string' ? safeJsonParse<any[]>(components, []) : components
-          if (!Array.isArray(parsed) || parsed.length === 0) return 'pending'
-          const allHaveNumerals = parsed.every((c: any) => c.numeral !== undefined && c.numeral !== null)
+          const parsed = extractReferenceMapComponents(components)
+          if (parsed.length === 0) return 'pending'
+          const allHaveNumerals = parsed.every((c: any) => c.referenceLabel || (c.numeral !== undefined && c.numeral !== null))
           return allHaveNumerals ? 'completed' : 'in_progress'
         }
       },

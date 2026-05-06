@@ -50,6 +50,42 @@ export type FigureScopeFilterResult<T = any> = {
   optionalLabels: string[]
 }
 
+export type ClaimSupportMetadata = {
+  source: 'frozen_claims'
+  basis: 'stage0_component_claim_match' | 'stage0_scope_claim_match'
+  matchedClaims: number[]
+  claimRole: Extract<ScopeClaimUse, 'claim_1' | 'dependent_claim'>
+  confidence: 'high' | 'medium' | 'low'
+  matchedText: string
+  reason: string
+  stage0ComponentIndex?: number
+  llmScope?: {
+    source: 'stage0_scopeRecommendations'
+    elementId: string
+    label: string
+    sourceType: ScopeSourceType
+    recommended: ScopeUseSelection
+    effective: ScopeUseSelection
+    reason: string
+    sourceRefs: string[]
+    generatedAt?: string
+  }
+  llmReview?: {
+    source: 'component_planning_llm'
+    taskCode: 'LLM3_DIAGRAM'
+    stageCode: 'DRAFT_DIAGRAM_GENERATION'
+    reviewedAt: string
+    reason: string
+  }
+}
+
+export type ComponentPlannerSeedOptions = {
+  normalizedComponents: any[]
+  scopeRecommendations?: unknown
+  claims?: unknown
+  claimsText?: unknown
+}
+
 const SOURCE_TYPES: ScopeSourceType[] = [
   'component', 'subcomponent', 'process_step', 'method_step',
   'constituent', 'compound', 'formulation', 'material',
@@ -162,6 +198,90 @@ function componentsFromSourceRefs(sourceRefs: string[], normalizedComponents: an
 
 function nameWithoutParenthetical(value: unknown): string {
   return clean(value).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function stripHtml(value: unknown): string {
+  return clean(String(value || '').replace(/<[^>]*>/g, ' '))
+}
+
+type NormalizedClaimRecord = {
+  number: number
+  text: string
+  type?: string
+}
+
+function normalizeClaims(claims: unknown, claimsText: unknown): NormalizedClaimRecord[] {
+  const records: NormalizedClaimRecord[] = []
+
+  if (Array.isArray(claims)) {
+    claims.forEach((claim, index) => {
+      const record = claim && typeof claim === 'object' ? claim as Record<string, any> : {}
+      const text = stripHtml(record.text || record.claim || record.content)
+      if (!text) return
+      const parsedNumber = Number(record.number)
+      records.push({
+        number: Number.isFinite(parsedNumber) && parsedNumber > 0 ? Math.floor(parsedNumber) : index + 1,
+        text,
+        type: typeof record.type === 'string' ? record.type : undefined,
+      })
+    })
+  } else if (typeof claims === 'string') {
+    return normalizeClaims(undefined, claims)
+  }
+
+  if (records.length) return records
+
+  const plainText = stripHtml(claimsText)
+  if (!plainText) return []
+
+  const matches = Array.from(plainText.matchAll(/(?:^|\s)(\d+)\.\s+([\s\S]*?)(?=\s+\d+\.\s+|$)/g))
+  if (matches.length) {
+    return matches
+      .map((match, index) => ({
+        number: Number(match[1]) || index + 1,
+        text: clean(match[2]),
+      }))
+      .filter(claim => claim.text)
+  }
+
+  return [{ number: 1, text: plainText }]
+}
+
+const GENERIC_MATCH_TOKENS = new Set([
+  'configured', 'comprising', 'comprises', 'including', 'includes', 'having',
+  'wherein', 'system', 'method', 'device', 'component', 'module', 'element',
+  'apparatus', 'process', 'composition', 'plurality', 'least', 'first', 'second',
+  'third', 'said', 'claim'
+])
+
+function claimContainsCandidate(claimText: string, candidate: unknown): { matched: boolean; confidence: 'high' | 'medium' } {
+  const claimKey = scopeElementKey(claimText)
+  const candidateKey = scopeElementKey(nameWithoutParenthetical(candidate))
+  if (!claimKey || candidateKey.length < 3) return { matched: false, confidence: 'medium' }
+
+  if (` ${claimKey} `.includes(` ${candidateKey} `)) {
+    return { matched: true, confidence: 'high' }
+  }
+
+  const tokens = candidateKey
+    .split(' ')
+    .filter(token => token.length > 3 && !GENERIC_MATCH_TOKENS.has(token))
+  if (tokens.length >= 2 && tokens.every(token => claimKey.includes(` ${token} `) || claimKey.startsWith(`${token} `) || claimKey.endsWith(` ${token}`))) {
+    return { matched: true, confidence: 'medium' }
+  }
+
+  return { matched: false, confidence: 'medium' }
+}
+
+function mergeClaimNumbers(values: number[]): number[] {
+  return Array.from(new Set(values.filter(value => Number.isFinite(value) && value > 0).map(value => Math.floor(value)))).sort((a, b) => a - b)
+}
+
+function isScopeExcludedFromComponentPlanning(element: ScopeRecommendationElement): boolean {
+  const effective = getEffectiveScopeUse(element)
+  return effective.description === 'exclude'
+    || element.sourceType === 'environment'
+    || element.sourceType === 'use_case'
 }
 
 function meaningfulParentName(value: unknown): string {
@@ -384,6 +504,131 @@ export function componentsFromScopeRecommendations(
         scopeLabel: element.label,
       }
     })
+}
+
+export function componentsFromFrozenClaimsAndStage0({
+  normalizedComponents,
+  scopeRecommendations,
+  claims,
+  claimsText,
+}: ComponentPlannerSeedOptions): any[] {
+  const stage0Components = Array.isArray(normalizedComponents) ? normalizedComponents : []
+  const claimRecords = normalizeClaims(claims, claimsText)
+  if (!stage0Components.length || !claimRecords.length) return []
+
+  const hasScope = isScopeRecommendations(scopeRecommendations)
+  const componentByLabel = buildComponentLookup(stage0Components)
+  const scopeElementsByComponentIndex = new Map<number, ScopeRecommendationElement[]>()
+
+  if (hasScope) {
+    scopeRecommendations.elements.forEach((element) => {
+      if (isScopeExcludedFromComponentPlanning(element)) return
+      const sourceComponent = sourceComponentForScopeElement(element, stage0Components, componentByLabel)
+      const sourceIndex = sourceComponent ? stage0Components.indexOf(sourceComponent) : -1
+      if (sourceIndex < 0) return
+      const entries = scopeElementsByComponentIndex.get(sourceIndex) || []
+      entries.push(element)
+      scopeElementsByComponentIndex.set(sourceIndex, entries)
+    })
+  }
+
+  return stage0Components.flatMap((component, index) => {
+    const candidateNames = unique([
+      component?.name,
+      component?.title,
+      component?.label,
+    ].map(value => clean(value)).filter(Boolean))
+
+    const scopeElements = scopeElementsByComponentIndex.get(index) || []
+    const matches: Array<{
+      claimNumber: number
+      matchedText: string
+      confidence: 'high' | 'medium'
+      basis: ClaimSupportMetadata['basis']
+      scopeElement?: ScopeRecommendationElement
+    }> = []
+
+    claimRecords.forEach((claim) => {
+      for (const name of candidateNames) {
+        const result = claimContainsCandidate(claim.text, name)
+        if (result.matched) {
+          matches.push({
+            claimNumber: claim.number,
+            matchedText: name,
+            confidence: result.confidence,
+            basis: 'stage0_component_claim_match',
+          })
+          break
+        }
+      }
+
+      scopeElements.forEach((element) => {
+        const result = claimContainsCandidate(claim.text, element.label)
+        if (!result.matched) return
+        matches.push({
+          claimNumber: claim.number,
+          matchedText: element.label,
+          confidence: result.confidence,
+          basis: 'stage0_scope_claim_match',
+          scopeElement: element,
+        })
+      })
+    })
+
+    if (!matches.length) return []
+
+    const primaryMatch = matches.find(match => match.scopeElement) || matches[0]
+    const primaryScope = primaryMatch.scopeElement || scopeElements.find(element => {
+      const effective = getEffectiveScopeUse(element)
+      return effective.claim !== 'none'
+    }) || scopeElements[0]
+    const matchedClaims = mergeClaimNumbers(matches.map(match => match.claimNumber))
+    const scopeEffective = primaryScope ? getEffectiveScopeUse(primaryScope) : undefined
+    const claimRole: ClaimSupportMetadata['claimRole'] = matchedClaims.includes(1) || scopeEffective?.claim === 'claim_1'
+      ? 'claim_1'
+      : 'dependent_claim'
+    const confidence: ClaimSupportMetadata['confidence'] = primaryMatch.confidence === 'high'
+      ? 'high'
+      : primaryScope
+        ? 'medium'
+        : 'low'
+
+    const claimSupport: ClaimSupportMetadata = {
+      source: 'frozen_claims',
+      basis: primaryMatch.basis,
+      matchedClaims,
+      claimRole,
+      confidence,
+      matchedText: primaryMatch.matchedText,
+      reason: claimRole === 'claim_1'
+        ? 'Stage 0 component maps to frozen Claim 1 terminology and is eligible for reference-label planning.'
+        : 'Stage 0 component maps to frozen dependent-claim terminology and may need a reference label.',
+      stage0ComponentIndex: index,
+      llmScope: primaryScope ? {
+        source: 'stage0_scopeRecommendations',
+        elementId: primaryScope.id,
+        label: primaryScope.label,
+        sourceType: primaryScope.sourceType,
+        recommended: primaryScope.recommended,
+        effective: getEffectiveScopeUse(primaryScope),
+        reason: primaryScope.reason,
+        sourceRefs: primaryScope.sourceRefs,
+        generatedAt: hasScope ? scopeRecommendations.generatedAt : undefined,
+      } : undefined,
+    }
+
+    return [{
+      ...component,
+      sequence: typeof component?.sequence === 'number' ? component.sequence : index + 1,
+      sourceType: component?.sourceType || primaryScope?.sourceType,
+      sourceScopeId: component?.sourceScopeId || primaryScope?.id,
+      sourceRefs: Array.isArray(component?.sourceRefs) && component.sourceRefs.length
+        ? component.sourceRefs
+        : primaryScope?.sourceRefs,
+      scopeLabel: component?.scopeLabel || primaryScope?.label,
+      claimSupport,
+    }]
+  })
 }
 
 export function filterComponentsByScopeForNumbering<T = any>(

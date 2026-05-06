@@ -2,11 +2,13 @@
 
 import React, { useState, useEffect } from 'react'
 import {
+  componentsFromFrozenClaimsAndStage0,
   componentsFromScopeRecommendations,
   isScopeRecommendations,
   scopeElementKey,
   scopeTitleFromElement,
   sourceComponentForScopeElement,
+  type ClaimSupportMetadata,
 } from '@/lib/scope-recommendations'
 
 interface ComponentPlannerStageProps {
@@ -38,6 +40,8 @@ interface Component {
   sourceScopeId?: string
   sourceRefs?: string[]
   scopeLabel?: string
+  sourceType?: string
+  claimSupport?: ClaimSupportMetadata
 }
 
 type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'
@@ -211,7 +215,9 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         range: comp?.range,
         sequence: typeof comp?.sequence === 'number' && comp.sequence > 0 ? comp.sequence : index + 1,
         level: Number.isFinite(levelNumber) && levelNumber >= 0 ? Math.floor(levelNumber) : 0,
-        parentId: isMeaningfulParent(comp?.parentId) ? String(comp.parentId).trim() : undefined
+        parentId: isMeaningfulParent(comp?.parentId) ? String(comp.parentId).trim() : undefined,
+        claimSupport: comp?.claimSupport,
+        sourceType: comp?.sourceType,
       }
     })
 
@@ -266,9 +272,19 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       return normalizeComponentsForPlanner(hydrateComponentTitlesFromScope(refMapComponents))
     }
 
-    // Prefer user-approved/LLM-recommended scope selections for new numbering maps.
+    // Prefer frozen-claim matches against Stage 0 components, then fall back to Stage 0 scope recommendations.
     const normalized = getNormalizedIdeaData()
     const ideaComponents = getIdeaComponentsForScope()
+    const claimSeededComponents = componentsFromFrozenClaimsAndStage0({
+      normalizedComponents: ideaComponents,
+      scopeRecommendations: normalized?.scopeRecommendations,
+      claims: normalized?.claimsStructuredFinal || normalized?.claimsStructured || normalized?.claimsStructuredProvisional,
+      claimsText: normalized?.claimsFinal || normalized?.claims || normalized?.claimsProvisional,
+    })
+    if (claimSeededComponents.length > 0) {
+      return normalizeComponentsForPlanner(claimSeededComponents)
+    }
+
     const scopedComponents = componentsFromScopeRecommendations(
       normalized?.scopeRecommendations,
       ideaComponents
@@ -291,6 +307,8 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   const [error, setError] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
   const [showRanges, setShowRanges] = useState(false)
+  const [isValidatingComponents, setIsValidatingComponents] = useState(false)
+  const [componentReview, setComponentReview] = useState<any | null>(null)
   
   // Patent type and numbering style state
   const patentTypePrimary = session?.patentTypePrimary as PatentTypePrimary | null
@@ -386,8 +404,99 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       })
     }
     collect(id)
+
+    const claimLinkedComponents = components.filter((comp) =>
+      idsToRemove.has(comp.id) && comp.claimSupport?.source === 'frozen_claims'
+    )
+    if (claimLinkedComponents.length > 0) {
+      const listedNames = claimLinkedComponents
+        .slice(0, 3)
+        .map((comp) => comp.name)
+        .join(', ')
+      const suffix = claimLinkedComponents.length > 3 ? ` and ${claimLinkedComponents.length - 3} more` : ''
+      const confirmed = window.confirm(
+        `This will remove claim-linked component${claimLinkedComponents.length > 1 ? 's' : ''}: ${listedNames}${suffix}.\n\nThese components were matched to frozen claims and may be needed for reference labels, drafting, or figures. Continue?`
+      )
+      if (!confirmed) return
+    }
+
     setComponents(components.filter((comp) => !idsToRemove.has(comp.id)))
     setIsDirty(true)
+  }
+
+  const normalizeSuggestedComponent = (suggestion: any, sequence: number): Component => {
+    const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER']
+    const existingIds = new Set(components.map(comp => comp.id))
+    const suggestedId = typeof suggestion?.id === 'string' && suggestion.id.trim() && !existingIds.has(suggestion.id)
+      ? suggestion.id.trim()
+      : crypto.randomUUID()
+
+    return {
+      ...suggestion,
+      id: suggestedId,
+      name: typeof (suggestion?.name || suggestion?.title || suggestion?.label) === 'string' && (suggestion.name || suggestion.title || suggestion.label).trim()
+        ? (suggestion.name || suggestion.title || suggestion.label).trim()
+        : `Component ${components.length + sequence}`,
+      type: validTypes.includes(suggestion?.type) ? suggestion.type : 'OTHER',
+      description: typeof suggestion?.description === 'string' ? suggestion.description : '',
+      sequence: components.length + sequence,
+      numeral: undefined,
+      referenceLabel: undefined,
+    }
+  }
+
+  const addSuggestedComponents = (suggestions: any[]) => {
+    const existingKeys = new Set(components.map(comp => scopeElementKey(comp.name)).filter(Boolean))
+    const nextComponents = suggestions
+      .filter((suggestion) => {
+        const key = scopeElementKey(suggestion?.name || suggestion?.title || suggestion?.label)
+        if (!key || existingKeys.has(key)) return false
+        existingKeys.add(key)
+        return true
+      })
+      .map((suggestion, index) => normalizeSuggestedComponent(suggestion, index + 1))
+
+    if (nextComponents.length === 0) return
+    setComponents([...components, ...nextComponents])
+    setComponentReview((review: any) => review ? {
+      ...review,
+      suggestedComponents: (review.suggestedComponents || []).filter((suggestion: any) => {
+        const key = scopeElementKey(suggestion?.name || suggestion?.title || suggestion?.label)
+        return !nextComponents.some(comp => scopeElementKey(comp.name) === key)
+      })
+    } : review)
+    setIsDirty(true)
+  }
+
+  const handleValidateComponentPlan = async () => {
+    if (!session?.id) return
+    setIsValidatingComponents(true)
+    setError(null)
+    try {
+      const result = await onComplete({
+        action: 'validate_component_plan_llm',
+        sessionId: session.id,
+        components: components
+          .filter(comp => comp.name && comp.name.trim())
+          .map(comp => ({
+            ...comp,
+            name: comp.name.trim(),
+            description: (comp.description || '').trim(),
+            parentId: (comp as any).parentId || undefined
+          }))
+      })
+
+      if (result?.error) {
+        setError(String(result.error))
+        return
+      }
+
+      setComponentReview(result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI component validation failed')
+    } finally {
+      setIsValidatingComponents(false)
+    }
   }
 
   const handleAutoAssignNumerals = async () => {
@@ -463,8 +572,11 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     }
   }
 
+  const hasAssignedReference = (comp: Component) =>
+    comp.referenceLabel || (comp.numeral !== undefined && comp.numeral !== null)
+
   const canProceed = components.length > 0 && components.every(comp =>
-    comp.name.trim() && comp.numeral !== undefined
+    comp.name.trim() && hasAssignedReference(comp)
   )
 
   const handleSaveComponents = async (): Promise<boolean> => {
@@ -544,23 +656,35 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
 
   const renderRow = (node: any, level: number) => (
     <tr key={node.id} className="group hover:bg-gray-50/80 transition-colors border-b border-gray-100 last:border-0">
-      <td className="px-4 py-3 whitespace-nowrap">
-        <div style={{ paddingLeft: `${level * 16}px` }} className="flex items-center">
+      <td className="px-4 py-3 align-top">
+        <div style={{ paddingLeft: `${level * 16}px` }} className="flex min-w-0 items-start">
           {level > 0 && (
-            <svg className="w-3 h-3 text-gray-300 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="mt-2 w-3 h-3 shrink-0 text-gray-300 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-5h5" />
             </svg>
           )}
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <input
               type="text"
               value={node.name}
               onChange={(e) => updateComponent(node.id, { name: e.target.value })}
               placeholder="Component name"
-              className="w-full px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+              className="block w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
             />
-            {node.parentId && (
-              <div className="mt-0.5 text-[10px] text-gray-400 uppercase tracking-wider ml-2">Submodule</div>
+            {(node.parentId || node.claimSupport?.source === 'frozen_claims') && (
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 px-2">
+                {node.parentId && (
+                  <span className="text-[10px] text-gray-400 uppercase tracking-wider">Submodule</span>
+                )}
+                {node.claimSupport?.source === 'frozen_claims' && (
+                  <span
+                    className="inline-flex max-w-full items-center rounded border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                    title={node.claimSupport.reason}
+                  >
+                    Claim-linked
+                  </span>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -569,7 +693,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         <select
           value={node.type}
           onChange={(e) => updateComponent(node.id, { type: e.target.value })}
-          className="w-full px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
+          className="w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
         >
           {COMPONENT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -584,11 +708,11 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           value={node.description}
           onChange={(e) => updateComponent(node.id, { description: e.target.value })}
           placeholder="Brief description"
-          className="w-full px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm text-gray-600 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+          className="w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm text-gray-600 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
         />
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {/* Manual reference label input - adapts to numbering style */}
           {effectiveNumberingStyle === 'NUMERIC_BUCKET' ? (
             <input
@@ -784,41 +908,144 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         </div>
       )}
 
+      {componentReview && (
+        <div className="mb-6 bg-indigo-50 border border-indigo-100 rounded-lg p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-medium text-indigo-900">AI Component Validation</h3>
+              {componentReview.summary && (
+                <p className="mt-1 text-sm text-indigo-800">{componentReview.summary}</p>
+              )}
+            </div>
+            <button
+              onClick={() => setComponentReview(null)}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {Array.isArray(componentReview.suggestedComponents) && componentReview.suggestedComponents.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium uppercase tracking-wider text-indigo-700">Suggested Stage 0 Components</p>
+                <button
+                  onClick={() => addSuggestedComponents(componentReview.suggestedComponents)}
+                  className="text-xs font-medium text-indigo-700 hover:text-indigo-900"
+                >
+                  Add All
+                </button>
+              </div>
+              {componentReview.suggestedComponents.map((suggestion: any, index: number) => (
+                <div key={`${suggestion.name || suggestion.title || 'suggestion'}-${index}`} className="flex items-start justify-between gap-3 rounded-md border border-indigo-100 bg-white p-3">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{suggestion.name || suggestion.title || suggestion.label}</p>
+                    {suggestion.description && (
+                      <p className="mt-0.5 text-xs text-gray-600">{suggestion.description}</p>
+                    )}
+                    {suggestion.claimSupport?.reason && (
+                      <p className="mt-1 text-xs text-indigo-700">{suggestion.claimSupport.reason}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => addSuggestedComponents([suggestion])}
+                    className="shrink-0 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                  >
+                    Add
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-indigo-800">No missing Stage 0 components were suggested.</p>
+          )}
+
+          {Array.isArray(componentReview.missingClaimTerms) && componentReview.missingClaimTerms.length > 0 && (
+            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-amber-800">Manual Review Terms</p>
+              <ul className="mt-2 space-y-1 text-xs text-amber-800">
+                {componentReview.missingClaimTerms.map((item: any, index: number) => (
+                  <li key={`${item.term}-${index}`}>
+                    <span className="font-medium">{item.term}</span>
+                    {item.reason ? ` - ${item.reason}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {Array.isArray(componentReview.warnings) && componentReview.warnings.length > 0 && (
+            <ul className="mt-3 space-y-1 text-xs text-indigo-700">
+              {componentReview.warnings.map((warning: string, index: number) => (
+                <li key={index}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* Components Table Card */}
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden mb-8">
         <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50">
           <h3 className="text-sm font-medium text-gray-900">Component Structure</h3>
-          <button
-            onClick={addComponent}
-            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5 mr-1.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Component
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleValidateComponentPlan}
+              disabled={isValidatingComponents}
+              title="Ask AI to compare frozen claims, Stage 0 components, and this planner list, then suggest missing Stage 0 components or claim terms needing manual review. Uses the diagram-generation LLM control."
+              className="inline-flex items-center px-3 py-1.5 border border-indigo-200 shadow-sm text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isValidatingComponents ? (
+                <svg className="animate-spin w-3.5 h-3.5 mr-1.5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5 mr-1.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5 2a8 8 0 11-16 0 8 8 0 0116 0z" />
+                </svg>
+              )}
+              AI Validate
+            </button>
+            <button
+              onClick={addComponent}
+              className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 mr-1.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Add Component
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-100">
+          <table className="min-w-full table-fixed divide-y divide-gray-100">
+            <colgroup>
+              <col className="w-[28%]" />
+              <col className="w-[18%]" />
+              <col className="w-[32%]" />
+              <col className="w-[17%]" />
+              <col className="w-[5%]" />
+            </colgroup>
             <thead className="bg-gray-50/50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider w-[30%]">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   Name
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider w-[20%]">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   Type
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider w-[30%]">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   Description
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider w-[15%]">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   <div className="flex items-center gap-1">
                     <span>Reference</span>
                     <span className="normal-case font-normal text-gray-300" title="Enter manually or use Auto Assign">(manual/auto)</span>
                   </div>
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider w-[5%]">
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">
                   
                 </th>
               </tr>
