@@ -39,6 +39,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import KishoNormalizationLoader from '@/components/ui/kisho-normalization-loader'
+import Stage0PatentIntelligenceOverlay, {
+  type Stage0PatentIntelligenceStatus
+} from '@/components/ui/stage0-patent-intelligence-overlay'
 import {
   coerceScopeRecommendations,
   getEffectiveScopeUse,
@@ -78,6 +81,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [showOriginal, setShowOriginal] = useState(false)
   const [showInventionDetails, setShowInventionDetails] = useState(true)
   const [isNavigating, setIsNavigating] = useState(false)
+  const [stage0OverlayStatus, setStage0OverlayStatus] = useState<Stage0PatentIntelligenceStatus | null>(null)
+  const [stage0StartedAt, setStage0StartedAt] = useState<number | null>(null)
+  const [stage0OverlayError, setStage0OverlayError] = useState<string | undefined>(undefined)
   const [activeTab, setActiveTab] = useState<'core' | 'components' | 'scope' | 'classification'>('core')
   const [expandedComponents, setExpandedComponents] = useState<Set<number>>(new Set())
 
@@ -282,6 +288,41 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
     })
   }
 
+  const regenerateStructure = async () => {
+    try {
+      setError(null)
+      if (!session?.id) return
+      const currentRaw = session?.ideaRecord?.rawInput || rawIdea || ''
+      const currentTitle = session?.ideaRecord?.title || title || ''
+      if (!currentRaw || !currentTitle) {
+        setError('Cannot regenerate: missing title or description.')
+        return
+      }
+      setIsRegenerating(true)
+      setStage0StartedAt(Date.now())
+      setStage0OverlayStatus('running')
+      setStage0OverlayError(undefined)
+      await onComplete({
+        action: 'normalize_idea',
+        sessionId: session.id,
+        rawIdea: currentRaw,
+        title: currentTitle,
+        allowRefine
+      })
+      setStage0OverlayStatus('success')
+      await onRefresh()
+      await new Promise(resolve => setTimeout(resolve, 500))
+      setStage0OverlayStatus(null)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Failed to regenerate AI output. Please try again.'
+      setError(message)
+      setStage0OverlayError(message)
+      setStage0OverlayStatus('error')
+    } finally {
+      setIsRegenerating(false)
+    }
+  }
+
   
 
   const proceedToClaims = async () => {
@@ -321,6 +362,22 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   }
 
   return (
+    <>
+    <Stage0PatentIntelligenceOverlay
+      open={stage0OverlayStatus !== null}
+      mode={allowRefine ? 'enhance' : 'preserve'}
+      title={title}
+      disclosureLength={rawIdea.length}
+      startedAt={stage0StartedAt}
+      status={stage0OverlayStatus || 'running'}
+      errorMessage={stage0OverlayError}
+      onRetry={regenerateStructure}
+      onReturnToEditor={() => {
+        setStage0OverlayStatus(null)
+        setStage0OverlayError(undefined)
+        setIsRegenerating(false)
+      }}
+    />
     <div className="px-6 py-8 w-full">
       {/* Header with Jurisdiction Badge */}
       <div className="mb-8">
@@ -484,34 +541,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                           {isEditing ? <><Check className="w-3 h-3 mr-1" /> Done</> : <><Edit2 className="w-3 h-3 mr-1" /> Edit</>}
                         </button>
                         <button
-                          onClick={async () => {
-                            try {
-                              setError(null)
-                              if (!session?.id) return
-                              const currentRaw = session?.ideaRecord?.rawInput || rawIdea || ''
-                              const currentTitle = session?.ideaRecord?.title || title || ''
-                              if (!currentRaw || !currentTitle) {
-                                setError('Cannot regenerate: missing title or description.')
-                                return
-                              }
-                              setIsRegenerating(true)
-                              setShowNormalized(false)
-                              setNormalizedData(null)
-                              await onComplete({
-                                action: 'normalize_idea',
-                                sessionId: session.id,
-                                rawIdea: currentRaw,
-                                title: currentTitle,
-                                allowRefine
-                              })
-                              await onRefresh()
-                              setShowNormalized(true)
-                            } catch (e) {
-                              setError('Failed to regenerate AI output. Please try again.')
-                            } finally {
-                              setIsRegenerating(false)
-                            }
-                          }}
+                          onClick={regenerateStructure}
                           className="inline-flex items-center px-2 py-1.5 text-xs font-medium rounded-md text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-60"
                           disabled={isRegenerating}
                           title="Regenerate Structure"
@@ -1358,5 +1388,6 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         </Button>
       </div>
     </div>
+    </>
   )
 }

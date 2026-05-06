@@ -5,7 +5,9 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
-import KishoNormalizationLoader from '@/components/ui/kisho-normalization-loader'
+import Stage0PatentIntelligenceOverlay, {
+  type Stage0PatentIntelligenceStatus
+} from '@/components/ui/stage0-patent-intelligence-overlay'
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
 
 type CountryOption = {
@@ -74,6 +76,14 @@ function NewPatentDraftPageContent() {
     if (urlRawIdea) setRawIdea(urlRawIdea)
   }, [searchParams])
   const [isCreating, setIsCreating] = useState(false)
+  const [stage0OverlayStatus, setStage0OverlayStatus] = useState<Stage0PatentIntelligenceStatus | null>(null)
+  const [stage0StartedAt, setStage0StartedAt] = useState<number | null>(null)
+  const [stage0OverlayError, setStage0OverlayError] = useState<string | undefined>(undefined)
+  const [draftCreationContext, setDraftCreationContext] = useState<{
+    patentId?: string
+    sessionId?: string
+    jurisdictionPersisted?: boolean
+  } | null>(null)
   const [isFileProcessing, setIsFileProcessing] = useState(false)
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -419,75 +429,93 @@ function NewPatentDraftPageContent() {
     }
 
     setIsCreating(true)
+    setStage0StartedAt(Date.now())
+    setStage0OverlayStatus('running')
+    setStage0OverlayError(undefined)
     setError(null)
 
     try {
-      // First create a basic patent record
-      const patentResponse = await fetch(`/api/projects/${selectedProject}/patents`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          title: patentTitle.trim(),
-          description: 'Created for patent drafting workflow'
-        })
-      })
+      let patentId = draftCreationContext?.patentId
+      let sessionId = draftCreationContext?.sessionId
+      let jurisdictionPersisted = !!draftCreationContext?.jurisdictionPersisted
 
-      if (!patentResponse.ok) {
-        const errorData = await patentResponse.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Failed to create patent')
+      if (!patentId) {
+        // First create a basic patent record
+        const patentResponse = await fetch(`/api/projects/${selectedProject}/patents`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            title: patentTitle.trim(),
+            description: 'Created for patent drafting workflow'
+          })
+        })
+
+        if (!patentResponse.ok) {
+          const errorData = await patentResponse.json().catch(() => ({}))
+          throw new Error(errorData.error || 'Failed to create patent')
+        }
+
+        const patentData = await patentResponse.json()
+        patentId = patentData.patent.id
+        setDraftCreationContext({ patentId })
       }
 
-      const patentData = await patentResponse.json()
-      const patentId = patentData.patent.id
-
-      // Start drafting session and normalize idea
-      const draftingResponse = await fetch(`/api/patents/${patentId}/drafting`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          action: 'start_session'
+      if (!sessionId) {
+        // Start drafting session and normalize idea
+        const draftingResponse = await fetch(`/api/patents/${patentId}/drafting`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            action: 'start_session'
+          })
         })
-      })
 
-      if (!draftingResponse.ok) {
-        const errorData = await draftingResponse.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Failed to start drafting session')
+        if (!draftingResponse.ok) {
+          const errorData = await draftingResponse.json().catch(() => ({}))
+          throw new Error(errorData.error || 'Failed to start drafting session')
+        }
+
+        const draftSessionData = await draftingResponse.json()
+        sessionId = draftSessionData.session.id
+        setDraftCreationContext({ patentId, sessionId, jurisdictionPersisted: false })
       }
 
-      const draftSessionData = await draftingResponse.json()
-      const sessionId = draftSessionData.session.id
-
-      // Persist jurisdiction choice and language preferences
-      const setStageResponse = await fetch(`/api/patents/${patentId}/drafting`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          action: 'set_stage',
-          sessionId,
-          // Keep the session in the initial stage while persisting jurisdiction choice
-          stage: 'IDEA_ENTRY',
-          draftingJurisdictions: finalSelection,
-          activeJurisdiction: finalSelection[0],
-          // Language configuration
-          languageMode: languageMode,
-          languageByJurisdiction: languageByJurisdiction,
-          figuresLanguage: figuresLanguage,
-          commonLanguage: languageMode === 'common' ? commonLanguage : null
+      if (!jurisdictionPersisted) {
+        // Persist jurisdiction choice and language preferences
+        const setStageResponse = await fetch(`/api/patents/${patentId}/drafting`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            action: 'set_stage',
+            sessionId,
+            // Keep the session in the initial stage while persisting jurisdiction choice
+            stage: 'IDEA_ENTRY',
+            draftingJurisdictions: finalSelection,
+            activeJurisdiction: finalSelection[0],
+            // Language configuration
+            languageMode: languageMode,
+            languageByJurisdiction: languageByJurisdiction,
+            figuresLanguage: figuresLanguage,
+            commonLanguage: languageMode === 'common' ? commonLanguage : null
+          })
         })
-      })
 
-      if (!setStageResponse.ok) {
-        const errorData = await setStageResponse.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Failed to persist jurisdiction selection')
+        if (!setStageResponse.ok) {
+          const errorData = await setStageResponse.json().catch(() => ({}))
+          throw new Error(errorData.error || 'Failed to persist jurisdiction selection')
+        }
+
+        jurisdictionPersisted = true
+        setDraftCreationContext({ patentId, sessionId, jurisdictionPersisted: true })
       }
 
       // Normalize the idea
@@ -513,12 +541,19 @@ function NewPatentDraftPageContent() {
         throw new Error(errorMessage)
       }
 
+      setStage0OverlayStatus('success')
+      setDraftCreationContext(null)
+      await new Promise(resolve => setTimeout(resolve, 500))
+
       // Redirect to the drafting page (already on component planner stage)
       router.push(`/patents/${patentId}/draft`)
 
     } catch (error) {
       console.error('Failed to create patent draft:', error)
-      setError(error instanceof Error ? error.message : 'Failed to start patent draft. Please try again.')
+      const message = error instanceof Error ? error.message : 'Failed to start patent draft. Please try again.'
+      setError(message)
+      setStage0OverlayError(message)
+      setStage0OverlayStatus('error')
     } finally {
       setIsCreating(false)
     }
@@ -538,6 +573,22 @@ function NewPatentDraftPageContent() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <Stage0PatentIntelligenceOverlay
+        open={stage0OverlayStatus !== null}
+        mode={allowRefine ? 'enhance' : 'preserve'}
+        title={patentTitle}
+        disclosureLength={rawIdea.length}
+        startedAt={stage0StartedAt}
+        status={stage0OverlayStatus || 'running'}
+        errorMessage={stage0OverlayError}
+        onRetry={handleCreateDraft}
+        onReturnToEditor={() => {
+          setStage0OverlayStatus(null)
+          setStage0OverlayError(undefined)
+          setDraftCreationContext(null)
+          setIsCreating(false)
+        }}
+      />
       <div className="max-w-3xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
@@ -1006,10 +1057,6 @@ function NewPatentDraftPageContent() {
                   Keep exactly what I provided
                 </label>
               </div>
-
-              {isCreating && (
-                <KishoNormalizationLoader mode={allowRefine ? 'enhance' : 'preserve'} className="mb-0" />
-              )}
 
               <div className="flex justify-end space-x-4">
                 <Link
