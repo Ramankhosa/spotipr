@@ -95,6 +95,7 @@ describe('detectExternalImageContent', () => {
     expect(request.taskCode).toBe('LLM3_DIAGRAM')
     expect(request.stageCode).toBe('DRAFT_SKETCH_GENERATION')
     expect(request.modelClass).toBe('gemini-2.5-pro')
+    expect(request.parameters.maxOutputTokens).toBe(8192)
     expect(request.content.parts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'image' }),

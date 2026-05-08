@@ -128,6 +128,7 @@ const SKETCH_FIXED_COST_USD = SKETCH_FIXED_COST_INR * INR_TO_USD
 // ============================================================================
 const SKETCH_RECOMMENDED_MODEL = 'gemini-3-pro-image-preview'
 const EXTERNAL_IMAGE_DETECTION_MODEL = 'gemini-2.5-pro'
+const EXTERNAL_IMAGE_DETECTION_MAX_OUTPUT_TOKENS = 8192
 const SKETCH_OUTPUT_IMAGE_SIZE = '2K'
 const SKETCH_STAGE_CODE = 'DRAFT_SKETCH_GENERATION'
 const SKETCH_TASK_CODE: TaskCode = 'LLM3_DIAGRAM' // Closest task for vision + drafting limits
@@ -577,7 +578,7 @@ export async function detectExternalImageContent(
       },
       idempotencyKey: crypto.randomUUID(),
       parameters: {
-        maxOutputTokens: 700,
+        maxOutputTokens: EXTERNAL_IMAGE_DETECTION_MAX_OUTPUT_TOKENS,
         temperature: 0.1,
         purpose: 'detect_external_image_content'
       },
