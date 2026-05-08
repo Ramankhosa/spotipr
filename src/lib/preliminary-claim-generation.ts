@@ -109,6 +109,10 @@ type PreliminaryClaimContext = {
   scopeRecommendations?: unknown
   normalizationReviewWarnings?: unknown
   inventionType?: unknown
+  patentTypePrimary?: PreliminaryPatentType | string
+  fieldOfRelevance?: unknown
+  field?: unknown
+  subfield?: unknown
 }
 
 type BuildPreliminaryClaimsPromptParams = {
@@ -238,6 +242,25 @@ function toStringArray(value: unknown): string[] {
   return [JSON.stringify(value)]
 }
 
+function formatContextScalar(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function formatInventionType(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim() || 'GENERAL'
+  }
+
+  if (Array.isArray(value)) {
+    const items = value
+      .map(item => typeof item === 'string' ? item.trim() : '')
+      .filter(Boolean)
+    return items.length ? items.join(' + ') : 'GENERAL'
+  }
+
+  return 'GENERAL'
+}
+
 function formatListBlock(label: string, value: unknown) {
   const values = toStringArray(value)
   if (!values.length) return ''
@@ -315,23 +338,27 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
       ? 'method'
       : 'method'
 
-  const inventionTypes = toStringArray((context as any).inventionType)
-  const isSoftware = inventionTypes.some(t => /software/i.test(t))
-
-  const multiIndependentGuidance = isSoftware
-    ? `The calling system expressly permits and requests 3 independent claims in different statutory categories:
-1. An independent ${primaryCategory} claim (Claim 1) with its dependent claims.
-2. An independent ${secondaryCategory} claim targeting the same inventive concept from a ${secondaryCategory} perspective, with its dependent claims.
-3. An independent computer-readable medium (CRM) claim reciting instructions that, when executed, cause a processor to perform the method, with its dependent claims.`
-    : `The calling system expressly permits and requests 2 independent claims in different statutory categories:
-1. An independent ${primaryCategory} claim (Claim 1) with its dependent claims.
-2. An independent ${secondaryCategory} claim targeting the same inventive concept from a ${secondaryCategory} perspective, with its dependent claims.`
+  const inventionType = formatInventionType(context.inventionType)
+  const renderedPatentType = patentTypePrimary || context.patentTypePrimary || 'UNKNOWN'
+  const technicalField =
+    formatContextScalar(context.fieldOfRelevance) ||
+    formatContextScalar(context.field) ||
+    'N/A'
+  const subfield = formatContextScalar(context.subfield) || 'N/A'
 
   return `You are a senior patent attorney drafting preliminary patent claims for a ${countryName} patent specification handled by the ${officeName}.
 - Jurisdiction: ${jurisdiction}
 - Tone: ${tone}
 - Voice: ${voice}
 - Avoid: ${avoid}
+
+DOMAIN / ARCHETYPE CONTEXT
+- Invention Archetype: ${inventionType}
+- Patent Type: ${renderedPatentType}
+- Technical Field: ${technicalField}
+- Subfield: ${subfield}
+
+Use this block only to adapt claim vocabulary, statutory claim category, and breadth strategy. Do not use it to introduce unsupported components, steps, materials, values, algorithms, use cases, therapeutic effects, or embodiments.
 
 ${baseInstruction}
 
@@ -370,10 +397,8 @@ Detected patent type: ${patentTypePrimary}
 Expected Claim 1 category: ${claimType}.
 Use the type-specific drafting rules from the database prompt for this detected category.
 
-MULTI-INDEPENDENT CLAIM ARCHITECTURE:
-${multiIndependentGuidance}
-Each independent claim targets the SAME inventive concept from a different statutory angle.
-Number all claims sequentially (1, 2, 3, ...) regardless of category.
+MULTI-INDEPENDENT CLAIM RUNTIME NOTE:
+Use the Independent Claim Policy in the claims base prompt. The detected patent type is ${renderedPatentType}. The invention archetype is ${inventionType}. Additional independent claims must be included only when source-supported, jurisdictionally permitted, and allowed by the output contract.
 
 CLAIM NARROWING STRATEGY:
 For dependent claims under each independent claim:

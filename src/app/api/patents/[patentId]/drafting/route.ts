@@ -4924,7 +4924,11 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       sourceFactLedger: ideaContext?.sourceFactLedger ?? existingNormalized.sourceFactLedger,
       scopeRecommendations: ideaContext?.scopeRecommendations ?? existingNormalized.scopeRecommendations,
       normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings,
-      inventionType: existingNormalized.inventionType
+      inventionType: existingNormalized.inventionType,
+      patentTypePrimary,
+      fieldOfRelevance: ideaContext?.fieldOfRelevance ?? idea.fieldOfRelevance ?? existingNormalized.fieldOfRelevance ?? existingNormalized.field,
+      field: ideaContext?.field ?? idea.field ?? existingNormalized.field,
+      subfield: ideaContext?.subfield ?? idea.subfield ?? existingNormalized.subfield
     }
 
     // Build jurisdiction-specific rules block (same logic as buildSectionPrompt in drafting-service)
