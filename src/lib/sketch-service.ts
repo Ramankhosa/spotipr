@@ -127,6 +127,7 @@ const SKETCH_FIXED_COST_USD = SKETCH_FIXED_COST_INR * INR_TO_USD
 // ✗ gemini-2.0-flash-lite (text/vision only - NO image output)
 // ============================================================================
 const SKETCH_RECOMMENDED_MODEL = 'gemini-3-pro-image-preview'
+const EXTERNAL_IMAGE_DETECTION_MODEL = 'gemini-2.5-pro'
 const SKETCH_OUTPUT_IMAGE_SIZE = '2K'
 const SKETCH_STAGE_CODE = 'DRAFT_SKETCH_GENERATION'
 const SKETCH_TASK_CODE: TaskCode = 'LLM3_DIAGRAM' // Closest task for vision + drafting limits
@@ -560,6 +561,7 @@ export async function detectExternalImageContent(
     {
       taskCode: SKETCH_TASK_CODE,
       stageCode: SKETCH_STAGE_CODE,
+      modelClass: EXTERNAL_IMAGE_DETECTION_MODEL,
       content: {
         parts: [
           { type: 'text', text: prompt },

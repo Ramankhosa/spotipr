@@ -64,7 +64,7 @@ beforeEach(() => {
 })
 
 describe('detectExternalImageContent', () => {
-  test('uses sketch generation task and stage with image content', async () => {
+  test('uses sketch generation quota with a hardcoded Gemini 2.5 Pro vision model', async () => {
     executeLLMOperation.mockResolvedValue({
       success: true,
       response: {
@@ -75,7 +75,7 @@ describe('detectExternalImageContent', () => {
           warnings: [],
         }),
         outputTokens: 100,
-        modelClass: 'gemini-3-pro-image-preview',
+        modelClass: 'gemini-2.5-pro',
       },
     })
 
@@ -94,6 +94,7 @@ describe('detectExternalImageContent', () => {
     const [, request] = executeLLMOperation.mock.calls[0]
     expect(request.taskCode).toBe('LLM3_DIAGRAM')
     expect(request.stageCode).toBe('DRAFT_SKETCH_GENERATION')
+    expect(request.modelClass).toBe('gemini-2.5-pro')
     expect(request.content.parts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'image' }),
@@ -122,7 +123,7 @@ describe('detectExternalImageContent', () => {
       response: {
         output: JSON.stringify({ description: 'A short controller diagram.' }),
         outputTokens: 10,
-        modelClass: 'gemini-3-pro-image-preview',
+        modelClass: 'gemini-2.5-pro',
       },
     })
 

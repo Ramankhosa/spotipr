@@ -115,7 +115,14 @@ export class LLMGateway {
 
       // 5. Resolve the model to use based on plan, task, and optional stage
       let modelResolution: ModelResolutionResult | null = null
+      const explicitModelCode = typeof llmRequest.modelClass === 'string' && llmRequest.modelClass.trim().length > 0
+        ? llmRequest.modelClass.trim()
+        : null
       console.log(`[Gateway] Resolving model for tenant=${tenantContext.tenantId}, planId=${tenantContext.planId || 'NONE'}, taskCode=${llmRequest.taskCode}, stageCode=${llmRequest.stageCode || 'none'}`)
+      if (explicitModelCode) {
+        llmRequest.modelClass = explicitModelCode
+        console.log(`[Gateway] Explicit model requested: ${explicitModelCode}`)
+      }
       
       if (tenantContext.planId) {
         try {
@@ -170,7 +177,7 @@ export class LLMGateway {
       }
 
       // 6. Validate model capabilities (vision, streaming, etc.)
-      const selectedModel = modelResolution?.modelCode || 'gemini-2.5-pro' // Default model
+      const selectedModel = explicitModelCode || modelResolution?.modelCode || 'gemini-2.5-pro' // Default model
       const capabilityCheck = this.validateModelCapabilities(selectedModel, llmRequest)
       if (!capabilityCheck.valid) {
         console.error(`✗ Model capability validation failed: ${capabilityCheck.error}`)
@@ -227,7 +234,14 @@ export class LLMGateway {
       console.log('[Gateway] Step 8: Routing to LLM provider...')
       let response: LLMResponse
       
-      if (modelResolution) {
+      if (explicitModelCode) {
+        console.log('[Gateway] Using explicit model:', explicitModelCode)
+        response = await llmProviderRouter.routeWithModel(
+          llmRequest,
+          decision,
+          explicitModelCode
+        )
+      } else if (modelResolution) {
         // Use the resolved model with fallbacks
         console.log('[Gateway] Using resolved model:', modelResolution.modelCode)
         response = await llmProviderRouter.routeWithModel(
@@ -254,7 +268,7 @@ export class LLMGateway {
           metadata: {
             ...llmRequest.metadata,
             stageCode: llmRequest.stageCode,
-            modelSource: modelResolution?.source
+            modelSource: explicitModelCode ? 'explicit' : modelResolution?.source
           }
         }
 
