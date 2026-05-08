@@ -1778,7 +1778,9 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
       ? sectionsNeedingClaim1[0] // Use first C1-requiring section
       : (dynamicSections[0] || 'detailedDescription') // Fallback to first section or default
     
-    const udbResult = buildUniversalDraftingBundle(representativeSection, normalizedData, idea)
+    const udbResult = buildUniversalDraftingBundle(representativeSection, normalizedData, idea, undefined, {
+      patentTypePrimary: (session as any)?.patentTypePrimary
+    })
     const claim1Available = isClaim1Available(normalizedData)
     console.log(`[generateReferenceDraft] UDB batch injection:`, {
       hasUDBBlock: !!udbResult.block,
@@ -2230,7 +2232,9 @@ ${contextParts.join('\n\n')}
     // ══════════════════════════════════════════════════════════════════════════════
     const normalizedData = idea.normalizedData || {}
     // Pass existingSections so the AI-generated title (if available) is used
-    const udbResult = buildUniversalDraftingBundle(sectionKey, normalizedData, idea, existingSections)
+    const udbResult = buildUniversalDraftingBundle(sectionKey, normalizedData, idea, existingSections, {
+      patentTypePrimary: (session as any)?.patentTypePrimary
+    })
     
     // Check gating: if section requires Claim 1 but it's missing, return error
     if (udbResult.gated) {

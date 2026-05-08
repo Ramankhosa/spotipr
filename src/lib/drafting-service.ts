@@ -25,7 +25,9 @@ import {
   buildAntiHallucinationGuards,
   buildDetailedDescriptionScopeContext,
   buildDetailedDescriptionSourceLockBlock,
-  filterDetailedDescriptionConstraints
+  filterDetailedDescriptionConstraints,
+  normalizeDraftingArchetypeList,
+  determineDraftingArchetype
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import { buildIdeaNormalizationPrompt } from '@/lib/idea-normalization-prompt';
@@ -1930,21 +1932,7 @@ Respond in this exact JSON shape:
   }
 
   private static normalizeArchetypeList(input: any, fallbackField?: string): string[] {
-    const set = new Set<string>()
-    const add = (raw?: string) => {
-      if (!raw) return
-      String(raw)
-        .split('+')
-        .map((p) => p.trim().toUpperCase())
-        .filter(Boolean)
-        .forEach((p) => set.add(p))
-    }
-    if (Array.isArray(input)) input.forEach((v) => add(typeof v === 'string' ? v : String(v)))
-    else if (typeof input === 'string') add(input)
-    if (set.size === 0 && fallbackField) add(this.determineArchetype(fallbackField))
-    if (set.size === 0) set.add('GENERAL')
-    if (set.size > 1 && set.has('GENERAL')) set.delete('GENERAL')
-    return Array.from(set)
+    return normalizeDraftingArchetypeList(input, fallbackField)
   }
 
   private static sanitizeFigureTitle(title?: string | null): string {
@@ -1959,13 +1947,7 @@ Respond in this exact JSON shape:
   }
 
   private static determineArchetype(field: string): string {
-    const f = field?.toLowerCase() || ''
-    if (/(software|computer|internet|app|data|ai|algorithm|blockchain|network|platform|server|cloud|processor)/.test(f)) return 'SOFTWARE'
-    if (/(chem|pharma|compound|composition|material|polymer|alloy|drug|molecule|synthesis)/.test(f)) return 'CHEMICAL'
-    if (/(bio|gene|cell|protein|dna|rna|medical|diagnostic|therapeutic|antibody|sequence)/.test(f)) return 'BIO'
-    if (/(electric|circuit|semiconductor|voltage|power|sensor|transistor|communication|wireless|signal)/.test(f)) return 'ELECTRICAL'
-    if (/(mechanic|device|apparatus|tool|machine|engine|structure|fastener|assembly|housing)/.test(f)) return 'MECHANICAL'
-    return 'GENERAL'
+    return determineDraftingArchetype(field)
   }
 
   private static getArchetypeInstructions(archetype: string): string {
@@ -2405,7 +2387,7 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       // UNIVERSAL DRAFTING BUNDLE (UDB) - Normalized Data + Claim 1
       // ══════════════════════════════════════════════════════════════════════════════
-      const udbResult = buildUniversalDraftingBundle(section, normalizedData, idea)
+      const udbResult = buildUniversalDraftingBundle(section, normalizedData, idea, undefined, { patentTypePrimary, archetype })
       
       // Check gating: if section requires Claim 1 but it's missing, throw error
       if (udbResult.gated) {

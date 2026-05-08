@@ -444,6 +444,50 @@ export function areClaimsFrozen(normalizedData: Record<string, any> | null | und
   return !!(normalizedData?.claimsApprovedAt)
 }
 
+interface DraftingContextOptions {
+  patentTypePrimary?: unknown
+  archetype?: unknown
+}
+
+function formatContextScalar(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function determineDraftingArchetype(field: unknown): string {
+  const f = formatContextScalar(field).toLowerCase()
+  if (/(software|computer|internet|app|data|ai|algorithm|blockchain|network|platform|server|cloud|processor)/.test(f)) return 'SOFTWARE'
+  if (/(chem|pharma|compound|composition|material|polymer|alloy|drug|molecule|synthesis)/.test(f)) return 'CHEMICAL'
+  if (/(bio|gene|cell|protein|dna|rna|medical|diagnostic|therapeutic|antibody|sequence)/.test(f)) return 'BIO'
+  if (/(electric|circuit|semiconductor|voltage|power|sensor|transistor|communication|wireless|signal)/.test(f)) return 'ELECTRICAL'
+  if (/(mechanic|device|apparatus|tool|machine|engine|structure|fastener|assembly|housing)/.test(f)) return 'MECHANICAL'
+  return 'GENERAL'
+}
+
+export function normalizeDraftingArchetypeList(input: unknown, fallbackField?: unknown): string[] {
+  const set = new Set<string>()
+  const add = (raw: unknown) => {
+    const value = formatContextScalar(raw)
+    if (!value) return
+    value
+      .split('+')
+      .map((p) => p.trim().toUpperCase())
+      .filter(Boolean)
+      .forEach((p) => set.add(p))
+  }
+
+  if (Array.isArray(input)) input.forEach(add)
+  else add(input)
+
+  if (set.size === 0 && formatContextScalar(fallbackField)) add(determineDraftingArchetype(fallbackField))
+  if (set.size === 0) set.add('GENERAL')
+  if (set.size > 1 && set.has('GENERAL')) set.delete('GENERAL')
+  return Array.from(set)
+}
+
+export function formatDraftingArchetype(input: unknown, fallbackField?: unknown): string {
+  return normalizeDraftingArchetypeList(input, fallbackField).join('+') || 'GENERAL'
+}
+
 /**
  * Build the Normalized Data context block for injection into prompts.
  * Returns empty string if data is not available or injection is disabled.
@@ -453,7 +497,8 @@ export function areClaimsFrozen(normalizedData: Record<string, any> | null | und
 export function buildNormalizedDataBlock(
   normalizedData: Record<string, any> | null | undefined,
   idea: Record<string, any> | null | undefined,
-  existingSections?: Record<string, string> | null | undefined
+  existingSections?: Record<string, string> | null | undefined,
+  options?: DraftingContextOptions
 ): string {
   if (!normalizedData && !idea) return ''
 
@@ -461,6 +506,42 @@ export function buildNormalizedDataBlock(
   const ideaData = idea || {}
 
   const parts: string[] = []
+
+  const nestedNormalizedData =
+    ideaData.normalizedData && typeof ideaData.normalizedData === 'object'
+      ? ideaData.normalizedData
+      : {}
+  const archetypeInput =
+    options?.archetype ??
+    ideaData.inventionType ??
+    nestedNormalizedData.inventionType ??
+    nd.inventionType
+  const archetypeFallbackField =
+    formatContextScalar(ideaData.fieldOfRelevance) ||
+    formatContextScalar(nestedNormalizedData.fieldOfRelevance)
+  const archetype = formatDraftingArchetype(archetypeInput, archetypeFallbackField)
+  const patentType =
+    formatContextScalar(nd.patentTypePrimary) ||
+    formatContextScalar(options?.patentTypePrimary) ||
+    'UNKNOWN'
+  const domainField =
+    formatContextScalar(nd.fieldOfRelevance) ||
+    formatContextScalar(ideaData.fieldOfRelevance) ||
+    formatContextScalar(nd.field) ||
+    formatContextScalar(ideaData.field) ||
+    'N/A'
+  const domainSubfield =
+    formatContextScalar(nd.subfield) ||
+    formatContextScalar(ideaData.subfield) ||
+    'N/A'
+
+  parts.push(`DOMAIN / ARCHETYPE CONTEXT
+- Invention Archetype: ${archetype}
+- Patent Type: ${patentType}
+- Technical Field: ${domainField}
+- Subfield: ${domainSubfield}
+
+Use this block only to adapt patent drafting vocabulary, disclosure units, and section emphasis. Do not use it to introduce unsupported components, steps, materials, values, algorithms, use cases, or embodiments.`)
 
   // Title - IMPORTANT: Use AI-generated title from existingSections if available,
   // as this is the drafting-stage refined title that should be used for consistency
@@ -626,7 +707,8 @@ export function buildUniversalDraftingBundle(
   sectionKey: string,
   normalizedData: Record<string, any> | null | undefined,
   idea: Record<string, any> | null | undefined,
-  existingSections?: Record<string, string> | null | undefined
+  existingSections?: Record<string, string> | null | undefined,
+  options?: DraftingContextOptions
 ): { block: string; gated: boolean; gateReason?: string } {
   // Validate inputs
   if (!sectionKey) {
@@ -651,7 +733,7 @@ export function buildUniversalDraftingBundle(
   // Add Normalized Data block if enabled
   // Pass existingSections to use AI-generated title if available
   if (config.injectNormalizedData) {
-    const ndBlock = buildNormalizedDataBlock(normalizedData, idea, existingSections)
+    const ndBlock = buildNormalizedDataBlock(normalizedData, idea, existingSections, options)
     if (ndBlock && ndBlock.trim()) {
       parts.push(ndBlock)
     }
