@@ -41,9 +41,11 @@ The following data is provided by the inventor for illustrative purposes only.
 LEGAL NOTICE:
 - This data is NON-LIMITING and does not establish thresholds, ranges, or requirements.
 - This data must NOT be used to narrow the scope of any claims.
+- This data is auxiliary context only and does not expand the invention scope.
+- This data must NOT be used to add components, figures, reference numerals, products, persons, organizations, structures, steps, environments, use cases, examples, values, materials, operating conditions, or results unless already supported by Claim 1 and the normalized invention context.
 - This data must NOT be used for comparison, superiority claims, or to imply preferred values.
 - This data is exemplary only and does not define the boundaries of the invention.
-- Other values, ranges, and configurations are expressly contemplated within the scope of the claims.
+- Unsupported values, ranges, and configurations must be omitted rather than inferred.
 
 ILLUSTRATIVE DATA:
 `.trim()

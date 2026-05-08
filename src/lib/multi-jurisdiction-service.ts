@@ -22,6 +22,11 @@ INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
 DATA PRIORITY NOTICE (CRITICAL):
 Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
 This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
+This data is auxiliary context only and does not expand the invention scope.
+This data MUST NOT be used to add components, figures, reference numerals, named entities,
+products, persons, organizations, structures, steps, environments, use cases, examples,
+values, materials, operating conditions, or results
+that are not already supported by Claim 1 and the normalized invention context.
 
 ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
 - Use ONLY the exact data values, measurements, and observations provided below.
@@ -63,6 +68,8 @@ import { getSectionStageCode } from '@/lib/metering/section-stage-mapping'
 import {
   buildUniversalDraftingBundle,
   buildAntiHallucinationGuards,
+  buildDetailedDescriptionSourceLockBlock,
+  filterDetailedDescriptionConstraints,
   shouldGateSection,
   isClaim1Available,
   getSectionInjectionConfig
@@ -1495,8 +1502,9 @@ export async function generateReferenceDraft(
     const sectionInstructions = dynamicSections.map((key, idx) => {
       const prompt = sectionPrompts[key]
       const requiredBy = sectionDetails[key]?.requiredBy.join(', ') || 'General'
-      const constraints = prompt.constraints.length > 0 
-        ? `\n   Constraints: ${prompt.constraints.join('; ')}`
+      const safeConstraints = filterDetailedDescriptionConstraints(key, prompt.constraints)
+      const constraints = safeConstraints.length > 0 
+        ? `\n   Constraints: ${safeConstraints.join('; ')}`
         : ''
       
       let instructionText = prompt.instruction
@@ -1544,8 +1552,8 @@ export async function generateReferenceDraft(
             contextAddendum += `
    
    FIGURES CONTEXT (database-driven):
-   - Reference figures using format: "As shown in FIG. X, ...".
-   - Use reference numerals from the COMPONENTS list when referring to elements.`
+   - Reference figures only as parentheticals, using "(FIG. X)" or "(see FIG. X)".
+   - Do NOT narrate figures or use figure titles as a source for adding invention details.`
           }
         }
         
@@ -1889,6 +1897,10 @@ ${additionalContextParts.join('\n')}`)
       promptParts.push(antiHallucinationBlock)
     }
 
+    if (dynamicSections.includes('detailedDescription')) {
+      promptParts.push(buildDetailedDescriptionSourceLockBlock('detailedDescription'))
+    }
+
     // Section instructions and output format
     promptParts.push(`
 ==============================================================================
@@ -2199,8 +2211,9 @@ ${contextParts.join('\n\n')}
     }
 
     // Build section-specific instruction
-    const constraints = sectionPrompt.constraints?.length > 0 
-      ? `\nConstraints: ${sectionPrompt.constraints.join('; ')}`
+    const safeConstraints = filterDetailedDescriptionConstraints(sectionKey, sectionPrompt.constraints)
+    const constraints = safeConstraints.length > 0 
+      ? `\nConstraints: ${safeConstraints.join('; ')}`
       : ''
 
     // Get database-driven context requirements for this section
@@ -2350,8 +2363,8 @@ FIGURES REQUIREMENTS:
         contextInstructions += `
 
 FIGURES REQUIREMENTS:
-- Reference figures using format: "As shown in FIG. X, ...".
-- Describe each figure's content in detail.`
+- Reference figures only as parentheticals, using "(FIG. X)" or "(see FIG. X)".
+- Do NOT narrate figures or use figure titles as a source for adding invention details.`
       }
     }
     
@@ -2468,6 +2481,11 @@ ${additionalContextParts.join('\n')}`)
     // Add anti-hallucination guards
     if (antiHallucinationBlock) {
       promptParts.push(antiHallucinationBlock)
+    }
+
+    const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(sectionKey)
+    if (detailedDescriptionSourceLock) {
+      promptParts.push(detailedDescriptionSourceLock)
     }
 
     // Section generation instructions

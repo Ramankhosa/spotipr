@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import {
+  buildAntiHallucinationGuards,
+  buildDetailedDescriptionSourceLockBlock,
   buildDetailedDescriptionScopeContext,
-  buildNormalizedDataBlock
+  buildNormalizedDataBlock,
+  filterDetailedDescriptionConstraints
 } from '@/lib/section-injection-config'
 
 describe('normalized data section injection', () => {
@@ -79,5 +82,38 @@ describe('normalized data section injection', () => {
     expect(context.allowedFigureNumbers).toEqual([1])
     expect(context.guard).toContain('Allowed component/reference context')
     expect(context.guard.includes('No figure references')).toBe(false)
+  })
+
+  test('always supplies a detailed description source-lock guard', () => {
+    const guard = buildDetailedDescriptionSourceLockBlock('detailedDescription')
+
+    expect(guard).toContain('DETAILED DESCRIPTION SOURCE LOCK')
+    expect(guard).toContain('Frozen Claim 1 and the Normalized Data')
+    expect(guard).toContain('injected DD user data are auxiliary context only')
+    expect(guard).toContain('omit the detail')
+    expect(buildDetailedDescriptionSourceLockBlock('summary')).toBe('')
+  })
+
+  test('filters detailed description constraints that invite unsupported subject matter', () => {
+    const constraints = [
+      'Enable skilled person to practice',
+      'Reference figures with numerals',
+      'Include multiple embodiments',
+      'Describe best mode',
+      'Add specific parameters and examples'
+    ]
+
+    expect(filterDetailedDescriptionConstraints('detailedDescription', constraints)).toEqual([
+      'Enable skilled person to practice',
+      'Reference figures with numerals'
+    ])
+    expect(filterDetailedDescriptionConstraints('summary', constraints)).toEqual(constraints)
+  })
+
+  test('warns detailed description prompts not to invent missing figure or component context', () => {
+    const guard = buildAntiHallucinationGuards(false, true, false)
+
+    expect(guard).toContain('Do NOT invent figure numbers or titles')
+    expect(guard).toContain('Do NOT invent component names or reference numerals')
   })
 })

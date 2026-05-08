@@ -23,7 +23,9 @@ import { getSectionStageCode } from '@/lib/metering/section-stage-mapping';
 import {
   buildUniversalDraftingBundle,
   buildAntiHallucinationGuards,
-  buildDetailedDescriptionScopeContext
+  buildDetailedDescriptionScopeContext,
+  buildDetailedDescriptionSourceLockBlock,
+  filterDetailedDescriptionConstraints
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import { buildIdeaNormalizationPrompt } from '@/lib/idea-normalization-prompt';
@@ -59,8 +61,10 @@ INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
 DATA PRIORITY NOTICE (CRITICAL):
 Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
 This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
+This data is auxiliary context only and does not expand the invention scope.
 This data MUST NOT be used to add components, figures, reference numerals, named entities,
-products, persons, organizations, environments, use cases, examples, or operating conditions
+products, persons, organizations, structures, steps, environments, use cases, examples,
+values, materials, operating conditions, or results
 that are not already supported by Claim 1 and the normalized invention context.
 
 ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
@@ -2304,8 +2308,12 @@ Norms:
       }
     }
 
-    if (ctx?.sectionPrompt?.constraints?.length) {
-      promptConstraints = `Constraints: ${ctx.sectionPrompt.constraints.join('; ')}`
+    const safePromptConstraints = filterDetailedDescriptionConstraints(
+      section,
+      ctx?.sectionPrompt?.constraints || []
+    )
+    if (safePromptConstraints.length) {
+      promptConstraints = safePromptConstraints.join('; ')
     }
 
     const targetLine = (guidance as any)?.target || ''
@@ -2602,6 +2610,11 @@ PERMITTED QUALITATIVE DISCLOSURE:
       // Anti-hallucination guards
       if (antiHallucinationBlock) {
         promptParts.push(antiHallucinationBlock)
+      }
+
+      const detailedDescriptionSourceLock = buildDetailedDescriptionSourceLockBlock(section)
+      if (detailedDescriptionSourceLock) {
+        promptParts.push(detailedDescriptionSourceLock)
       }
 
       // Output control

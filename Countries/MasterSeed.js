@@ -1082,10 +1082,15 @@ You will receive:
 - Claim 1 (frozen legal anchor)
 - Optional injected context (figures, components, numerals) if enabled
 
-Claim 1 and the Normalized Data define the invention.
-Injected figures, components, and numerals are authoritative only for entities already supported by Claim 1 and the Normalized Data.
-If injected context includes any figure, component, numeral, named entity, product, person, organization, prior-art system, environment, use case, or example not supported by Claim 1 and the Normalized Data, ignore it.
-Do NOT invent missing elements or details.
+AUTHORITATIVE INVENTION SCOPE (CRITICAL)
+The invention scope is limited to Frozen Claim 1 and the Normalized Data.
+
+Figures, components, reference numerals, and injected DD user data are auxiliary context only.
+They may be used only to label, cite, or clarify subject matter already supported by Frozen Claim 1 and the Normalized Data.
+They MUST NOT be used as an independent source for adding components, structures, steps, use cases, environments, examples, values, materials, operating conditions, or results.
+
+If a detail is not expressly present in Frozen Claim 1 or the Normalized Data, omit the detail.
+Do NOT fill gaps using technical assumptions, common implementations, or drafting conventions.
 
 ────────────────────────────────────────
 CLAIM SUPPORT CONSTRAINT (CRITICAL)
@@ -1175,8 +1180,10 @@ PERMITTED LEVEL OF TECHNICAL DETAIL
 ────────────────────────────────────────
 - Functional "configured to" descriptions are permitted.
 - Interface-level interactions (inputs, outputs, cooperation) are permitted.
-- Internal algorithms, control logic, and calculation steps are permitted and required
-  if necessary to explain how a result is achieved, provided they align with Claim 1.
+- Internal algorithms, control logic, formulas, weighting factors, thresholds,
+  numerical ranges, materials, test values, and calculation steps are permitted
+  ONLY when expressly present in Frozen Claim 1 or Normalized Data.
+- Do NOT create implementation logic merely because it would be technically plausible.
 
 ────────────────────────────────────────
 FIGURE REFERENCE RULE
@@ -1203,7 +1210,8 @@ This paragraph MUST establish that the invention components are operatively, str
 A) One system overview paragraph listing only invention-scoped components and defining their physical or implemented form appropriate to Claim 1.
 B) One paragraph for each major element of Claim 1.
 C) Up to FOUR paragraphs describing claim-relevant interactions.
-D) Up to SIX paragraphs describing optional variations that preserve scope.
+D) Up to SIX paragraphs describing optional variations ONLY IF each variation is expressly present in Frozen Claim 1, Normalized Data, or an enabled jurisdictional requirement.
+If no such source-supported variation exists, omit variation paragraphs entirely.
 E) One best-mode paragraph ONLY if explicitly required by jurisdiction.
 
 ────────────────────────────────────────
@@ -1213,6 +1221,9 @@ Do NOT:
 - Explain motivations, design reasoning, benefits, or results.
 - Use evaluative or comparative language.
 - Introduce new components, figures, numerals, entities, examples, or use cases not supported by Claim 1 and the Normalized Data.
+- Add embodiments, examples, variants, preferred modes, numeric values, thresholds, materials, dimensions, data flows, algorithms, use cases, environments, or operating conditions not expressly supported by Frozen Claim 1 or Normalized Data.
+- Treat figure titles, component labels, reference numerals, or DD user data as new invention disclosure.
+- Use generic phrases such as "in some embodiments" or "for example" to introduce unsupported subject matter.
 - Refer to a provided figure, component, or numeral if it is outside the invention-scoped set.
 - Treat drawings, sketches, figure titles, or reference numerals as independent technical disclosure.
 
@@ -1223,6 +1234,8 @@ Before finalizing, ensure:
 - Every major Claim 1 element appears at least once.
 - Every Claim 1 functional relationship has at least one interaction paragraph.
 - No paragraph introduces unsupported subject matter.
+- Each sentence must be traceable to Frozen Claim 1 or Normalized Data, except for permitted reference labels and figure parentheticals.
+- Any unsupported but plausible engineering detail must be omitted.
 - Every reference numeral and FIG. X citation used is both injected and mapped to an allowed invention element.
 
 Do NOT output the self-check.

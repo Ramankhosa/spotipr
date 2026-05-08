@@ -711,6 +711,60 @@ ${guards.join('\n')}
 `
 }
 
+function isDetailedDescriptionKey(sectionKey: string): boolean {
+  return String(sectionKey || '').toLowerCase().replace(/[_\-\s.]/g, '') === 'detaileddescription'
+}
+
+const DETAILED_DESCRIPTION_UNSAFE_CONSTRAINTS = [
+  /\bmultiple\s+embodiments?\b/i,
+  /\banother\s+embodiment\b/i,
+  /\bdescribe\s+best\s+mode\b/i,
+  /\bbest\s+mode\b/i,
+  /\bpreferred\s+embodiments?\b/i,
+  /\bpreferred\s+mode\b/i,
+  /\bspecific\s+parameters?\b/i,
+  /\bexamples?\b/i,
+  /\bsample\s+data\b/i,
+  /\btest\s+(?:measurements?|results?|data)\b/i,
+  /\bnumerical\s+(?:values?|ranges?)\b/i
+]
+
+/**
+ * Detailed Description constraints are database/admin controlled, so filter only
+ * the high-risk directives that invite unsupported subject matter. Other
+ * sections remain fully admin-controlled.
+ */
+export function filterDetailedDescriptionConstraints(
+  sectionKey: string,
+  constraints: string[] | null | undefined
+): string[] {
+  const list = Array.isArray(constraints) ? constraints.filter(Boolean) : []
+  if (!isDetailedDescriptionKey(sectionKey)) return list
+
+  return list.filter(constraint => {
+    const text = String(constraint || '')
+    return !DETAILED_DESCRIPTION_UNSAFE_CONSTRAINTS.some(pattern => pattern.test(text))
+  })
+}
+
+export const DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK = `
+DETAILED DESCRIPTION SOURCE LOCK (RUNTIME OVERRIDE - CRITICAL)
+- The invention scope for detailedDescription is limited to Frozen Claim 1 and the Normalized Data.
+- Figures, components, reference numerals, and injected DD user data are auxiliary context only.
+- Auxiliary context may be used only to label, cite, or clarify subject matter already supported by Frozen Claim 1 and the Normalized Data.
+- Auxiliary context MUST NOT be used as an independent source for adding components, structures, steps, use cases, environments, examples, values, materials, operating conditions, or results.
+- Optional variations may be drafted only when each variation is expressly present in Frozen Claim 1, Normalized Data, or an enabled jurisdictional requirement.
+- Internal algorithms, control logic, formulas, weighting factors, thresholds, numerical ranges, materials, test values, and calculation steps may be drafted only when expressly present in Frozen Claim 1 or Normalized Data.
+- If a detail is not expressly present in Frozen Claim 1 or the Normalized Data, omit the detail.
+- Do NOT fill gaps using technical assumptions, common implementations, field knowledge, or drafting conventions.
+- Do NOT use generic phrases such as "in some embodiments" or "for example" to introduce unsupported subject matter.
+- Each sentence must be traceable to Frozen Claim 1 or Normalized Data, except for permitted reference labels and figure parentheticals.
+`.trim()
+
+export function buildDetailedDescriptionSourceLockBlock(sectionKey: string): string {
+  return isDetailedDescriptionKey(sectionKey) ? DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK : ''
+}
+
 type DetailedDescriptionScopeOptions = {
   figuresSkipped?: boolean
 }
