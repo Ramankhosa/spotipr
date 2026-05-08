@@ -67,16 +67,19 @@ export async function POST(
       'text/plain', // .txt
       'text/markdown', // .md,
       'image/png',
+      'image/jpeg',
+      'image/jpg',
+      'image/webp',
       'image/svg+xml'
     ]
 
-    const allowedExtensions = ['.docx', '.pdf', '.txt', '.md', '.png', '.svg']
+    const allowedExtensions = ['.docx', '.pdf', '.txt', '.md', '.png', '.jpg', '.jpeg', '.webp', '.svg']
     const fileName = file.name.toLowerCase()
     const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext))
 
     if (!allowedTypes.includes(file.type) && !hasAllowedExtension) {
       return NextResponse.json({
-        error: 'Unsupported file type. Please upload .docx, .pdf, .txt, or .md files'
+        error: 'Unsupported file type. Please upload .docx, .pdf, .txt, .md, .png, .jpg, .webp, or .svg files'
       }, { status: 400 })
     }
 
@@ -88,7 +91,12 @@ export async function POST(
     let textContent = ''
 
     try {
-      if (file.type === 'image/png' || fileName.endsWith('.png') || file.type === 'image/svg+xml' || fileName.endsWith('.svg')) {
+      if (
+        file.type === 'image/png' || fileName.endsWith('.png') ||
+        file.type === 'image/jpeg' || file.type === 'image/jpg' || fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') ||
+        file.type === 'image/webp' || fileName.endsWith('.webp') ||
+        file.type === 'image/svg+xml' || fileName.endsWith('.svg')
+      ) {
         // Store diagram image to disk
         const baseDir = path.join(process.cwd(), 'uploads', 'projects', projectId, 'patents', patentId, 'figures')
         await fs.mkdir(baseDir, { recursive: true })

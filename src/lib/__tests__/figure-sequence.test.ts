@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { normalizeFigureSequence } from '@/lib/figure-sequence'
+import { appendFigureToSequence, normalizeFigureSequence } from '@/lib/figure-sequence'
 
 describe('figure-sequence', () => {
   test('normalizes to include all available figures exactly once', () => {
@@ -36,6 +36,44 @@ describe('figure-sequence', () => {
     expect(result.normalized).toEqual([{ id: 'diagram-1', type: 'diagram', sourceId: 'fp1', finalFigNo: 1 }])
     expect(result.meta.droppedSourceMismatchCount).toBe(1)
     expect(result.meta.appendedMissingCount).toBe(1)
+  })
+
+  test('appends a newly uploaded external image after existing figures when no sequence exists', () => {
+    const existing = [
+      { id: 'diagram-1', type: 'diagram' as const, sourceId: 'fp1' },
+      { id: 'sketch-a', type: 'sketch' as const, sourceId: 'a' },
+      { id: 'sketch-b', type: 'sketch' as const, sourceId: 'b' },
+    ]
+
+    const result = appendFigureToSequence([], existing, {
+      id: 'diagram-2',
+      type: 'diagram',
+      sourceId: 'fp2',
+    })
+
+    expect(result.normalized.map(s => s.id)).toEqual(['diagram-1', 'sketch-a', 'sketch-b', 'diagram-2'])
+    expect(result.normalized.map(s => s.finalFigNo)).toEqual([1, 2, 3, 4])
+    expect(result.meta.appendedMissingCount).toBe(4)
+  })
+
+  test('keeps saved custom order and appends a newly uploaded external image last', () => {
+    const existing = [
+      { id: 'diagram-1', type: 'diagram' as const, sourceId: 'fp1' },
+      { id: 'sketch-a', type: 'sketch' as const, sourceId: 'a' },
+    ]
+    const input = [
+      { id: 'sketch-a', type: 'sketch', sourceId: 'a', finalFigNo: 1 },
+      { id: 'diagram-1', type: 'diagram', sourceId: 'fp1', finalFigNo: 2 },
+    ]
+
+    const result = appendFigureToSequence(input, existing, {
+      id: 'diagram-2',
+      type: 'diagram',
+      sourceId: 'fp2',
+    })
+
+    expect(result.normalized.map(s => s.id)).toEqual(['sketch-a', 'diagram-1', 'diagram-2'])
+    expect(result.normalized.map(s => s.finalFigNo)).toEqual([1, 2, 3])
   })
 })
 

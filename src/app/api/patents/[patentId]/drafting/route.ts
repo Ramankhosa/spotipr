@@ -46,6 +46,7 @@ import {
 } from '@/lib/preliminary-claim-generation';
 import {
   generateSketch,
+  detectExternalImageContent,
   listSketches,
   getSketch,
   deleteSketch,
@@ -70,7 +71,7 @@ import plantumlEncoder from 'plantuml-encoder';
 import path from 'path';
 import fs from 'fs/promises';
 import { imageSize } from 'image-size';
-import { normalizeFigureSequence } from '@/lib/figure-sequence'
+import { appendFigureToSequence, normalizeFigureSequence } from '@/lib/figure-sequence'
 import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
 import {
   buildFigureScopePromptBlock,
@@ -85,6 +86,14 @@ import {
   filterDrawingSectionKeys,
   isDrawingSectionKey
 } from '@/lib/figure-availability'
+import {
+  emptyRepairSummary,
+  inferPlantUmlDiagramType,
+  mergeRepairSummary,
+  processGeneratedPlantUml,
+  type PlantUmlValidationError as SharedPlantUmlValidationError,
+  type RepairSummary
+} from '@/lib/plantuml-diagram-processing'
 
 const sanitizeFigureTitleInput = (title?: string | null): string => {
   const raw = typeof title === 'string' ? title : ''
@@ -922,6 +931,9 @@ export async function POST(
 
       case 'create_manual_figure':
         return await handleCreateManualFigure(authResult.user, patentId, data);
+
+      case 'detect_external_image_content':
+        return await handleDetectExternalImageContent(authResult.user, patentId, data, requestHeaders);
 
       // === SKETCH GENERATION (Figure Planner - Sketch Tab) ===
       case 'generate_sketch':
@@ -3368,7 +3380,8 @@ const DIAGRAM_HARD_CAPS: Record<string, { maxElements: number; elementType: stri
   BLOCK: { maxElements: 10, elementType: 'rectangles' },
   FLOW: { maxElements: 8, elementType: 'steps' },
   ACTIVITY: { maxElements: 8, elementType: 'actions' },
-  SEQUENCE: { maxElements: 5, elementType: 'participants' }
+  SEQUENCE: { maxElements: 5, elementType: 'participants' },
+  CONSTITUENT: { maxElements: 10, elementType: 'rectangles' }
 }
 
 // Additional cap for sequence diagram messages
@@ -3597,7 +3610,7 @@ function enforceDiagramCaps(plantuml: string, diagramType: string): string {
     }
     
     // Count and potentially skip elements based on type
-    if (diagramType.toUpperCase() === 'BLOCK' || diagramType.toUpperCase() === 'FLOW') {
+    if (diagramType.toUpperCase() === 'BLOCK' || diagramType.toUpperCase() === 'FLOW' || diagramType.toUpperCase() === 'CONSTITUENT') {
       // Count rectangles
       if (/^\s*rectangle\b/i.test(trimmed)) {
         elementCount++
@@ -4284,15 +4297,19 @@ async function attemptRepairPlantUml(
   const errorsText = validationErrors
     .map(e => `${e.type}${e.line ? `@${e.line}` : ''}: ${e.message}`)
     .join('\n')
-  const prompt = `You are a PlantUML syntax fixer.
-Fix ONLY syntax/structure errors with the smallest possible edit.
-Do NOT change meaning: no renaming labels, no reordering nodes, no adding/removing components or arrows unless absolutely required for syntax.
+  const prompt = `You are a PlantUML syntax and patent-policy fixer.
+Fix syntax/structure errors and remove forbidden PlantUML logic constructs with the smallest safe edit.
+When forbidden logic is present, rewrite it as a simple linear patent-safe diagram.
+Do NOT change meaning: no renaming labels, no reordering nodes, no adding/removing components or arrows unless required to make the diagram valid and linear.
 
 STRICT RULES:
-- Preserve diagram type (block/sequence/activity/state). Do NOT convert it.
+- Preserve diagram type (block/sequence/activity/state/constituent). Do NOT convert it.
 - Do NOT add !include/!theme/!pragma/title/caption.
 - Do NOT add, remove, or modify any skinparam lines.
 - Keep all component names and reference numerals exactly as-is.
+- Do NOT use if/else/endif, alt, loop, fork, repeat, while, switch, note, or box.
+- Do NOT use arrow labels. Use plain arrows only.
+- For activity diagrams, use start, at least three :action; lines, and stop.
 
 FIGURE: ${opts.figureTitle || 'Untitled'}
 DESCRIPTION: ${opts.description || 'n/a'}
@@ -4321,9 +4338,21 @@ Return ONLY corrected diagram code between @startuml and @enduml. No explanation
     if (!result.success || !result.response) return { ok: false, repaired: false, errors: validationErrors }
     const repairedBlock = extractPlantUmlBlock(result.response.output || '')
     if (!repairedBlock) return { ok: false, repaired: false, errors: validationErrors }
-    const validation = validatePlantUmlStructure(repairedBlock)
+    const sanitizedRepair = sanitizePlantUML(repairedBlock)
+    const forbiddenCheck = containsForbiddenKeywords(sanitizedRepair)
+    if (forbiddenCheck.hasForbidden) {
+      return {
+        ok: false,
+        repaired: true,
+        errors: forbiddenCheck.matches.map(match => ({
+          type: 'forbidden_construct',
+          message: `Repair still contains forbidden construct "${match}"`
+        }))
+      }
+    }
+    const validation = validatePlantUmlStructure(sanitizedRepair)
     if (!validation.ok) return { ok: false, repaired: true, errors: validation.errors }
-    return { ok: true, code: repairedBlock, repaired: true }
+    return { ok: true, code: sanitizedRepair, repaired: true }
   } catch (e) {
     console.warn('PlantUML repair attempt failed', e)
     return { ok: false, repaired: false, errors: validationErrors }
@@ -4341,6 +4370,66 @@ async function fetchPlantUmlErrorText(baseUrl: string, encoded: string): Promise
     console.warn('Failed to fetch PlantUML /txt diagnostics', e)
   }
   return null
+}
+
+type DiagramProcessingFailure = {
+  index?: number
+  title?: string
+  reason: string
+}
+
+function plantUmlErrorsToReason(errors?: PlantUmlValidationError[] | SharedPlantUmlValidationError[]): string {
+  if (!errors || errors.length === 0) return 'Unknown PlantUML validation failure'
+  return errors.map(e => `${e.type}${e.line ? `@${e.line}` : ''}: ${e.message}`).join('; ')
+}
+
+function shouldExposeRepairSummary(summary: RepairSummary): boolean {
+  return summary.attempted > 0 || summary.repaired > 0 || summary.failed > 0
+}
+
+async function processDiagramWithRepair(
+  rawCode: string,
+  opts: {
+    diagramType?: string
+    figureTitle?: string
+    description?: string
+    numerals?: string[]
+    plantumlErrorText?: string
+    requestHeaders?: Record<string, string>
+    forceRepair?: boolean
+  }
+) {
+  return processGeneratedPlantUml({
+    rawCode,
+    diagramType: opts.diagramType,
+    figureTitle: opts.figureTitle,
+    description: opts.description,
+    numerals: opts.numerals,
+    plantumlErrorText: opts.plantumlErrorText,
+    requestHeaders: opts.requestHeaders,
+    forceRepair: opts.forceRepair,
+    repair: async ({ code, validationErrors, figureTitle, description, numerals, plantumlErrorText, requestHeaders }) => {
+      return attemptRepairPlantUml(
+        code,
+        validationErrors as PlantUmlValidationError[],
+        {
+          figureTitle,
+          description,
+          numerals,
+          plantumlErrorText,
+          requestHeaders
+        }
+      )
+    }
+  })
+}
+
+function buildDiagramFailureResponse(failedFigures: DiagramProcessingFailure[], repairSummary: RepairSummary) {
+  return NextResponse.json({
+    error: 'The AI generated invalid diagram code and repair failed. Please simplify the request or remove branching/looping language.',
+    failedFigures,
+    repairSummary: shouldExposeRepairSummary(repairSummary) ? repairSummary : undefined
+  }, { status: 400 })
 }
 
 async function handleStartSession(user: any, patentId: string, data: any) {
@@ -7420,7 +7509,7 @@ P200 -right-> M300
   activity: {
     type: 'activity',
     name: 'Activity/Flowchart Diagram',
-    description: 'Shows method steps, process flow, and decision points',
+    description: 'Shows linear method steps and process flow',
     syntaxGuide: `Use activity diagram syntax for method/process claims.
 - CRITICAL: Do NOT use rectangles for flow/method diagrams. Use ONLY activity syntax (:action;).
 - Do NOT wrap flow steps in rectangle blocks - this causes rendering issues.
@@ -7449,23 +7538,18 @@ stop
     syntaxGuide: `Use sequence diagram syntax for communication protocols.
 - Participants: participant "Name (numeral)" as Alias
 - IMPORTANT: Numerals MUST be in parentheses, e.g., "Client (100)" not "Client 100"
-- Messages: A -> B or A --> B (keep labels SHORT or omit entirely to avoid clutter)
+- Messages: A -> B or A --> B (NO labels on arrows)
 - Return: A <-- B
-- Activation: activate A ... deactivate A
-- FORBIDDEN: Long arrow labels that cause visual overlap`,
+- FORBIDDEN: Arrow labels that cause visual overlap`,
     exampleCode: `@startuml
 participant "Client (100)" as C
 participant "Server (200)" as S
 participant "Database (300)" as D
 
 C -> S
-activate S
 S -> D
-activate D
 D --> S
-deactivate D
 S --> C
-deactivate S
 @enduml`
   },
   state: {
@@ -7500,7 +7584,8 @@ Done --> [*]
 - Show relationships between constituents (not physical connections)
 - Reference labels use (a), (b), (c) format for COMPOSITION patents
 - IMPORTANT: Labels MUST be in parentheses format, e.g., "Active Agent (a)" not "Active Agent a"
-- Show proportions/ratios only if specified in claims`,
+- Show proportions/ratios only if specified in claims
+- FORBIDDEN: Do NOT add labels/text after arrows (e.g., NO "A --> B : label")`,
     exampleCode: `@startuml
 package "Formulation" {
   rectangle "Active Agent (a)" as A
@@ -7509,9 +7594,9 @@ package "Formulation" {
   rectangle "Excipient (d)" as D
 }
 
-A -down-> B : incorporated in
-B -right-> C : combined with
-C -down-> D : mixed with
+A -down-> B
+B -right-> C
+C -down-> D
 @enduml`
   }
 }
@@ -7720,12 +7805,11 @@ function planDiagramTypes(
           reason: `${patentType}+SOFTWARE archetype with sequence signals → Sequence diagram`
         })
       } else if ((archetype.includes('ELECTRICAL') || archetype.includes('SOFTWARE')) && claimSignals.hasStateConcepts) {
-        // State diagram ONLY if ELECTRICAL/SOFTWARE + state signals
         plans.push({
           figureNo: 4,
-          type: 'state',
-          purpose: 'State machine showing operational modes',
-          reason: `${patentType}+${archetype} with state signals → State diagram`
+          type: 'block',
+          purpose: 'Operational mode component layout without state-machine transitions',
+          reason: `${patentType}+${archetype} with state signals → Flattened to block diagram for patent-safe auto planning`
         })
       } else if (claimSignals.hasMethodClaims && plans.filter(p => p.type === 'activity').length < 2) {
         plans.push({
@@ -8527,6 +8611,9 @@ async function handlePlanAndGenerateDiagramsLLM(
     success: true,
     plan: planResult.plan,
     figures: generateResult.figures,
+    warnings: generateResult.warnings,
+    repairSummary: generateResult.repairSummary,
+    failedFigures: generateResult.failedFigures,
     message: `Successfully planned and generated ${generateResult.figures?.length || 0} diagrams`
   })
 }
@@ -9099,6 +9186,11 @@ If in doubt, OMIT rather than add.
   // Persist immediately: assign figure numbers and save PlantUML + titles
   try {
     const saved: Array<{ figureNo: number; title: string; plantuml: string; purpose: string; diagramType: string; hasValidationWarnings: boolean }> = []
+    const warnings: string[] = []
+    const failedFigures: DiagramProcessingFailure[] = []
+    const repairSummary = emptyRepairSummary()
+    const availableNumerals = extractComponentsArray(session.referenceMap)
+      .map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`)
 
     // When appending, continue numbering after existing figures; when replacing, start fresh
     const existingPlans = await prisma.figurePlan.findMany({ where: { sessionId } })
@@ -9133,55 +9225,41 @@ If in doubt, OMIT rather than add.
       // Step 5: Validate structure
       // ═══════════════════════════════════════════════════════════════════════════
       
-      // Step 1: Basic sanitization
-      let code = sanitizePlantUML(codeRaw)
-      if (!code.includes('@startuml')) continue
-
-      // Step 2: C3 FORBIDDEN KEYWORD GATE (Critical - triggers skip if any match)
-      // If forbidden keywords are detected, log and skip this diagram.
-      // PHILOSOPHY: Regenerate, don't repair. Since we can't regenerate individual
-      // diagrams in this context, we skip the problematic one.
-      const forbiddenCheck = containsForbiddenKeywords(code)
-      if (forbiddenCheck.hasForbidden) {
-        console.warn(`[DiagramsLLM] FORBIDDEN KEYWORDS detected in "${title}": ${forbiddenCheck.matches.join(', ')}. Skipping diagram.`)
-        continue // Skip this diagram - forbidden constructs detected
-      }
-
-      // Step 2.5: C5 INCLUDE LIST VALIDATION (Warning only - catches hallucinations)
-      // Verify that generated diagram uses only components from the planner's include[] list.
-      // If hallucinated components are detected, log a warning but still save the diagram.
       const plannedFigure = figurePlan?.diagrams?.[i]
       const includeList = plannedFigure?.include
+      const processed = await processDiagramWithRepair(codeRaw, {
+        diagramType: figureType,
+        figureTitle: title,
+        description,
+        numerals: includeList && includeList.length > 0 ? includeList : availableNumerals,
+        requestHeaders
+      })
+      mergeRepairSummary(repairSummary, processed.repairSummary)
+      if (processed.warnings.length > 0) {
+        warnings.push(...processed.warnings.map(w => `${title}: ${w}`))
+      }
+      if (!processed.ok || !processed.code) {
+        const reason = plantUmlErrorsToReason(processed.errors)
+        console.warn(`[DiagramsLLM] Figure "${title}" failed after repair processing: ${reason}`)
+        failedFigures.push({ index: i + 1, title, reason })
+        continue
+      }
+
+      const code = processed.code
       const includeValidation = validateIncludeList(code, includeList)
       if (!includeValidation.valid) {
-        console.warn(`[DiagramsLLM] Figure "${title}" contains components not in include[] list: ${includeValidation.hallucinated.join(', ')}`)
-        // Note: We still save the diagram but log the warning. This catches subtle hallucinations.
+        const warning = `Figure "${title}" contains components not in include[] list: ${includeValidation.hallucinated.join(', ')}`
+        console.warn(`[DiagramsLLM] ${warning}`)
+        warnings.push(warning)
       }
 
-      // Step 2.6: C6 ACTIVITY NUMERAL VALIDATION (Warning - catches missing numerals in activity diagrams)
       const activityValidation = validateActivityNumerals(code)
       if (!activityValidation.valid) {
-        console.warn(`[DiagramsLLM] Figure "${title}" has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`)
-        // Note: We still save the diagram but log the warning. This catches activity diagrams missing numerals.
+        const warning = `Figure "${title}" has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`
+        console.warn(`[DiagramsLLM] ${warning}`)
+        warnings.push(warning)
       }
-
-      // Step 3: F - INJECT FIXED SKINPARAMS
-      // LLM should not have generated skinparams, but we inject the canonical block anyway.
-      code = injectFixedSkinparams(code)
-      
-      // Step 4: C2 - ENFORCE ELEMENT CAPS (truncate silently if over limit)
-      code = enforceDiagramCaps(code, figureType)
-
-      // Step 5: Validate structure (syntax check only, no repair)
-      // PHILOSOPHY: Regenerate, don't repair. We validate but don't attempt repair.
-      // If validation fails, we save with a warning but don't mutate the structure.
-      const validation = validatePlantUmlStructure(code)
-      const hasValidationErrors = !validation.ok
-      if (hasValidationErrors) {
-        console.warn(`[DiagramsLLM] Figure "${title}" has validation errors: ${validation.errors.map(e => e.message).join('; ')}`)
-        // Note: We still save the diagram but flag it. No repair attempts.
-        // Users can manually edit or regenerate the entire diagram set.
-      }
+      const hasValidationErrors = processed.repaired || !includeValidation.valid || !activityValidation.valid
 
       const figureNo = nextNo()
       const checksum = crypto.createHash('sha256').update(code).digest('hex')
@@ -9208,6 +9286,13 @@ If in doubt, OMIT rather than add.
         diagramType: figureType,
         hasValidationWarnings: hasValidationErrors
       })
+    }
+
+    if (saved.length === 0) {
+      return buildDiagramFailureResponse(failedFigures, repairSummary)
+    }
+    if (failedFigures.length > 0) {
+      warnings.push(`${failedFigures.length} diagram(s) could not be repaired and were skipped.`)
     }
 
     // Build response with processed code
@@ -9242,6 +9327,9 @@ If in doubt, OMIT rather than add.
     return NextResponse.json({ 
       figures: responseFigures, 
       saved,
+      warnings: warnings.length > 0 ? warnings : undefined,
+      repairSummary: shouldExposeRepairSummary(repairSummary) ? repairSummary : undefined,
+      failedFigures: failedFigures.length > 0 ? failedFigures : undefined,
       sketchSuggestionsGenerating: true // Indicate that suggestions are being generated in background
     })
   } catch (persistErr) {
@@ -10177,27 +10265,24 @@ async function handleFixPlantUMLRender(user: any, patentId: string, data: any, r
   const components = extractComponentsArray(session.referenceMap)
   const numerals = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`)
 
-  // Try to repair the PlantUML code
-  const repairResult = await attemptRepairPlantUml(
-    plantumlCode,
-    [{ type: 'render_error', message: renderError || 'Render failed' }],
-    {
-      figureTitle: title,
-      description,
-      numerals,
-      plantumlErrorText: renderError,
-      requestHeaders
-    }
-  )
+  const processed = await processDiagramWithRepair(plantumlCode, {
+    diagramType: inferPlantUmlDiagramType(plantumlCode),
+    figureTitle: title,
+    description,
+    numerals,
+    plantumlErrorText: renderError,
+    requestHeaders,
+    forceRepair: true
+  })
 
-  if (repairResult.ok && repairResult.code) {
+  if (processed.ok && processed.code) {
     // Save the fixed code to the diagram source
-    const checksum = crypto.createHash('sha256').update(repairResult.code).digest('hex')
+    const checksum = crypto.createHash('sha256').update(processed.code).digest('hex')
     
     await prisma.diagramSource.upsert({
       where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } },
       update: { 
-        plantumlCode: repairResult.code, 
+        plantumlCode: processed.code,
         checksum,
         imageUploadedAt: null, // Clear image since code changed
         imageFilename: null,
@@ -10206,7 +10291,7 @@ async function handleFixPlantUMLRender(user: any, patentId: string, data: any, r
       create: { 
         sessionId, 
         figureNo, 
-        plantumlCode: repairResult.code, 
+        plantumlCode: processed.code,
         checksum,
         language: 'en'
       }
@@ -10214,7 +10299,9 @@ async function handleFixPlantUMLRender(user: any, patentId: string, data: any, r
 
     return NextResponse.json({ 
       success: true, 
-      fixedCode: repairResult.code,
+      fixedCode: processed.code,
+      warnings: processed.warnings.length > 0 ? processed.warnings : undefined,
+      repairSummary: shouldExposeRepairSummary(processed.repairSummary) ? processed.repairSummary : undefined,
       message: 'Code fixed successfully - ready for re-render'
     })
   }
@@ -10222,7 +10309,9 @@ async function handleFixPlantUMLRender(user: any, patentId: string, data: any, r
   return NextResponse.json({ 
     success: false, 
     error: 'Could not auto-fix the PlantUML code. Please review and fix manually.',
-    details: repairResult.errors?.map(e => e.message).join(', ')
+    details: plantUmlErrorsToReason(processed.errors),
+    failedFigures: [{ index: 1, title, reason: plantUmlErrorsToReason(processed.errors) }],
+    repairSummary: shouldExposeRepairSummary(processed.repairSummary) ? processed.repairSummary : undefined
   }, { status: 400 })
 }
 
@@ -10262,7 +10351,7 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
 
   // Determine diagram type - use requested type, or detect from existing code, or default to block
   let diagramType: DiagramType = 'block'
-  if (requestedType && ['block', 'activity', 'sequence', 'state'].includes(requestedType)) {
+  if (requestedType && ['block', 'activity', 'sequence', 'state', 'constituent'].includes(requestedType)) {
     diagramType = requestedType as DiagramType
   } else if (existingDiagramCode) {
     // Detect from existing diagram source
@@ -10304,12 +10393,12 @@ MODIFICATION GUIDELINES
    - EXPAND: "add more detail", "show sub-steps", "elaborate" → Add detail as requested
    - DIAGRAM TYPE CONVERSION: "convert to sequence diagram", "make it an activity diagram" → Convert type as requested
    - RESTRUCTURE: "reorganize", "change the flow", "flip direction" → Restructure as requested
-   - STYLE OVERRIDES: If user explicitly requests different skinparams/styles → Apply user's style preferences
+   - STYLE REQUESTS: Honor layout/content style requests, but do NOT emit skinparam lines
    
    NOTE: Do NOT add colors unless user explicitly requests. Patent diagrams use black borders on white backgrounds by default.
 
 3. DEFAULT BEHAVIOR (when user does NOT specify style/layout changes):
-   - Apply the canonical style settings below
+   - Let the system inject canonical style settings
    - Preserve existing structure while applying the specific change
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -10469,45 +10558,34 @@ Output ONLY the diagram code (@startuml..@enduml).`
   if (!result.success || !result.response) return NextResponse.json({ error: result.error?.message || 'LLM failed' }, { status: 400 })
 
   const text = (result.response.output || '').trim()
-  const match = text.match(/@startuml[\s\S]*?@enduml/)
-  if (!match) return NextResponse.json({ error: 'No diagram code found in response' }, { status: 400 })
+  if (!text.includes('@startuml')) return NextResponse.json({ error: 'No diagram code found in response' }, { status: 400 })
 
-  let code = sanitizePlantUML(match[0])
-  // Validate sanitized code is still valid PlantUML
-  if (!code.includes('@startuml') || !code.includes('@enduml')) {
-    return NextResponse.json({ error: 'Diagram code became invalid after processing. Please try again with different instructions.' }, { status: 400 })
+  const processed = await processDiagramWithRepair(text, {
+    diagramType,
+    figureTitle: title,
+    description: instructions || '',
+    numerals: components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`),
+    requestHeaders
+  })
+  if (!processed.ok || !processed.code) {
+    return buildDiagramFailureResponse([
+      { index: 1, title, reason: plantUmlErrorsToReason(processed.errors) }
+    ], processed.repairSummary)
   }
 
+  let code = processed.code
+  const warnings = [...processed.warnings]
+
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRODUCTION-SAFE PROCESSING (REGENERATE-NOT-REPAIR)
+  // POST-REPAIR WARNING CHECKS
   // ═══════════════════════════════════════════════════════════════════════════
-  
-  // C3: Check forbidden keywords
-  const forbiddenCheck = containsForbiddenKeywords(code)
-  if (forbiddenCheck.hasForbidden) {
-    return NextResponse.json({ 
-      error: 'Generated diagram contains forbidden constructs',
-      details: `Detected: ${forbiddenCheck.matches.join(', ')}. Please try again with instructions that avoid decision logic.`
-    }, { status: 400 })
-  }
   
   // C6: Validate activity diagrams have numerals (warning only)
   const activityValidation = validateActivityNumerals(code)
   if (!activityValidation.valid) {
-    console.warn(`[RegenerateDiagramLLM] Figure ${figureNo} has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`)
-  }
-  
-  // Inject fixed skinparams
-  code = injectFixedSkinparams(code)
-  
-  // Validate structure (NO repair - regenerate-not-repair philosophy)
-  const validation = validatePlantUmlStructure(code)
-  if (!validation.ok) {
-    console.warn(`[RegenerateDiagramLLM] Figure ${figureNo} has syntax errors`)
-    return NextResponse.json({ 
-      error: 'Generated diagram has syntax errors. Please try again with different instructions.',
-      details: validation.errors 
-    }, { status: 400 })
+    const warning = `Figure ${figureNo} has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`
+    console.warn(`[RegenerateDiagramLLM] ${warning}`)
+    warnings.push(warning)
   }
 
   const checksum = crypto.createHash('sha256').update(code).digest('hex')
@@ -10559,7 +10637,7 @@ async function handleAddFigureLLM(user: any, patentId: string, data: any, reques
   const archetype = types.length > 0 ? types.join('+') : 'GENERAL'
 
   // Determine diagram type - use requested type or default to block
-  const diagramType: DiagramType = (requestedType && ['block', 'activity', 'sequence', 'state'].includes(requestedType)) 
+  const diagramType: DiagramType = (requestedType && ['block', 'activity', 'sequence', 'state', 'constituent'].includes(requestedType))
     ? requestedType as DiagramType 
     : 'block'
   const diagramInfo = DIAGRAM_TYPES[diagramType]
@@ -10661,45 +10739,34 @@ Return ONLY diagram code.`
   if (!result.success || !result.response) return NextResponse.json({ error: result.error?.message || 'LLM failed' }, { status: 400 })
 
   const text = (result.response.output || '').trim()
-  const match = text.match(/@startuml[\s\S]*?@enduml/)
-  if (!match) return NextResponse.json({ error: 'No diagram code found in response' }, { status: 400 })
+  if (!text.includes('@startuml')) return NextResponse.json({ error: 'No diagram code found in response' }, { status: 400 })
 
-  // Sanitize and validate the PlantUML code
-  let code = sanitizePlantUML(match[0])
-  if (!code.includes('@startuml') || !code.includes('@enduml')) {
-    return NextResponse.json({ error: 'Diagram code became invalid after processing. Please try again with different instructions.' }, { status: 400 })
+  const processed = await processDiagramWithRepair(text, {
+    diagramType,
+    figureTitle: 'New figure',
+    description: instructions || '',
+    numerals: components2.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`),
+    requestHeaders
+  })
+  if (!processed.ok || !processed.code) {
+    return buildDiagramFailureResponse([
+      { index: 1, title: 'New figure', reason: plantUmlErrorsToReason(processed.errors) }
+    ], processed.repairSummary)
   }
 
+  const code = processed.code
+  const warnings = [...processed.warnings]
+
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRODUCTION-SAFE PROCESSING (REGENERATE-NOT-REPAIR)
+  // POST-REPAIR WARNING CHECKS
   // ═══════════════════════════════════════════════════════════════════════════
-  
-  // C3: Check forbidden keywords
-  const forbiddenCheck = containsForbiddenKeywords(code)
-  if (forbiddenCheck.hasForbidden) {
-    return NextResponse.json({ 
-      error: 'Generated diagram contains forbidden constructs',
-      details: `Detected: ${forbiddenCheck.matches.join(', ')}. Please try again with instructions that avoid decision logic.`
-    }, { status: 400 })
-  }
   
   // C6: Validate activity diagrams have numerals (warning only)
   const activityValidation = validateActivityNumerals(code)
   if (!activityValidation.valid) {
-    console.warn(`[AddFigureLLM] New figure has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`)
-  }
-  
-  // Inject fixed skinparams
-  code = injectFixedSkinparams(code)
-  
-  // Validate structure (NO repair - regenerate-not-repair philosophy)
-  const validation = validatePlantUmlStructure(code)
-  if (!validation.ok) {
-    console.warn(`[AddFigureLLM] New figure has syntax errors`)
-    return NextResponse.json({ 
-      error: 'Generated diagram has syntax errors. Please try again with different instructions.',
-      details: validation.errors 
-    }, { status: 400 })
+    const warning = `New figure has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`
+    console.warn(`[AddFigureLLM] ${warning}`)
+    warnings.push(warning)
   }
 
   // Assign next figure number
@@ -10714,7 +10781,11 @@ Return ONLY diagram code.`
   await prisma.figurePlan.upsert({ where: { sessionId_figureNo: { sessionId, figureNo } }, update: { title }, create: { sessionId, figureNo, title, nodes: [], edges: [] } })
   const diagramSource = await prisma.diagramSource.upsert({ where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } }, update: { plantumlCode: code, checksum }, create: { sessionId, figureNo, plantumlCode: code, checksum, language: 'en' } })
 
-  return NextResponse.json({ diagramSource })
+  return NextResponse.json({
+    diagramSource,
+    warnings: warnings.length > 0 ? warnings : undefined,
+    repairSummary: shouldExposeRepairSummary(processed.repairSummary) ? processed.repairSummary : undefined
+  })
 }
 
 async function handleAddFiguresLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
@@ -10854,6 +10925,9 @@ Items:\n- ${instructionsList.join('\n- ')}`
         .filter((it: any) => typeof it === 'string' && it.includes('@startuml'))
     } catch {}
   }
+  if (blocks.length === 0 && text.includes('@startuml')) {
+    blocks = [text]
+  }
   if (blocks.length === 0) return NextResponse.json({ error: 'No diagram blocks found' }, { status: 400 })
 
   const existingPlans = await prisma.figurePlan.findMany({ where: { sessionId } })
@@ -10869,34 +10943,45 @@ Items:\n- ${instructionsList.join('\n- ')}`
 
   const created: any[] = []
   const skipped: number[] = []
+  const warnings: string[] = []
+  const failedFigures: DiagramProcessingFailure[] = []
+  const repairSummary = emptyRepairSummary()
+  const availableNumerals = components3.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`)
   
   for (let i = 0; i < blocks.length; i++) {
     const rawCode = blocks[i]
-    // IMPORTANT: Sanitize PlantUML code to remove forbidden directives that would cause render failure
-    let code = sanitizePlantUML(rawCode)
-    if (!code.includes('@startuml')) continue // Skip invalid blocks after sanitization
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // PRODUCTION-SAFE PROCESSING (REGENERATE-NOT-REPAIR)
-    // ═══════════════════════════════════════════════════════════════════════════
-    
-    // C3: Check forbidden keywords - skip block if found
-    const forbiddenCheck = containsForbiddenKeywords(code)
-    if (forbiddenCheck.hasForbidden) {
-      console.warn(`[AddFiguresLLM] Block ${i + 1} contains forbidden keywords: ${forbiddenCheck.matches.join(', ')}. Skipping.`)
+    const requestedTitle = `Requested figure ${i + 1}`
+    const processed = await processDiagramWithRepair(rawCode, {
+      diagramType: inferPlantUmlDiagramType(rawCode),
+      figureTitle: requestedTitle,
+      description: String(instructionsList[i] || ''),
+      numerals: availableNumerals,
+      requestHeaders
+    })
+    mergeRepairSummary(repairSummary, processed.repairSummary)
+    if (processed.warnings.length > 0) {
+      warnings.push(...processed.warnings.map(w => `${requestedTitle}: ${w}`))
+    }
+
+    if (!processed.ok || !processed.code) {
+      const reason = plantUmlErrorsToReason(processed.errors)
+      console.warn(`[AddFiguresLLM] Block ${i + 1} failed after repair processing: ${reason}`)
       skipped.push(i + 1)
+      failedFigures.push({ index: i + 1, title: requestedTitle, reason })
       continue
     }
+
+    const code = processed.code
     
-    // Inject fixed skinparams
-    code = injectFixedSkinparams(code)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // POST-REPAIR WARNING CHECKS
+    // ═══════════════════════════════════════════════════════════════════════════
     
-    // Validate structure (NO repair - skip if invalid)
-    const validation = validatePlantUmlStructure(code)
-    if (!validation.ok) {
-      console.warn(`[AddFiguresLLM] Block ${i + 1} has syntax errors. Skipping.`)
-      skipped.push(i + 1)
-      continue
+    const activityValidation = validateActivityNumerals(code)
+    if (!activityValidation.valid) {
+      const warning = `${requestedTitle} has activity actions without numerals: ${activityValidation.missingNumerals.join(', ')}`
+      console.warn(`[AddFiguresLLM] ${warning}`)
+      warnings.push(warning)
     }
     
     const no = nextNo()
@@ -10908,7 +10993,20 @@ Items:\n- ${instructionsList.join('\n- ')}`
     created.push({ figureNo: no, diagramSource })
   }
 
-  return NextResponse.json({ created, skippedBlocks: skipped.length > 0 ? skipped : undefined })
+  if (created.length === 0) {
+    return buildDiagramFailureResponse(failedFigures, repairSummary)
+  }
+  if (failedFigures.length > 0) {
+    warnings.push(`${failedFigures.length} diagram(s) could not be repaired and were skipped.`)
+  }
+
+  return NextResponse.json({
+    created,
+    skippedBlocks: skipped.length > 0 ? skipped : undefined,
+    warnings: warnings.length > 0 ? warnings : undefined,
+    repairSummary: shouldExposeRepairSummary(repairSummary) ? repairSummary : undefined,
+    failedFigures: failedFigures.length > 0 ? failedFigures : undefined
+  })
 }
 
 async function handleDeleteFigure(user: any, patentId: string, data: any) {
@@ -10961,19 +11059,45 @@ async function handleCreateManualFigure(user: any, patentId: string, data: any) 
 
   const session = await prisma.draftingSession.findFirst({ 
     where: { id: sessionId, patentId, userId: user.id },
-    select: { id: true, figureSequence: true, figureSequenceFinalized: true }
+    include: {
+      figurePlans: {
+        select: { id: true, figureNo: true },
+        orderBy: { figureNo: 'asc' }
+      },
+      sketchRecords: {
+        where: { isDeleted: false, status: 'SUCCESS' },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' }
+      }
+    }
   })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   await reactivateFiguresForSession(sessionId)
 
-  // Assign number if not provided
-  let no = figureNo
-  if (!no) {
-    const existing = await prisma.figurePlan.findMany({ where: { sessionId } })
-    const used = new Set(existing.map(e => e.figureNo))
-    no = 1
-    while (used.has(no)) no++
+  let loadedSketches = session.sketchRecords || []
+  if (loadedSketches.length === 0) {
+    loadedSketches = await prisma.sketchRecord.findMany({
+      where: {
+        patentId,
+        isDeleted: false,
+        status: 'SUCCESS'
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' }
+    })
   }
+
+  // Assign number if not provided
+  let no = Number(figureNo)
+  if (!Number.isInteger(no) || no <= 0) no = 0
+  if (!no) {
+    const maxExistingFigureNo = (session.figurePlans || []).reduce(
+      (max, plan) => Math.max(max, plan.figureNo || 0),
+      0
+    )
+    no = maxExistingFigureNo + 1
+  }
+  const wasExistingFigure = (session.figurePlans || []).some(plan => plan.figureNo === no)
 
   const cleanedTitle = sanitizeFigureTitleInput(title) || `Figure ${no}`
 
@@ -10992,26 +11116,38 @@ async function handleCreateManualFigure(user: any, patentId: string, data: any) 
 
   // Add new figure to figureSequence if not finalized
   if (!session.figureSequenceFinalized) {
-    const currentSequence = (session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>) || []
     const newId = `diagram-${no}`
-    
-    // Only add if not already in sequence
-    if (!currentSequence.some(item => item.id === newId)) {
-      const updatedSequence = [
-        ...currentSequence,
-        {
-          id: newId,
-          type: 'diagram' as const,
-          sourceId: figurePlan.id,
-          finalFigNo: currentSequence.length + 1
-        }
-      ]
-      
-      await prisma.draftingSession.update({
-        where: { id: sessionId },
-        data: { figureSequence: updatedSequence }
-      })
+    const existingDiagramPlans = (session.figurePlans || [])
+      .filter(plan => plan.figureNo !== no)
+    const allDiagramFigures = [
+      ...existingDiagramPlans,
+      { id: figurePlan.id, figureNo: no }
+    ]
+      .sort((a, b) => a.figureNo - b.figureNo)
+      .map(plan => ({
+        id: `diagram-${plan.figureNo}`,
+        type: 'diagram' as const,
+        sourceId: plan.id
+      }))
+    const existingSketchFigures = loadedSketches.map(sketch => ({
+      id: `sketch-${sketch.id}`,
+      type: 'sketch' as const,
+      sourceId: sketch.id
+    }))
+    const newFigure = {
+      id: newId,
+      type: 'diagram' as const,
+      sourceId: figurePlan.id
     }
+    const currentSequence = (session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>) || []
+    const { normalized: updatedSequence } = wasExistingFigure
+      ? normalizeFigureSequence(currentSequence, [...allDiagramFigures, ...existingSketchFigures])
+      : appendFigureToSequence(currentSequence, [...allDiagramFigures.filter(figure => figure.id !== newId), ...existingSketchFigures], newFigure)
+
+    await prisma.draftingSession.update({
+      where: { id: sessionId },
+      data: { figureSequence: updatedSequence }
+    })
   }
 
   return NextResponse.json({ created: { figureNo: no } })
@@ -11035,6 +11171,58 @@ async function checkSketchAccess(user: any): Promise<NextResponse | null> {
     }
   }
   return null // Access allowed
+}
+
+/**
+ * Detect visible content in a user-uploaded external figure image.
+ */
+async function handleDetectExternalImageContent(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const { sessionId, uploadedImageBase64, uploadedImageMimeType, title } = data
+
+  const accessDenied = await checkSketchAccess(user)
+  if (accessDenied) return accessDenied
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
+  }
+
+  if (!uploadedImageBase64 || !uploadedImageMimeType) {
+    return NextResponse.json({ error: 'Uploaded image is required for AI detection' }, { status: 400 })
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id }
+  })
+  if (!session) {
+    return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  }
+
+  try {
+    const result = await detectExternalImageContent({
+      patentId,
+      sessionId,
+      uploadedImageBase64,
+      uploadedImageMimeType,
+      title,
+      requestHeaders
+    })
+
+    if (!result.success) {
+      return NextResponse.json({
+        success: false,
+        error: result.error || 'AI image content detection failed',
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight
+      }, { status: 400 })
+    }
+
+    return NextResponse.json(result)
+  } catch (error) {
+    console.error('[ExternalImageDetection] Error:', error)
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : 'AI image content detection failed'
+    }, { status: 500 })
+  }
 }
 
 /**
@@ -12796,26 +12984,49 @@ async function handleUploadDiagram(user: any, patentId: string, data: any) {
     
     // Add new figure to figureSequence if not finalized
     if (!session.figureSequenceFinalized) {
-      const currentSequence = (session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>) || []
-      const newId = `diagram-${figureNo}`
-      
-      // Only add if not already in sequence
-      if (!currentSequence.some(item => item.id === newId)) {
-        const updatedSequence = [
-          ...currentSequence,
-          {
-            id: newId,
-            type: 'diagram' as const,
-            sourceId: newPlan.id,
-            finalFigNo: currentSequence.length + 1
-          }
-        ]
-        
-        await prisma.draftingSession.update({
-          where: { id: sessionId },
-          data: { figureSequence: updatedSequence }
+      const existingDiagramFigures = (await prisma.figurePlan.findMany({
+        where: { sessionId, NOT: { figureNo } },
+        select: { id: true, figureNo: true },
+        orderBy: { figureNo: 'asc' }
+      })).map(plan => ({
+        id: `diagram-${plan.figureNo}`,
+        type: 'diagram' as const,
+        sourceId: plan.id
+      }))
+      let loadedSketches = await prisma.sketchRecord.findMany({
+        where: { sessionId, isDeleted: false, status: 'SUCCESS' },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' }
+      })
+      if (loadedSketches.length === 0) {
+        loadedSketches = await prisma.sketchRecord.findMany({
+          where: { patentId, isDeleted: false, status: 'SUCCESS' },
+          select: { id: true },
+          orderBy: { createdAt: 'asc' }
         })
       }
+      const existingSketchFigures = loadedSketches.map(sketch => ({
+        id: `sketch-${sketch.id}`,
+        type: 'sketch' as const,
+        sourceId: sketch.id
+      }))
+      const currentSequence = (session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>) || []
+      const newId = `diagram-${figureNo}`
+      const newFigure = {
+        id: newId,
+        type: 'diagram' as const,
+        sourceId: newPlan.id
+      }
+      const { normalized: updatedSequence } = appendFigureToSequence(
+        currentSequence,
+        [...existingDiagramFigures, ...existingSketchFigures],
+        newFigure
+      )
+
+      await prisma.draftingSession.update({
+        where: { id: sessionId },
+        data: { figureSequence: updatedSequence }
+      })
     }
   } else {
     figurePlanId = existingPlan.id

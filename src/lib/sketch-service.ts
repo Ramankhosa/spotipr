@@ -81,6 +81,26 @@ export interface SketchGenerationResult {
   attemptCount?: number
 }
 
+export interface ExternalImageContentDetectionRequest {
+  patentId: string
+  sessionId: string
+  uploadedImageBase64: string
+  uploadedImageMimeType: string
+  title?: string
+  requestHeaders?: Record<string, string>
+}
+
+export interface ExternalImageContentDetectionResult {
+  success: boolean
+  description?: string
+  titleSuggestion?: string
+  warnings?: string[]
+  error?: string
+  imageWidth?: number
+  imageHeight?: number
+  modelUsed?: string
+}
+
 // Constants
 const SKETCH_UPLOAD_DIR = 'public/uploads/sketches'
 const MAX_MODIFY_ATTEMPTS = 10
@@ -110,6 +130,16 @@ const SKETCH_RECOMMENDED_MODEL = 'gemini-3-pro-image-preview'
 const SKETCH_OUTPUT_IMAGE_SIZE = '2K'
 const SKETCH_STAGE_CODE = 'DRAFT_SKETCH_GENERATION'
 const SKETCH_TASK_CODE: TaskCode = 'LLM3_DIAGRAM' // Closest task for vision + drafting limits
+export const EXTERNAL_IMAGE_AI_MAX_SIDE = 1920
+export const EXTERNAL_IMAGE_AI_MAX_PIXELS = 1920 * 1080
+export const EXTERNAL_IMAGE_AI_MAX_BYTES = 10 * 1024 * 1024
+
+const EXTERNAL_IMAGE_AI_ALLOWED_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp'
+])
 
 /**
  * Resolve the active plan for a tenant (latest active, non-expired)
@@ -319,6 +349,270 @@ export async function buildSketchContextBundle(
   }
 
   return bundle
+}
+
+function normalizeExternalImageMimeType(mimeType: string): string {
+  const normalized = (mimeType || '').trim().toLowerCase()
+  return normalized === 'image/jpg' ? 'image/jpeg' : normalized
+}
+
+function countDescriptionWords(value: string): number {
+  return value.trim().split(/\s+/).filter(Boolean).length
+}
+
+function stripMarkdownCodeFence(value: string): string {
+  return value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+}
+
+function extractExternalImageDetectionPayload(output: string): {
+  description: string
+  titleSuggestion?: string
+  warnings: string[]
+} {
+  const cleaned = stripMarkdownCodeFence(output || '')
+  let parsed: any = null
+
+  try {
+    parsed = JSON.parse(cleaned)
+  } catch {
+    const start = cleaned.indexOf('{')
+    const end = cleaned.lastIndexOf('}')
+    if (start !== -1 && end > start) {
+      try {
+        parsed = JSON.parse(cleaned.slice(start, end + 1))
+      } catch {
+        parsed = null
+      }
+    }
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    const description = String(parsed.description || parsed.imageDescription || '').trim()
+    const titleSuggestion = typeof parsed.titleSuggestion === 'string'
+      ? parsed.titleSuggestion.trim()
+      : typeof parsed.title === 'string'
+        ? parsed.title.trim()
+        : undefined
+    const warnings = Array.isArray(parsed.warnings)
+      ? parsed.warnings.filter((warning: any) => typeof warning === 'string' && warning.trim()).map((warning: string) => warning.trim())
+      : typeof parsed.warning === 'string' && parsed.warning.trim()
+        ? [parsed.warning.trim()]
+        : []
+
+    return {
+      description: description.replace(/\s+/g, ' '),
+      titleSuggestion: titleSuggestion || undefined,
+      warnings
+    }
+  }
+
+  return {
+    description: cleaned
+      .replace(/^description\s*:\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    warnings: []
+  }
+}
+
+function buildExternalImageDetectionPrompt(
+  context: SketchContextBundle,
+  title?: string,
+  imageWidth?: number,
+  imageHeight?: number
+): string {
+  const knownComponents = context.keyComponents.length > 0
+    ? context.keyComponents.slice(0, 40).map(component => `- ${component}`).join('\n')
+    : 'None provided.'
+  const knownNumerals = Object.entries(context.referenceNumerals || {}).slice(0, 60)
+  const numeralBlock = knownNumerals.length > 0
+    ? knownNumerals.map(([label, name]) => `- ${label}: ${name}`).join('\n')
+    : 'None provided.'
+  const diagramBlock = context.diagramSummaries.length > 0
+    ? context.diagramSummaries.slice(0, 20).join('\n')
+    : 'None provided.'
+  const dimensions = imageWidth && imageHeight ? `${imageWidth} x ${imageHeight}` : 'unknown'
+
+  return `You are analyzing a user-uploaded external image for a patent drafting figure workflow.
+
+TASK
+Generate a factual patent-style figure description from the visible image content. The description will populate a required "Description (min 20 words)" field for a patent figure.
+
+IMAGE
+- User title, if any: ${title?.trim() || 'None'}
+- Image dimensions sent for analysis: ${dimensions}
+
+INVENTION CONTEXT
+Idea summary:
+${context.ideaSummary || 'None provided.'}
+
+Known components:
+${knownComponents}
+
+Known reference numerals:
+${numeralBlock}
+
+Existing figure summaries:
+${diagramBlock}
+
+RULES
+- Describe only what is visibly present in the image.
+- Preserve visible labels, text, arrows, relationships, and reference numerals exactly where readable.
+- Use known invention context only to name visible elements more accurately; do not add unseen components.
+- If the image is a flow chart, describe the sequence and visible decision/processing blocks without inventing missing steps.
+- If the image is a photograph, screenshot, hand sketch, CAD drawing, chart, or system diagram, describe the visible structure and relationships objectively.
+- Do not mention uncertainty unless something is unreadable or ambiguous.
+- Return 20 to 80 words for the description.
+- Return JSON only, without markdown.
+
+JSON SHAPE
+{
+  "titleSuggestion": "short optional title under 12 words",
+  "description": "20 to 80 word factual patent-style image description",
+  "warnings": ["optional short warning if text is unreadable, image is blurry, or content is ambiguous"]
+}`
+}
+
+export async function detectExternalImageContent(
+  request: ExternalImageContentDetectionRequest
+): Promise<ExternalImageContentDetectionResult> {
+  const {
+    patentId,
+    sessionId,
+    uploadedImageBase64,
+    uploadedImageMimeType,
+    title,
+    requestHeaders
+  } = request
+  const mimeType = normalizeExternalImageMimeType(uploadedImageMimeType)
+
+  if (!uploadedImageBase64 || typeof uploadedImageBase64 !== 'string') {
+    return { success: false, error: 'Uploaded image data is required' }
+  }
+
+  if (!EXTERNAL_IMAGE_AI_ALLOWED_MIME_TYPES.has(mimeType)) {
+    return {
+      success: false,
+      error: 'AI detection supports PNG, JPEG, and WebP images. Convert SVG images to raster format before detection.'
+    }
+  }
+
+  const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/
+  if (!base64Regex.test(uploadedImageBase64)) {
+    return { success: false, error: 'Invalid base64 image data' }
+  }
+
+  let imageBuffer: Buffer
+  try {
+    imageBuffer = Buffer.from(uploadedImageBase64, 'base64')
+  } catch {
+    return { success: false, error: 'Failed to decode image data' }
+  }
+
+  if (imageBuffer.length === 0) {
+    return { success: false, error: 'Uploaded image data is empty' }
+  }
+
+  if (imageBuffer.length > EXTERNAL_IMAGE_AI_MAX_BYTES) {
+    return {
+      success: false,
+      error: `AI detection image is too large. Maximum encoded image size is ${Math.floor(EXTERNAL_IMAGE_AI_MAX_BYTES / 1024 / 1024)}MB.`
+    }
+  }
+
+  let width: number | undefined
+  let height: number | undefined
+  try {
+    const imageSize = require('image-size').default || require('image-size')
+    const dimensions = imageSize(imageBuffer)
+    width = dimensions.width
+    height = dimensions.height
+  } catch {
+    return { success: false, error: 'Could not read image dimensions for AI detection' }
+  }
+
+  if (!width || !height) {
+    return { success: false, error: 'Could not read image dimensions for AI detection' }
+  }
+
+  if (width > EXTERNAL_IMAGE_AI_MAX_SIDE || height > EXTERNAL_IMAGE_AI_MAX_SIDE || width * height > EXTERNAL_IMAGE_AI_MAX_PIXELS) {
+    return {
+      success: false,
+      error: 'AI detection image must be Full HD or smaller: maximum 1920 pixels on any side and no more than 2,073,600 total pixels.',
+      imageWidth: width,
+      imageHeight: height
+    }
+  }
+
+  const contextBundle = await buildSketchContextBundle(
+    patentId,
+    sessionId,
+    { useIdeaSummary: true, useClaims: false, useDiagrams: true, useComponents: true }
+  )
+
+  const prompt = buildExternalImageDetectionPrompt(contextBundle, title, width, height)
+  const result = await llmGateway.executeLLMOperation(
+    { headers: requestHeaders || {} },
+    {
+      taskCode: SKETCH_TASK_CODE,
+      stageCode: SKETCH_STAGE_CODE,
+      content: {
+        parts: [
+          { type: 'text', text: prompt },
+          {
+            type: 'image',
+            image: {
+              mimeType,
+              data: uploadedImageBase64,
+              description: title || 'External patent figure image'
+            }
+          }
+        ]
+      },
+      idempotencyKey: crypto.randomUUID(),
+      parameters: {
+        maxOutputTokens: 700,
+        temperature: 0.1,
+        purpose: 'detect_external_image_content'
+      },
+      metadata: {
+        patentId,
+        sessionId,
+        purpose: 'detect_external_image_content',
+        imageWidth: width,
+        imageHeight: height
+      }
+    }
+  )
+
+  if (!result.success || !result.response?.output) {
+    return {
+      success: false,
+      error: result.error?.message || 'AI image content detection failed'
+    }
+  }
+
+  const payload = extractExternalImageDetectionPayload(result.response.output)
+  if (!payload.description || countDescriptionWords(payload.description) < 20) {
+    return {
+      success: false,
+      error: 'AI could not produce a sufficiently detailed image description. Please describe the image manually or try a clearer image.'
+    }
+  }
+
+  return {
+    success: true,
+    description: payload.description,
+    titleSuggestion: payload.titleSuggestion,
+    warnings: payload.warnings,
+    imageWidth: width,
+    imageHeight: height,
+    modelUsed: result.response.modelClass || result.response.metadata?.modelUsed
+  }
 }
 
 // === PROMPT BUILDERS ===

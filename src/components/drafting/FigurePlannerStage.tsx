@@ -38,7 +38,8 @@ import {
   Paintbrush,
   Languages,
   Lightbulb,
-  Link2
+  Link2,
+  Plus
 } from 'lucide-react'
 
 // DnD Kit imports
@@ -102,6 +103,40 @@ type LLMFigure = {
   plantuml: string
 }
 
+type ManualUploadSlot = {
+  id: string
+  title: string
+  description: string
+  file: File | null
+  previewUrl: string | null
+  status: 'idle' | 'detecting' | 'saving' | 'saved' | 'error'
+  error?: string
+  warnings?: string[]
+  aiGenerated?: boolean
+  imageWidth?: number
+  imageHeight?: number
+  scaledForDetection?: boolean
+}
+
+const EXTERNAL_AI_MAX_SIDE = 1920
+const EXTERNAL_AI_MAX_PIXELS = 1920 * 1080
+const EXTERNAL_AI_MAX_BYTES = 10 * 1024 * 1024
+const EXTERNAL_UPLOAD_ACCEPT = 'image/png,image/jpeg,image/jpg,image/webp,image/svg+xml'
+
+function createManualUploadSlot(): ManualUploadSlot {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return {
+    id,
+    title: '',
+    description: '',
+    file: null,
+    previewUrl: null,
+    status: 'idle'
+  }
+}
+
 // Helper function to normalize page sizes from country profiles
 // IMPORTANT: This must be defined before the component to avoid TDZ (Temporal Dead Zone) errors
 function normalizePageSizes(input: any): string[] {
@@ -132,6 +167,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [isGenerating, setIsGenerating] = useState(false)
   const [figures, setFigures] = useState<LLMFigure[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [generationWarning, setGenerationWarning] = useState<string | null>(null)
   // In AI mode, null/empty means "AI decides the count"
   // User can optionally override by entering a number
   const [diagramCount, setDiagramCount] = useState<number | null>(null)
@@ -165,6 +201,20 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     }
     if (Array.isArray(referenceMap.components)) return referenceMap.components
     return []
+  }
+
+  const formatDiagramGenerationWarnings = (response: any): string | null => {
+    const messages: string[] = []
+    if (Array.isArray(response?.warnings)) {
+      messages.push(...response.warnings.filter((warning: any) => typeof warning === 'string' && warning.trim()))
+    }
+    if (Array.isArray(response?.failedFigures) && response.failedFigures.length > 0) {
+      messages.push(...response.failedFigures.map((failure: any) => {
+        const label = failure?.title || (failure?.index ? `Figure ${failure.index}` : 'A diagram')
+        return `${label}: ${failure?.reason || 'repair failed'}`
+      }))
+    }
+    return messages.length > 0 ? messages.join(' ') : null
   }
 
   const [isUploading, setIsUploading] = useState(false)
@@ -223,11 +273,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     return () => clearInterval(interval)
   }, [isGenerating])
 
-  const [manualCount, setManualCount] = useState(0)
-  const [manualInputs, setManualInputs] = useState<{ title: string; description: string }[]>([])
-  const [manualFiles, setManualFiles] = useState<(File | null)[]>([])
+  const [manualUploadSlots, setManualUploadSlots] = useState<ManualUploadSlot[]>([])
   const [showManual, setShowManual] = useState(false)
-  const [manualBusy, setManualBusy] = useState<Record<number, boolean>>({})
+  const [manualDetectingAll, setManualDetectingAll] = useState(false)
+  const [manualDetectionProgress, setManualDetectionProgress] = useState<{ current: number; total: number } | null>(null)
+  const manualUploadSlotsRef = useRef<ManualUploadSlot[]>([])
   const [showPlantUML, setShowPlantUML] = useState<Record<number, boolean>>({})
   const [countryProfile, setCountryProfile] = useState<any | null>(null)
   const uploadSectionRef = useRef<HTMLDivElement>(null)
@@ -235,6 +285,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const renderQueueRef = useRef<Promise<void>>(Promise.resolve())
   // Ref to hold latest handleUploadImage function to avoid stale closures in queueUpload
   const handleUploadImageRef = useRef<((figureNo: number, file: File, customFilename?: string, language?: string, opEpoch?: number) => Promise<void>) | null>(null)
+
+  useEffect(() => {
+    manualUploadSlotsRef.current = manualUploadSlots
+  }, [manualUploadSlots])
+
+  useEffect(() => {
+    return () => {
+      manualUploadSlotsRef.current.forEach(slot => {
+        if (slot.previewUrl) URL.revokeObjectURL(slot.previewUrl)
+      })
+    }
+  }, [])
 
   // === FIGURE PLANNER TAB STATE ===
   const [activeTab, setActiveTab] = useState<'diagrams' | 'sketches' | 'arrange'>('diagrams')
@@ -575,6 +637,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     setShowManual(newShowManual)
 
     if (newShowManual) {
+      setManualUploadSlots(prev => prev.length > 0 ? prev : [createManualUploadSlot()])
       // Scroll to upload section after a brief delay to allow animation to start
       setTimeout(() => {
         uploadSectionRef.current?.scrollIntoView({
@@ -1496,6 +1559,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     try {
       setIsGenerating(true)
       setError(null)
+      setGenerationWarning(null)
 
       // If user chose to decide and provided an override list, generate exactly those figures instead of auto list
       const overrideList = overrideInputs.filter(Boolean)
@@ -1556,7 +1620,7 @@ USER INSTRUCTIONS FOR EACH NEW FIGURE (HIGHEST PRIORITY)
 ${overrideList.map((instruction, index) => `Fig.${startingFigNo + index}: ${instruction}`).join('\n')}
 
 THE USER'S INSTRUCTIONS ABOVE TAKE ABSOLUTE PRIORITY. Follow them exactly.
-If user explicitly requests different styles, layouts, diagram types, or overrides, FOLLOW THE USER'S INSTRUCTIONS.`
+Follow user content, layout, and diagram type instructions, but the safety and PlantUML validity rules below cannot be overridden.`
 
         // Include existing figures context if checkbox is checked
         if (includeExistingFigures && session?.figurePlans?.length > 0) {
@@ -1599,32 +1663,18 @@ ${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 - Reference numerals: ${refNumeralsMandatory ? 'MANDATORY in all drawings' : 'Optional'}.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CANONICAL STYLE DEFAULTS (Apply unless user explicitly overrides)
+CANONICAL STYLE DEFAULTS (INJECTED BY BACKEND)
 ═══════════════════════════════════════════════════════════════════════════════
-Apply these skinparam settings by default. If user explicitly requests different styles, follow user's instructions instead.
-
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 10
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-skinparam nodesep 40
-skinparam ranksep 35
-skinparam BorderThickness 1.7
-skinparam PackageBorderThickness 1.7
-skinparam PackageTitleFontStyle bold
+Do NOT generate any skinparam lines. The backend injects canonical patent-style skinparams automatically.
 
 Default direction: left to right direction (unless user requests different)
 
 **PATENT FIGURE SEMANTICS (Apply unless user overrides):**
-- All connectors should be orthogonal (skinparam linetype ortho) unless user requests otherwise.
+- All connectors should be orthogonal; the backend applies this styling automatically.
 - Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
 - Solid arrows (-->) = data/control paths.
 - Dashed arrows (..>) = power/utility ONLY.
-- Label grammar: Data labels are nouns, control labels are verbs.
+- NO ARROW LABELS: Do not add text after arrows (e.g., NO "A --> B : label").
 - Nesting depth max = 2 levels.
 
 FORBIDDEN DIRECTIVES:
@@ -1642,20 +1692,6 @@ AVAILABLE DIAGRAM STYLES (use based on user request or best fit)
 
 STYLE 1 — NESTED BLOCK (CANONICAL TEMPLATE):
 @startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 10
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam linetype ortho
-skinparam nodesep 40
-skinparam ranksep 35
-skinparam BorderThickness 1.7
-skinparam PackageBorderThickness 1.7
-skinparam PackageTitleFontStyle bold
-
 left to right direction
 
 rectangle "System (10)" as SYS {
@@ -1666,59 +1702,31 @@ rectangle "System (10)" as SYS {
     rectangle "Component B1 (201)" as B1
   }
 }
-A1 --> B1 : data
+A1 --> B1
 @enduml
 
-SEQUENCE (with canonical skinparams):
+SEQUENCE:
 @startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 10
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam BorderThickness 1.7
-skinparam sequence {
-  LifeLineBorderColor black
-  LifeLineBackgroundColor white
-  ParticipantBorderColor black
-  ParticipantBackgroundColor white
-}
-
 actor "User (900)" as U
 participant "Device (100)" as D
-U -> D : input
-D --> U : response
+U -> D
+D --> U
 @enduml
 
-ACTIVITY (with canonical skinparams):
+ACTIVITY:
 @startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam roundcorner 10
-skinparam defaultFontName Arial
-skinparam defaultFontSize 14
-skinparam ArrowColor black
-skinparam BorderColor black
-skinparam BorderThickness 1.7
-skinparam activity {
-  BackgroundColor white
-  BorderColor black
-  FontColor black
-}
-
 start
 :Step one (100);
 :Step two (200);
+:Step three (300);
 stop
 @enduml
 
 ═══════════════════════════════════════════════════════════════════════════════
 FINAL SELF-CHECK (MANDATORY)
 ═══════════════════════════════════════════════════════════════════════════════
-- Follows user's instructions for diagram content, type, and style (user instructions override defaults).
-- Applies canonical skinparam settings unless user explicitly requested different styles.
+- Follows user's instructions for diagram content, type, and layout while respecting safety rules.
+- Does not include skinparam lines.
 - Uses only allowed numbered components (un-numbered helper nodes like "Power bus" are OK).
 - styleUsed field matches actual diagram style.
 - layoutPlan field accurately describes the spatial arrangement.
@@ -1736,11 +1744,14 @@ Now output the JSON array.`
         // Handle error responses
         if (!resp) throw new Error('LLM did not return valid figure list')
         if (resp.error) {
-          const errorMsg = resp.details 
+          const baseError = resp.details
             ? `${resp.error}: ${typeof resp.details === 'string' ? resp.details : JSON.stringify(resp.details)}`
             : resp.error
+          const repairDetails = formatDiagramGenerationWarnings(resp)
+          const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
           throw new Error(errorMsg)
         }
+        setGenerationWarning(formatDiagramGenerationWarnings(resp))
 
         // Backend already saves figures with correct figure numbers (appended after existing)
         // No need to call handleSavePlantUML - it would overwrite with wrong figure numbers
@@ -1774,14 +1785,17 @@ Now output the JSON array.`
         throw new Error('Figure generation failed - no response received')
       }
       if (res.error) {
-        const errorMsg = res.details 
+        const baseError = res.details
           ? `${res.error}: ${typeof res.details === 'string' ? res.details : JSON.stringify(res.details)}`
           : res.error
+        const repairDetails = formatDiagramGenerationWarnings(res)
+        const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
         throw new Error(errorMsg)
       }
       if (!res.success) {
         throw new Error(res.message || 'Figure generation failed')
       }
+      setGenerationWarning(formatDiagramGenerationWarnings(res))
 
       // Log the plan result
       console.log('[FigurePlanner] Generated', res.figures?.length, 'figures from plan')
@@ -1915,6 +1929,7 @@ Now output the JSON array.`
             
             if (fixResp?.success && fixResp?.fixedCode) {
               console.log(`[AutoFix] Successfully got fixed code for figure ${figureNo}, retrying render...`)
+              setGenerationWarning(prev => prev?.includes('Diagram repaired automatically') ? null : prev)
               setProcessingStatus(prev => ({ ...prev, [key]: 'Code fixed! Re-rendering...' }))
               // Refresh to get updated code in diagramSources
               await onRefresh()
@@ -1950,6 +1965,8 @@ Now output the JSON array.`
         }
         return ({ ...prev, [key]: url })
       })
+      setError(prev => prev?.startsWith(`Figure ${figureNo} processing failed:`) ? null : prev)
+      setGenerationWarning(prev => prev?.includes('Diagram repaired automatically') ? null : prev)
 
       setProcessingStatus(prev => ({ ...prev, [key]: intelligentMessages[3] }))
       setProcessingStep(prev => ({ ...prev, [key]: 3 }))
@@ -2020,6 +2037,10 @@ Now output the JSON array.`
       const filename = customFilename || uploadedMeta.filename
       await onComplete({ action: 'upload_diagram', sessionId: session?.id, figureNo, language, filename, checksum: uploadedMeta.checksum, imagePath: uploadedMeta.path })
       setUploaded((prev) => ({ ...prev, [getDiagramKey(figureNo, language)]: true }))
+      setError(prev => prev?.startsWith(`Figure ${figureNo} processing failed:`) ? null : prev)
+      setGenerationWarning(prev => prev?.includes('Diagram repaired automatically') ? null : prev)
+      setProcessingStatus(prev => ({ ...prev, [key]: '' }))
+      setProcessingStep(prev => ({ ...prev, [key]: 0 }))
       await onRefresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed')
@@ -2029,6 +2050,241 @@ Now output the JSON array.`
   }
   // Keep ref updated with latest handleUploadImage to avoid stale closures
   handleUploadImageRef.current = handleUploadImage
+
+  const updateManualUploadSlot = (slotId: string, patch: Partial<ManualUploadSlot>) => {
+    setManualUploadSlots(prev => prev.map(slot => slot.id === slotId ? { ...slot, ...patch } : slot))
+  }
+
+  const addManualUploadSlot = () => {
+    setManualUploadSlots(prev => [...prev, createManualUploadSlot()])
+  }
+
+  const removeManualUploadSlot = (slotId: string) => {
+    setManualUploadSlots(prev => {
+      const slot = prev.find(item => item.id === slotId)
+      if (slot?.previewUrl) URL.revokeObjectURL(slot.previewUrl)
+      const next = prev.filter(item => item.id !== slotId)
+      return next.length > 0 ? next : [createManualUploadSlot()]
+    })
+  }
+
+  const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+
+  const loadImageFromDataUrl = (dataUrl: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Could not read image dimensions'))
+    img.src = dataUrl
+  })
+
+  const dataUrlToBase64 = (dataUrl: string) => dataUrl.split(',')[1] || ''
+
+  const prepareExternalImageForAiDetection = async (file: File) => {
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml']
+    if (!allowedTypes.includes(file.type)) {
+      throw new Error('Please choose a PNG, JPEG, WebP, or SVG image')
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      throw new Error('Image upload files must be 25MB or smaller')
+    }
+
+    const dataUrl = await readFileAsDataUrl(file)
+    const image = await loadImageFromDataUrl(dataUrl)
+    const originalWidth = image.naturalWidth || image.width
+    const originalHeight = image.naturalHeight || image.height
+    if (!originalWidth || !originalHeight) {
+      throw new Error('Could not read image dimensions')
+    }
+
+    const sideScale = Math.min(EXTERNAL_AI_MAX_SIDE / originalWidth, EXTERNAL_AI_MAX_SIDE / originalHeight, 1)
+    const pixelScale = Math.min(Math.sqrt(EXTERNAL_AI_MAX_PIXELS / (originalWidth * originalHeight)), 1)
+    const scale = Math.min(sideScale, pixelScale)
+    const targetWidth = Math.max(1, Math.round(originalWidth * scale))
+    const targetHeight = Math.max(1, Math.round(originalHeight * scale))
+    const mustRasterize = file.type === 'image/svg+xml' || scale < 1 || file.size > EXTERNAL_AI_MAX_BYTES
+
+    if (!mustRasterize) {
+      return {
+        base64: dataUrlToBase64(dataUrl),
+        mimeType: file.type === 'image/jpg' ? 'image/jpeg' : file.type,
+        width: originalWidth,
+        height: originalHeight,
+        scaled: false
+      }
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Could not prepare image for AI detection')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, targetWidth, targetHeight)
+    ctx.drawImage(image, 0, 0, targetWidth, targetHeight)
+
+    let outputMimeType = file.type === 'image/png' || file.type === 'image/svg+xml' ? 'image/png' : 'image/jpeg'
+    let outputDataUrl = canvas.toDataURL(outputMimeType, 0.86)
+    const approxBytes = Math.ceil(dataUrlToBase64(outputDataUrl).length * 3 / 4)
+    if (approxBytes > EXTERNAL_AI_MAX_BYTES) {
+      outputMimeType = 'image/jpeg'
+      outputDataUrl = canvas.toDataURL(outputMimeType, 0.82)
+    }
+
+    return {
+      base64: dataUrlToBase64(outputDataUrl),
+      mimeType: outputMimeType,
+      width: targetWidth,
+      height: targetHeight,
+      scaled: scale < 1 || file.type === 'image/svg+xml' || file.size > EXTERNAL_AI_MAX_BYTES
+    }
+  }
+
+  const handleManualFileChange = (slotId: string, file?: File | null) => {
+    if (!file) return
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml']
+    if (!allowedTypes.includes(file.type)) {
+      updateManualUploadSlot(slotId, { error: 'Please choose a PNG, JPEG, WebP, or SVG image', status: 'error' })
+      return
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      updateManualUploadSlot(slotId, { error: 'Image upload files must be 25MB or smaller', status: 'error' })
+      return
+    }
+
+    const current = manualUploadSlotsRef.current.find(slot => slot.id === slotId)
+    if (current?.previewUrl) URL.revokeObjectURL(current.previewUrl)
+    updateManualUploadSlot(slotId, {
+      file,
+      previewUrl: URL.createObjectURL(file),
+      description: current?.aiGenerated ? '' : current?.description || '',
+      status: 'idle',
+      error: undefined,
+      warnings: undefined,
+      aiGenerated: false,
+      scaledForDetection: undefined,
+      imageWidth: undefined,
+      imageHeight: undefined
+    })
+  }
+
+  const detectManualImageContent = async (slotId: string, skipValidDescription = false): Promise<boolean> => {
+    const slot = manualUploadSlotsRef.current.find(item => item.id === slotId)
+    if (!slot) return false
+    if (!slot.file) {
+      updateManualUploadSlot(slotId, { status: 'error', error: 'Choose an image before running AI detection' })
+      return false
+    }
+    if (skipValidDescription && countWords(slot.description) >= 20) return true
+
+    try {
+      updateManualUploadSlot(slotId, { status: 'detecting', error: undefined, warnings: undefined })
+      const prepared = await prepareExternalImageForAiDetection(slot.file)
+      const resp = await onComplete({
+        action: 'detect_external_image_content',
+        sessionId: session?.id,
+        title: slot.title || undefined,
+        uploadedImageBase64: prepared.base64,
+        uploadedImageMimeType: prepared.mimeType
+      })
+
+      if (!resp?.success || !resp.description) {
+        throw new Error(resp?.error || 'AI image content detection failed')
+      }
+
+      updateManualUploadSlot(slotId, {
+        title: slot.title || resp.titleSuggestion || '',
+        description: resp.description,
+        status: 'idle',
+        error: undefined,
+        warnings: Array.isArray(resp.warnings) ? resp.warnings : undefined,
+        aiGenerated: true,
+        imageWidth: prepared.width,
+        imageHeight: prepared.height,
+        scaledForDetection: prepared.scaled
+      })
+      return true
+    } catch (err) {
+      updateManualUploadSlot(slotId, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'AI image content detection failed'
+      })
+      return false
+    }
+  }
+
+  const detectAllManualImageContent = async () => {
+    const targets = manualUploadSlotsRef.current.filter(slot => slot.file && countWords(slot.description) < 20 && slot.status !== 'saved')
+    if (targets.length === 0) {
+      setError('Choose at least one image that needs a description before running AI detection')
+      return
+    }
+
+    setError(null)
+    setManualDetectingAll(true)
+    setManualDetectionProgress({ current: 0, total: targets.length })
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        setManualDetectionProgress({ current: i + 1, total: targets.length })
+        await detectManualImageContent(targets[i].id, true)
+      }
+    } finally {
+      setManualDetectingAll(false)
+      setManualDetectionProgress(null)
+    }
+  }
+
+  const saveManualUploadSlot = async (slotId: string): Promise<boolean> => {
+    const slot = manualUploadSlotsRef.current.find(item => item.id === slotId)
+    if (!slot) return false
+    if (!slot.file) {
+      updateManualUploadSlot(slotId, { status: 'error', error: 'Choose an image before adding it to figures' })
+      return false
+    }
+    if (countWords(slot.description) < 20) {
+      updateManualUploadSlot(slotId, { status: 'error', error: 'Description must contain at least 20 words' })
+      return false
+    }
+
+    try {
+      updateManualUploadSlot(slotId, { status: 'saving', error: undefined })
+      const title = sanitizeFigureLabel(slot.title) || slot.title || undefined
+      const resp = await onComplete({
+        action: 'create_manual_figure',
+        sessionId: session?.id,
+        title,
+        description: slot.description
+      })
+      const createdNo = resp?.created?.figureNo
+      if (!createdNo) throw new Error('Manual figure could not be created')
+      await handleUploadImage(createdNo, slot.file)
+      updateManualUploadSlot(slotId, { status: 'saved', error: undefined })
+      return true
+    } catch (err) {
+      updateManualUploadSlot(slotId, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Failed to add image to figures'
+      })
+      return false
+    }
+  }
+
+  const saveAllReadyManualUploads = async () => {
+    const targets = manualUploadSlotsRef.current.filter(slot => slot.status !== 'saved' && slot.file && countWords(slot.description) >= 20)
+    if (targets.length === 0) {
+      setError('No external images are ready to add. Each image needs a file and at least 20 description words.')
+      return
+    }
+
+    setError(null)
+    for (const slot of targets) {
+      await saveManualUploadSlot(slot.id)
+    }
+  }
 
   const handleViewImage = async (figureNo: number, filename?: string) => {
     if (!filename) return
@@ -2240,6 +2496,13 @@ Now output the JSON array.`
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {generationWarning && (
+        <Alert className="border-amber-200 bg-amber-50 text-amber-900">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{generationWarning}</AlertDescription>
         </Alert>
       )}
 
@@ -2532,7 +2795,7 @@ Now output the JSON array.`
                 onClick={handleUploadToggle}
                 className={showManual ? 'border-indigo-400 text-indigo-700' : ''}
               >
-                {showManual ? 'Hide External Uploads' : 'Upload External Image'}
+                {showManual ? 'Hide External Uploads' : 'Upload External Images'}
               </Button>
             </motion.div>
           </div>
@@ -2808,9 +3071,11 @@ Now output the JSON array.`
                           <Button size="sm" className="flex-1" onClick={async () => {
                             setRegeneratingFigure(prev => ({ ...prev, [figNo]: true }))
                             setError(null) // Clear previous errors
+                            setGenerationWarning(null)
                             try {
                              const resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved })
                               if (resp?.diagramSource?.plantumlCode) {
+                                setGenerationWarning(formatDiagramGenerationWarnings(resp))
                                 await onRefresh()
                                 setModifyFigNo(null)
                                 setModifyTextSaved('')
@@ -2826,9 +3091,11 @@ Now output the JSON array.`
                                 autoProcessDiagram(figNo, newCode, lang, opEpoch)
                               } else if (resp?.error) {
                                 // Handle API error response
-                                const errorMsg = resp.details 
+                                const baseError = resp.details
                                   ? `${resp.error}: ${typeof resp.details === 'string' ? resp.details : JSON.stringify(resp.details)}`
                                   : resp.error
+                                const repairDetails = formatDiagramGenerationWarnings(resp)
+                                const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
                                 setError(`Diagram modification failed: ${errorMsg}`)
                               } else if (!resp) {
                                 // Handle null response (error handled by parent, but show something)
@@ -2884,105 +3151,186 @@ Now output the JSON array.`
               }}
               className={`bg-white border border-gray-200 rounded-xl p-6 shadow-sm mt-6 ${highlightUpload ? 'ring-2 ring-indigo-400 ring-opacity-50' : ''}`}
             >
-            <div className="mb-4">
-              <h4 className="font-semibold flex items-center gap-2 mb-2">
-                <Upload className="w-5 h-5 text-indigo-600" />
-                Upload External Images
-                {highlightUpload && (
-                  <motion.span
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    className="inline-flex items-center px-2 py-1 text-xs font-medium text-indigo-700 bg-indigo-100 rounded-full"
-                  >
-                    <Sparkles className="w-3 h-3 mr-1" />
-                    Ready to upload!
-                  </motion.span>
-                )}
-              </h4>
-              <p className="text-sm text-gray-600">
-                Upload your own patent diagrams or images. Each image needs a detailed description (minimum 20 words)
-                so our AI can understand and integrate it into your patent specification.
-              </p>
-                      </div>
-            
-            <div className="flex gap-4 mb-6">
-              <Input 
-                type="number" 
-                min={1} 
-                className="w-24"
-                value={manualCount}
-                onChange={(e) => { 
-                  const n = Math.max(0, parseInt(e.target.value || '0', 10)); 
-                  setManualCount(n); 
-                  setManualInputs(Array.from({ length: n }, (_, i) => manualInputs[i] || { title: '', description: '' })); 
-                  setManualFiles(Array.from({ length: n }, (_, i) => manualFiles[i] || null)); 
-                }} 
-              />
-              <Button onClick={async () => {
-                // Bulk add slots logic
-              try {
-                for (let i = 0; i < manualCount; i++) {
-                  const item = manualInputs[i]
-                  if (!item || !item.description || item.description.trim().split(/\s+/).length < 20) {
-                    setError('Each image needs at least 20 words description')
-                    return
-                  }
-                }
-                for (let i = 0; i < manualCount; i++) {
-                  const item = manualInputs[i]
-                            const resp = await onComplete({ action: 'create_manual_figure', sessionId: session?.id, title: sanitizeFigureLabel(item.title) || item.title, description: item.description })
-                  const createdNo = resp?.created?.figureNo
-                  if (createdNo && manualFiles[i]) {
-                    await handleUploadImage(createdNo, manualFiles[i] as File)
-                  }
-                }
-                setManualCount(0)
-                setManualInputs([])
-                setManualFiles([])
-                await onRefresh()
-                } catch (e) { setError('Failed to create manual figures') }
-              }}>
-                Add {manualCount} Upload Slots
-              </Button>
-        </div>
+            <div className="flex flex-col gap-4 mb-6 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h4 className="font-semibold flex items-center gap-2 mb-2">
+                  <Upload className="w-5 h-5 text-indigo-600" />
+                  Upload External Images
+                  {highlightUpload && (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="inline-flex items-center px-2 py-1 text-xs font-medium text-indigo-700 bg-indigo-100 rounded-full"
+                    >
+                      <Sparkles className="w-3 h-3 mr-1" />
+                      Ready to upload!
+                    </motion.span>
+                  )}
+                </h4>
+                <p className="text-sm text-gray-600 max-w-3xl">
+                  Upload patent diagrams or images one at a time. Use AI detection to draft the required description; images sent to AI are limited to Full HD resolution.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={addManualUploadSlot}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add image
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={detectAllManualImageContent}
+                  disabled={manualDetectingAll || manualUploadSlots.every(slot => !slot.file || countWords(slot.description) >= 20 || slot.status === 'saved')}
+                >
+                  {manualDetectingAll ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
+                  Let AI Detect Image Content
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={saveAllReadyManualUploads}
+                  disabled={manualUploadSlots.every(slot => !slot.file || countWords(slot.description) < 20 || slot.status === 'saved')}
+                >
+                  <Check className="w-4 h-4 mr-2" />
+                  Add all ready
+                </Button>
+              </div>
+            </div>
+
+            {manualDetectionProgress && (
+              <div className="mb-4 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-700 flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Detecting image {manualDetectionProgress.current} of {manualDetectionProgress.total}
+              </div>
+            )}
 
             <div className="space-y-4">
-        {Array.from({ length: manualCount }).map((_, i) => (
-                <div key={i} className="border rounded-lg p-4 bg-gray-50">
-                  <div className="grid gap-4">
-                    <Input 
-                      placeholder="Figure Title (Optional)" 
-                      value={manualInputs[i]?.title || ''} 
-                      onChange={(e) => { const arr = [...manualInputs]; arr[i] = { ...(arr[i] || { title: '', description: '' }), title: e.target.value }; setManualInputs(arr) }} 
-                    />
-                    <div>
-                      <Label className="text-xs text-gray-500 mb-1">Description (min 20 words)</Label>
-                      <Textarea 
-                        placeholder="Describe the image content..."
-                        value={manualInputs[i]?.description || ''} 
-                        onChange={(e) => { const arr = [...manualInputs]; arr[i] = { ...(arr[i] || { title: '', description: '' }), description: e.target.value }; setManualInputs(arr) }} 
-                      />
-                       <div className="text-xs mt-1 text-right">
-              <span className={countWords(manualInputs[i]?.description || '') >= 20 ? 'text-green-600' : 'text-gray-500'}>
-                {countWords(manualInputs[i]?.description || '')} / 20 words
-              </span>
+              {manualUploadSlots.map((slot, i) => {
+                const wordCount = countWords(slot.description)
+                const ready = !!slot.file && wordCount >= 20 && slot.status !== 'saved'
+                return (
+                  <div key={slot.id} className="border rounded-lg p-4 bg-gray-50">
+                    <div className="flex flex-col gap-4 lg:flex-row">
+                      <div className="lg:w-64 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm font-medium text-gray-700">Image {i + 1}</div>
+                          <div className="flex items-center gap-2">
+                            {slot.status === 'saved' ? (
+                              <Badge variant="default" className="bg-green-600">Saved</Badge>
+                            ) : ready ? (
+                              <Badge variant="default" className="bg-green-500">Ready</Badge>
+                            ) : slot.status === 'detecting' ? (
+                              <Badge variant="secondary">Detecting</Badge>
+                            ) : slot.file ? (
+                              <Badge variant="outline">Needs description</Badge>
+                            ) : (
+                              <Badge variant="outline">Needs image</Badge>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeManualUploadSlot(slot.id)}
+                              disabled={slot.status === 'detecting' || slot.status === 'saving'}
+                              className="h-8 w-8 p-0 text-gray-500 hover:text-red-600"
+                              title="Remove image"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="aspect-[4/3] rounded-md border bg-white flex items-center justify-center overflow-hidden">
+                          {slot.previewUrl ? (
+                            <img src={slot.previewUrl} alt={`External upload ${i + 1}`} className="h-full w-full object-contain" />
+                          ) : (
+                            <div className="text-center text-gray-400">
+                              <UploadCloud className="w-8 h-8 mx-auto mb-2" />
+                              <p className="text-xs">Choose image</p>
+                            </div>
+                          )}
+                        </div>
+
+                        <Input
+                          type="file"
+                          accept={EXTERNAL_UPLOAD_ACCEPT}
+                          className="bg-white"
+                          disabled={slot.status === 'detecting' || slot.status === 'saving' || slot.status === 'saved'}
+                          onChange={(e) => handleManualFileChange(slot.id, e.target.files?.[0])}
+                        />
+                        <p className="text-xs text-gray-500">PNG, JPEG, WebP, or SVG. AI detection analyzes a Full HD copy.</p>
+                      </div>
+
+                      <div className="flex-1 grid gap-4">
+                        <Input
+                          placeholder="Figure Title (Optional)"
+                          value={slot.title}
+                          disabled={slot.status === 'saving' || slot.status === 'saved'}
+                          onChange={(e) => updateManualUploadSlot(slot.id, { title: e.target.value })}
+                        />
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <Label className="text-xs text-gray-500">Description (min 20 words)</Label>
+                            <span className={wordCount >= 20 ? 'text-xs text-green-600' : 'text-xs text-gray-500'}>
+                              {wordCount} / 20 words
+                            </span>
+                          </div>
+                          <Textarea
+                            placeholder="Describe the image content..."
+                            value={slot.description}
+                            disabled={slot.status === 'saving' || slot.status === 'saved'}
+                            className="min-h-[110px]"
+                            onChange={(e) => updateManualUploadSlot(slot.id, {
+                              description: e.target.value,
+                              aiGenerated: false,
+                              error: undefined,
+                              status: slot.status === 'error' ? 'idle' : slot.status
+                            })}
+                          />
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => detectManualImageContent(slot.id)}
+                              disabled={!slot.file || slot.status === 'detecting' || slot.status === 'saving' || slot.status === 'saved' || manualDetectingAll}
+                            >
+                              {slot.status === 'detecting' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
+                              Detect this image
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => saveManualUploadSlot(slot.id)}
+                              disabled={!ready || slot.status === 'saving' || isUploading}
+                            >
+                              {slot.status === 'saving' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                              Add to figures
+                            </Button>
+                            {slot.aiGenerated && (
+                              <Badge variant="outline" className="text-indigo-700 border-indigo-200 bg-indigo-50">AI drafted</Badge>
+                            )}
+                            {slot.scaledForDetection && slot.imageWidth && slot.imageHeight && (
+                              <Badge variant="outline" className="text-slate-600">
+                                Analyzed at {slot.imageWidth}x{slot.imageHeight}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+
+                        {slot.error && (
+                          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                            <span>{slot.error}</span>
+                          </div>
+                        )}
+                        {slot.warnings && slot.warnings.length > 0 && (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                            {slot.warnings.join(' ')}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <Input 
-                        type="file" 
-                        accept=".png,.svg" 
-                        className="bg-white"
-                        onChange={(e) => { const arr = [...manualFiles]; arr[i] = e.target.files?.[0] || null; setManualFiles(arr) }} 
-                      />
-                      {manualFiles[i] && countWords(manualInputs[i]?.description || '') >= 20 && (
-                         <Badge variant="default" className="bg-green-500">Ready</Badge>
-                      )}
-                    </div>
-        </div>
-          </div>
-        ))}
-      </div>
           </motion.div>
       )}
       </AnimatePresence>

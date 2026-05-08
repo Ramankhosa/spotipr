@@ -107,4 +107,18 @@ export function normalizeFigureSequence(
   return { normalized, meta }
 }
 
+/**
+ * Normalize an existing sequence while forcing a newly created figure to be the
+ * last missing item. This prevents a new upload from becoming Fig. 1 when the
+ * session had figures but no persisted sequence yet.
+ */
+export function appendFigureToSequence(
+  input: unknown,
+  existingFigures: AvailableFigure[],
+  newFigure: AvailableFigure
+): NormalizeFigureSequenceResult {
+  const existingWithoutNew = existingFigures.filter(f => f.id !== newFigure.id)
+  return normalizeFigureSequence(input, [...existingWithoutNew, newFigure])
+}
+
 
