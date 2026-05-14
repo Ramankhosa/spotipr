@@ -6,7 +6,7 @@
  * ============================================================================
  *
  * Seeds the database with:
- * 1. All available LLM models (Google, OpenAI, Anthropic, DeepSeek, Groq)
+ * 1. All available LLM models (Google, OpenAI, Anthropic, DeepSeek, Groq, Z.AI)
  * 2. All workflow stages (Patent Drafting, Novelty Search, etc.)
  * 3. PRODUCTION TOKEN LIMITS for all plans (same limits, different models per tier)
  *
@@ -272,6 +272,78 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    {
+      code: 'gpt-5.4',
+      displayName: 'GPT-5.4',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 250,    // $2.50
+      outputCostPer1M: 1500,  // $15.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.4-mini',
+      displayName: 'GPT-5.4 Mini',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 75,     // $0.75
+      outputCostPer1M: 450,   // $4.50
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.4-nano',
+      displayName: 'GPT-5.4 Nano',
+      provider: 'openai',
+      contextWindow: 400000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 125,   // $1.25
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.4-pro',
+      displayName: 'GPT-5.4 Pro',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 3000,   // $30.00
+      outputCostPer1M: 18000, // $180.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.5',
+      displayName: 'GPT-5.5',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 3000,  // $30.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.5-pro',
+      displayName: 'GPT-5.5 Pro',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: false,
+      inputCostPer1M: 3000,   // $30.00
+      outputCostPer1M: 18000, // $180.00
+      isActive: true,
+      isDefault: false
+    },
     // OpenAI - "Thinking" aliases (translated to reasoning controls in provider request)
     {
       code: 'gpt-5.1-thinking',
@@ -398,7 +470,31 @@ async function main() {
     },
 
     // === ANTHROPIC MODELS ===
-    // Provider supports: claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus, claude-3-sonnet, claude-3-haiku
+    // Provider supports: Claude 4.x and Claude 3.x model codes.
+    {
+      code: 'claude-opus-4-7',
+      displayName: 'Claude Opus 4.7',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-opus-4-6',
+      displayName: 'Claude Opus 4.6',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'claude-3-5-sonnet',
       displayName: 'Claude 3.5 Sonnet',
@@ -506,6 +602,56 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 55,     // $0.55
       outputCostPer1M: 219,   // $2.19
+      isActive: true,
+      isDefault: false
+    },
+
+    // === Z.AI GLM MODELS ===
+    {
+      code: 'glm-5.1',
+      displayName: 'GLM-5.1',
+      provider: 'zai',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 140,    // $1.40
+      outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5',
+      displayName: 'GLM-5',
+      provider: 'zai',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 320,   // $3.20
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5-turbo',
+      displayName: 'GLM-5 Turbo',
+      provider: 'zai',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 120,    // $1.20
+      outputCostPer1M: 400,   // $4.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-5v-turbo',
+      displayName: 'GLM-5V Turbo',
+      provider: 'zai',
+      contextWindow: 200000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 120,    // $1.20
+      outputCostPer1M: 400,   // $4.00
       isActive: true,
       isDefault: false
     },

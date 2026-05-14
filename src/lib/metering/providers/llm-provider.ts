@@ -29,6 +29,7 @@ export type ProviderType =
   | 'deepseek' 
   | 'groq' 
   | 'grok'
+  | 'zai'
 
 // Provider factory function - supports all providers
 export function createLLMProvider(type: ProviderType, config: ProviderConfig): LLMProvider {
@@ -52,6 +53,9 @@ export function createLLMProvider(type: ProviderType, config: ProviderConfig): L
     case 'grok':
       const { GrokProvider } = require('./grok-provider')
       return new GrokProvider(config)
+    case 'zai':
+      const { ZAIProvider } = require('./zai-provider')
+      return new ZAIProvider(config)
     default:
       throw new Error(`Unsupported provider type: ${type}`)
   }
@@ -93,6 +97,12 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gpt-5': 'openai',
     'gpt-5.1': 'openai',
     'gpt-5.2': 'openai',
+    'gpt-5.4': 'openai',
+    'gpt-5.4-mini': 'openai',
+    'gpt-5.4-nano': 'openai',
+    'gpt-5.4-pro': 'openai',
+    'gpt-5.5': 'openai',
+    'gpt-5.5-pro': 'openai',
     'gpt-5-mini': 'openai',
     'gpt-5-nano': 'openai',
     // OpenAI - GPT-5 Thinking Variants
@@ -108,6 +118,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     // Anthropic - Friendly names
     'claude-3.5-sonnet': 'anthropic',
     'claude-3.5-haiku': 'anthropic',
+    'claude-opus-4-7': 'anthropic',
+    'claude-opus-4-6': 'anthropic',
     'claude-3-opus': 'anthropic',
     'claude-3-sonnet': 'anthropic',
     'claude-3-haiku': 'anthropic',
@@ -121,6 +133,12 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     // DeepSeek
     'deepseek-chat': 'deepseek',
     'deepseek-reasoner': 'deepseek',
+
+    // Z.AI GLM
+    'glm-5.1': 'zai',
+    'glm-5': 'zai',
+    'glm-5-turbo': 'zai',
+    'glm-5v-turbo': 'zai',
     
     // Groq - Friendly names (prefixed)
     'groq-llama-3.3-70b': 'groq',
@@ -159,6 +177,9 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
   if (lowerCode.startsWith('deepseek')) {
     return 'deepseek'
   }
+  if (lowerCode.startsWith('glm') || lowerCode.startsWith('zai') || lowerCode.startsWith('z.ai')) {
+    return 'zai'
+  }
   if (lowerCode.startsWith('llama') || lowerCode.startsWith('mixtral') || lowerCode.startsWith('gemma') || lowerCode.startsWith('groq')) {
     return 'groq'
   }
@@ -168,7 +189,7 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
   
   // FAIL-FAST: Throw error for truly unknown models instead of silently defaulting
   // This catches typos and misconfigured models in admin panel immediately
-  const knownPrefixes = ['gemini', 'gpt', 'o1', 'o3', 'claude', 'deepseek', 'llama', 'mixtral', 'gemma', 'groq', 'grok']
+  const knownPrefixes = ['gemini', 'gpt', 'o1', 'o3', 'claude', 'deepseek', 'glm', 'zai', 'llama', 'mixtral', 'gemma', 'groq', 'grok']
   throw new Error(
     `Unknown model code: "${modelCode}". ` +
     `Model must start with one of: ${knownPrefixes.join(', ')}. ` +

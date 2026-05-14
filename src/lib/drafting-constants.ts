@@ -1,4 +1,4 @@
-export const MAX_DRAFTING_INPUT_CHARS = 15000
+export const MAX_DRAFTING_INPUT_CHARS = 25000
 
 export const EMAIL_DRAFTING_PROJECT_NAME = 'Email Drafting Requests'
 

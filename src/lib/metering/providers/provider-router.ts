@@ -30,11 +30,15 @@ export interface RoutingDecision {
 const VISION_CAPABLE_MODELS = new Set([
   // OpenAI
   'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5-mini', 'gpt-5-nano',
+  'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.5-pro',
   'gpt-5.1-thinking', 'gpt-5.2-thinking',
   // Anthropic
+  'claude-opus-4-7', 'claude-opus-4-6',
   'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
   'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
   'claude-3-sonnet-20240229', 'claude-3-haiku-20240307',
+  // Z.AI GLM
+  'glm-5v-turbo',
   // Google Gemini
   'gemini-2.5-pro',
   'gemini-2.0-flash', 'gemini-2.0-flash-001',
@@ -55,10 +59,22 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'o1': { maxInput: 200000, maxOutput: 100000 },
   'o1-mini': { maxInput: 128000, maxOutput: 65536 },
   // GPT-5 additions (for fallback validation)
+  'gpt-5': { maxInput: 256000, maxOutput: 32768 },
+  'gpt-5.1': { maxInput: 256000, maxOutput: 32768 },
   'gpt-5.2': { maxInput: 400000, maxOutput: 128000 },
+  'gpt-5.4': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.4-mini': { maxInput: 400000, maxOutput: 128000 },
+  'gpt-5.4-nano': { maxInput: 400000, maxOutput: 128000 },
+  'gpt-5.4-pro': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.5': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.5-pro': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5-mini': { maxInput: 128000, maxOutput: 16384 },
+  'gpt-5-nano': { maxInput: 64000, maxOutput: 8192 },
   'gpt-5.1-thinking': { maxInput: 400000, maxOutput: 128000 },
   'gpt-5.2-thinking': { maxInput: 400000, maxOutput: 128000 },
   // Anthropic
+  'claude-opus-4-7': { maxInput: 1000000, maxOutput: 128000 },
+  'claude-opus-4-6': { maxInput: 1000000, maxOutput: 128000 },
   'claude-3.5-sonnet': { maxInput: 200000, maxOutput: 8192 },
   'claude-3-5-sonnet-20241022': { maxInput: 200000, maxOutput: 8192 },
   'claude-3.5-haiku': { maxInput: 200000, maxOutput: 8192 },
@@ -81,7 +97,12 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'groq-llama-3.3-70b': { maxInput: 128000, maxOutput: 8192 },
   'mixtral-8x7b-32768': { maxInput: 32768, maxOutput: 8192 },
   // DeepSeek
-  'deepseek-chat': { maxInput: 128000, maxOutput: 8192 }
+  'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
+  // Z.AI GLM
+  'glm-5.1': { maxInput: 200000, maxOutput: 128000 },
+  'glm-5': { maxInput: 200000, maxOutput: 128000 },
+  'glm-5-turbo': { maxInput: 200000, maxOutput: 128000 },
+  'glm-5v-turbo': { maxInput: 200000, maxOutput: 128000 }
 }
 
 // All supported provider configurations
@@ -125,6 +146,13 @@ export class LLMProviderRouter {
         apiKey: process.env.OPENAI_API_KEY,
         model: 'gpt-4o',
         baseURL: 'https://api.openai.com/v1'
+      },
+
+      // Z.AI GLM provider (OpenAI-compatible API)
+      zai: {
+        apiKey: process.env.ZAI_API_KEY || process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY,
+        model: 'glm-5.1',
+        baseURL: 'https://api.z.ai/api/paas/v4'
       },
       
       // Anthropic Claude provider
@@ -558,8 +586,9 @@ export class LLMProviderRouter {
         { provider: 'gemini', priority: 1, fallback: true },
         { provider: 'openai', priority: 2, fallback: true },
         { provider: 'anthropic', priority: 3, fallback: true },
-        { provider: 'deepseek', priority: 4, fallback: true },
-        { provider: 'groq', priority: 5, fallback: true }
+        { provider: 'zai', priority: 4, fallback: true },
+        { provider: 'deepseek', priority: 5, fallback: true },
+        { provider: 'groq', priority: 6, fallback: true }
       ]
     }
 
@@ -666,6 +695,7 @@ export class LLMProviderRouter {
       'anthropic': process.env.ANTHROPIC_API_KEY,
       'gemini': process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_API_KEY,
       'gemini-flash-lite': process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_API_KEY,
+      'zai': process.env.ZAI_API_KEY || process.env.ZHIPU_API_KEY || process.env.GLM_API_KEY,
       'deepseek': process.env.DEEPSEEK_API_KEY,
       'groq': process.env.GROQ_API_KEY
     }

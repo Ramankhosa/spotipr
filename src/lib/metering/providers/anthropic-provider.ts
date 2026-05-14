@@ -1,6 +1,6 @@
 /**
  * Anthropic Claude Provider Implementation
- * Supports Claude 3.5 Sonnet, Claude 3.5 Haiku, Claude 3 Opus
+ * Supports Claude 4.x Opus and Claude 3.x models.
  */
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
@@ -9,6 +9,9 @@ import type { LLMProvider, ProviderConfig } from './llm-provider'
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
   supportedModels = [
+    // Claude 4.x models
+    'claude-opus-4-7',
+    'claude-opus-4-6',
     // Claude 3.5 models - use the stable aliases that Anthropic actually supports
     'claude-3-5-sonnet',
     'claude-3-5-haiku', 
@@ -51,9 +54,11 @@ export class AnthropicProvider implements LLMProvider {
     const startTime = Date.now()
     const modelToUse = request.modelClass || this.config.model || 'claude-3-5-sonnet'
     
-    // Map friendly model names to Anthropic's required exact model IDs
-    // Anthropic API requires dated versions - aliases don't work
+    // Map friendly model names to Anthropic's canonical API model IDs.
     const modelMap: Record<string, string> = {
+      // Claude 4.x dateless IDs are pinned API model IDs
+      'claude-opus-4-7': 'claude-opus-4-7',
+      'claude-opus-4-6': 'claude-opus-4-6',
       // Claude 3.5 Sonnet variations -> latest dated version
       'claude-3.5-sonnet': 'claude-3-5-sonnet-20241022',
       'claude-3-5-sonnet': 'claude-3-5-sonnet-20241022',
@@ -103,18 +108,23 @@ export class AnthropicProvider implements LLMProvider {
         messages.push({ role: 'user', content: request.prompt })
       }
 
-      // Apply token limits
+      const modelLimits = this.getTokenLimits(modelToUse)
       const maxTokens = Math.min(
         limits.maxTokensOut || 4096,
-        8192 // Claude's max output tokens
+        modelLimits.output
       )
 
-      const response = await this.client.messages.create({
+      const requestBody: any = {
         model: actualModel,
         max_tokens: maxTokens,
-        messages,
-        temperature: request.parameters?.temperature ?? 0.7
-      })
+        messages
+      }
+
+      if (!actualModel.startsWith('claude-opus-4-')) {
+        requestBody.temperature = request.parameters?.temperature ?? 0.7
+      }
+
+      const response = await this.client.messages.create(requestBody)
 
       const outputText = response.content
         .filter((block: any) => block.type === 'text')
@@ -147,6 +157,8 @@ export class AnthropicProvider implements LLMProvider {
   getTokenLimits(modelName: string): { input: number; output: number } {
     // Claude 3.5 models have 200K context
     const limits: Record<string, { input: number; output: number }> = {
+      'claude-opus-4-7': { input: 1000000, output: 128000 },
+      'claude-opus-4-6': { input: 1000000, output: 128000 },
       'claude-3-5-sonnet': { input: 200000, output: 8192 },
       'claude-3-5-haiku': { input: 200000, output: 8192 },
       'claude-3-opus': { input: 200000, output: 4096 },
@@ -159,6 +171,8 @@ export class AnthropicProvider implements LLMProvider {
   getCostPerToken(modelName: string): { input: number; output: number } {
     // Cost per token in USD (approximate as of Dec 2024)
     const costs: Record<string, { input: number; output: number }> = {
+      'claude-opus-4-7': { input: 0.000005, output: 0.000025 },
+      'claude-opus-4-6': { input: 0.000005, output: 0.000025 },
       'claude-3-5-sonnet': { input: 0.000003, output: 0.000015 },
       'claude-3-5-haiku': { input: 0.0000008, output: 0.000004 },
       'claude-3-opus': { input: 0.000015, output: 0.000075 },

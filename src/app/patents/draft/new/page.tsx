@@ -10,6 +10,8 @@ import Stage0PatentIntelligenceOverlay, {
 } from '@/components/ui/stage0-patent-intelligence-overlay'
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
 
+const DRAFTING_INPUT_WARNING_CHARS = Math.floor(MAX_DRAFTING_INPUT_CHARS * 0.9)
+
 type CountryOption = {
   code: string
   label: string
@@ -988,9 +990,9 @@ function NewPatentDraftPageContent() {
                 className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-vertical"
                 required
               />
-              <p className={`mt-1 text-sm ${rawIdea.length > MAX_DRAFTING_INPUT_CHARS ? 'text-red-600' : rawIdea.length > 13500 ? 'text-orange-600' : 'text-gray-500'}`}>
+              <p className={`mt-1 text-sm ${rawIdea.length > MAX_DRAFTING_INPUT_CHARS ? 'text-red-600' : rawIdea.length > DRAFTING_INPUT_WARNING_CHARS ? 'text-orange-600' : 'text-gray-500'}`}>
                 {rawIdea.length} characters (max {MAX_DRAFTING_INPUT_CHARS.toLocaleString()})
-                {rawIdea.length > 13500 && rawIdea.length <= MAX_DRAFTING_INPUT_CHARS && ' - Approaching limit'}
+                {rawIdea.length > DRAFTING_INPUT_WARNING_CHARS && rawIdea.length <= MAX_DRAFTING_INPUT_CHARS && ' - Approaching limit'}
                 {rawIdea.length > MAX_DRAFTING_INPUT_CHARS && ' - Exceeds limit!'}
               </p>
               {/* Experimental Data Notice */}

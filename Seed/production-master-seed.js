@@ -134,7 +134,7 @@ const SEED_SCRIPTS = [
     name: 'LLM Models & Workflow Stages',
     script: 'Seed/seed-llm-models.js',
     skip: options.skipLlm || options.usersOnly,
-    description: 'Seeds LLM models (28), workflow stages (38), PRODUCTION token limits',
+    description: 'Seeds LLM model registry, workflow stages, PRODUCTION token limits',
   },
   {
     name: 'Admin Users & Tenants',

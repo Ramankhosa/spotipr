@@ -17,6 +17,12 @@ export class OpenAIProvider implements LLMProvider {
     'gpt-5',
     'gpt-5.1',
     'gpt-5.2',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.4-nano',
+    'gpt-5.4-pro',
+    'gpt-5.5',
+    'gpt-5.5-pro',
     'gpt-5-mini',
     'gpt-5-nano',
     // GPT-5 Thinking Variants (alias to base model + reasoning controls)
@@ -60,6 +66,7 @@ export class OpenAIProvider implements LLMProvider {
     // OpenAI's newer models (o1, o1-mini, o1-preview, gpt-5, gpt-5.1, etc.) use max_completion_tokens
     const isO1Model = modelToUse.startsWith('o1')
     const isGPT5Model = modelToUse.startsWith('gpt-5')
+    const isProModel = isGPT5Model && modelToUse.endsWith('-pro')
     const usesMaxCompletionTokens = isO1Model || isGPT5Model
     const supportsTemperatureTuning = !(isO1Model || isGPT5Model)
     
@@ -113,10 +120,14 @@ export class OpenAIProvider implements LLMProvider {
         const configuredReasoning = request.parameters?.reasoning
         const configuredReasoningEffort = request.parameters?.reasoning_effort
 
-        // Default effort: 'high' for thinking variants, 'low' for regular GPT-5 models (faster responses)
+        // Default effort: 'high' for thinking/pro variants, 'low' for regular GPT-5 models (faster responses)
         // Set to 'medium' or 'high' explicitly if you need more thorough reasoning
-        const defaultEffort = isThinkingVariant ? 'high' : 'low'
-        const effort = configuredReasoning?.effort ?? configuredReasoningEffort ?? defaultEffort
+        const defaultEffort = isThinkingVariant || isProModel ? 'high' : 'low'
+        const effort = isProModel ? 'high' : (configuredReasoning?.effort ?? configuredReasoningEffort ?? defaultEffort)
+
+        if (isProModel) {
+          return await this.executeResponsesRequest(request, requestedModel, modelToUse, messageContent, maxTokens, effort)
+        }
 
         // Always set reasoning_effort for GPT-5 models to control response time
         requestBody.reasoning_effort = effort
@@ -179,6 +190,87 @@ export class OpenAIProvider implements LLMProvider {
     }
   }
 
+  private async executeResponsesRequest(
+    request: LLMRequest,
+    requestedModel: string,
+    modelToUse: string,
+    messageContent: any,
+    maxTokens: number,
+    reasoningEffort: string
+  ): Promise<LLMResponse> {
+    const input = Array.isArray(messageContent)
+      ? [{
+          role: 'user',
+          content: messageContent.map((part: any) => {
+            if (part.type === 'text') {
+              return { type: 'input_text', text: part.text }
+            }
+
+            return {
+              type: 'input_image',
+              image_url: part.image_url?.url
+            }
+          })
+        }]
+      : messageContent
+
+    const requestBody: any = {
+      model: modelToUse,
+      input,
+      max_output_tokens: maxTokens,
+      reasoning: { effort: reasoningEffort }
+    }
+
+    console.log(`[OpenAIProvider] Using Responses API for ${modelToUse} with reasoning.effort=${reasoningEffort}`)
+
+    const response = await fetch(`${this.config.baseURL}/responses`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      throw new Error(`OpenAI Responses API error: ${response.status} ${error}`)
+    }
+
+    const data = await response.json()
+    const usage = data.usage
+    const outputText = this.extractResponsesText(data)
+
+    return {
+      output: outputText,
+      outputTokens: usage?.output_tokens || 0,
+      modelClass: requestedModel,
+      metadata: {
+        provider: 'openai',
+        inputTokens: usage?.input_tokens || 0,
+        totalTokens: usage?.total_tokens || 0,
+        finishReason: data.status,
+        modelUsed: modelToUse
+      }
+    }
+  }
+
+  private extractResponsesText(data: any): string {
+    if (typeof data.output_text === 'string') {
+      return data.output_text
+    }
+
+    if (!Array.isArray(data.output)) {
+      return ''
+    }
+
+    return data.output
+      .flatMap((item: any) => Array.isArray(item.content) ? item.content : [])
+      .filter((part: any) => part.type === 'output_text' || part.type === 'text')
+      .map((part: any) => part.text || '')
+      .join('')
+  }
+
   getTokenLimits(modelName: string): { input: number, output: number } {
     const normalized = this.normalizeModelCode(modelName).apiModel
     // Token limits per model family
@@ -192,6 +284,12 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-5': { input: 256000, output: 32768 },
       'gpt-5.1': { input: 256000, output: 32768 },
       'gpt-5.2': { input: 256000, output: 32768 },
+      'gpt-5.4': { input: 1050000, output: 128000 },
+      'gpt-5.4-mini': { input: 400000, output: 128000 },
+      'gpt-5.4-nano': { input: 400000, output: 128000 },
+      'gpt-5.4-pro': { input: 1050000, output: 128000 },
+      'gpt-5.5': { input: 1050000, output: 128000 },
+      'gpt-5.5-pro': { input: 1050000, output: 128000 },
       'gpt-5-mini': { input: 128000, output: 16384 },
       'gpt-5-nano': { input: 64000, output: 8192 },
       // GPT-3.5 Series
@@ -218,6 +316,12 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-5': { input: 0.00001, output: 0.00003 },               // $10/$30 per M
       'gpt-5.1': { input: 0.000012, output: 0.000036 },           // $12/$36 per M
       'gpt-5.2': { input: 0.000012, output: 0.000036 },           // $12/$36 per M (placeholder - update if pricing differs)
+      'gpt-5.4': { input: 0.0000025, output: 0.000015 },          // $2.50/$15.00 per M
+      'gpt-5.4-mini': { input: 0.00000075, output: 0.0000045 },   // $0.75/$4.50 per M
+      'gpt-5.4-nano': { input: 0.0000002, output: 0.00000125 },   // $0.20/$1.25 per M
+      'gpt-5.4-pro': { input: 0.00003, output: 0.00018 },         // $30/$180 per M
+      'gpt-5.5': { input: 0.000005, output: 0.00003 },            // $5/$30 per M
+      'gpt-5.5-pro': { input: 0.00003, output: 0.00018 },         // $30/$180 per M
       'gpt-5-mini': { input: 0.000003, output: 0.000012 },        // $3/$12 per M
       'gpt-5-nano': { input: 0.0000005, output: 0.000002 },       // $0.50/$2.00 per M
       // GPT-3.5 Series

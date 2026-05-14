@@ -1533,7 +1533,7 @@ Draft the Industrial Applicability section using the following structure ONLY:
 PARAGRAPH DISCIPLINE (NON-NEGOTIABLE)
 ────────────────────────────────────────
 - Output MUST consist of ONE paragraph only.
-- The paragraph MUST contain EXACTLY 2 sentences.
+- The paragraph MUST contain EXACTLY 2 to 3 sentences.
 - Maintain concise, controlled patent prose.
 
 ────────────────────────────────────────
