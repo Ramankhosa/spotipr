@@ -33,7 +33,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Link2,
-  Image
+  Image,
+  FileSearch
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -49,6 +50,12 @@ import {
   type ScopeRecommendations,
   type ScopeUseSelection
 } from '@/lib/scope-recommendations'
+import SupportDataSourcesEditor from '@/components/drafting/SupportDataSourcesEditor'
+import {
+  coerceSupportDataSources,
+  type SupportDataSource
+} from '@/lib/support-data-sources'
+import { isLegacyExtractionFailure } from '@/lib/normalized-data'
 
 // Tooltip wrapper component for hover explanations
 const Tooltip = ({ children, content, position = 'bottom' }: { children: React.ReactNode; content: string; position?: 'top' | 'bottom' | 'left' | 'right' }) => (
@@ -84,7 +91,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [stage0OverlayStatus, setStage0OverlayStatus] = useState<Stage0PatentIntelligenceStatus | null>(null)
   const [stage0StartedAt, setStage0StartedAt] = useState<number | null>(null)
   const [stage0OverlayError, setStage0OverlayError] = useState<string | undefined>(undefined)
-  const [activeTab, setActiveTab] = useState<'core' | 'components' | 'scope' | 'classification'>('core')
+  const [activeTab, setActiveTab] = useState<'core' | 'components' | 'supportData' | 'scope' | 'classification'>('core')
   const [expandedComponents, setExpandedComponents] = useState<Set<number>>(new Set())
 
   // Editable fields
@@ -94,6 +101,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [bestMethod, setBestMethod] = useState('')
   const [components, setComponents] = useState<any[]>([])
   const [scopeRecommendations, setScopeRecommendations] = useState<ScopeRecommendations | null>(null)
+  const [supportDataSources, setSupportDataSources] = useState<SupportDataSource[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [abstractText, setAbstractText] = useState('')
   const [cpcCodes, setCpcCodes] = useState<string[]>([])
@@ -108,6 +116,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const normalizedRecord = (session?.ideaRecord?.normalizedData as any) || {}
   const sourceHandlingMode = normalizedRecord.sourceHandlingMode
   const allowRefine = sourceHandlingMode === 'PRESERVE' ? false : true
+  const extractionFailed = normalizedRecord.extractionFailed === true || isLegacyExtractionFailure(normalizedRecord)
 
   // Load normalized data and claims on component mount
   useEffect(() => {
@@ -127,6 +136,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
           cpcCodes: session.ideaRecord.cpcCodes,
           ipcCodes: session.ideaRecord.ipcCodes,
           sourceFactLedger: session.ideaRecord.normalizedData?.sourceFactLedger,
+          supportDataSources: session.ideaRecord.normalizedData?.supportDataSources,
           scopeRecommendations: session.ideaRecord.normalizedData?.scopeRecommendations,
           normalizationReviewWarnings: session.ideaRecord.normalizedData?.normalizationReviewWarnings,
           sourceHandlingMode: session.ideaRecord.normalizedData?.sourceHandlingMode
@@ -141,6 +151,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       setBestMethod(session.ideaRecord.bestMethod || '')
       setComponents(Array.isArray(session.ideaRecord.components) ? session.ideaRecord.components : [])
       setScopeRecommendations(coerceScopeRecommendations(session.ideaRecord.normalizedData?.scopeRecommendations, session.ideaRecord.normalizedData) || null)
+      setSupportDataSources(coerceSupportDataSources(session.ideaRecord.normalizedData?.supportDataSources))
       setSearchQuery((session as any)?.ideaRecord?.searchQuery || '')
       setAbstractText(session.ideaRecord.abstract || '')
       setCpcCodes(Array.isArray(session.ideaRecord.cpcCodes) ? session.ideaRecord.cpcCodes : [])
@@ -149,7 +160,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
   }, [session])
 
-  const canProceed = !!normalizedData
+  const canProceed = !!normalizedData && !extractionFailed
 
   const scopeSourceTypes = [
     'component', 'subcomponent', 'process_step', 'method_step', 'constituent', 'compound',
@@ -307,6 +318,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         sessionId: session.id,
         rawIdea: currentRaw,
         title: currentTitle,
+        sourceInputMeta: normalizedRecord.sourceInputMeta,
         allowRefine
       })
       setStage0OverlayStatus('success')
@@ -336,11 +348,13 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         await onComplete({
           action: 'update_idea_record',
           sessionId: session.id,
-          updates: {
+          patch: {
             problem, objectives, logic, bestMethod,
             components: validComponents,
             searchQuery, abstract: abstractText, cpcCodes, ipcCodes,
-            scopeRecommendations
+            scopeRecommendations,
+            supportDataSources,
+            schemaVersion: 2
           }
         })
         setComponents(validComponents)
@@ -429,6 +443,15 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         </Alert>
       )}
 
+      {extractionFailed && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            Stage 0 extraction failed for this record. Regenerate the invention structure before generating claims.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Combined Notice: Sequential Steps + Experimental Data */}
       <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
         <div className="flex items-start gap-3">
@@ -445,7 +468,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
             </p>
             {/* Experimental Data Notice */}
             <p className="text-xs text-amber-700 leading-relaxed">
-              <strong>About Experimental Data:</strong> This stage extracts the invention structure. Experimental data and test results will be handled in the <strong>Drafting Stage</strong>.
+              <strong>About Support Data:</strong> This stage extracts complex source facts. Review tables, equations, examples, test results, sequences, and exclusions in the <strong>Support Data</strong> tab.
             </p>
           </div>
         </div>
@@ -556,6 +579,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                       {([
                         { key: 'core' as const, label: 'Core Details', icon: Target },
                         { key: 'components' as const, label: `Components (${components?.length || 0})`, icon: Layers },
+                        { key: 'supportData' as const, label: `Support Data (${supportDataSources.filter(source => source.status !== 'deleted').length})`, icon: FileSearch },
                         { key: 'scope' as const, label: 'Scope', icon: Scale },
                         { key: 'classification' as const, label: 'Classification', icon: Hash },
                       ]).map(tab => (
@@ -583,7 +607,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             <span>
-                              <strong>Tip:</strong> Experimental data can be added in the Drafting Stage.
+                              <strong>Tip:</strong> Add or correct complex source facts in the Support Data tab before generating claims.
                             </span>
                           </div>
 
@@ -1133,6 +1157,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                       })()}
 
                       {/* ═══ SCOPE TAB ═══ */}
+                      {activeTab === 'supportData' && (
+                        <SupportDataSourcesEditor
+                          sources={supportDataSources}
+                          onChange={setSupportDataSources}
+                          isEditing={isEditing}
+                        />
+                      )}
+
                       {activeTab === 'scope' && (
                         <div>
                           <div className="flex items-center justify-between gap-3 mb-3">
@@ -1348,7 +1380,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                   problem, objectives, logic, bestMethod, 
                                   components: validComponents,
                                   searchQuery, abstract: abstractText, cpcCodes, ipcCodes,
-                                  scopeRecommendations
+                                  scopeRecommendations,
+                                  supportDataSources,
+                                  schemaVersion: 2
                                 }
                               })
                               

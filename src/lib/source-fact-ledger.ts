@@ -129,6 +129,10 @@ function addRegexCandidates(
   })
 }
 
+function keywordCount(sentence: string, regex: RegExp) {
+  return (sentence.match(regex) || []).length
+}
+
 export function extractPatentCriticalSourceFacts(rawIdea: string): SourceFactCandidate[] {
   const out: SourceFactCandidate[] = []
   const text = rawIdea || ''
@@ -176,10 +180,14 @@ export function extractPatentCriticalSourceFacts(rawIdea: string): SourceFactCan
   )
 
   sourceSentences(text).forEach((sentence) => {
-    if (/\b(if|unless|when|wherein|provided that|in response to|trigger(?:s|ed)?|activat(?:es|ed)|below|above|exceeds?)\b/i.test(sentence)) {
+    const hasConditionAnchor = /\b(if|unless|when|wherein|provided that|in response to|below|above|exceeds?)\b/i.test(sentence)
+    const conditionWeakCount = keywordCount(sentence, /\b(trigger(?:s|ed)?|activat(?:es|ed)?)\b/gi)
+    if (hasConditionAnchor || conditionWeakCount >= 2) {
       out.push({ value: sentence, category: 'conditionsAndRules' })
     }
-    if (/\b(optional|optionally|alternative|alternatively|variant|embodiment|or|either)\b/i.test(sentence)) {
+    const hasAlternativeAnchor = /\b(optional|optionally|alternative|alternatively|variant|embodiment|either)\b/i.test(sentence)
+    const alternativeWeakCount = keywordCount(sentence, /\bor\b/gi)
+    if (hasAlternativeAnchor || alternativeWeakCount >= 2) {
       out.push({ value: sentence, category: 'alternativesAndEmbodiments' })
     }
     if (/\b(example|for example|use case|scenario|prototype|test|trial)\b/i.test(sentence)) {
@@ -188,7 +196,10 @@ export function extractPatentCriticalSourceFacts(rawIdea: string): SourceFactCan
     if (/\b(fallback|fail(?:s|ure)?|safety|shutdown|cutoff|cut-off|expire(?:s|d)?|expiry|retention|alert|alarm|manual review)\b/i.test(sentence)) {
       out.push({ value: sentence, category: 'safetyFallbackOrExpiryRules' })
     }
-    if (/\b(metadata|field|identifier|id|timestamp|confidence|score|payload|header|token|cache)\b/i.test(sentence)) {
+    const hasMetadataAnchor = /\b(metadata|identifier|timestamp|confidence|score|payload|header|token|cache)\b/i.test(sentence)
+    const metadataWeakCount = keywordCount(sentence, /\b(field|id)\b/gi)
+    const hasDataContext = /\b(data|schema|record|message|request|response|payload|metadata)\b/i.test(sentence)
+    if (hasMetadataAnchor || (metadataWeakCount >= 2 && hasDataContext)) {
       out.push({ value: sentence, category: 'dataFieldsOrMetadata' })
     }
   })
@@ -209,6 +220,10 @@ function normalizeForSearch(value: string) {
     .trim()
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function containsCandidate(normalizedOutput: string, candidate: string) {
   const normalizedCandidate = normalizeForSearch(candidate)
   if (!normalizedCandidate) return true
@@ -218,7 +233,7 @@ function containsCandidate(normalizedOutput: string, candidate: string) {
   if (numbers.length === 0) return false
 
   const units = normalizedCandidate.match(/\b(?:percent|wt|w\/w|v\/v|ppm|ppb|mg|kg|ug|mcg|ml|l\/min|mm|cm|nm|um|mv|kv|hz|khz|mhz|ghz|rpm|pa|kpa|mpa|bar|psi|ph|hours?|minutes?|seconds?|days?|weeks?|months?|years?|[a-z])\b/g) || []
-  const hasNumbers = numbers.every(number => normalizedOutput.includes(number))
+  const hasNumbers = numbers.every(number => new RegExp(`(^|[^0-9.])${escapeRegExp(number)}(?![0-9.])`).test(normalizedOutput))
   const hasUnit = units.length === 0 || units.some(unit => normalizedOutput.includes(unit))
   return hasNumbers && hasUnit
 }

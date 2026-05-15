@@ -54,6 +54,23 @@ describe('source fact ledger helpers', () => {
     expect(review.normalizationReviewWarnings).toHaveLength(0)
   })
 
+  test('does not classify weak single keywords as patent-critical facts', () => {
+    const candidates = extractPatentCriticalSourceFacts('The user can click the button or press Enter. The id is shown near the field.')
+    const values = candidates.map(candidate => candidate.value)
+
+    expect(values.some(value => value.includes('click the button or press Enter'))).toBe(false)
+    expect(values.some(value => value.includes('id is shown'))).toBe(false)
+  })
+
+  test('matches numeric candidates by numeric boundaries', () => {
+    const review = completeSourceFactLedger('The heater operates at 25 C.', {
+      logic: 'The heater has 125 elements.',
+      sourceFactLedger: {},
+    })
+
+    expect(review.normalizationReviewWarnings.some(warning => warning.includes('25 C'))).toBe(true)
+  })
+
   test('detects explicitly stated best method language only', () => {
     expect(sourceMentionsBestMethod('The preferred implementation uses a ceramic filter.')).toBe(true)
     expect(sourceMentionsBestMethod('The device may include a ceramic filter.')).toBe(false)

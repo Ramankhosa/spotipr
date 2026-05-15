@@ -7,6 +7,11 @@ import {
   buildSourceFactLedgerPromptBlock,
 } from '@/lib/source-fact-ledger'
 import { buildClaimScopePromptBlock } from '@/lib/scope-recommendations'
+import {
+  buildSupportDataSourceEntries,
+  buildSupportDataSourcePromptBlock,
+  hasSupportDataSources,
+} from '@/lib/support-data-sources'
 
 export type PreliminaryPatentType = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
 
@@ -107,6 +112,7 @@ type PreliminaryClaimContext = {
   doNotClaim?: unknown
   sourceFactLedger?: unknown
   scopeRecommendations?: unknown
+  supportDataSources?: unknown
   normalizationReviewWarnings?: unknown
   inventionType?: unknown
   patentTypePrimary?: PreliminaryPatentType | string
@@ -314,6 +320,11 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     context.sourceFactLedger,
     'SOURCE FACT LEDGER FOR CLAIM SUPPORT'
   )
+  const supportDataBlock = buildSupportDataSourcePromptBlock(
+    context,
+    'claims',
+    'SUPPORT DATA SOURCES FOR CLAIM SUPPORT'
+  )
   const claimScopeBlock = buildClaimScopePromptBlock(context.scopeRecommendations)
 
   const claimType = patentTypePrimary === 'PRODUCT'
@@ -331,6 +342,7 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
       : patentTypePrimary === 'PROCESS'
         ? 'method'
         : 'composition'
+  const primaryExampleSubject = primaryCategory === 'composition' ? 'constituents' : 'elements'
 
   const secondaryCategory = patentTypePrimary === 'PROCESS'
     ? 'system'
@@ -384,12 +396,12 @@ ${context.coreInventiveConcept ? `Core Inventive Concept: ${context.coreInventiv
 ${formatListBlock('Claimable Features', context.claimableFeatures)}
 ${formatListBlock('Fallback Limitations', context.fallbackLimitations)}
 ${formatListBlock('Do Not Claim / Missing Facts', context.doNotClaim)}
-${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
+${supportDataBlock ? `\n${supportDataBlock}` : sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 ${formatWarnings(context.normalizationReviewWarnings)}
 
 SOURCE SUPPORT DISCIPLINE:
-Every claim element MUST map to at least one source fact (SF-ID or normalized field).
-Cite specific SF-IDs (e.g., SF-componentsAndSubcomponents-1) in the supportMatrix for each claim.
+Every claim element MUST map to at least one source fact (SDS-ID, SF-ID, or normalized field).
+Cite specific SDS-IDs or SF-IDs in the supportMatrix for each claim when available.
 If you cannot map a claim element to a source fact, do NOT include it in the claim.
 
 PATENT TYPE ENFORCEMENT:
@@ -421,7 +433,7 @@ Return ONLY one JSON object:
       "number": 1,
       "type": "independent",
       "category": "${primaryCategory}",
-      "text": "A ${primaryCategory} comprising source-supported elements..."
+      "text": "A ${primaryCategory} comprising source-supported ${primaryExampleSubject}..."
     },
     {
       "number": 2,
@@ -478,13 +490,23 @@ function entryMatchesClaim(claimText: string, entryValue: string) {
 function supportEntriesFromContext(context: PreliminaryClaimContext): SupportEntry[] {
   const entries: SupportEntry[] = []
 
-  buildSourceFactLedgerEntries(context.sourceFactLedger).forEach(entry => {
-    entries.push({
-      id: entry.id,
-      value: entry.value,
-      sourceField: `sourceFactLedger.${entry.category}`,
+  if (hasSupportDataSources(context)) {
+    buildSupportDataSourceEntries(context).forEach(entry => {
+      entries.push({
+        id: entry.id,
+        value: entry.value,
+        sourceField: entry.sourceField,
+      })
     })
-  })
+  } else {
+    buildSourceFactLedgerEntries(context.sourceFactLedger).forEach(entry => {
+      entries.push({
+        id: entry.id,
+        value: entry.value,
+        sourceField: `sourceFactLedger.${entry.category}`,
+      })
+    })
+  }
 
   if (Array.isArray(context.components)) {
     context.components.forEach((component: any, index) => {
@@ -657,11 +679,11 @@ export function analyzePreliminaryClaimQuality(params: AnalyzePreliminaryClaimQu
   })
 
   const independentClaims = claims.filter(claim => claim.type === 'independent')
-  if (independentClaims.length < 2) {
+  if (independentClaims.length === 0) {
     warnings.push({
       code: 'INDEPENDENT_CLAIM_COUNT',
       severity: 'warning',
-      message: `Expected at least 2 independent claims in different categories; found ${independentClaims.length}.`,
+      message: 'Expected at least one independent claim; found none.',
     })
   }
 

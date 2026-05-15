@@ -28,6 +28,22 @@ export class DraftClaimsParseError extends Error {
 
 const CLAIM_CATEGORIES = ['method', 'system', 'apparatus', 'composition', 'product'] as const
 
+export function normalizeDraftClaimType(value: unknown): DraftClaim['type'] | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+
+  if (!normalized) return undefined
+  if (['i', 'ind', 'independent', 'independent claim'].includes(normalized)) return 'independent'
+  if (['d', 'dep', 'dependent', 'dependent claim'].includes(normalized)) return 'dependent'
+  if (/^independent\b/.test(normalized)) return 'independent'
+  if (/^dependent\b/.test(normalized)) return 'dependent'
+  return undefined
+}
+
 function stripMarkdownFences(text: string) {
   return text
     .replace(/^```(?:json|jsonc)?\s*/i, '')
@@ -226,10 +242,8 @@ function normalizeClaim(raw: any, index: number): DraftClaim | null {
   const dependsOn = Number(dependsOnRaw || dependencyFromText?.[1])
   const validDependsOn = Number.isFinite(dependsOn) && dependsOn > 0 ? dependsOn : undefined
 
-  const typeRaw = typeof raw.type === 'string' ? raw.type.toLowerCase() : ''
-  const type: DraftClaim['type'] = number === 1 || typeRaw.includes('independent') || !validDependsOn
-    ? 'independent'
-    : 'dependent'
+  const llmType = normalizeDraftClaimType(raw.type ?? raw.claimType ?? raw.claim_type ?? raw.kind)
+  const type: DraftClaim['type'] = llmType || (number === 1 ? 'independent' : 'dependent')
 
   return {
     number,
@@ -340,7 +354,7 @@ function parseClaimsFromNumberedText(output: string): DraftClaim[] {
 
     const dependency = claimText.match(/\bclaims?\s+(\d+)\b/i)
     const dependsOn = dependency ? Number(dependency[1]) : undefined
-    const type: DraftClaim['type'] = number === 1 || !dependsOn ? 'independent' : 'dependent'
+    const type: DraftClaim['type'] = number === 1 ? 'independent' : 'dependent'
 
     claims.push({
       number,

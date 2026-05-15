@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState, Fragment, useRef, memo } from 'react'
 import { Popover, Transition } from '@headlessui/react'
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/20/solid'
+import { getAuthoritativeClaims } from '@/lib/claims-context'
 
 interface RelatedArtStageProps {
   session: {
@@ -874,8 +875,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       
       // Get frozen claims from session for claim-aware prior art analysis
       const normalizedData = (session?.ideaRecord?.normalizedData || {}) as any
-      const frozenClaims = normalizedData.claimsStructured || []
-      const claimsText = normalizedData.claims || ''
+      const claimsSnapshot = getAuthoritativeClaims(normalizedData)
+      const frozenClaims = claimsSnapshot.structured
+      const claimsText = claimsSnapshot.html
       const claimsApprovedAt = normalizedData.claimsApprovedAt
       
       // Pass claims context to the AI review for deeper analysis

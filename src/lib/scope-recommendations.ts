@@ -394,21 +394,33 @@ export function coerceScopeRecommendations(
     if (!item || typeof item !== 'object') return
     const itemRecord = item as Record<string, any>
     const label = clean(itemRecord.label || itemRecord.name || itemRecord.title)
-    if (!label || /^not stated by source$/i.test(label)) return
+    if (!label) return
+    const reason = clean(itemRecord.reason)
+    const sourceRefs = normalizeSourceRefs(itemRecord.sourceRefs)
+    const isNotStatedLabel = /^not stated by source$/i.test(label)
+    const hasMeaningfulGapContext = !!reason || sourceRefs.length > 0
+    if (isNotStatedLabel && !hasMeaningfulGapContext) return
     const sourceType = pickEnum(itemRecord.sourceType, SOURCE_TYPES, 'other')
     const key = `${scopeElementKey(label)}::${sourceType}`
     if (seen.has(key)) return
     seen.add(key)
 
-    const recommended = normalizeSelection(itemRecord.recommended)
+    const recommended = isNotStatedLabel
+      ? {
+          claim: 'none',
+          numbering: 'do_not_number',
+          figures: 'do_not_show',
+          description: 'exclude',
+        } as ScopeUseSelection
+      : normalizeSelection(itemRecord.recommended)
     elements.push({
       id: clean(itemRecord.id) || makeElementId(label, sourceType, elements.length),
       label,
       sourceType,
       recommended,
       user: normalizeUserSelection(itemRecord.user),
-      reason: clean(itemRecord.reason) || 'LLM-generated scope recommendation.',
-      sourceRefs: normalizeSourceRefs(itemRecord.sourceRefs),
+      reason: reason || 'LLM-generated scope recommendation.',
+      sourceRefs,
     })
   })
 
@@ -629,6 +641,62 @@ export function componentsFromFrozenClaimsAndStage0({
       claimSupport,
     }]
   })
+}
+
+function stage0IndexFromSourceRefs(sourceRefs: unknown): number | undefined {
+  if (!Array.isArray(sourceRefs)) return undefined
+  for (const sourceRef of sourceRefs) {
+    if (typeof sourceRef !== 'string') continue
+    const match = sourceRef.match(/\bcomponents\[(\d+)\]/i)
+    if (!match) continue
+    const index = Number(match[1])
+    if (Number.isInteger(index) && index >= 0) return index
+  }
+  return undefined
+}
+
+function componentPlannerSeedKey(component: any, fallbackIndex: number, fallbackIsStage0 = false): string {
+  if (fallbackIsStage0 && fallbackIndex >= 0) return `stage0:${fallbackIndex}`
+
+  const claimIndex = component?.claimSupport?.stage0ComponentIndex
+  if (Number.isInteger(claimIndex) && claimIndex >= 0) return `stage0:${claimIndex}`
+
+  const sourceRefIndex = stage0IndexFromSourceRefs(component?.sourceRefs)
+  if (sourceRefIndex !== undefined) return `stage0:${sourceRefIndex}`
+
+  const scopeId = clean(component?.sourceScopeId || component?.scopeRecommendationId)
+  if (scopeId) return `scope:${scopeId}`
+
+  const labelKey = scopeElementKey(component?.scopeLabel || component?.name || component?.title || component?.label || component?.id)
+  return labelKey ? `label:${labelKey}` : `fallback:${fallbackIndex}`
+}
+
+export function componentPlannerSeedsFromStage0(options: ComponentPlannerSeedOptions): any[] {
+  const stage0Components = Array.isArray(options.normalizedComponents)
+    ? options.normalizedComponents
+    : []
+  if (!stage0Components.length) return []
+
+  const claimSeededComponents = componentsFromFrozenClaimsAndStage0(options)
+  const scopedComponents = componentsFromScopeRecommendations(
+    options.scopeRecommendations,
+    stage0Components
+  )
+
+  const merged: any[] = []
+  const seen = new Set<string>()
+  const add = (component: any, fallbackIndex: number, fallbackIsStage0 = false) => {
+    const key = componentPlannerSeedKey(component, fallbackIndex, fallbackIsStage0)
+    if (seen.has(key)) return
+    seen.add(key)
+    merged.push(component)
+  }
+
+  claimSeededComponents.forEach((component, index) => add(component, index))
+  scopedComponents.forEach((component, index) => add(component, index))
+  stage0Components.forEach((component, index) => add(component, index, true))
+
+  return merged
 }
 
 export function filterComponentsByScopeForNumbering<T = any>(

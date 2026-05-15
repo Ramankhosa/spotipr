@@ -1814,6 +1814,8 @@ model DraftingSession {
   patentTypeDecidedAt     DateTime? @map("patent_type_decided_at")
   patentTypeFrozenAt      DateTime? @map("patent_type_frozen_at")
   patentTypeComponentsHash String?  @map("patent_type_components_hash")
+  normalizationInProgressAt DateTime? @map("normalization_in_progress_at")
+  normalizationRequestId    String?   @map("normalization_request_id")
 
   @@map("drafting_sessions")
 }

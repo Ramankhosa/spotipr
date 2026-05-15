@@ -10,58 +10,9 @@
 
 import { prisma } from '@/lib/prisma'
 import { llmGateway } from '@/lib/metering'
+import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper'
 
-// ============================================================================
-// DD User Data Legal Wrapper (Fixed Global Text - DO NOT MODIFY WITHOUT LEGAL REVIEW)
-// ============================================================================
-const DD_USER_DATA_LEGAL_WRAPPER = `
-────────────────────────────────────────
-INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
-────────────────────────────────────────
-
-DATA PRIORITY NOTICE (CRITICAL):
-Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
-This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
-This data is auxiliary context only and does not expand the invention scope.
-This data MUST NOT be used to add components, figures, reference numerals, named entities,
-products, persons, organizations, structures, steps, environments, use cases, examples,
-values, materials, operating conditions, or results
-that are not already supported by Claim 1 and the normalized invention context.
-
-ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
-- Use ONLY the exact data values, measurements, and observations provided below.
-- Do NOT invent, fabricate, or extrapolate any numerical values, ranges, or test results.
-- Do NOT create hypothetical examples or sample data.
-- If the data is incomplete, describe only what is provided; do NOT fill gaps with assumptions.
-- Reproduce the data faithfully; paraphrasing is permitted but fabrication is STRICTLY PROHIBITED.
-
-NON-GENERALIZATION RULE (CRITICAL):
-- Do NOT generalize inventor-provided data to all embodiments.
-- Do NOT state or imply that observed values, behaviors, or conditions apply universally.
-- All references to data MUST be explicitly limited to example configurations and stated test conditions.
-
-PERMITTED USE OF ILLUSTRATIVE DATA (INSTRUCTIONAL):
-When inventor-provided data is present, you MUST use it only in the following manner:
-1) Place all discussion of the data within a clearly separated illustrative example or observational
-   discussion in the Detailed Description (i.e., an "Illustrative Examples" portion).
-2) Use the data ONLY to illustrate operability or representative observed behavior under stated conditions.
-3) Introduce data using cautious, example-limiting phrases such as:
-   - "in one example configuration"
-   - "representative observations include"
-   - "under selected test conditions"
-   - "example measurements indicate"
-4) Describe WHAT was observed without interpreting WHY it occurs or HOW it improves the system.
-5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.
-6) After presenting the data, explicitly clarify that the data is illustrative only and does not limit the invention.
-
-SECTION SCOPE LIMITATION (CRITICAL):
-- Do NOT integrate inventor-provided data into core system definitions, element descriptions,
-  or functional requirements.
-- Do NOT convert numeric values into thresholds, ranges, or mandatory operating conditions,
-  unless such limits are explicitly required by Claim 1 (rare).
-
-ILLUSTRATIVE DATA (VERBATIM):
-`.trim()
+const DD_USER_DATA_LEGAL_WRAPPER = DD_USER_DATA_LLM_WRAPPER
 import type { LLMRequest } from '@/lib/metering'
 import { getCountryProfile } from '@/lib/country-profile-service'
 import { getSectionStageCode } from '@/lib/metering/section-stage-mapping'
@@ -74,6 +25,8 @@ import {
   isClaim1Available,
   getSectionInjectionConfig
 } from '@/lib/section-injection-config'
+import { buildSupportDataSourcePromptBlock } from '@/lib/support-data-sources'
+import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
 import {
   areFiguresSkipped,
   filterDrawingSectionKeys,
@@ -1270,6 +1223,7 @@ export async function generateReferenceDraft(
   try {
     const figuresSkipped = areFiguresSkipped(session)
     const idea = session.ideaRecord || {}
+    const normalizedData = idea.normalizedData || {}
     const referenceMap = session.referenceMap || { components: [] }
     // Handle both nested structure { components: { components: [...] } } and direct array { components: [...] }
     const rawComponents = referenceMap.components as any
@@ -1574,32 +1528,48 @@ export async function generateReferenceDraft(
           }
         }
         
-        // Claim 1 anchoring/avoidance instructions (config-driven)
-        // Per SRS: Each section has specific rules about whether to use Claim 1
+        // Independent-claims anchoring/avoidance instructions (config-driven)
+        // Per SRS: Each section has specific rules about whether to use independent claims
         const sectionConfig = getSectionInjectionConfig(key)
         
         if (sectionConfig.injectClaim1 && sectionConfig.claim1Mode === 'bindingAnchor') {
-          // Section SHOULD use Claim 1 as binding anchor
+          // Section SHOULD use independent claims as binding anchor
           contextAddendum += `
    
-   CLAIM 1 ANCHORING (REQUIRED for this section):
-   - Align all content with Claim 1 provided in the context.
-   - Do NOT add elements not supported by Claim 1.
-   - Keep terminology EXACTLY consistent with Claim 1 language.
-   - All features described must trace back to Claim 1.`
+   INDEPENDENT CLAIMS ANCHORING (REQUIRED for this section):
+   - Align all content with the independent claims provided in the context.
+   - Do NOT add elements not supported by the independent claims.
+   - Keep terminology EXACTLY consistent with independent claim language.
+   - All features described must trace back to independent claim language.`
         } else if (sectionConfig.injectClaim1 && sectionConfig.claim1Mode === 'constraintOnly') {
-          // Section uses Claim 1 for terminology consistency only
+          // Section uses independent claims for terminology consistency only
           contextAddendum += `
    
-   CLAIM 1 CONSTRAINT:
-   - Use Claim 1 ONLY for terminology consistency.
+   INDEPENDENT CLAIMS CONSTRAINT:
+   - Use independent claims ONLY for terminology consistency.
    - Do NOT enumerate or restate claim features.
-   - Avoid contradiction with Claim 1 scope.`
+   - Avoid contradiction with independent claim scope.`
         } else if (!sectionConfig.injectClaim1) {
-          // Section should NOT use Claim 1 - add explicit avoidance instruction
+          // Section should NOT use independent claims - add explicit avoidance instruction
           contextAddendum += `
    
-   NOTE: Do NOT reference Claim 1 for this section. Write based on the normalized invention context only.`
+   NOTE: Do NOT reference independent claims for this section. Write based on the normalized invention context only.`
+        }
+
+        const supportBlock =
+          buildSupportDataSourcePromptBlock(
+            normalizedData,
+            key,
+            `SUPPORT DATA SOURCES FOR ${String(key).toUpperCase()}`
+          ) ||
+          buildSourceFactLedgerPromptBlock(
+            normalizedData.sourceFactLedger,
+            `SOURCE FACT LEDGER FOR ${String(key).toUpperCase()}`
+          )
+        if (supportBlock) {
+          contextAddendum += `
+
+${supportBlock}`
         }
       }
       
@@ -1744,8 +1714,6 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
     // ══════════════════════════════════════════════════════════════════════════════
     // UNIVERSAL DRAFTING BUNDLE (UDB) for batch generation
     // ══════════════════════════════════════════════════════════════════════════════
-    const normalizedData = idea.normalizedData || {}
-    
     // Check gating for critical sections that require frozen Claim 1
     const gatedSections = dynamicSections.filter(key => shouldGateSection(key, normalizedData))
     
@@ -1779,7 +1747,8 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
       : (dynamicSections[0] || 'detailedDescription') // Fallback to first section or default
     
     const udbResult = buildUniversalDraftingBundle(representativeSection, normalizedData, idea, undefined, {
-      patentTypePrimary: (session as any)?.patentTypePrimary
+      patentTypePrimary: (session as any)?.patentTypePrimary,
+      suppressSupportDataSources: true
     })
     const claim1Available = isClaim1Available(normalizedData)
     console.log(`[generateReferenceDraft] UDB batch injection:`, {

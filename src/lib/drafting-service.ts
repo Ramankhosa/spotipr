@@ -34,13 +34,26 @@ import { buildIdeaNormalizationPrompt } from '@/lib/idea-normalization-prompt';
 import {
   completeSourceFactLedger,
   sourceMentionsBestMethod,
-  type SourceFactLedger,
 } from '@/lib/source-fact-ledger';
 import {
   coerceScopeRecommendations,
   type ClaimSupportMetadata,
-  type ScopeRecommendations,
 } from '@/lib/scope-recommendations';
+import {
+  completeSupportDataSources,
+} from '@/lib/support-data-sources';
+import { normalizeComponentDisplayName } from '@/lib/component-naming';
+import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper';
+import {
+  buildIdeaNormalizationExtractedFields,
+  migrateNormalizedData,
+  type IdeaNormalizationExtractedFields,
+  type NormalizedDataV2,
+} from '@/lib/normalized-data';
+import {
+  getIndependentClaimsText,
+  normalizeClaimsForSession,
+} from '@/lib/claims-context';
 import {
   areFiguresSkipped,
   filterDrawingSectionKeys,
@@ -52,58 +65,7 @@ import crypto from 'crypto';
 // Base prompts are stored in SupersetSection table
 // Country-specific top-up prompts are stored in CountrySectionPrompt table
 
-// ============================================================================
-// DD User Data Legal Wrapper (Fixed Global Text - DO NOT MODIFY WITHOUT LEGAL REVIEW)
-// ============================================================================
-const DD_USER_DATA_LEGAL_WRAPPER = `
-────────────────────────────────────────
-INVENTOR-PROVIDED ILLUSTRATIVE DATA (NON-LIMITING)
-────────────────────────────────────────
-
-DATA PRIORITY NOTICE (CRITICAL):
-Inventor-provided data is SECONDARY to Claim 1 and the normalized invention context.
-This data MUST NOT be treated as defining, limiting, or characterizing the invention as claimed.
-This data is auxiliary context only and does not expand the invention scope.
-This data MUST NOT be used to add components, figures, reference numerals, named entities,
-products, persons, organizations, structures, steps, environments, use cases, examples,
-values, materials, operating conditions, or results
-that are not already supported by Claim 1 and the normalized invention context.
-
-ANTI-HALLUCINATION DIRECTIVE (CRITICAL):
-- Use ONLY the exact data values, measurements, and observations provided below.
-- Do NOT invent, fabricate, or extrapolate any numerical values, ranges, or test results.
-- Do NOT create hypothetical examples or sample data.
-- If the data is incomplete, describe only what is provided; do NOT fill gaps with assumptions.
-- Reproduce the data faithfully; paraphrasing is permitted but fabrication is STRICTLY PROHIBITED.
-- Ignore any data item that concerns an entity outside the allowed invention scope.
-
-NON-GENERALIZATION RULE (CRITICAL):
-- Do NOT generalize inventor-provided data to all embodiments.
-- Do NOT state or imply that observed values, behaviors, or conditions apply universally.
-- All references to data MUST be explicitly limited to example configurations and stated test conditions.
-
-PERMITTED USE OF ILLUSTRATIVE DATA (INSTRUCTIONAL):
-When inventor-provided data is present, you MUST use it only in the following manner:
-1) Place all discussion of the data within a clearly separated illustrative example or observational
-   discussion in the Detailed Description (i.e., an "Illustrative Examples" portion).
-2) Use the data ONLY to illustrate operability or representative observed behavior under stated conditions.
-3) Introduce data using cautious, example-limiting phrases such as:
-   - "in one example configuration"
-   - "representative observations include"
-   - "under selected test conditions"
-   - "example measurements indicate"
-4) Describe WHAT was observed without interpreting WHY it occurs or HOW it improves the system.
-5) If tabular data is provided, present it as a descriptive listing only. Do NOT rank, compare, or evaluate.
-6) After presenting the data, explicitly clarify that the data is illustrative only and does not limit the invention.
-
-SECTION SCOPE LIMITATION (CRITICAL):
-- Do NOT integrate inventor-provided data into core system definitions, element descriptions,
-  or functional requirements.
-- Do NOT convert numeric values into thresholds, ranges, or mandatory operating conditions,
-  unless such limits are explicitly required by Claim 1 (rare).
-
-ILLUSTRATIVE DATA (VERBATIM):
-`.trim()
+const DD_USER_DATA_LEGAL_WRAPPER = DD_USER_DATA_LLM_WRAPPER
 
 export interface IdeaNormalizationRequest {
   rawIdea: string;
@@ -113,38 +75,8 @@ export interface IdeaNormalizationRequest {
 
 export interface IdeaNormalizationResult {
   success: boolean;
-  normalizedData?: any;
-  extractedFields?: {
-    searchQuery?: string;
-    problem?: string;
-    objectives?: string;
-    components?: any[];
-    logic?: string;
-    inputs?: string;
-    outputs?: string;
-    variants?: string;
-    inventionType?: string[];
-    patentTypePrimary?: PatentTypePrimary;
-    bestMethod?: string;
-    fieldOfRelevance?: string;
-    subfield?: string;
-    recommendedFocus?: string;
-    complianceNotes?: string;
-    drawingsFocus?: string;
-    claimStrategy?: string;
-    coreInventiveConcept?: string;
-    claimableFeatures?: string[];
-    fallbackLimitations?: string[];
-    doNotClaim?: string[];
-    riskFlags?: string;
-    abstract?: string;
-    cpcCodes?: string[];
-    ipcCodes?: string[];
-    sourceFactLedger?: SourceFactLedger;
-    normalizationReviewWarnings?: string[];
-    scopeRecommendations?: ScopeRecommendations;
-    sourceHandlingMode?: 'PRESERVE' | 'STRUCTURE_ONLY';
-  };
+  normalizedData?: NormalizedDataV2;
+  extractedFields?: IdeaNormalizationExtractedFields;
   llmPrompt?: string;
   llmResponse?: any;
   tokensUsed?: number;
@@ -423,7 +355,7 @@ export class DraftingService {
       // Persist normalization output on the idea record for downstream use (including archetype)
       await prisma.ideaRecord.update({
         where: { sessionId: session.id },
-        data: {
+        data: ({
           normalizedData: normalizationResult.normalizedData || {},
           problem: normalizationResult.extractedFields?.problem,
           objectives: normalizationResult.extractedFields?.objectives,
@@ -440,22 +372,29 @@ export class DraftingService {
           llmPromptUsed: normalizationResult.llmPrompt,
           llmResponse: normalizationResult.llmResponse,
           tokensUsed: normalizationResult.tokensUsed
-        }
+        } as any)
       })
 
       // Update session with normalized data
+      const normalizedComponents = normalizationResult.extractedFields?.components || []
+      const normalizedLogic = normalizationResult.extractedFields?.logic || ''
       await prisma.draftingSession.update({
         where: { id: session.id },
-        data: {
+        data: ({
+          patentTypePrimary: normalizationResult.extractedFields?.patentTypePrimary,
+          patentTypeDecidedAt: normalizationResult.extractedFields?.patentTypePrimary ? new Date() : undefined,
+          patentTypeComponentsHash: normalizationResult.extractedFields?.patentTypePrimary
+            ? this.generatePatentTypeContextHash(normalizedComponents, normalizedLogic)
+            : undefined,
           referenceMap: normalizationResult.extractedFields
             ? {
                 create: {
-                  components: normalizationResult.extractedFields.components || [],
+                  components: normalizedComponents,
                   isValid: false,
                 }
               }
             : undefined
-        }
+        } as any)
       });
 
       return { success: true, draftId: session.id };
@@ -507,68 +446,6 @@ export class DraftingService {
         };
       }
       
-      const domainExpertise = (areaOfInvention && areaOfInvention.trim()) ? ` with core expertise in ${areaOfInvention.trim()}` : '';
-      const refinementNote = allowRefine
-        ? ''
-        : '\n- Do NOT invent or add new components/claims beyond what is provided. Preserve the user-described invention faithfully; paraphrase only for clarity.';
-
-      const legacyPrompt = `You are an expert patent attorney specializing in drafting and structuring patent disclosures across all domains (mechanical, electrical, software, biotech, chemistry, medical devices, materials, aerospace, etc.)${domainExpertise}.
-
-Read the invention description and return ONLY one JSON object with the fields defined below.
-
-Rules (must follow strictly):
-- Output MUST be a single JSON object, no code fences, no backticks, no prose.
-- Use concise, formal patent language suitable for specification drafting.
-- Keep each field as a single string (no arrays), except: "components" (array of objects), "cpcCodes" (array of strings), "ipcCodes" (array of strings), and "inventionType" (array of archetype tags).
-- Include "inventionType" as the archetype classification (one or more of: MECHANICAL, ELECTRICAL, SOFTWARE, CHEMICAL, BIO, GENERAL). Allow multiple using either an array or a "+"-joined string (e.g., "MECHANICAL+SOFTWARE"); uppercase the values.
-- Additionally, provide a single meaningful "searchQuery" sentence (<= 25 words) optimized for PQAI AI-based prior-art search. It MUST be a coherent plain-English sentence, not a bag of keywords; plain ASCII, no quotes, no brackets, no CPC/IPC codes, no labels.
-- Use double-quoted keys and strings; avoid line breaks mid-sentence when possible.
- - Keep content succinct; avoid redundancy and marketing language.
- - Components: return up to 8 items maximum by default (more only if essential). Use hierarchy when helpful (module → submodule → sub-submodule). Keep each item's description to one sentence.${refinementNote}
-
-TITLE: ${title}
-
-INVENTION DESCRIPTION:
-${rawIdea}
-
-Respond in this exact JSON shape:
-{
-  "searchQuery": "meaningful plain-English search sentence (<= 25 words, ASCII, no quotes/brackets), suitable for PQAI AI-based patent search",
-  "problem": "concise statement of the technical problem",
-  "objectives": "succinct objectives of the invention",
-  "components": [{
-    "name": "component name",
-    "type": "MAIN_CONTROLLER|SUBSYSTEM|MODULE|INTERFACE|SENSOR|ACTUATOR|PROCESSOR|MEMORY|DISPLAY|COMMUNICATION|POWER_SUPPLY|OTHER",
-    "description": "technical role in the system",
-    "inputs": "optional: key inputs/signals/data",
-    "outputs": "optional: key outputs/actions/data",
-    "dependencies": "optional: other components relied on",
-    "figureHint": "optional: what to highlight in figures",
-    "parent": "optional: parent component name if this is a submodule",
-    "level": "optional: 0 for root modules, 1 for child, 2 for grandchild, etc.",
-    "sequence": "optional: order within its level (1-based)",
-    "numberingHint": "optional: preferred hundreds bucket e.g., 100|200|300|400|500|600|700|800|900"
-  }],
-  "inventionType": ["MECHANICAL", "SOFTWARE"],
-  "logic": "how components interact to achieve the objectives",
-  "inputs": "key inputs/signals/data required",
-  "outputs": "key outputs/actions/data produced",
-  "variants": "notable embodiments or alternatives",
-  "bestMethod": "preferred implementation at filing date",
-  "fieldOfRelevance": "primary domain (e.g., Mechanical, Electrical, Software, Medical Device, Biotech, Chemistry, Materials, Aerospace)",
-  "subfield": "more specific area (e.g., fluid mechanics, image processing, polymer chemistry)",
-  "recommendedFocus": "what to emphasize in drafting for this field",
-  "complianceNotes": "regulatory or standards-related notes if relevant",
-  "drawingsFocus": "what figures should emphasize given the field",
-  "claimStrategy": "high-level claim drafting approach suited to this field",
-  "riskFlags": "any potential enablement or patentability risks to watch",
-  "abstract": "<= 150-word abstract that begins exactly with the title; neutral tone; no claims/advantages/numerals",
-  "cpcCodes": ["primary CPC code like H04L 29/08", "optional secondary"],
-  "ipcCodes": ["primary IPC code like G06F 17/30", "optional secondary"]
-}`;
-
-      void legacyPrompt;
-
       const prompt = buildIdeaNormalizationPrompt({
         rawIdea,
         title,
@@ -657,62 +534,47 @@ Respond in this exact JSON shape:
           } catch (secondErr) {
             console.error('Fallback JSON parse also failed:', secondErr);
 
-            // Try one more fallback: clean up the JSON more aggressively
+            // Try one more fallback with syntax-only cleanup. Do not fabricate values.
             try {
               let cleanJson = jsonText
                 .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Remove all control characters
                 .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
                 .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":') // Quote keys
                 .replace(/:\s*'([^']*)'/g, ':"$1"') // Convert single quotes to double quotes for values
-                .replace(/:\s*([^",}\[\]]+)(\s*[,}\]])/g, ':"$1"$2'); // Quote unquoted string values
 
               normalizedData = JSON.parse(cleanJson);
-              console.log('Aggressive cleanup parsing succeeded');
+              console.log('Syntax cleanup parsing succeeded');
             } catch (thirdErr) {
-              console.error('All JSON parsing attempts failed, creating fallback response');
-              // Create a non-inventive fallback response to allow the process to continue
-              normalizedData = {
-                searchQuery: title.toLowerCase().replace(/[^a-z0-9\s]/g, '').substring(0, 50),
-                problem: "Extraction failed - review source text",
-                objectives: "Extraction failed - review source text",
-                components: [],
-                inventionType: ["GENERAL"],
-                patentTypePrimary: this.patentTypeFallbackFromText(rawIdea, title).primary,
-                logic: "Extraction failed - review source text",
-                inputs: "Not stated by source",
-                outputs: "Not stated by source",
-                variants: "Not stated by source",
-                bestMethod: "Not stated by source",
-                fieldOfRelevance: areaOfInvention || "Not stated by source",
-                subfield: "Not stated by source",
-                recommendedFocus: "Review source text before drafting",
-                complianceNotes: "Not stated by source",
-                drawingsFocus: "Review source text before figure planning",
-                claimStrategy: "Review source text before claim generation",
-                coreInventiveConcept: "Extraction failed - review source text",
-                claimableFeatures: [],
-                fallbackLimitations: [],
-                doNotClaim: ["Do not claim facts that were not verified from the source text."],
-                riskFlags: "LLM extraction failed; verify all source facts before drafting",
-                abstract: `${title}. Extraction failed; review the source disclosure before drafting.`,
-                cpcCodes: [],
-                ipcCodes: [],
-                sourceHandlingMode: allowRefine ? "STRUCTURE_ONLY" : "PRESERVE",
-                sourceFactLedger: {},
-                normalizationReviewWarnings: ["LLM response could not be parsed. Please verify the comprehended invention before generating claims."]
-              };
-              console.log('Using fallback normalized data due to JSON parsing failure');
+              console.error('All JSON parsing attempts failed; normalization will fail closed:', thirdErr);
+              throw thirdErr;
             }
           }
         }
 
-        // Normalize component hierarchy if provided
+        // Normalize component hierarchy and display names if provided
         if (Array.isArray(normalizedData?.components)) {
-          normalizedData.components = normalizedData.components.map((c: any, idx: number) => ({
-            ...c,
-            level: typeof c?.level === 'number' && c.level >= 0 ? c.level : 0,
-            sequence: typeof c?.sequence === 'number' && c.sequence > 0 ? c.sequence : (idx + 1),
-          }))
+          const rawComponents = normalizedData.components
+          const componentNameMap = new Map<string, string>()
+          normalizedData.components = rawComponents.map((c: any, idx: number) => {
+            const originalName = typeof c?.name === 'string' ? c.name.trim() : ''
+            const displayName = normalizeComponentDisplayName(originalName, c?.type) || originalName
+            if (originalName && displayName) {
+              componentNameMap.set(originalName.toLowerCase(), displayName)
+            }
+            return {
+              ...c,
+              name: displayName,
+              level: typeof c?.level === 'number' && c.level >= 0 ? c.level : 0,
+              sequence: typeof c?.sequence === 'number' && c.sequence > 0 ? c.sequence : (idx + 1),
+            }
+          }).map((c: any) => {
+            const parent = typeof c?.parent === 'string' ? c.parent.trim() : ''
+            if (!parent) return c
+            return {
+              ...c,
+              parent: componentNameMap.get(parent.toLowerCase()) || normalizeComponentDisplayName(parent),
+            }
+          })
         }
 
         if (!normalizedData || typeof normalizedData !== 'object') {
@@ -757,6 +619,7 @@ Respond in this exact JSON shape:
       normalizedData.inventionType = detectedArchetype
       normalizedData.patentTypePrimary = detectedPatentType
       normalizedData.sourceHandlingMode = allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE'
+      normalizedData.schemaVersion = 2
 
       if (!sourceMentionsBestMethod(rawIdea)) {
         normalizedData.bestMethod = 'Not stated by source'
@@ -786,42 +649,25 @@ Respond in this exact JSON shape:
         normalizedData.scopeRecommendations,
         normalizedData
       )
+      const supportDataReview = completeSupportDataSources(rawIdea, normalizedData)
+      normalizedData.supportDataSources = supportDataReview.supportDataSources
+      normalizedData.normalizationReviewWarnings = Array.from(new Set([
+        ...(Array.isArray(normalizedData.normalizationReviewWarnings)
+          ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
+          : []),
+        ...supportDataReview.normalizationReviewWarnings,
+      ]))
 
-      const extractedFields = {
-        searchQuery: typeof normalizedData.searchQuery === 'string' ? String(normalizedData.searchQuery).trim() : undefined,
-        problem: normalizedData.problem,
-        objectives: normalizedData.objectives,
-        components: normalizedData.components,
-        logic: normalizedData.logic,
-        inputs: normalizedData.inputs,
-        outputs: normalizedData.outputs,
-        variants: normalizedData.variants,
-        inventionType: detectedArchetype,
-        patentTypePrimary: detectedPatentType,
-        bestMethod: normalizedData.bestMethod,
-        fieldOfRelevance: normalizedData.fieldOfRelevance,
-        subfield: normalizedData.subfield,
-        recommendedFocus: normalizedData.recommendedFocus,
-        complianceNotes: normalizedData.complianceNotes,
-        drawingsFocus: normalizedData.drawingsFocus,
-        claimStrategy: normalizedData.claimStrategy,
-        coreInventiveConcept: normalizedData.coreInventiveConcept,
-        claimableFeatures: normalizedData.claimableFeatures,
-        fallbackLimitations: normalizedData.fallbackLimitations,
-        doNotClaim: normalizedData.doNotClaim,
-        riskFlags: normalizedData.riskFlags,
-        abstract: normalizedData.abstract,
-        cpcCodes: Array.isArray(normalizedData.cpcCodes) ? normalizedData.cpcCodes.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
-        ipcCodes: Array.isArray(normalizedData.ipcCodes) ? normalizedData.ipcCodes.map((s: any) => String(s).trim()).filter(Boolean) : undefined,
-        sourceFactLedger: normalizedData.sourceFactLedger,
-        normalizationReviewWarnings: normalizedData.normalizationReviewWarnings,
-        scopeRecommendations: normalizedData.scopeRecommendations,
-        sourceHandlingMode: normalizedData.sourceHandlingMode
-      };
+      const finalNormalizedData = migrateNormalizedData(normalizedData, {
+        inventionType: detectedArchetype as any,
+        patentTypePrimary: detectedPatentType as any,
+        sourceHandlingMode: allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE',
+      })
+      const extractedFields = buildIdeaNormalizationExtractedFields(finalNormalizedData)
 
       return {
         success: true,
-        normalizedData,
+        normalizedData: finalNormalizedData,
         extractedFields,
         llmPrompt: prompt,
         llmResponse: llmResult.response,
@@ -1908,27 +1754,7 @@ Respond in this exact JSON shape:
    * correctly across different data formats that may exist in legacy sessions.
    */
   private static normalizeClaimsData(normalized: Record<string, any> = {}): Record<string, any> {
-    const merged = { ...(normalized || {}) }
-    
-    // Backfill provisional/final for legacy sessions
-    if (!merged.claimsProvisional && merged.claims) {
-      merged.claimsProvisional = merged.claims
-    }
-    if (!merged.claimsStructuredProvisional && merged.claimsStructured) {
-      merged.claimsStructuredProvisional = merged.claimsStructured
-    }
-    
-    // If claims are frozen (claimsApprovedAt is set), ensure final fields are populated
-    if (merged.claimsApprovedAt) {
-      if (!merged.claimsFinal) {
-        merged.claimsFinal = merged.claims || merged.claimsProvisional
-      }
-      if (!merged.claimsStructuredFinal && merged.claimsStructured) {
-        merged.claimsStructuredFinal = merged.claimsStructured
-      }
-    }
-    
-    return merged
+    return normalizeClaimsForSession(normalized)
   }
 
   private static normalizeArchetypeList(input: any, fallbackField?: string): string[] {
@@ -2244,9 +2070,13 @@ Norms:
     // Handle superset prompts with template variables
     let promptInstruction = ''
     let promptConstraints = ''
+    const normalizedDataForClaims = this.normalizeClaimsData((idea as any)?.normalizedData || {})
+    const independentClaimsText = getIndependentClaimsText(normalizedDataForClaims)
+    let independentClaimsTemplateUsed = false
 
     if (ctx?.sectionPrompt?.instruction) {
       promptInstruction = ctx.sectionPrompt.instruction
+      independentClaimsTemplateUsed = /\{\{INDEPENDENT_CLAIMS\}\}/i.test(promptInstruction)
 
       // Replace template variables in superset prompts
       // CRITICAL: No empty placeholders - omit variable entirely if data is missing
@@ -2259,7 +2089,7 @@ Norms:
         '{{PRIOR_ART_SUMMARY}}': manualPriorArt || '',
         '{{PROBLEM_STATEMENT}}': idea?.problemStatement || idea?.description || '',
         '{{ADVANTAGES_LIST}}': (idea?.advantages || idea?.benefits || []).join('; ') || '',
-        '{{INDEPENDENT_CLAIMS}}': '', // Populated via UDB Claim 1 injection
+        '{{INDEPENDENT_CLAIMS}}': independentClaimsText,
         '{{KEY_EMBODIMENTS}}': '', // Omit if not available
         '{{FIGURE_LIST}}': figs || '',
         '{{FULL_DISCLOSURE_TEXT}}': idea?.description || idea?.detailedDescription || '',
@@ -2382,12 +2212,18 @@ ${writingSampleBlock}`
       
       // Normalize claims data to ensure consistent detection of frozen claims
       // This backfills provisional/final fields from legacy data structures
-      const normalizedData = this.normalizeClaimsData(rawNormalizedData)
+      const normalizedData = rawNormalizedData === (payload.idea as any)?.normalizedData
+        ? normalizedDataForClaims
+        : this.normalizeClaimsData(rawNormalizedData)
       
       // ══════════════════════════════════════════════════════════════════════════════
       // UNIVERSAL DRAFTING BUNDLE (UDB) - Normalized Data + Claim 1
       // ══════════════════════════════════════════════════════════════════════════════
-      const udbResult = buildUniversalDraftingBundle(section, normalizedData, idea, undefined, { patentTypePrimary, archetype })
+      const udbResult = buildUniversalDraftingBundle(section, normalizedData, idea, undefined, {
+        patentTypePrimary,
+        archetype,
+        suppressClaimInjection: independentClaimsTemplateUsed,
+      })
       
       // Check gating: if section requires Claim 1 but it's missing, throw error
       if (udbResult.gated) {

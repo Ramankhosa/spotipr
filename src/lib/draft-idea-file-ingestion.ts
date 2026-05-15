@@ -1,19 +1,30 @@
 import mammoth from 'mammoth'
 import AdmZip from 'adm-zip'
+import * as XLSX from 'xlsx'
 import { createRequire } from 'module'
+import crypto from 'crypto'
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
 
 const require = createRequire(import.meta.url)
 
 export const DRAFT_IDEA_FILE_MAX_BYTES = 5 * 1024 * 1024
 
-export type DraftIdeaFileFormat = 'txt' | 'doc' | 'docx' | 'pdf'
+export type DraftIdeaFileFormat = 'txt' | 'md' | 'csv' | 'tsv' | 'xlsx' | 'doc' | 'docx' | 'pdf'
 
 export type DraftIdeaFileExtractionResult = {
   textContent: string
   fileName: string
   fileSize: number
   detectedFormat: DraftIdeaFileFormat
+  sourceInputMeta: {
+    originalFileName: string
+    mimeType?: string
+    fileSize: number
+    detectedFormat: DraftIdeaFileFormat
+    extractedCharCount: number
+    extractionHash: string
+    extractedAt: string
+  }
   warning?: string
 }
 
@@ -41,9 +52,28 @@ type ExtractionDependencies = {
 
 const MIME_TO_FORMAT: Record<string, DraftIdeaFileFormat> = {
   'text/plain': 'txt',
+  'text/markdown': 'md',
+  'text/x-markdown': 'md',
+  'text/csv': 'csv',
+  'application/csv': 'csv',
+  'text/tab-separated-values': 'tsv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/msword': 'doc',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
   'application/pdf': 'pdf',
+}
+
+const SUPPORTED_FILE_TYPES_MESSAGE = 'Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.'
+const EXTENSION_TO_FORMAT: Record<string, DraftIdeaFileFormat> = {
+  xlsx: 'xlsx',
+  docx: 'docx',
+  doc: 'doc',
+  pdf: 'pdf',
+  md: 'md',
+  markdown: 'md',
+  csv: 'csv',
+  tsv: 'tsv',
+  txt: 'txt',
 }
 
 function normalizeText(text: string) {
@@ -82,7 +112,7 @@ function extractTextFromDocxXml(xml: string) {
   return pieces.join('')
 }
 
-function extractDocxTextFromZip(buffer: Buffer) {
+function extractDocxTextFromZip(buffer: Buffer, fileName?: string) {
   try {
     const zip = new AdmZip(buffer)
     const entries = zip.getEntries()
@@ -107,24 +137,77 @@ function extractDocxTextFromZip(buffer: Buffer) {
       .map(entry => extractTextFromDocxXml(entry.getData().toString('utf8')))
       .filter(Boolean)
       .join('\n')
-  } catch {
+  } catch (error) {
+    const caught = error instanceof Error ? error : new Error(String(error))
+    console.warn('[docx-ingestion] Zip fallback extraction failed', {
+      fileName,
+      bufferSize: buffer.byteLength,
+      error: caught.message,
+    })
     return ''
   }
 }
 
 function detectFormat(fileName: string, mimeType?: string): DraftIdeaFileFormat {
   const lower = fileName.toLowerCase()
-
-  if (lower.endsWith('.docx')) return 'docx'
-  if (lower.endsWith('.doc')) return 'doc'
-  if (lower.endsWith('.pdf')) return 'pdf'
-  if (lower.endsWith('.txt')) return 'txt'
+  const baseName = lower.split(/[\\/]/).pop() || lower
+  const extensionMatch = /\.([a-z0-9]+)$/.exec(baseName)
+  const extension = extensionMatch?.[1]
+  if (extension) {
+    const extensionFormat = EXTENSION_TO_FORMAT[extension]
+    if (extensionFormat) return extensionFormat
+    throw new DraftIdeaFileIngestionError(SUPPORTED_FILE_TYPES_MESSAGE)
+  }
 
   const normalizedMime = (mimeType || '').toLowerCase()
   const format = MIME_TO_FORMAT[normalizedMime]
   if (format) return format
 
-  throw new DraftIdeaFileIngestionError('Unsupported file type. Please upload .txt, .doc, .docx, or .pdf files.')
+  throw new DraftIdeaFileIngestionError(SUPPORTED_FILE_TYPES_MESSAGE)
+}
+
+function escapeMarkdownTableCell(value: unknown) {
+  return String(value ?? '')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim()
+}
+
+function xlsxRowsToMarkdown(sheetName: string, rows: unknown[][]) {
+  const populatedRows = rows
+    .map(row => row.map(cell => escapeMarkdownTableCell(cell)))
+    .filter(row => row.some(cell => cell.length > 0))
+  if (!populatedRows.length) return ''
+
+  const columnCount = Math.max(...populatedRows.map(row => row.length))
+  const normalizedRows = populatedRows.map(row => Array.from({ length: columnCount }, (_, index) => row[index] || ''))
+  const header = normalizedRows[0].some(Boolean)
+    ? normalizedRows[0]
+    : Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`)
+  const body = normalizedRows[0].some(Boolean) ? normalizedRows.slice(1) : normalizedRows
+  const lines = [
+    `# Sheet: ${sheetName}`,
+    `| ${header.join(' | ')} |`,
+    `| ${header.map(() => '---').join(' | ')} |`,
+    ...body.map(row => `| ${row.join(' | ')} |`),
+  ]
+  return lines.join('\n')
+}
+
+function extractXlsxText(buffer: Buffer) {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
+  return workbook.SheetNames
+    .map((sheetName) => {
+      const sheet = workbook.Sheets[sheetName]
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        raw: false,
+        defval: '',
+      }) as unknown[][]
+      return xlsxRowsToMarkdown(sheetName, rows)
+    })
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 async function defaultExtractDocxText(buffer: Buffer) {
@@ -176,7 +259,7 @@ async function extractDocxWithFallback(
     })
   }
 
-  const zipText = extractDocxTextFromZip(buffer)
+  const zipText = extractDocxTextFromZip(buffer, fileName)
   if (normalizeText(zipText)) {
     return {
       text: zipText,
@@ -216,8 +299,10 @@ export async function extractDraftIdeaTextFromBuffer(
   let warning: string | undefined
 
   try {
-    if (detectedFormat === 'txt') {
+    if (['txt', 'md', 'csv', 'tsv'].includes(detectedFormat)) {
       rawText = input.buffer.toString('utf8')
+    } else if (detectedFormat === 'xlsx') {
+      rawText = extractXlsxText(input.buffer)
     } else if (detectedFormat === 'docx') {
       const docxResult = await extractDocxWithFallback(
         input.buffer,
@@ -235,6 +320,8 @@ export async function extractDraftIdeaTextFromBuffer(
     if (error instanceof DraftIdeaFileIngestionError) throw error
     if (detectedFormat === 'doc') {
       throw new DraftIdeaFileIngestionError('Could not extract text from this .doc file. Please save it as .docx or .txt and upload again.')
+    } else if (detectedFormat === 'xlsx') {
+      throw new DraftIdeaFileIngestionError('Could not extract text from this .xlsx file. Please save it as .csv or .txt and upload again.')
     } else if (detectedFormat === 'pdf') {
       throw new DraftIdeaFileIngestionError('No readable text was found. Scanned PDFs are not supported yet.')
     } else {
@@ -250,6 +337,15 @@ export async function extractDraftIdeaTextFromBuffer(
     fileName: input.fileName,
     fileSize: input.buffer.byteLength,
     detectedFormat,
+    sourceInputMeta: {
+      originalFileName: input.fileName,
+      ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+      fileSize: input.buffer.byteLength,
+      detectedFormat,
+      extractedCharCount: textContent.length,
+      extractionHash: crypto.createHash('sha256').update(textContent, 'utf8').digest('hex'),
+      extractedAt: new Date().toISOString(),
+    },
     ...(warning ? { warning } : {}),
   }
 }

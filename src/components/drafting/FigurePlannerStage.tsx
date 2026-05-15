@@ -1574,6 +1574,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         const figureScopeBlock = buildFigureScopePromptBlock(normalizedIdea?.scopeRecommendations)
         // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
         const numeralsPreview = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
+        const claimLinkedPreview = components
+          .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
+          .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
+          .join('\n') || '- No claim-linked components identified for mandatory figure coverage.'
 
         const drawingRules = countryProfile?.rules?.drawings || {}
         const figureLabelFormat = countryProfile?.profileData?.diagrams?.figureLabelFormat || countryProfile?.profileData?.rules?.drawings?.figureLabelFormat || 'Fig. {number}'
@@ -1647,12 +1651,18 @@ IMPORTANT: New figures should continue the "zoom-in" progression. If existing fi
 COMPONENTS / NUMERALS
 ═══════════════════════════════════════════════════════════════════════════════
 Available numbered components: ${numeralsPreview}.
+
+REQUIRED CLAIM-LINKED FIGURE COMPONENTS:
+${claimLinkedPreview}
+
 ${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 
 **NUMBERED ELEMENT RULE (STRICT):**
 - Use ONLY the provided **numbered** components and their numerals listed above.
 - Do NOT invent any additional numbered components or numerals.
 - Every component label MUST include its numeral in parentheses, e.g., "Controller (200)".
+- Across the generated figure set, every required claim-linked component listed above MUST appear at least once unless explicitly excluded from figures by USER-APPROVED FIGURE SCOPE.
+- After required claim-linked coverage is satisfied, unclaimed approved registry components may appear when useful for clarity.
 
 **HELPER NODES ALLOWED:**
 - You MAY add **un-numbered helper nodes** ONLY for routing clarity: "Power bus", "Comms bus", "Data bus", "Interface bus"

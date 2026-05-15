@@ -3,7 +3,10 @@ import {
   buildAntiHallucinationGuards,
   buildDetailedDescriptionSourceLockBlock,
   buildDetailedDescriptionScopeContext,
+  buildIndependentClaimsBlock,
   buildNormalizedDataBlock,
+  buildUniversalDraftingBundle,
+  extractIndependentClaims,
   filterDetailedDescriptionConstraints
 } from '@/lib/section-injection-config'
 
@@ -44,6 +47,80 @@ describe('normalized data section injection', () => {
     expect(block).toContain('SOURCE FACT LEDGER')
     expect(block).toContain('18 percent')
     expect(block).toContain('unless rain is forecast')
+  })
+
+  test('uses normalized data before denormalized idea fields in section context', () => {
+    const block = buildNormalizedDataBlock(
+      {
+        problem: 'Fresh normalized problem',
+        components: [{ name: 'Fresh Component', description: 'from normalized data' }],
+      },
+      {
+        problem: 'Stale idea problem',
+        components: [{ name: 'Stale Component', description: 'from idea record' }],
+        normalizedData: {
+          problem: 'Nested problem',
+        },
+      }
+    )
+
+    expect(block).toContain('Fresh normalized problem')
+    expect(block).toContain('Fresh Component')
+    expect(block).not.toContain('Stale idea problem')
+    expect(block).not.toContain('Stale Component')
+  })
+
+  test('gates best mode sections until frozen Claim 1 is available', () => {
+    const result = buildUniversalDraftingBundle('bestMethod', { problem: 'x' }, null)
+
+    expect(result.gated).toBe(true)
+    expect(result.gateReason).toContain('Claim 1')
+  })
+
+  test('injects only LLM-classified independent claims with count-based heading', () => {
+    const normalizedData = {
+      claimsApprovedAt: '2026-05-05T00:00:00.000Z',
+      claimsStructuredFinal: [
+        { number: 1, type: 'independent', category: 'system', text: 'A system comprising a controller.' },
+        { number: 2, type: 'dependent', text: 'The system of claim 1, wherein the controller filters signals.' },
+        { number: 8, type: 'independent', category: 'method', text: 'A method comprising operating the controller.' },
+      ],
+    }
+
+    const block = buildIndependentClaimsBlock(normalizedData, 'bindingAnchor')
+
+    expect(extractIndependentClaims(normalizedData)).toContain('Claim 8 (method):')
+    expect(block).toContain('INDEPENDENT CLAIMS')
+    expect(block).toContain('A system comprising a controller')
+    expect(block).toContain('A method comprising operating the controller')
+    expect(block).not.toContain('filters signals')
+  })
+
+  test('suppresses UDB independent-claims injection when template already supplies it', () => {
+    const normalizedData = {
+      claimsApprovedAt: '2026-05-05T00:00:00.000Z',
+      claimsStructuredFinal: [
+        { number: 1, type: 'independent', text: 'A system comprising a controller.' },
+      ],
+    }
+
+    const result = buildUniversalDraftingBundle('summary', normalizedData, null, undefined, {
+      suppressClaimInjection: true,
+    })
+
+    expect(result.gated).toBe(false)
+    expect(result.block).not.toContain('FROZEN - LEGAL AUTHORITY')
+  })
+
+  test('gates legacy extraction-failed normalized data', () => {
+    const result = buildUniversalDraftingBundle(
+      'background',
+      { problem: 'Extraction failed - review source text' },
+      null
+    )
+
+    expect(result.gated).toBe(true)
+    expect(result.gateReason).toContain('Stage 0 normalization failed')
   })
 
   test('limits detailed description figure and numeral context to the invention scope', () => {

@@ -59,7 +59,20 @@ describe('POST /api/patents/draft/ingest-file', () => {
     const body = await response.json()
 
     expect(response.status).toBe(400)
-    expect(body.error).toBe('Unsupported file type. Please upload .txt, .doc, .docx, or .pdf files.')
+    expect(body.error).toBe('Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.')
+  })
+
+  test('rejects unsupported extensions even when browser supplies text/plain', async () => {
+    mockedAuthenticateUser.mockResolvedValueOnce({
+      user: { id: 'user_1' },
+      error: null,
+    } as any)
+
+    const response = await POST(buildRequest(new File(['<b>idea</b>'], 'evil.html', { type: 'text/plain' })))
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error).toBe('Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.')
   })
 
   test('rejects empty pdf uploads as non-readable text', async () => {

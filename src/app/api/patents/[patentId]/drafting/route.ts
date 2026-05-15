@@ -6,6 +6,8 @@ export const maxDuration = 300; // 5 minutes - matches novelty-search stage rout
 import { authenticateUser } from '@/lib/auth-middleware';
 import { prisma } from '@/lib/prisma';
 import { DraftingService, deriveNumberingStyle } from '@/lib/drafting-service';
+import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
+import { migrateNormalizedData, type SourceInputMeta } from '@/lib/normalized-data';
 import { IdeaBankService } from '@/lib/idea-bank-service';
 import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from '@/lib/idea-bank-funnel';
 import { llmGateway } from '@/lib/metering/gateway';
@@ -34,10 +36,16 @@ import { ANNEXURE_LEGACY_COLUMNS } from '@/lib/annexure-schema';
 import {
   DraftClaimsParseError,
   formatDraftClaimsAsHtml,
+  normalizeDraftClaimType,
   parseGeneratedClaimsPayloadFromLLMOutput,
   stripTrailingClaimDependencyLabel,
   stripTrailingClaimDependencyLabelsFromHtml,
 } from '@/lib/draft-claims-parser';
+import {
+  getAuthoritativeClaims,
+  getEditableClaims,
+  normalizeClaimsForSession as normalizeClaimsForSessionShared,
+} from '@/lib/claims-context';
 import {
   analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
@@ -74,6 +82,10 @@ import { imageSize } from 'image-size';
 import { appendFigureToSequence, normalizeFigureSequence } from '@/lib/figure-sequence'
 import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
 import {
+  buildSupportDataSourcePromptBlock,
+  coerceSupportDataSources
+} from '@/lib/support-data-sources'
+import {
   buildFigureScopePromptBlock,
   coerceScopeRecommendations,
   componentsFromFrozenClaimsAndStage0,
@@ -104,6 +116,62 @@ const sanitizeFigureTitleInput = (title?: string | null): string => {
   cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/\s+([,.;:])/g, '$1')
   cleaned = cleaned.replace(/^[\s,:;.-]+|[\s,:;.-]+$/g, '')
   return cleaned.trim()
+}
+
+const sanitizeStage0TextInput = (value: unknown): string => {
+  if (typeof value !== 'string') return ''
+  return value
+    .replace(/\u0000/g, '')
+    .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim()
+}
+
+const sanitizeStage0TitleInput = (value: unknown): string => {
+  return sanitizeStage0TextInput(value).replace(/\s+/g, ' ').trim()
+}
+
+const hashStage0Text = (value: string): string =>
+  crypto.createHash('sha256').update(value, 'utf8').digest('hex')
+
+const coerceSourceInputMeta = (value: unknown): SourceInputMeta => {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  const stringField = (key: string, max = 300) => {
+    const raw = record[key]
+    return typeof raw === 'string' && raw.trim()
+      ? raw.trim().slice(0, max)
+      : undefined
+  }
+  const numberField = (key: string) => {
+    const raw = record[key]
+    return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+      ? raw
+      : undefined
+  }
+  return {
+    originalFileName: stringField('originalFileName'),
+    mimeType: stringField('mimeType', 120),
+    fileSize: numberField('fileSize'),
+    detectedFormat: stringField('detectedFormat', 40),
+    extractedCharCount: numberField('extractedCharCount'),
+    extractionHash: stringField('extractionHash', 128),
+    extractedAt: stringField('extractedAt', 80),
+  }
+}
+
+const buildSourceInputMeta = (rawIdea: string, sourceInputMeta: unknown): SourceInputMeta => {
+  const submittedHash = hashStage0Text(rawIdea)
+  const base = coerceSourceInputMeta(sourceInputMeta)
+  return {
+    ...base,
+    submittedCharCount: rawIdea.length,
+    submittedHash,
+    submittedAt: new Date().toISOString(),
+    ...(base.extractionHash ? { editedAfterExtraction: base.extractionHash !== submittedHash } : {}),
+  }
 }
 
 // Update figure number in title to match actual assigned figure number
@@ -1291,8 +1359,9 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   
   // Get frozen claims from session for claim-aware analysis
   const normalizedData = normalizeClaimsForSession((session?.ideaRecord?.normalizedData as any) || {})
-  const frozenClaims = claimsContext?.claims || normalizedData.claimsStructuredFinal || normalizedData.claimsStructured || normalizedData.claimsStructuredProvisional || []
-  const claimsText = normalizedData.claimsFinal || normalizedData.claims || normalizedData.claimsProvisional || ''
+  const authoritativeClaims = getAuthoritativeClaims(normalizedData)
+  const frozenClaims = claimsContext?.claims || authoritativeClaims.structured
+  const claimsText = authoritativeClaims.html
   const hasClaimsContext = claimsContext?.frozenAt || normalizedData.claimsApprovedAt || claimsText
   const manualPriorArtText = (session?.manualPriorArt as any)?.manualPriorArtText || (session?.manualPriorArt as any)?.text || ''
   const manualPriorArtSection = manualPriorArtText
@@ -3366,7 +3435,7 @@ const ALLOWED_SKINPARAM_BLOCKS = /^skinparam\s+(sequence|activity|rectangle|part
 // PRODUCTION-SAFE DIAGRAM GENERATION CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 // These constants enforce the "renderer, not explainer" philosophy.
-// If it's not in the planner's include[], it doesn't exist.
+// The planner's include[] controls generation, except required claim-linked coverage can add approved registry components.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // C3: FORBIDDEN KEYWORD GATE (Critical - triggers regeneration if ANY match)
@@ -3382,6 +3451,17 @@ const DIAGRAM_HARD_CAPS: Record<string, { maxElements: number; elementType: stri
   ACTIVITY: { maxElements: 8, elementType: 'actions' },
   SEQUENCE: { maxElements: 5, elementType: 'participants' },
   CONSTITUENT: { maxElements: 10, elementType: 'rectangles' }
+}
+
+function buildSupportOrSourceFactBlock(
+  normalizedData: any,
+  sourceFactLedger: any,
+  sectionKey: string,
+  supportHeading: string,
+  ledgerHeading: string
+) {
+  return buildSupportDataSourcePromptBlock(normalizedData, sectionKey, supportHeading) ||
+    buildSourceFactLedgerPromptBlock(sourceFactLedger, ledgerHeading)
 }
 
 // Additional cap for sequence diagram messages
@@ -4518,13 +4598,6 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
     if (key in patch) updateData[key] = patch[key]
   }
 
-  if (Object.keys(updateData).length === 0 && !('scopeRecommendations' in patch)) {
-    return NextResponse.json(
-      { error: 'Nothing to update' },
-      { status: 400 }
-    )
-  }
-
   // Fetch existing to preserve required fields and normalized JSON
   const existing = await prisma.ideaRecord.findUnique({ where: { sessionId } })
 
@@ -4532,7 +4605,7 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   const normalizedMergeKeys = [
     'problem','objectives','components','logic','inputs','outputs','variants','bestMethod',
     'fieldOfRelevance','subfield','recommendedFocus','complianceNotes','drawingsFocus','claimStrategy','riskFlags',
-    'abstract','cpcCodes','ipcCodes','scopeRecommendations'
+    'abstract','cpcCodes','ipcCodes','scopeRecommendations','supportDataSources','schemaVersion','sourceInputMeta'
   ] as const
 
   const baseNormalized = (existing?.normalizedData as any) || {}
@@ -4540,6 +4613,12 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   normalizedMergeKeys.forEach((k) => {
     if (k in patch) normalizedPatch[k] = (patch as any)[k]
   })
+  if (Object.keys(updateData).length === 0 && Object.keys(normalizedPatch).length === 0) {
+    return NextResponse.json(
+      { error: 'Nothing to update' },
+      { status: 400 }
+    )
+  }
   if ('scopeRecommendations' in normalizedPatch) {
     const coercedScopeRecommendations = coerceScopeRecommendations(
       normalizedPatch.scopeRecommendations,
@@ -4550,6 +4629,13 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
     } else {
       delete normalizedPatch.scopeRecommendations
     }
+  }
+  if ('supportDataSources' in normalizedPatch) {
+    normalizedPatch.supportDataSources = coerceSupportDataSources(normalizedPatch.supportDataSources)
+    normalizedPatch.schemaVersion = 2
+  }
+  if ('schemaVersion' in normalizedPatch) {
+    normalizedPatch.schemaVersion = 2
   }
   const mergedNormalized = { ...baseNormalized, ...normalizedPatch }
 
@@ -4564,6 +4650,13 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
       ...updateData
     }
   })
+
+  if ('components' in normalizedPatch || 'scopeRecommendations' in normalizedPatch) {
+    await invalidateReferenceMapForStage0Change(
+      sessionId,
+      'Stage 0 components or scope recommendations changed. Re-save the component plan before using figures.'
+    )
+  }
 
   // Persist raw input to disk if provided
   try {
@@ -4600,6 +4693,17 @@ function extractComponentsArray(referenceMap: any): any[] {
   return []
 }
 
+async function invalidateReferenceMapForStage0Change(sessionId: string, reason: string) {
+  if (!sessionId) return
+  await prisma.referenceMap.updateMany({
+    where: { sessionId },
+    data: {
+      isValid: false,
+      validationErrors: [reason] as any
+    }
+  })
+}
+
 // ============================================================================
 // PATENT TYPE MANUAL OVERRIDE (Stage 1)
 // ============================================================================
@@ -4631,7 +4735,7 @@ async function handleUpdatePatentType(user: any, patentId: string, data: any) {
   // Verify session ownership
   const session = await prisma.draftingSession.findFirst({
     where: {
-      id: sessionId,
+      id: sessionId.trim(),
       patentId,
       userId: user.id
     },
@@ -4699,20 +4803,13 @@ const htmlToPlainText = (html?: string | null): string => {
 }
 
 const normalizeClaimsForSession = (normalized: Record<string, any> = {}) => {
-  const merged = { ...(normalized || {}) }
-  // Backfill provisional/final for legacy sessions
-  if (!merged.claimsProvisional && merged.claims) merged.claimsProvisional = merged.claims
-  if (!merged.claimsStructuredProvisional && merged.claimsStructured) merged.claimsStructuredProvisional = merged.claimsStructured
-  if (!merged.claimsFinal && merged.claimsApprovedAt) merged.claimsFinal = merged.claims || merged.claimsProvisional
-  if (!merged.claimsStructuredFinal && merged.claimsApprovedAt && merged.claimsStructured) {
-    merged.claimsStructuredFinal = merged.claimsStructured
-  }
-  return merged
+  return normalizeClaimsForSessionShared(normalized)
 }
 
 const getWorkingClaims = (normalized: Record<string, any> = {}) => {
-  const structured = normalized.claimsStructured || normalized.claimsStructuredFinal || normalized.claimsStructuredProvisional || []
-  const html = sanitizeClaimsHtml(normalized.claims || normalized.claimsFinal || normalized.claimsProvisional) || structuredClaimsToHtml(structured)
+  const snapshot = getEditableClaims(normalized)
+  const structured = snapshot.structured
+  const html = sanitizeClaimsHtml(snapshot.html) || structuredClaimsToHtml(structured)
   return { structured, html }
 }
 
@@ -4923,6 +5020,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       doNotClaim: ideaContext?.doNotClaim ?? existingNormalized.doNotClaim,
       sourceFactLedger: ideaContext?.sourceFactLedger ?? existingNormalized.sourceFactLedger,
       scopeRecommendations: ideaContext?.scopeRecommendations ?? existingNormalized.scopeRecommendations,
+      supportDataSources: ideaContext?.supportDataSources ?? existingNormalized.supportDataSources,
       normalizationReviewWarnings: ideaContext?.normalizationReviewWarnings ?? existingNormalized.normalizationReviewWarnings,
       inventionType: existingNormalized.inventionType,
       patentTypePrimary,
@@ -5413,8 +5511,11 @@ async function handleClaimRefinementPreview(user: any, patentId: string, data: a
       return `- ${name}${numeral}${desc}`
     })
     .join('\n')
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    normalized,
     normalized.sourceFactLedger,
+    'claims',
+    'SUPPORT DATA SOURCES FOR CLAIM REFINEMENT SUPPORT',
     'SOURCE FACT LEDGER FOR CLAIM REFINEMENT SUPPORT'
   )
 
@@ -5554,7 +5655,7 @@ ${criticalInstructionsBlock}
 Guidelines:
 - For each claim, either KEEP_AS_IS or provide a refined_text that avoids anticipation/obviousness over the selected patents.
 - Only narrow when justified by specific references from the selected patents list. Cite them via IDs (AUTO#1, MANUAL#1, etc.).
-- Use the source fact ledger only as available source support for fallback narrowing; do not introduce limitations that are absent from the original idea ledger/context.
+- Use the support data/source fact context only as available source support for fallback narrowing; do not introduce limitations that are absent from the original idea context.
 - Preserve jurisdictional style loosely; maintain numbering.
 - Prefer concise edits over full rewrites when possible.
 - Each refined claim must clearly distinguish from ALL selected patents above.
@@ -5660,12 +5761,26 @@ async function handleClaimRefinementApply(user: any, patentId: string, data: any
     normalized.claimsStructuredFinal ||
     []
 
-  const fallbackFromPreview = preview.refinedClaims.map((c: any, idx: number) => ({
-    number: c.number || idx + 1,
-    text: c.original_text || c.refined_text || '',
-    type: 'independent',
-    category: 'independent'
-  }))
+  const baseByNumber = new Map<number, any>()
+  for (const claim of Array.isArray(baseStructured) ? baseStructured : []) {
+    const claimNumber = Number(claim?.number)
+    if (Number.isFinite(claimNumber)) baseByNumber.set(claimNumber, claim)
+  }
+  const fallbackFromPreview = preview.refinedClaims.map((c: any, idx: number) => {
+    const number = Number(c.number || idx + 1)
+    const baseClaim = baseByNumber.get(number)
+    const type = normalizeDraftClaimType(c.type ?? c.claimType ?? c.claim_type) ||
+      normalizeDraftClaimType(baseClaim?.type) ||
+      (number === 1 ? 'independent' : 'dependent')
+    const dependsOn = Number(c.dependsOn ?? c.depends_on ?? c.parentClaim ?? baseClaim?.dependsOn)
+    return {
+      number,
+      text: c.original_text || c.refined_text || '',
+      type,
+      ...(type === 'dependent' && Number.isFinite(dependsOn) && dependsOn > 0 ? { dependsOn } : {}),
+      ...(c.category || baseClaim?.category ? { category: c.category || baseClaim?.category } : {})
+    }
+  })
 
   const workingStructured = Array.isArray(baseStructured) && baseStructured.length > 0 ? baseStructured : fallbackFromPreview
   const acceptedSet = new Set(
@@ -6512,7 +6627,7 @@ async function handleProceedToComponents(user: any, patentId: string, data: any)
   // Verify session ownership
   const session = await prisma.draftingSession.findFirst({
     where: {
-      id: sessionId,
+      id: sessionId.trim(),
       patentId,
       userId: user.id
     },
@@ -6536,9 +6651,11 @@ async function handleProceedToComponents(user: any, patentId: string, data: any)
 }
 
 async function handleNormalizeIdea(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, rawIdea, title, areaOfInvention, allowRefine } = data;
+  const { sessionId, areaOfInvention, allowRefine, sourceInputMeta } = data;
+  const rawIdea = sanitizeStage0TextInput(data?.rawIdea)
+  const title = sanitizeStage0TitleInput(data?.title)
 
-  if (!sessionId || !rawIdea || !title) {
+  if (typeof sessionId !== 'string' || !sessionId.trim() || !rawIdea || !title) {
     return NextResponse.json(
       { error: 'Session ID, raw idea, and title are required' },
       { status: 400 }
@@ -6546,6 +6663,13 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   }
 
   // Validate title length (ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¤ 15 words)
+  if (title.length > 300) {
+    return NextResponse.json(
+      { error: 'Title must be 300 characters or less' },
+      { status: 400 }
+    );
+  }
+
   const titleWords = title.trim().split(/\s+/).length;
   if (titleWords > 15) {
     return NextResponse.json(
@@ -6554,10 +6678,17 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
     );
   }
 
+  if (rawIdea.length > MAX_DRAFTING_INPUT_CHARS) {
+    return NextResponse.json(
+      { error: `Idea text exceeds maximum length of ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters. Please shorten your description.` },
+      { status: 400 }
+    );
+  }
+
   // Verify session ownership
   const session = await prisma.draftingSession.findFirst({
     where: {
-      id: sessionId,
+      id: sessionId.trim(),
       patentId,
       userId: user.id
     },
@@ -6571,6 +6702,32 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
     );
   }
 
+  const normalizationRequestId = crypto.randomUUID()
+  const staleLockCutoff = new Date(Date.now() - 60_000)
+  const lockResult = await prisma.draftingSession.updateMany({
+    where: ({
+      id: session.id,
+      patentId,
+      userId: user.id,
+      OR: [
+        { normalizationInProgressAt: null },
+        { normalizationInProgressAt: { lt: staleLockCutoff } },
+      ],
+    } as any),
+    data: ({
+      normalizationInProgressAt: new Date(),
+      normalizationRequestId,
+    } as any),
+  })
+
+  if (lockResult.count === 0) {
+    return NextResponse.json(
+      { error: 'Idea normalization is already in progress for this session. Please wait for it to finish.' },
+      { status: 409 }
+    )
+  }
+
+  try {
   // Use LLM to normalize the idea
   console.log('Starting idea normalization for patent:', patentId, 'session:', sessionId);
 
@@ -6600,74 +6757,96 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   ) || DraftingService.patentTypeFallbackFromText(rawIdea, title).primary;
   console.log(`[handleNormalizeIdea] Patent type from normalization: ${patentTypePrimary}`);
 
+  const normalizedData = migrateNormalizedData(
+    {
+      ...(result.normalizedData || {}),
+      sourceInputMeta: buildSourceInputMeta(rawIdea, sourceInputMeta),
+    },
+    {
+      patentTypePrimary: patentTypePrimary as any,
+      sourceHandlingMode: effectiveAllowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE',
+    }
+  )
+  const extractedFields = {
+    ...(result.extractedFields || {}),
+    sourceInputMeta: normalizedData.sourceInputMeta,
+    extractionFailed: normalizedData.extractionFailed,
+  }
+  const ideaFields = {
+    title,
+    rawInput: rawIdea,
+    normalizedData,
+    searchQuery: extractedFields.searchQuery || null,
+    problem: extractedFields.problem,
+    objectives: extractedFields.objectives,
+    components: extractedFields.components,
+    logic: extractedFields.logic,
+    inputs: extractedFields.inputs,
+    outputs: extractedFields.outputs,
+    variants: extractedFields.variants,
+    bestMethod: extractedFields.bestMethod,
+    abstract: extractedFields.abstract,
+    cpcCodes: extractedFields.cpcCodes || [],
+    ipcCodes: extractedFields.ipcCodes || [],
+    llmPromptUsed: result.llmPrompt,
+    llmResponse: result.llmResponse,
+    tokensUsed: result.tokensUsed
+  };
+
   // Create or update idea record
   const ideaRecord = await prisma.ideaRecord.upsert({
-    where: { sessionId },
-    update: ({
-      title,
-      rawInput: rawIdea,
-      normalizedData: result.normalizedData,
-      searchQuery: (result.extractedFields as any)?.searchQuery || null,
-      problem: result.extractedFields?.problem,
-      objectives: result.extractedFields?.objectives,
-      components: result.extractedFields?.components,
-      logic: result.extractedFields?.logic,
-      inputs: result.extractedFields?.inputs,
-      outputs: result.extractedFields?.outputs,
-      variants: result.extractedFields?.variants,
-      bestMethod: result.extractedFields?.bestMethod,
-      abstract: result.extractedFields?.abstract,
-      cpcCodes: (result.extractedFields as any)?.cpcCodes || [],
-      ipcCodes: (result.extractedFields as any)?.ipcCodes || [],
-      llmPromptUsed: result.llmPrompt,
-      llmResponse: result.llmResponse,
-      tokensUsed: result.tokensUsed
-    } as any),
+    where: { sessionId: session.id },
+    update: (ideaFields as any),
     create: ({
-      sessionId,
-      title,
-      rawInput: rawIdea,
-      normalizedData: result.normalizedData,
-      searchQuery: (result.extractedFields as any)?.searchQuery || null,
-      problem: result.extractedFields?.problem,
-      objectives: result.extractedFields?.objectives,
-      components: result.extractedFields?.components,
-      logic: result.extractedFields?.logic,
-      inputs: result.extractedFields?.inputs,
-      outputs: result.extractedFields?.outputs,
-      variants: result.extractedFields?.variants,
-      bestMethod: result.extractedFields?.bestMethod,
-      abstract: result.extractedFields?.abstract,
-      cpcCodes: (result.extractedFields as any)?.cpcCodes || [],
-      ipcCodes: (result.extractedFields as any)?.ipcCodes || [],
-      llmPromptUsed: result.llmPrompt,
-      llmResponse: result.llmResponse,
-      tokensUsed: result.tokensUsed
+      sessionId: session.id,
+      ...ideaFields,
     } as any)
   });
 
   // Keep session status as IDEA_ENTRY so user sees Stage 1 first
   // Status will be updated to COMPONENT_PLANNER when they proceed from Stage 1
-  const components = result.extractedFields?.components || [];
-  const logic = result.extractedFields?.logic || '';
+  const components = extractedFields.components || [];
+  const logic = extractedFields.logic || '';
+  const nextPatentTypeComponentsHash = DraftingService.generatePatentTypeContextHash(components, logic);
+  const previousPatentTypeComponentsHash = (session as any).patentTypeComponentsHash;
+  const stage0ComponentContextChanged = previousPatentTypeComponentsHash !== nextPatentTypeComponentsHash;
   const sessionUpdateData: any = {
     status: 'IDEA_ENTRY',
     patentTypePrimary,
     patentTypeDecidedAt: new Date(),
-    patentTypeComponentsHash: DraftingService.generatePatentTypeContextHash(components, logic)
+    patentTypeComponentsHash: nextPatentTypeComponentsHash
   };
   
   await prisma.draftingSession.update({
-    where: { id: sessionId },
+    where: { id: session.id },
     data: sessionUpdateData
   });
 
+  if (stage0ComponentContextChanged) {
+    await invalidateReferenceMapForStage0Change(
+      session.id,
+      'Stage 0 normalization changed components or logic. Re-save the component plan before using figures.'
+    )
+  }
+
   return NextResponse.json({
     ideaRecord,
-    normalizedData: result.normalizedData,
-    extractedFields: result.extractedFields,
+    normalizedData,
+    extractedFields,
     patentTypePrimary // Include in response so UI can show it immediately
   });
+  } finally {
+    await prisma.draftingSession.updateMany({
+      where: ({
+        id: session.id,
+        normalizationRequestId,
+      } as any),
+      data: ({
+        normalizationInProgressAt: null,
+        normalizationRequestId: null,
+      } as any),
+    })
+  }
 }
 
 async function handleUpdateComponentMap(user: any, patentId: string, data: any) {
@@ -6829,8 +7008,9 @@ async function handleValidateComponentPlanLLM(user: any, patentId: string, data:
     return NextResponse.json({ error: 'No Stage 0 components are available to review.' }, { status: 400 })
   }
 
-  const claimsStructured = normalized.claimsStructuredFinal || normalized.claimsStructured || normalized.claimsStructuredProvisional || []
-  const claimsHtml = sanitizeClaimsHtml(normalized.claimsFinal || normalized.claims || normalized.claimsProvisional) || structuredClaimsToHtml(claimsStructured)
+  const claimsSnapshot = getAuthoritativeClaims(normalized)
+  const claimsStructured = claimsSnapshot.structured
+  const claimsHtml = sanitizeClaimsHtml(claimsSnapshot.html) || structuredClaimsToHtml(claimsStructured)
   const claimsPlain = htmlToPlainText(claimsHtml)
 
   if (!claimsPlain) {
@@ -8224,17 +8404,21 @@ async function handlePlanFiguresLLM(
     ((session as any).draftingJurisdictions?.[0]) || 'US'
 
   // Extract invention context
-  const idea = session.ideaRecord?.normalizedData as any
+  const idea = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
   const figureScope = filterComponentsByScopeForFigures(
     extractComponentsArray(session.referenceMap),
     idea?.scopeRecommendations
   )
   const components = figureScope.components
   const figureScopeBlock = buildFigureScopePromptBlock(idea?.scopeRecommendations)
-  const claims = idea?.claimsStructured || []
-  const claimsText = idea?.claims || ''
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+  const claimsSnapshot = getAuthoritativeClaims(idea)
+  const claims = claimsSnapshot.structured
+  const claimsText = claimsSnapshot.html
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    idea,
     idea?.sourceFactLedger,
+    'briefDescriptionOfDrawings',
+    'SUPPORT DATA SOURCES FOR FIGURE PLANNING',
     'SOURCE FACT LEDGER FOR FIGURE PLANNING'
   )
   
@@ -8249,6 +8433,10 @@ async function handlePlanFiguresLLM(
   const componentsContext = components.length > 0
     ? components.map((c: any) => `- ${c.name} [ref=${c.referenceLabel || c.numeral || '?'}]${c.description ? ': ' + c.description : ''}`).join('\n')
     : 'No components defined yet.'
+  const claimLinkedComponentsContext = components
+    .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
+    .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
+    .join('\n') || '- No claim-linked components identified for mandatory figure coverage.'
 
   // Build claims context
   let claimsContext = ''
@@ -8299,6 +8487,9 @@ ${figureScopeBlock ? `${figureScopeBlock}\n` : ''}
 
 COMPONENTS (with reference labels):
 ${componentsContext}
+
+REQUIRED CLAIM-LINKED FIGURE COMPONENTS:
+${claimLinkedComponentsContext}
 
 NOTE: Reference labels vary by patent type:
 - SYSTEM/PRODUCT: assigned numeric labels
@@ -8388,8 +8579,10 @@ COMPONENT SELECTION DISCIPLINE
 When selecting items for "include", choose ONLY top-level functional components.
 OMIT: diagnostics, logging, calibration, error handling, and optional features.
 
-If unsure whether an element belongs in a diagram, OMIT IT.
-Simpler diagrams are preferred over completeness.
+Across the full figure set, every required claim-linked component listed above MUST appear in at least one include[] list unless explicitly excluded from figures by USER-APPROVED FIGURE SCOPE.
+After required claim-linked coverage is satisfied, keep diagrams simple.
+Unclaimed approved registry components may also appear when useful for clarity.
+If unsure whether a non-required element belongs in a diagram, OMIT IT.
 
 ═══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT (MANDATORY - Return valid JSON only)
@@ -8644,8 +8837,11 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
   await reactivateFiguresForSession(sessionId)
   const normalizedIdea = session.ideaRecord?.normalizedData as any
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    normalizedIdea,
     normalizedIdea?.sourceFactLedger,
+    'briefDescriptionOfDrawings',
+    'SUPPORT DATA SOURCES FOR DIAGRAM GENERATION',
     'SOURCE FACT LEDGER FOR DIAGRAM GENERATION'
   )
   const generationFigureScopeBlock = buildFigureScopePromptBlock(normalizedIdea?.scopeRecommendations)
@@ -8683,6 +8879,10 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
     const componentsContext = components.length > 0
       ? components.map((c: any) => `- ${c.name} [ref=${c.referenceLabel || c.numeral || '?'}]`).join('\n')
       : 'No components defined.'
+    const claimLinkedComponentsContext = components
+      .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
+      .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
+      .join('\n') || '- No claim-linked components identified for mandatory figure coverage.'
 
     // Map diagram types to PlantUML diagram types
     const typeToPlantUML: Record<string, string> = {
@@ -8695,7 +8895,7 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
 
     // Build plan-based prompt using PRODUCTION-SAFE template
     // CRITICAL: Generator is a RENDERER, not an explainer.
-    // If it's not in the planner's include[], it doesn't exist.
+    // The plan controls generation, except required claim-linked coverage may add an approved registry component.
     effectivePrompt = `═══════════════════════════════════════════════════════════════════════════════
 PATENT DIAGRAM GENERATOR — PRODUCTION SAFE (PLANTUML)
 ═══════════════════════════════════════════════════════════════════════════════
@@ -8707,7 +8907,7 @@ You are a RENDERER, not an explainer.
 INPUTS (SOURCE OF TRUTH):
 - Planner suggestions (JSON): See FIGURE PLAN below
 - Component registry (use verbatim; do not invent): See COMPONENTS below
-- Source fact ledger (read-only): use only to avoid omissions of source-stated details; numbered figures still use only approved numbered components
+- Support data/source context (read-only): use only to avoid omissions of source-stated details; numbered figures still use only approved numbered components
 
 ═══════════════════════════════════════════════════════════════════════════════
 GLOBAL RULES (NON-NEGOTIABLE)
@@ -8721,12 +8921,18 @@ GLOBAL RULES (NON-NEGOTIABLE)
    - error handling, fault handling, power modes
    - note, box, title, caption
 5) Do NOT invent components, steps, or interactions.
-6) If unsure, OMIT rather than add.
+6) Across the generated figure set, every required claim-linked component listed below MUST be rendered at least once unless explicitly excluded from figures by USER-APPROVED FIGURE SCOPE.
+7) If a required claim-linked component is absent from all FIGURE PLAN include[] lists, place it in the most appropriate planned figure using its approved registry name and reference label.
+8) If unsure about a non-required element, OMIT rather than add.
 
 ═══════════════════════════════════════════════════════════════════════════════
 AVAILABLE COMPONENTS (Use ONLY these - do not invent new ones)
 ═══════════════════════════════════════════════════════════════════════════════
 ${componentsContext}
+
+REQUIRED CLAIM-LINKED FIGURE COMPONENTS:
+${claimLinkedComponentsContext}
+
 ${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
 ${sourceFactLedgerBlock ? `\n${sourceFactLedgerBlock}` : ''}
 
@@ -8877,8 +9083,9 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
   }
 
   // Extract claims for intelligent diagram type selection
-  const frozenClaims = idea?.claimsStructured || []
-  const claimsText = idea?.claims || ''
+  const claimsSnapshot = getAuthoritativeClaims(normalizeClaimsForSession(idea || {}))
+  const frozenClaims = claimsSnapshot.structured
+  const claimsText = claimsSnapshot.html
   
   // Extract claim signals for diagram planning
   const claimSignals = extractClaimSignals(
@@ -8984,7 +9191,7 @@ Do NOT use ANY of the following constructs:
 - alt, loop, fork, repeat, while, switch
 - note, box, title, caption
 - Error handling, fault paths, power modes
-- Any component not in the include[] list
+- Any component outside the approved component registry. Components outside include[] are allowed only when they are required claim-linked components listed above and needed for claim coverage.
 
 ─────────────────────────────────────────────────────────────────────────────────
 ALLOWED CONSTRUCTS ONLY
@@ -9091,11 +9298,11 @@ FINAL CHECK (Before Output)
 ✓ No note, box, title, caption
 ✓ No skinparam lines (system injects them)
 ✓ No arrow labels (NO "A --> B : label" - just "A --> B")
-✓ Only uses components from include[] list
+✓ Uses components from include[] list, plus required claim-linked components only when needed for claim coverage
 ✓ One @startuml and one @enduml
 ✓ Linear flow only - no branching
 
-If in doubt, OMIT rather than add.
+If in doubt about a non-required element, OMIT rather than add.
 `
 
   console.log(`[DiagramsLLM] Starting diagram generation for session ${sessionId}, using plan: ${usePlan ? 'yes' : 'no'}`)
@@ -10342,8 +10549,11 @@ async function handleRegenerateDiagramLLM(user: any, patentId: string, data: any
 
   // Determine Diagram Archetype
   const idea = session.ideaRecord?.normalizedData as any
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    idea,
     idea?.sourceFactLedger,
+    'briefDescriptionOfDrawings',
+    'SUPPORT DATA SOURCES FOR DIAGRAM REGENERATION',
     'SOURCE FACT LEDGER FOR DIAGRAM REGENERATION'
   )
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
@@ -10633,8 +10843,11 @@ async function handleAddFigureLLM(user: any, patentId: string, data: any, reques
 
   // Determine Diagram Archetype
   const idea = session.ideaRecord?.normalizedData as any
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    idea,
     idea?.sourceFactLedger,
+    'briefDescriptionOfDrawings',
+    'SUPPORT DATA SOURCES FOR NEW FIGURE',
     'SOURCE FACT LEDGER FOR NEW FIGURE'
   )
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
@@ -10819,8 +11032,11 @@ async function handleAddFiguresLLM(user: any, patentId: string, data: any, reque
   }).join('; ')
   const inventionTitle = session.ideaRecord?.title || ''
   const idea = session.ideaRecord?.normalizedData as any
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+  const sourceFactLedgerBlock = buildSupportOrSourceFactBlock(
+    idea,
     idea?.sourceFactLedger,
+    'briefDescriptionOfDrawings',
+    'SUPPORT DATA SOURCES FOR NEW FIGURES',
     'SOURCE FACT LEDGER FOR NEW FIGURES'
   )
   const types = Array.isArray(idea?.inventionType) ? idea.inventionType : (idea?.inventionType ? [idea.inventionType] : [])
@@ -13530,8 +13746,9 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
 
   // Check for frozen claims - use them instead of regenerating
   const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
-  const frozenClaimsText = normalizedData.claimsFinal || normalizedData.claimsProvisional || normalizedData.claims || ''
-  const frozenClaimsStructured = normalizedData.claimsStructuredFinal || normalizedData.claimsStructuredProvisional || normalizedData.claimsStructured || []
+  const frozenClaimsSnapshot = getAuthoritativeClaims(normalizedData)
+  const frozenClaimsText = frozenClaimsSnapshot.html
+  const frozenClaimsStructured = frozenClaimsSnapshot.structured
   const claimsFrozen = !!(normalizedData.claimsApprovedAt || normalizedData.claimsFinal)
   const claimsJurisdiction = normalizedData.claimsJurisdiction || effectiveJurisdiction
   
@@ -14303,8 +14520,9 @@ async function handleGenerateReferenceDraft(
 
   // Use frozen claims from Stage 1 as the authoritative claims for the reference draft
   const normalizedData = normalizeClaimsForSession((session!.ideaRecord?.normalizedData as any) || {})
-  const frozenClaimsStructured = normalizedData.claimsStructuredFinal || normalizedData.claimsStructured || normalizedData.claimsStructuredProvisional || []
-  const frozenClaimsHtml = normalizedData.claimsFinal || normalizedData.claims || normalizedData.claimsProvisional || ''
+  const frozenClaimsSnapshot = getAuthoritativeClaims(normalizedData)
+  const frozenClaimsStructured = frozenClaimsSnapshot.structured
+  const frozenClaimsHtml = frozenClaimsSnapshot.html
   let frozenClaimsForDraft = ''
   if (Array.isArray(frozenClaimsStructured) && frozenClaimsStructured.length > 0) {
     frozenClaimsForDraft = frozenClaimsStructured.map((c: any) => `${c.number}. ${c.text}`).join('\n\n')
@@ -14598,8 +14816,9 @@ async function handleGenerateReferenceSection(
 
   // Check for frozen claims (for claims section)
   const normalizedData = normalizeClaimsForSession((session.ideaRecord?.normalizedData as any) || {})
-  const frozenClaimsStructured = normalizedData.claimsStructuredFinal || normalizedData.claimsStructured || normalizedData.claimsStructuredProvisional || []
-  const frozenClaimsHtml = normalizedData.claimsFinal || normalizedData.claims || normalizedData.claimsProvisional || ''
+  const frozenClaimsSnapshot = getAuthoritativeClaims(normalizedData)
+  const frozenClaimsStructured = frozenClaimsSnapshot.structured
+  const frozenClaimsHtml = frozenClaimsSnapshot.html
   let frozenClaimsForDraft = ''
   if (Array.isArray(frozenClaimsStructured) && frozenClaimsStructured.length > 0) {
     frozenClaimsForDraft = frozenClaimsStructured.map((c: any) => `${c.number}. ${c.text}`).join('\n\n')

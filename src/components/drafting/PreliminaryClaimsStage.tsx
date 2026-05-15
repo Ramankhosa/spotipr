@@ -584,6 +584,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         fallbackLimitations: normalizedRecord.fallbackLimitations,
         doNotClaim: normalizedRecord.doNotClaim,
         sourceFactLedger: normalizedRecord.sourceFactLedger,
+        supportDataSources: normalizedRecord.supportDataSources,
         scopeRecommendations: normalizedRecord.scopeRecommendations,
         normalizationReviewWarnings: normalizedRecord.normalizationReviewWarnings
       }

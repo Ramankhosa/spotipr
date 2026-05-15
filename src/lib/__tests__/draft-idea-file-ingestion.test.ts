@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { Document, Packer, Paragraph, TextRun } from 'docx'
 import AdmZip from 'adm-zip'
+import * as XLSX from 'xlsx'
 import {
   DraftIdeaFileIngestionError,
   extractDraftIdeaTextFromBuffer,
@@ -19,7 +20,66 @@ describe('draft idea file ingestion', () => {
       textContent: 'Line one\nLine two\nLine three',
       fileName: 'idea.txt',
       detectedFormat: 'txt',
+      sourceInputMeta: {
+        originalFileName: 'idea.txt',
+        mimeType: 'text/plain',
+        fileSize: expect.any(Number),
+        detectedFormat: 'txt',
+        extractedCharCount: 'Line one\nLine two\nLine three'.length,
+        extractionHash: expect.any(String),
+        extractedAt: expect.any(String),
+      },
     })
+  })
+
+  test('extracts markdown files as text', async () => {
+    const result = await extractDraftIdeaTextFromBuffer({
+      fileName: 'idea.md',
+      mimeType: 'text/markdown',
+      buffer: Buffer.from('# Disclosure\n\n| Metric | Value |\n| --- | --- |\n| Efficiency | 92% |\n'),
+    })
+
+    expect(result.detectedFormat).toBe('md')
+    expect(result.textContent).toContain('| Metric | Value |')
+  })
+
+  test('extracts csv and tsv files as structured text', async () => {
+    const csv = await extractDraftIdeaTextFromBuffer({
+      fileName: 'results.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from('metric,value\nefficiency,92%\n'),
+    })
+    const tsv = await extractDraftIdeaTextFromBuffer({
+      fileName: 'results.tsv',
+      mimeType: 'text/tab-separated-values',
+      buffer: Buffer.from('metric\tvalue\nefficiency\t92%\n'),
+    })
+
+    expect(csv.detectedFormat).toBe('csv')
+    expect(csv.textContent).toContain('metric,value')
+    expect(tsv.detectedFormat).toBe('tsv')
+    expect(tsv.textContent).toContain('metric\tvalue')
+  })
+
+  test('extracts xlsx sheets as markdown tables', async () => {
+    const workbook = XLSX.utils.book_new()
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      ['Metric', 'Value'],
+      ['Efficiency', '92%'],
+    ])
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Results')
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+
+    const result = await extractDraftIdeaTextFromBuffer({
+      fileName: 'results.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer,
+    })
+
+    expect(result.detectedFormat).toBe('xlsx')
+    expect(result.textContent).toContain('# Sheet: Results')
+    expect(result.textContent).toContain('| Metric | Value |')
+    expect(result.textContent).toContain('| Efficiency | 92% |')
   })
 
   test('extracts docx text through the configured converter', async () => {
@@ -154,6 +214,8 @@ describe('draft idea file ingestion', () => {
   })
 
   test('uses a clear failure message for docx parser errors', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
     await expect(
       extractDraftIdeaTextFromBuffer(
         {
@@ -164,6 +226,16 @@ describe('draft idea file ingestion', () => {
         { extractDocxText: vi.fn().mockRejectedValue(new Error('primary parser failed')) }
       )
     ).rejects.toThrow('Could not extract text from this .docx file. Please save it as .txt and upload again.')
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[docx-ingestion] Zip fallback extraction failed',
+      expect.objectContaining({
+        fileName: 'broken.docx',
+        bufferSize: expect.any(Number),
+        error: expect.any(String),
+      })
+    )
+    warnSpy.mockRestore()
   })
 
   test('extracts selectable text from pdf files', async () => {
@@ -223,7 +295,17 @@ describe('draft idea file ingestion', () => {
         mimeType: 'application/rtf',
         buffer: Buffer.from('idea'),
       })
-    ).rejects.toThrow('Unsupported file type. Please upload .txt, .doc, .docx, or .pdf files.')
+    ).rejects.toThrow('Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.')
+  })
+
+  test('rejects unsupported filename extensions even when MIME type is text/plain', async () => {
+    await expect(
+      extractDraftIdeaTextFromBuffer({
+        fileName: 'evil.html',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('<script>alert(1)</script>'),
+      })
+    ).rejects.toThrow('Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.')
   })
 
   test('uses a clear best-effort failure message for doc parser errors', async () => {

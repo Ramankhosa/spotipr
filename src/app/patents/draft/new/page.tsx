@@ -22,6 +22,16 @@ type CountryOption = {
   languages: string[]
 }
 
+type SourceInputMeta = {
+  originalFileName?: string
+  mimeType?: string
+  fileSize?: number
+  detectedFormat?: string
+  extractedCharCount?: number
+  extractionHash?: string
+  extractedAt?: string
+}
+
 const areLanguageMapsEqual = (a: Record<string, string>, b: Record<string, string>) => {
   const aKeys = Object.keys(a)
   const bKeys = Object.keys(b)
@@ -88,6 +98,7 @@ function NewPatentDraftPageContent() {
   } | null>(null)
   const [isFileProcessing, setIsFileProcessing] = useState(false)
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
+  const [sourceInputMeta, setSourceInputMeta] = useState<SourceInputMeta | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [availableCountries, setAvailableCountries] = useState<CountryOption[]>([])
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
@@ -344,11 +355,12 @@ function NewPatentDraftPageContent() {
     if (!file) return
 
     const fileName = file.name.toLowerCase()
-    const allowedExtensions = ['.txt', '.doc', '.docx', '.pdf']
+    const allowedExtensions = ['.txt', '.md', '.markdown', '.csv', '.tsv', '.xlsx', '.doc', '.docx', '.pdf']
     const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext))
     if (!hasAllowedExtension) {
-      setError('Unsupported file type. Please upload .txt, .doc, .docx, or .pdf files.')
+      setError('Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.')
       setUploadedFileName(null)
+      setSourceInputMeta(null)
       input.value = ''
       return
     }
@@ -356,6 +368,7 @@ function NewPatentDraftPageContent() {
     if (file.size > 5 * 1024 * 1024) { // 5MB limit
       setError('File size must be less than 5MB')
       setUploadedFileName(null)
+      setSourceInputMeta(null)
       input.value = ''
       return
     }
@@ -384,10 +397,12 @@ function NewPatentDraftPageContent() {
 
       setRawIdea(data.textContent)
       setUploadedFileName(data.fileName || file.name)
+      setSourceInputMeta(data.sourceInputMeta || null)
       setError(null)
     } catch (error) {
       console.error('File processing error:', error)
       setUploadedFileName(null)
+      setSourceInputMeta(null)
       setError(error instanceof Error ? error.message : 'Failed to process file. Please check the file format and try again.')
     } finally {
       setIsFileProcessing(false)
@@ -532,6 +547,7 @@ function NewPatentDraftPageContent() {
             sessionId,
             rawIdea: rawIdea.trim(),
             title: patentTitle.trim(),
+            sourceInputMeta,
             allowRefine
           })
         })
@@ -1001,7 +1017,7 @@ function NewPatentDraftPageContent() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <p className="text-xs text-blue-700">
-                  <strong>Note:</strong> Focus on the invention concept here. Experimental data, test measurements, or illustrative examples can be added later in the Drafting Stage under Detailed Description.
+                  <strong>Note:</strong> Include tables, equations, examples, test measurements, schemas, sequences, or exclusions here if they support the invention. Stage 0 will extract them into editable support data.
                 </p>
               </div>
             </div>
@@ -1013,13 +1029,13 @@ function NewPatentDraftPageContent() {
               </label>
               <input
                 type="file"
-                accept=".txt,.doc,.docx,.pdf"
+                accept=".txt,.md,.markdown,.csv,.tsv,.xlsx,.doc,.docx,.pdf"
                 onChange={handleFileUpload}
                 disabled={isFileProcessing}
                 className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
               />
               <p className="mt-1 text-sm text-gray-500">
-                Supported formats: .txt, .doc, .docx, and text-based .pdf files (max 5MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
+                Supported formats: .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, and text-based .pdf files (max 5MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
               </p>
               {isFileProcessing && (
                 <p className="mt-1 text-xs text-indigo-600">

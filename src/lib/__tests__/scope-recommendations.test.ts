@@ -3,6 +3,7 @@ import {
   buildClaimScopePromptBlock,
   buildFigureScopePromptBlock,
   coerceScopeRecommendations,
+  componentPlannerSeedsFromStage0,
   componentsFromFrozenClaimsAndStage0,
   componentsFromScopeRecommendations,
   filterComponentsByScopeForFigures,
@@ -91,6 +92,36 @@ describe('scope recommendations helpers', () => {
     expect(getEffectiveScopeUse(scope!.elements[0]).numbering).toBe('number')
   })
 
+  test('preserves not-stated gap elements when they carry reason or source references', () => {
+    const scope = coerceScopeRecommendations({
+      ...rawScope,
+      elements: [
+        {
+          id: 'missing_enablement',
+          label: 'Not stated by source',
+          sourceType: 'other',
+          recommended: {
+            claim: 'claim_1',
+            numbering: 'number',
+            figures: 'include',
+            description: 'include',
+          },
+          reason: 'Source does not state controller placement.',
+          sourceRefs: ['sourceFactLedger.notStated[0]'],
+        },
+      ],
+    })
+
+    expect(scope?.elements).toHaveLength(1)
+    expect(scope?.elements[0].label).toBe('Not stated by source')
+    expect(scope?.elements[0].recommended).toEqual({
+      claim: 'none',
+      numbering: 'do_not_number',
+      figures: 'do_not_show',
+      description: 'exclude',
+    })
+  })
+
   test('filters numbering and figure components using effective selections', () => {
     const scope = coerceScopeRecommendations(rawScope)!
     const components = [
@@ -134,6 +165,55 @@ describe('scope recommendations helpers', () => {
       source: 'frozen_claims',
       matchedClaims: [1],
       claimRole: 'claim_1',
+    })
+  })
+
+  test('component planner seeding preserves Stage 0 components beyond frozen-claim matches', () => {
+    const scope = coerceScopeRecommendations({
+      ...rawScope,
+      elements: [
+        rawScope.elements[0],
+        {
+          id: 'valve_driver',
+          label: 'valve driver',
+          sourceType: 'component',
+          recommended: {
+            claim: 'dependent_claim',
+            numbering: 'number',
+            figures: 'include',
+            description: 'include',
+          },
+          reason: 'Actuation component useful for figures.',
+          sourceRefs: ['components[1]'],
+        },
+      ],
+    })!
+    const components = [
+      { name: 'moisture sensor', description: 'Sensor that detects soil moisture.' },
+      { name: 'valve driver', description: 'Drives an irrigation valve.' },
+      { name: 'battery pack', description: 'Supplies operating power.' },
+    ]
+
+    const seeds = componentPlannerSeedsFromStage0({
+      normalizedComponents: components,
+      scopeRecommendations: scope,
+      claims: [
+        {
+          number: 1,
+          type: 'independent',
+          text: 'A system comprising a moisture sensor configured to detect soil moisture.',
+        },
+      ],
+    })
+
+    expect(seeds.map(component => component.name)).toEqual([
+      'moisture sensor',
+      'valve driver',
+      'battery pack',
+    ])
+    expect(seeds[0].claimSupport).toMatchObject({
+      source: 'frozen_claims',
+      matchedClaims: [1],
     })
   })
 

@@ -14,8 +14,18 @@ import {
   buildSourceFactLedgerEntries,
   buildSourceFactLedgerPromptBlock
 } from '@/lib/source-fact-ledger'
+import {
+  buildSupportDataSourcePromptBlock,
+  hasSupportDataSources
+} from '@/lib/support-data-sources'
 import { buildFigurelessDraftGuard } from '@/lib/figure-availability'
 import { filterComponentsByScopeForDescription } from '@/lib/scope-recommendations'
+import { migrateNormalizedData } from '@/lib/normalized-data'
+import {
+  formatIndependentClaimsText,
+  getIndependentClaims,
+  getIndependentClaimsText,
+} from '@/lib/claims-context'
 
 export type Claim1Mode = 'bindingAnchor' | 'constraintOnly' | 'off'
 
@@ -103,15 +113,17 @@ export function getSectionInjectionConfig(sectionKey: string): SectionInjectionC
  * in inconsistent legal claims that harm the patent application.
  * 
  * Other sections (objectsOfInvention, technicalSolution, advantageousEffects,
- * bestMode, industrialApplicability) CAN use Claim 1 when available but
- * are NOT gated because they can be revised later without legal risk.
+ * industrialApplicability) CAN use Claim 1 when available but are NOT gated
+ * because they can be revised later without legal risk.
  * 
  * NOTE: Keys are stored in lowercase for case-insensitive matching.
  */
 export const SECTIONS_REQUIRING_CLAIM1_FOR_GENERATION = new Set([
   'abstract',           // Must align with Claim 1 scope per USPTO/EPO rules
   'summary',            // Must align with Claim 1 as it defines invention scope
-  'detaileddescription' // Must provide basis for Claim 1 features (written description requirement)
+  'detaileddescription', // Must provide basis for Claim 1 features (written description requirement)
+  'bestmode',           // Binding Claim 1 anchor in injection config
+  'bestmethod'          // Alias for bestMode
 ])
 
 /**
@@ -213,6 +225,25 @@ function decodeHtmlEntities(text: string): string {
 }
 
 /**
+ * Extract all LLM-classified independent claims from the authoritative claims snapshot.
+ * This intentionally trusts stored claim.type metadata and does not reclassify from text.
+ */
+export function extractIndependentClaims(
+  normalizedData: Record<string, any> | null | undefined,
+  requireFrozen: boolean = false
+): string | null {
+  const text = getIndependentClaimsText(normalizedData, { requireFrozen })
+  return text || null
+}
+
+export function countIndependentClaims(
+  normalizedData: Record<string, any> | null | undefined,
+  requireFrozen: boolean = false
+): number {
+  return getIndependentClaims(normalizedData, { requireFrozen }).length
+}
+
+/**
  * Extract Claim 1 from frozen/structured claims.
  * Returns null if Claim 1 is not available.
  * 
@@ -233,173 +264,18 @@ export function extractClaim1(
   normalizedData: Record<string, any> | null | undefined,
   requireFrozen: boolean = false
 ): string | null {
-  if (!normalizedData) return null
-
-  // Check if claims are frozen (user has approved them)
-  const isFrozen = !!normalizedData.claimsApprovedAt
-  
-  // If frozen claims are required but not available, return null
-  if (requireFrozen && !isFrozen) {
-    return null
-  }
-
-  // Priority order for structured claims - most finalized source first
-  // INVARIANT: claimsStructuredFinal is ONLY populated after user approval
-  const structuredClaims: any[] =
-    normalizedData.claimsStructuredFinal ||
-    normalizedData.claimsStructured ||
-    normalizedData.claimsStructuredProvisional ||
-    []
-
-  if (!Array.isArray(structuredClaims) || structuredClaims.length === 0) {
-    return null
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // CLAIM 1 EXTRACTION - MULTI-STEP PRIORITY ALGORITHM
-  // ═══════════════════════════════════════════════════════════════════════════
-  
-  // Helper: Parse claim number with STRICT validation
-  // Rejects "1a", "01a", "1.1" - only pure integers like "1", "01", 1
-  const parseStrictClaimNumber = (num: any): number | null => {
-    if (typeof num === 'number' && Number.isInteger(num) && num > 0) {
-      return num
-    }
-    if (typeof num === 'string') {
-      // STRICT: Must be all digits (allows leading zeros like "01" → 1)
-      const trimmed = num.trim()
-      if (/^\d+$/.test(trimmed)) {
-        const parsed = parseInt(trimmed, 10)
-        return parsed > 0 ? parsed : null
-      }
-    }
-    return null
-  }
-  
-  // Helper: Check if claim text looks like a dependent claim
-  // Dependent claims typically start with "The [noun] of claim [X]" or reference earlier claims
-  const looksLikeDependentClaim = (text: string): boolean => {
-    if (!text) return false
-    const normalized = text.trim().toLowerCase()
-    // Pattern: "The [word] of claim [number]" at the start
-    if (/^the\s+\w+\s+of\s+claim\s+\d/i.test(normalized)) return true
-    // Pattern: Contains "according to claim [number]" early in text (first 100 chars)
-    const earlyText = normalized.substring(0, 100)
-    if (/according\s+to\s+claim\s+\d/i.test(earlyText)) return true
-    if (/as\s+claimed\s+in\s+claim\s+\d/i.test(earlyText)) return true
-    if (/of\s+any\s+(one\s+)?of\s+(the\s+)?preceding\s+claims?/i.test(earlyText)) return true
-    return false
-  }
-
-  let claim1: any = null
-  
-  // STEP 1: Find claim with EXACT number === 1 (strict parsing)
-  claim1 = structuredClaims.find((c) => {
-    if (!c) return false
-    const claimNum = parseStrictClaimNumber(c.number)
-    return claimNum === 1
-  })
-  
-  // STEP 2: If no claim #1, find the SMALLEST numbered claim
-  if (!claim1) {
-    let smallestNum = Infinity
-    let smallestClaim: any = null
-    
-    for (const c of structuredClaims) {
-      if (!c) continue
-      const claimNum = parseStrictClaimNumber(c.number)
-      if (claimNum !== null && claimNum < smallestNum) {
-        smallestNum = claimNum
-        smallestClaim = c
-      }
-    }
-    
-    if (smallestClaim) {
-      claim1 = smallestClaim
-      console.warn(`[extractClaim1] Claim #1 not found, using smallest numbered claim #${smallestNum}`)
-    }
-  }
-  
-  // STEP 3: If no numbered claims, find first INDEPENDENT claim that doesn't look dependent
-  if (!claim1) {
-    // First try: claims explicitly marked as independent
-    const independentClaims = structuredClaims.filter((c) => 
-      c && c.type === 'independent'
-    )
-    
-    // Prefer independent claims whose text doesn't look dependent
-    claim1 = independentClaims.find((c) => 
-      c.text && typeof c.text === 'string' && !looksLikeDependentClaim(c.text)
-    )
-    
-    // If all independent claims look dependent (data integrity issue), use first one anyway
-    if (!claim1 && independentClaims.length > 0) {
-      claim1 = independentClaims[0]
-      console.warn(`[extractClaim1] All independent claims look dependent, using first one`)
-    }
-  }
-  
-  // STEP 4: Last resort - first claim that doesn't look dependent
-  if (!claim1) {
-    claim1 = structuredClaims.find((c) => 
-      c && c.text && typeof c.text === 'string' && !looksLikeDependentClaim(c.text)
-    )
-    
-    if (claim1) {
-      console.warn(`[extractClaim1] No numbered or typed claims, using first non-dependent claim`)
-    }
-  }
-
-  // Final validation: must have valid text
-  if (!claim1 || !claim1.text || typeof claim1.text !== 'string') {
-    return null
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // INDEPENDENT CLAIMS WRAPPER -- combine all independents into one block
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const cleanClaimText = (c: any): string => {
-    let text = (c.text || '')
-      .replace(/<[^>]*>/g, '')
-      .replace(/^\s*\d+\.\s*/, '')
-      .trim()
-    text = decodeHtmlEntities(text)
-    return text.replace(/\s+/g, ' ').trim()
-  }
-
-  const allIndependents = structuredClaims
-    .filter((c: any) => c && c.type === 'independent' && c.text && typeof c.text === 'string')
-    .map((c: any) => ({
-      number: parseStrictClaimNumber(c.number) || 0,
-      category: c.category || '',
-      text: cleanClaimText(c),
-    }))
-    .filter((c: any) => c.text)
-    .sort((a: any, b: any) => a.number - b.number)
-
-  if (allIndependents.length === 0) {
-    const cleaned = cleanClaimText(claim1)
-    return cleaned || null
-  }
-
-  if (allIndependents.length === 1) {
-    return allIndependents[0].text
-  }
-
-  return allIndependents
-    .map((c: any) => {
-      const label = c.category ? ` (${c.category})` : ''
-      return `Claim ${c.number}${label}:\n${c.text}`
-    })
-    .join('\n\n')
+  return extractIndependentClaims(normalizedData, requireFrozen)
 }
 
 /**
  * Check if Claim 1 is available (regardless of frozen status).
  */
 export function isClaim1Available(normalizedData: Record<string, any> | null | undefined): boolean {
-  return extractClaim1(normalizedData, false) !== null
+  return extractIndependentClaims(normalizedData, false) !== null
+}
+
+export function areIndependentClaimsAvailable(normalizedData: Record<string, any> | null | undefined): boolean {
+  return isClaim1Available(normalizedData)
 }
 
 /**
@@ -421,8 +297,8 @@ export function isClaim1AvailableAndFrozen(normalizedData: Record<string, any> |
   if (!isFrozen) return false
   
   // Second check: try to extract Claim 1 from structured claims (preferred)
-  const claim1FromStructured = extractClaim1(normalizedData, true)
-  if (claim1FromStructured !== null) return true
+  const independentClaimsFromStructured = extractIndependentClaims(normalizedData, true)
+  if (independentClaimsFromStructured !== null) return true
   
   // Fallback check: if structured claims are empty but HTML claims exist, allow it
   // This handles cases where claims were frozen but not in structured format
@@ -447,6 +323,9 @@ export function areClaimsFrozen(normalizedData: Record<string, any> | null | und
 interface DraftingContextOptions {
   patentTypePrimary?: unknown
   archetype?: unknown
+  sectionKey?: string
+  suppressClaimInjection?: boolean
+  suppressSupportDataSources?: boolean
 }
 
 function formatContextScalar(value: unknown): string {
@@ -502,37 +381,46 @@ export function buildNormalizedDataBlock(
 ): string {
   if (!normalizedData && !idea) return ''
 
-  const nd = normalizedData || {}
   const ideaData = idea || {}
+  const hasObjectData = (value: unknown): value is Record<string, any> =>
+    !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value as Record<string, any>).length > 0
+  const rawNestedNormalizedData = hasObjectData(ideaData.normalizedData) ? ideaData.normalizedData : {}
+  const nd = hasObjectData(normalizedData) ? migrateNormalizedData(normalizedData) as Record<string, any> : {}
+  const nestedNormalizedData = hasObjectData(rawNestedNormalizedData)
+    ? migrateNormalizedData(rawNestedNormalizedData) as Record<string, any>
+    : {}
+  const hasContextValue = (value: unknown) => {
+    if (Array.isArray(value)) return value.length > 0
+    if (typeof value === 'string') return value.trim().length > 0
+    return value !== undefined && value !== null
+  }
+  const pickContextValue = (...keys: string[]) => {
+    for (const source of [nd, nestedNormalizedData, ideaData]) {
+      for (const key of keys) {
+        const value = source?.[key]
+        if (hasContextValue(value)) return value
+      }
+    }
+    return undefined
+  }
 
   const parts: string[] = []
 
-  const nestedNormalizedData =
-    ideaData.normalizedData && typeof ideaData.normalizedData === 'object'
-      ? ideaData.normalizedData
-      : {}
   const archetypeInput =
     options?.archetype ??
-    ideaData.inventionType ??
-    nestedNormalizedData.inventionType ??
-    nd.inventionType
+    pickContextValue('inventionType')
   const archetypeFallbackField =
-    formatContextScalar(ideaData.fieldOfRelevance) ||
-    formatContextScalar(nestedNormalizedData.fieldOfRelevance)
+    formatContextScalar(pickContextValue('fieldOfRelevance', 'field'))
   const archetype = formatDraftingArchetype(archetypeInput, archetypeFallbackField)
   const patentType =
-    formatContextScalar(nd.patentTypePrimary) ||
+    formatContextScalar(pickContextValue('patentTypePrimary')) ||
     formatContextScalar(options?.patentTypePrimary) ||
     'UNKNOWN'
   const domainField =
-    formatContextScalar(nd.fieldOfRelevance) ||
-    formatContextScalar(ideaData.fieldOfRelevance) ||
-    formatContextScalar(nd.field) ||
-    formatContextScalar(ideaData.field) ||
+    formatContextScalar(pickContextValue('fieldOfRelevance', 'field')) ||
     'N/A'
   const domainSubfield =
-    formatContextScalar(nd.subfield) ||
-    formatContextScalar(ideaData.subfield) ||
+    formatContextScalar(pickContextValue('subfield')) ||
     'N/A'
 
   parts.push(`DOMAIN / ARCHETYPE CONTEXT
@@ -546,43 +434,43 @@ Use this block only to adapt patent drafting vocabulary, disclosure units, and s
   // Title - IMPORTANT: Use AI-generated title from existingSections if available,
   // as this is the drafting-stage refined title that should be used for consistency
   const aiGeneratedTitle = existingSections?.title?.trim()
-  const title = aiGeneratedTitle || ideaData.title || nd.title
+  const title = aiGeneratedTitle || pickContextValue('title')
   if (title && typeof title === 'string' && title.trim()) {
     parts.push(`Title: ${title.trim()}`)
   }
 
   // Problem Statement
-  const problem = ideaData.problem || ideaData.problemStatement || nd.problem
+  const problem = pickContextValue('problem', 'problemStatement')
   if (problem && typeof problem === 'string' && problem.trim()) {
     parts.push(`Problem: ${problem.trim()}`)
   }
 
   // Objectives
-  const objectives = ideaData.objectives || nd.objectives
+  const objectives = pickContextValue('objectives')
   if (objectives && typeof objectives === 'string' && objectives.trim()) {
     parts.push(`Objectives: ${objectives.trim()}`)
   }
 
   // Solution
-  const solution = ideaData.solution || nd.solution || ideaData.description
+  const solution = pickContextValue('solution', 'description')
   if (solution && typeof solution === 'string' && solution.trim()) {
     parts.push(`Solution: ${solution.trim()}`)
   }
 
   // Field of Relevance
-  const field = ideaData.fieldOfRelevance || nd.fieldOfRelevance
+  const field = pickContextValue('fieldOfRelevance')
   if (field && typeof field === 'string' && field.trim()) {
     parts.push(`Technical Field: ${field.trim()}`)
   }
 
   // Subfield
-  const subfield = ideaData.subfield || nd.subfield
+  const subfield = pickContextValue('subfield')
   if (subfield && typeof subfield === 'string' && subfield.trim()) {
     parts.push(`Subfield: ${subfield.trim()}`)
   }
 
   // Components (if array)
-  const components = ideaData.components || nd.components
+  const components = pickContextValue('components')
   if (Array.isArray(components) && components.length > 0) {
     const componentLines = components
       .map((c: any) => {
@@ -610,35 +498,51 @@ Use this block only to adapt patent drafting vocabulary, disclosure units, and s
   }
 
   // Logic/Process Flow
-  const logic = ideaData.logic || nd.logic
+  const logic = pickContextValue('logic')
   if (logic && typeof logic === 'string' && logic.trim()) {
     parts.push(`Process Logic: ${logic.trim()}`)
   }
 
   // Inputs
-  const inputs = ideaData.inputs || nd.inputs
+  const inputs = pickContextValue('inputs')
   if (inputs && typeof inputs === 'string' && inputs.trim()) {
     parts.push(`Inputs: ${inputs.trim()}`)
   }
 
   // Outputs
-  const outputs = ideaData.outputs || nd.outputs
+  const outputs = pickContextValue('outputs')
   if (outputs && typeof outputs === 'string' && outputs.trim()) {
     parts.push(`Outputs: ${outputs.trim()}`)
   }
 
   // Best Method (brief)
-  const bestMethod = ideaData.bestMethod || nd.bestMethod
+  const bestMethod = pickContextValue('bestMethod')
   if (bestMethod && typeof bestMethod === 'string' && bestMethod.trim()) {
     parts.push(`Best Method: ${bestMethod.trim()}`)
   }
 
-  const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
-    ideaData.sourceFactLedger || nd.sourceFactLedger,
-    'SOURCE FACT LEDGER (READ-ONLY SOURCE SUPPORT)'
-  )
-  if (sourceFactLedgerBlock) {
-    parts.push(sourceFactLedgerBlock)
+  const supportDataSourceContainer = hasSupportDataSources(nd)
+    ? nd
+    : hasSupportDataSources(nestedNormalizedData)
+      ? nestedNormalizedData
+      : ideaData
+  const supportDataBlock = options?.suppressSupportDataSources
+    ? ''
+    : buildSupportDataSourcePromptBlock(
+        supportDataSourceContainer,
+        options?.sectionKey || 'detailedDescription',
+        'SUPPORT DATA SOURCES (READ-ONLY SOURCE SUPPORT)'
+      )
+  if (supportDataBlock) {
+    parts.push(supportDataBlock)
+  } else if (!hasSupportDataSources(nd) && !hasSupportDataSources(nestedNormalizedData) && !hasSupportDataSources(ideaData)) {
+    const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
+      pickContextValue('sourceFactLedger'),
+      'SOURCE FACT LEDGER (READ-ONLY SOURCE SUPPORT)'
+    )
+    if (sourceFactLedgerBlock) {
+      parts.push(sourceFactLedgerBlock)
+    }
   }
 
   // If no parts, return empty (no header, no placeholder)
@@ -659,19 +563,19 @@ ${parts.join('\n')}
  * 
  * CRITICAL: Never returns placeholder text like "Not available" or "None provided"
  */
-export function buildClaim1Block(
+export function buildIndependentClaimsBlock(
   normalizedData: Record<string, any> | null | undefined,
   mode: Claim1Mode
 ): string {
   if (mode === 'off') return ''
 
-  const claimsText = extractClaim1(normalizedData)
+  const independentClaims = getIndependentClaims(normalizedData)
+  const claimsText = formatIndependentClaimsText(independentClaims)
   if (!claimsText) return ''
 
   const isFrozen = areClaimsFrozen(normalizedData)
   const statusLabel = isFrozen ? '(FROZEN - LEGAL AUTHORITY)' : '(WORKING - FOR ALIGNMENT)'
-  const hasMultiple = claimsText.includes('\n\nClaim ')
-  const heading = hasMultiple ? 'INDEPENDENT CLAIMS' : 'CLAIM 1'
+  const heading = independentClaims.length > 1 ? 'INDEPENDENT CLAIMS' : 'CLAIM 1'
 
   let modeInstruction = ''
   if (mode === 'bindingAnchor') {
@@ -697,6 +601,13 @@ ${modeInstruction}
 `
 }
 
+export function buildClaim1Block(
+  normalizedData: Record<string, any> | null | undefined,
+  mode: Claim1Mode
+): string {
+  return buildIndependentClaimsBlock(normalizedData, mode)
+}
+
 /**
  * Build complete Universal Drafting Bundle (UDB) for a section.
  * Combines Normalized Data and Claim 1 based on section config.
@@ -717,6 +628,13 @@ export function buildUniversalDraftingBundle(
   }
 
   const config = getSectionInjectionConfig(sectionKey)
+  if (normalizedData && migrateNormalizedData(normalizedData).extractionFailed) {
+    return {
+      block: '',
+      gated: true,
+      gateReason: 'Stage 0 normalization failed. Regenerate the invention structure before drafting sections.',
+    }
+  }
 
   // Check gating first (uses the new function that checks normalizedData directly)
   if (shouldGateSection(sectionKey, normalizedData)) {
@@ -733,7 +651,7 @@ export function buildUniversalDraftingBundle(
   // Add Normalized Data block if enabled
   // Pass existingSections to use AI-generated title if available
   if (config.injectNormalizedData) {
-    const ndBlock = buildNormalizedDataBlock(normalizedData, idea, existingSections, options)
+    const ndBlock = buildNormalizedDataBlock(normalizedData, idea, existingSections, { ...options, sectionKey })
     if (ndBlock && ndBlock.trim()) {
       parts.push(ndBlock)
     }
@@ -742,8 +660,8 @@ export function buildUniversalDraftingBundle(
   // Add Claim 1 block if enabled and available
   // Use non-frozen check here since we already passed gating (which checks frozen for critical sections)
   const claim1Available = isClaim1Available(normalizedData)
-  if (config.injectClaim1 && claim1Available) {
-    const c1Block = buildClaim1Block(normalizedData, config.claim1Mode)
+  if (config.injectClaim1 && claim1Available && !options?.suppressClaimInjection) {
+    const c1Block = buildIndependentClaimsBlock(normalizedData, config.claim1Mode)
     if (c1Block && c1Block.trim()) {
       parts.push(c1Block)
     }
@@ -1026,7 +944,7 @@ export function buildDetailedDescriptionScopeText(
 ): string {
   const nd = normalizedData || {}
   const ideaData = idea || {}
-  const claim1 = extractClaim1(nd) || ''
+  const claim1 = extractIndependentClaims(nd) || ''
 
   const fields = [
     claim1,
@@ -1242,10 +1160,7 @@ const FULL_CLAIMS_PATTERNS = [
   /FULL CLAIMS/i,
   /ALL CLAIMS/i,
   /claims?\s*\d+\s*[-–]\s*\d+/i, // "claims 1-20" or similar
-  /claim\s*2\s*[.:,]/i, // Reference to claim 2 or beyond
-  /claim\s*[3-9]\d*\s*[.:,]/i, // Reference to claim 3+ 
   /dependent\s+claim/i, // Reference to dependent claims
-  /independent\s+claims/i, // Plural independent claims
 ]
 
 /**
@@ -1262,9 +1177,9 @@ const CLAIM_1_PATTERNS = [
  * Validate claims injection invariants for a drafting prompt.
  * 
  * Invariants:
- * 1. Non-claims sections must never receive full claims
- * 2. Claim 1 and full claims must never appear together in a prompt
- * 3. Only the 'claims' section may contain full claims
+ * 1. Non-claims sections must never receive full/dependent claims
+ * 2. Claim anchors and full/dependent claims must never appear together in a prompt
+ * 3. Only the 'claims' section may contain full/dependent claims
  * 
  * @param prompt - The prompt to validate
  * @param sectionKey - The section this prompt is for

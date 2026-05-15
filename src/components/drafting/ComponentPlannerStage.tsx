@@ -2,14 +2,14 @@
 
 import React, { useState, useEffect } from 'react'
 import {
-  componentsFromFrozenClaimsAndStage0,
-  componentsFromScopeRecommendations,
+  componentPlannerSeedsFromStage0,
   isScopeRecommendations,
   scopeElementKey,
   scopeTitleFromElement,
   sourceComponentForScopeElement,
   type ClaimSupportMetadata,
 } from '@/lib/scope-recommendations'
+import { getAuthoritativeClaims } from '@/lib/claims-context'
 
 interface ComponentPlannerStageProps {
   session: any
@@ -268,34 +268,22 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   const getInitialComponents = () => {
     // Try referenceMap first
     const refMapComponents = extractComponentsFromReferenceMap(session?.referenceMap)
-    if (refMapComponents.length > 0) {
+    if (session?.referenceMap?.isValid !== false && refMapComponents.length > 0) {
       return normalizeComponentsForPlanner(hydrateComponentTitlesFromScope(refMapComponents))
     }
 
-    // Prefer frozen-claim matches against Stage 0 components, then fall back to Stage 0 scope recommendations.
+    // Seed from all Stage 0 components, while preserving claim-backed metadata where available.
     const normalized = getNormalizedIdeaData()
     const ideaComponents = getIdeaComponentsForScope()
-    const claimSeededComponents = componentsFromFrozenClaimsAndStage0({
+    const claimsSnapshot = getAuthoritativeClaims(normalized || {})
+    const seededComponents = componentPlannerSeedsFromStage0({
       normalizedComponents: ideaComponents,
       scopeRecommendations: normalized?.scopeRecommendations,
-      claims: normalized?.claimsStructuredFinal || normalized?.claimsStructured || normalized?.claimsStructuredProvisional,
-      claimsText: normalized?.claimsFinal || normalized?.claims || normalized?.claimsProvisional,
+      claims: claimsSnapshot.structured,
+      claimsText: claimsSnapshot.html,
     })
-    if (claimSeededComponents.length > 0) {
-      return normalizeComponentsForPlanner(claimSeededComponents)
-    }
-
-    const scopedComponents = componentsFromScopeRecommendations(
-      normalized?.scopeRecommendations,
-      ideaComponents
-    )
-    if (scopedComponents.length > 0) {
-      return normalizeComponentsForPlanner(scopedComponents)
-    }
-
-    // Legacy fallback for sessions without scopeRecommendations.
-    if (Array.isArray(ideaComponents) && ideaComponents.length > 0) {
-      return normalizeComponentsForPlanner(ideaComponents)
+    if (seededComponents.length > 0) {
+      return normalizeComponentsForPlanner(seededComponents)
     }
 
     return []
@@ -330,7 +318,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   
   // User can override numbering style
   const [numberingStyleOverride, setNumberingStyleOverride] = useState<NumberingStyle | null>(
-    session?.referenceMap?.numberingStyle || null
+    session?.referenceMap?.numberingStyle || session?.referenceMap?.components?.numberingStyle || null
   )
   const effectiveNumberingStyle = numberingStyleOverride || deriveDefaultNumberingStyle()
 
