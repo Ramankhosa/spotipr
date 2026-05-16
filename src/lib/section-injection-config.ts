@@ -23,6 +23,7 @@ import { filterComponentsByScopeForDescription } from '@/lib/scope-recommendatio
 import { migrateNormalizedData } from '@/lib/normalized-data'
 import {
   formatIndependentClaimsText,
+  getAuthoritativeClaims,
   getIndependentClaims,
   getIndependentClaimsText,
 } from '@/lib/claims-context'
@@ -94,6 +95,11 @@ export function getSectionInjectionConfig(sectionKey: string): SectionInjectionC
   const camelKey = sectionKey.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
   const camelConfig = SECTION_INJECTION_CONFIG[camelKey]
   if (camelConfig) return camelConfig
+
+  const compactKey = sectionKey.replace(/[_\-\s.]/g, '').toLowerCase()
+  if (compactKey === 'description' || compactKey === 'detaileddescription') {
+    return SECTION_INJECTION_CONFIG.detailedDescription
+  }
 
   // Safe fallback for unknown sections: ND ON, C1 OFF
   console.warn(`[getSectionInjectionConfig] Unknown section key "${sectionKey}", using safe defaults`)
@@ -324,6 +330,7 @@ interface DraftingContextOptions {
   patentTypePrimary?: unknown
   archetype?: unknown
   sectionKey?: string
+  jurisdiction?: string
   suppressClaimInjection?: boolean
   suppressSupportDataSources?: boolean
 }
@@ -531,11 +538,17 @@ Use this block only to adapt patent drafting vocabulary, disclosure units, and s
     : buildSupportDataSourcePromptBlock(
         supportDataSourceContainer,
         options?.sectionKey || 'detailedDescription',
-        'SUPPORT DATA SOURCES (READ-ONLY SOURCE SUPPORT)'
+        'SUPPORT DATA SOURCES (READ-ONLY SOURCE SUPPORT)',
+        { jurisdiction: options?.jurisdiction }
       )
   if (supportDataBlock) {
     parts.push(supportDataBlock)
-  } else if (!hasSupportDataSources(nd) && !hasSupportDataSources(nestedNormalizedData) && !hasSupportDataSources(ideaData)) {
+  } else if (
+    !isDetailedDescriptionKey(options?.sectionKey || '') &&
+    !hasSupportDataSources(nd) &&
+    !hasSupportDataSources(nestedNormalizedData) &&
+    !hasSupportDataSources(ideaData)
+  ) {
     const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
       pickContextValue('sourceFactLedger'),
       'SOURCE FACT LEDGER (READ-ONLY SOURCE SUPPORT)'
@@ -608,6 +621,69 @@ export function buildClaim1Block(
   return buildIndependentClaimsBlock(normalizedData, mode)
 }
 
+function stripClaimMarkup(value: unknown): string {
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function claimNumberForSort(claim: any, fallback: number): number {
+  const parsed = Number(claim?.number)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function getDetailedDescriptionAllClaimsText(
+  normalizedData: Record<string, any> | null | undefined
+): string {
+  if (!normalizedData) return ''
+  const snapshot = getAuthoritativeClaims(normalizedData)
+  if (Array.isArray(snapshot.structured) && snapshot.structured.length > 0) {
+    return [...snapshot.structured]
+      .sort((a: any, b: any) => claimNumberForSort(a, Number.MAX_SAFE_INTEGER) - claimNumberForSort(b, Number.MAX_SAFE_INTEGER))
+      .map((claim: any, index: number) => {
+        const number = claimNumberForSort(claim, index + 1)
+        const type = String(claim?.type || '').trim()
+        const category = String(claim?.category || '').trim()
+        const dependsOn = claim?.dependsOn || claim?.depends_on
+        const metadata = [
+          type ? type : '',
+          category ? category : '',
+          dependsOn ? `depends on claim ${dependsOn}` : '',
+        ].filter(Boolean).join(', ')
+        const text = stripClaimMarkup(claim?.text || claim?.claim || claim?.content)
+        return text ? `Claim ${number}${metadata ? ` (${metadata})` : ''}: ${text}` : ''
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+  return stripClaimMarkup(snapshot.html)
+}
+
+export function buildDetailedDescriptionClaimCoverageBlock(
+  normalizedData: Record<string, any> | null | undefined
+): string {
+  const allClaimsText = getDetailedDescriptionAllClaimsText(normalizedData)
+  if (!allClaimsText) return ''
+
+  return `
+DETAILED DESCRIPTION CLAIM COVERAGE CHECKLIST (FROZEN CLAIMS)
+- Treat this checklist as mandatory coverage for the Detailed Description.
+- Discuss each independent claim element and each dependent-claim added limitation at least once when source-supported.
+- Dependent-claim limitations may be drafted as concise optional-variation paragraphs after the core Claim 1 disclosure.
+- Use claim terminology consistently, but do NOT copy claim sentence structure or "wherein" phrasing.
+- If a claim limitation conflicts with the Normalized Data or source guardrails, keep the safer supported wording and do not invent missing implementation detail.
+
+${allClaimsText}
+`.trim()
+}
+
 /**
  * Build complete Universal Drafting Bundle (UDB) for a section.
  * Combines Normalized Data and Claim 1 based on section config.
@@ -667,6 +743,13 @@ export function buildUniversalDraftingBundle(
     }
   }
 
+  if (isDetailedDescriptionKey(sectionKey) && claim1Available) {
+    const claimCoverageBlock = buildDetailedDescriptionClaimCoverageBlock(normalizedData)
+    if (claimCoverageBlock && claimCoverageBlock.trim()) {
+      parts.push(claimCoverageBlock)
+    }
+  }
+
   return {
     block: parts.join('\n'),
     gated: false
@@ -712,7 +795,8 @@ ${guards.join('\n')}
 }
 
 function isDetailedDescriptionKey(sectionKey: string): boolean {
-  return String(sectionKey || '').toLowerCase().replace(/[_\-\s.]/g, '') === 'detaileddescription'
+  const compact = String(sectionKey || '').toLowerCase().replace(/[_\-\s.]/g, '')
+  return compact === 'detaileddescription' || compact === 'description'
 }
 
 const DETAILED_DESCRIPTION_UNSAFE_CONSTRAINTS = [
@@ -749,16 +833,19 @@ export function filterDetailedDescriptionConstraints(
 
 export const DETAILED_DESCRIPTION_SOURCE_LOCK_BLOCK = `
 DETAILED DESCRIPTION SOURCE LOCK (RUNTIME OVERRIDE - CRITICAL)
-- The invention scope for detailedDescription is limited to Frozen Claim 1 and the Normalized Data.
+- The invention scope for detailedDescription is limited to the Frozen Claims, the Normalized Data, and the auto-selected Detailed Description source evidence.
+- Frozen Claim 1 remains the core embodiment anchor, but dependent-claim limitations must also receive written-description support when they are present in the Frozen Claims.
+- Auto-selected Detailed Description source data may be used as positive support only when it appears in the "AUTO-SELECTED DETAILED DESCRIPTION SOURCE DATA" block.
+- Detailed Description source guardrails may be used only as exclusions or risk constraints.
 - Figures, components, reference numerals, and injected DD user data are auxiliary context only.
-- Auxiliary context may be used only to label, cite, or clarify subject matter already supported by Frozen Claim 1 and the Normalized Data.
+- Auxiliary context may be used only to label, cite, or clarify subject matter already supported by the Frozen Claims, Normalized Data, or auto-selected Detailed Description source data.
 - Auxiliary context MUST NOT be used as an independent source for adding components, structures, steps, use cases, environments, examples, values, materials, operating conditions, or results.
-- Optional variations may be drafted only when each variation is expressly present in Frozen Claim 1, Normalized Data, or an enabled jurisdictional requirement.
-- Internal algorithms, control logic, formulas, weighting factors, thresholds, numerical ranges, materials, test values, and calculation steps may be drafted only when expressly present in Frozen Claim 1 or Normalized Data.
-- If a detail is not expressly present in Frozen Claim 1 or the Normalized Data, omit the detail.
+- Optional variations may be drafted only when each variation is expressly present in the Frozen Claims, Normalized Data, auto-selected Detailed Description source data, or an enabled jurisdictional requirement.
+- Internal algorithms, control logic, formulas, weighting factors, thresholds, numerical ranges, materials, test values, and calculation steps may be drafted only when expressly present in the Frozen Claims, Normalized Data, or auto-selected Detailed Description source data.
+- If a detail is not expressly present in the Frozen Claims, Normalized Data, or auto-selected Detailed Description source data, omit the detail.
 - Do NOT fill gaps using technical assumptions, common implementations, field knowledge, or drafting conventions.
 - Do NOT use generic phrases such as "in some embodiments" or "for example" to introduce unsupported subject matter.
-- Each sentence must be traceable to Frozen Claim 1 or Normalized Data, except for permitted reference labels and figure parentheticals.
+- Each sentence must be traceable to the Frozen Claims, Normalized Data, or auto-selected Detailed Description source data, except for permitted reference labels and figure parentheticals.
 `.trim()
 
 export function buildDetailedDescriptionSourceLockBlock(sectionKey: string): string {
@@ -944,10 +1031,10 @@ export function buildDetailedDescriptionScopeText(
 ): string {
   const nd = normalizedData || {}
   const ideaData = idea || {}
-  const claim1 = extractIndependentClaims(nd) || ''
+  const claims = getDetailedDescriptionAllClaimsText(nd) || extractIndependentClaims(nd) || ''
 
   const fields = [
-    claim1,
+    claims,
     ideaData.title,
     nd.title,
     ideaData.problem,
@@ -1093,9 +1180,9 @@ export function buildDetailedDescriptionScopeContext(
 
   const guard = `
 DETAILED DESCRIPTION INVENTION-SCOPE GUARD (CRITICAL)
-- The allowed invention is limited to Frozen Claim 1 and the Normalized Data.
+- The allowed invention is limited to the Frozen Claims, Normalized Data, and auto-selected Detailed Description source evidence.
 - Additional context supplies labels and citations only; it does not expand the invention.
-- Ignore any supplied component, reference numeral, figure, person, organization, product, prior-art system, environment, use case, example, or named entity that is not supported by Claim 1 or the Normalized Data.
+- Ignore any supplied component, reference numeral, figure, person, organization, product, prior-art system, environment, use case, example, or named entity that is not supported by the Frozen Claims, Normalized Data, or auto-selected Detailed Description source evidence.
 - Do NOT use figure titles, figure descriptions, sketches, or reference numerals as an independent source for adding entities to the invention.
 - Use only the allowed component/reference context listed below when adding reference labels.
 - Use only the allowed figure references listed below, and only as parentheticals.

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   buildAntiHallucinationGuards,
+  buildDetailedDescriptionClaimCoverageBlock,
   buildDetailedDescriptionSourceLockBlock,
   buildDetailedDescriptionScopeContext,
   buildIndependentClaimsBlock,
@@ -161,11 +162,55 @@ describe('normalized data section injection', () => {
     expect(context.guard.includes('No figure references')).toBe(false)
   })
 
+  test('uses frozen dependent claims for detailed description coverage and scoped numerals', () => {
+    const normalizedData = {
+      claimsApprovedAt: '2026-05-05T00:00:00.000Z',
+      claimsStructuredFinal: [
+        {
+          number: 1,
+          type: 'independent',
+          category: 'system',
+          text: 'A system comprising a moisture sensor configured to generate a moisture signal.'
+        },
+        {
+          number: 2,
+          type: 'dependent',
+          dependsOn: 1,
+          text: 'The system of claim 1, further comprising a calibration module configured to adjust the moisture signal.'
+        }
+      ],
+      components: [
+        { name: 'moisture sensor', description: 'detects soil moisture' },
+        { name: 'calibration module', description: 'adjusts the moisture signal' }
+      ]
+    }
+
+    const context = buildDetailedDescriptionScopeContext(
+      normalizedData,
+      null,
+      [
+        { name: 'moisture sensor', referenceLabel: '100' },
+        { name: 'calibration module', referenceLabel: '300' },
+        { name: 'weather gateway', referenceLabel: '900' }
+      ],
+      []
+    )
+    const coverage = buildDetailedDescriptionClaimCoverageBlock(normalizedData)
+    const bundle = buildUniversalDraftingBundle('detailedDescription', normalizedData, null)
+
+    expect(context.allowedReferenceLabels).toEqual(['100', '300'])
+    expect(coverage).toContain('Claim 2')
+    expect(coverage).toContain('calibration module')
+    expect(bundle.block).toContain('DETAILED DESCRIPTION CLAIM COVERAGE CHECKLIST')
+    expect(bundle.block).toContain('adjust the moisture signal')
+  })
+
   test('always supplies a detailed description source-lock guard', () => {
     const guard = buildDetailedDescriptionSourceLockBlock('detailedDescription')
 
     expect(guard).toContain('DETAILED DESCRIPTION SOURCE LOCK')
-    expect(guard).toContain('Frozen Claim 1 and the Normalized Data')
+    expect(guard).toContain('Frozen Claims, the Normalized Data')
+    expect(guard).toContain('auto-selected Detailed Description source evidence')
     expect(guard).toContain('injected DD user data are auxiliary context only')
     expect(guard).toContain('omit the detail')
     expect(buildDetailedDescriptionSourceLockBlock('summary')).toBe('')

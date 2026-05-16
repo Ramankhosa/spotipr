@@ -40,6 +40,34 @@ interface ValidationIssue {
   limit?: number
 }
 
+interface DDEvidencePreviewItem {
+  sourceId: string
+  label: string
+  kind: string
+  excerpt: string
+  role?: string
+  confidence?: string
+  reason?: string
+  status: string
+  included: boolean
+  edited: boolean
+  injectedText: string
+  originalInjectedText: string
+  controlsStale: boolean
+}
+
+interface DDEvidencePreview {
+  status: 'ready' | 'failed' | 'missing'
+  jurisdiction?: string
+  inputHash?: string
+  generatedAt?: string
+  controlsStale?: boolean
+  selectedSources: DDEvidencePreviewItem[]
+  guardrailSources: DDEvidencePreviewItem[]
+  excludedSources: DDEvidencePreviewItem[]
+  warnings: string[]
+}
+
 // ============================================================================
 // Inline Diff View Component - Shows changes between original and revised text
 // ============================================================================
@@ -1739,6 +1767,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [ddUserDataSaving, setDdUserDataSaving] = useState(false)
   const [ddUserDataSaved, setDdUserDataSaved] = useState(false) // For save confirmation feedback
   const [ddUserDataExpanded, setDdUserDataExpanded] = useState(false)
+  const [ddEvidencePreview, setDdEvidencePreview] = useState<DDEvidencePreview | null>(null)
+  const [ddEvidenceGuardrailsExpanded, setDdEvidenceGuardrailsExpanded] = useState(false)
+  const [ddEvidenceJurisdiction, setDdEvidenceJurisdiction] = useState<string>(() => ((session as any)?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'IN').toUpperCase())
+  const [ddEvidenceSearch, setDdEvidenceSearch] = useState('')
+  const [ddEvidenceSaving, setDdEvidenceSaving] = useState(false)
+  const [ddEvidenceExpandedSources, setDdEvidenceExpandedSources] = useState<Record<string, boolean>>({})
+  const [ddEvidenceEditingSourceId, setDdEvidenceEditingSourceId] = useState<string | null>(null)
+  const [ddEvidenceEditDraft, setDdEvidenceEditDraft] = useState('')
   const DD_USER_DATA_MAX_SIZE = 50 * 1024 // 50KB
 
   // Add Component Numbers to Claims
@@ -2151,6 +2187,19 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   }, [session?.annexureDrafts])
   const isMultiJurisdiction = availableJurisdictions.length > 1
 
+  const ddEvidenceJurisdictionOptions = useMemo(() => {
+    const options = isMultiJurisdiction ? ['REFERENCE', ...availableJurisdictions] : availableJurisdictions
+    const normalized = options.map(code => (code || '').toUpperCase()).filter(Boolean)
+    return normalized.length ? Array.from(new Set(normalized)) : [activeJurisdiction || 'IN']
+  }, [isMultiJurisdiction, availableJurisdictions, activeJurisdiction])
+
+  useEffect(() => {
+    if (!ddEvidenceJurisdictionOptions.length) return
+    if (!ddEvidenceJurisdictionOptions.includes(ddEvidenceJurisdiction)) {
+      setDdEvidenceJurisdiction(ddEvidenceJurisdictionOptions[0])
+    }
+  }, [ddEvidenceJurisdictionOptions, ddEvidenceJurisdiction])
+
   const addableCountries = useMemo(
     () => availableCountries.filter(c => !availableJurisdictions.includes(c.code)),
     [availableCountries, availableJurisdictions]
@@ -2461,11 +2510,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       setDdUserDataLoading(true)
       try {
         const res = await fetch(
-          `/api/patents/${patent.id}/drafting/dd-user-data?sessionId=${session.id}&sectionKey=detailedDescription`,
+          `/api/patents/${patent.id}/drafting/dd-user-data?sessionId=${session.id}&sectionKey=detailedDescription&jurisdiction=${encodeURIComponent(ddEvidenceJurisdiction)}`,
           { headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}` } }
         )
         if (res.ok) {
           const data = await res.json()
+          setDdEvidencePreview(data.evidencePreview || null)
           if (data.data) {
             setDdUserData(data.data.userData || '')
             // Use saved toggles if they exist, otherwise use defaults based on drafting type
@@ -2482,16 +2532,18 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         } else {
           // Error loading - set defaults
           setDdUserDataToggles(getDefaultDdToggles())
+          setDdEvidencePreview(null)
         }
       } catch (err) {
         console.error('Failed to load DD user data:', err)
         setDdUserDataToggles(getDefaultDdToggles())
+        setDdEvidencePreview(null)
       } finally {
         setDdUserDataLoading(false)
       }
     }
     loadDDUserData()
-  }, [session?.id, patent?.id, getDefaultDdToggles])
+  }, [session?.id, patent?.id, getDefaultDdToggles, ddEvidenceJurisdiction])
 
   // Save DD User Data handler
   const handleSaveDDUserData = useCallback(async () => {
@@ -2569,6 +2621,122 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       setDdUserDataSaving(false)
     }
   }, [session?.id, patent?.id])
+
+  const ddManualInjectedTargets = useMemo(
+    () => Object.entries(ddUserDataToggles).filter(([, enabled]) => enabled).map(([code]) => code),
+    [ddUserDataToggles]
+  )
+  const ddManualInjectionEnabled = ddUserData.trim().length > 0 && ddManualInjectedTargets.length > 0
+  const ddAutoIncludedCount = ddEvidencePreview?.selectedSources?.filter(item => item.included).length || 0
+  const ddGuardrailIncludedCount = ddEvidencePreview?.guardrailSources?.filter(item => item.included).length || 0
+  const ddAnyInjectionEnabled = ddAutoIncludedCount > 0 || ddGuardrailIncludedCount > 0 || ddManualInjectionEnabled
+  const ddEvidenceFilteredSelectedSources = useMemo(() => {
+    const items = ddEvidencePreview?.selectedSources || []
+    const query = ddEvidenceSearch.trim().toLowerCase()
+    if (!query) return items
+    return items.filter(item =>
+      item.sourceId.toLowerCase().includes(query) ||
+      item.label.toLowerCase().includes(query) ||
+      item.kind.toLowerCase().includes(query) ||
+      (item.role || '').toLowerCase().includes(query)
+    )
+  }, [ddEvidencePreview?.selectedSources, ddEvidenceSearch])
+
+  const patchDDEvidenceControls = useCallback(async (patch: Record<string, unknown>) => {
+    if (!session?.id || !patent?.id) return
+    setDdEvidenceSaving(true)
+    try {
+      const res = await fetch(`/api/patents/${patent.id}/drafting/dd-user-data`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({
+          sessionId: session.id,
+          sectionKey: 'detailedDescription',
+          jurisdiction: ddEvidenceJurisdiction,
+          ...patch,
+        })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error || 'Failed to save Detailed Description evidence controls')
+        return
+      }
+      setDdEvidencePreview(data.evidencePreview || null)
+      setDdUserDataSaved(true)
+      setTimeout(() => setDdUserDataSaved(false), 2500)
+    } catch (err) {
+      console.error('Failed to save DD evidence controls:', err)
+      alert('Failed to save Detailed Description evidence controls')
+    } finally {
+      setDdEvidenceSaving(false)
+    }
+  }, [session?.id, patent?.id, ddEvidenceJurisdiction])
+
+  const handleToggleDDEvidenceSource = useCallback((sourceId: string, included: boolean) => {
+    if (!ddEvidencePreview) return
+    const excludedSelectedSourceIds = ddEvidencePreview.selectedSources
+      .filter(item => item.sourceId === sourceId ? !included : !item.included)
+      .map(item => item.sourceId)
+    void patchDDEvidenceControls({ excludedSelectedSourceIds })
+  }, [ddEvidencePreview, patchDDEvidenceControls])
+
+  const handleToggleDDGuardrailSource = useCallback((sourceId: string, included: boolean) => {
+    if (!ddEvidencePreview) return
+    const excludedGuardrailSourceIds = ddEvidencePreview.guardrailSources
+      .filter(item => item.sourceId === sourceId ? !included : !item.included)
+      .map(item => item.sourceId)
+    void patchDDEvidenceControls({ excludedGuardrailSourceIds })
+  }, [ddEvidencePreview, patchDDEvidenceControls])
+
+  const handleSelectAllDDEvidence = useCallback(() => {
+    void patchDDEvidenceControls({ excludedSelectedSourceIds: [] })
+  }, [patchDDEvidenceControls])
+
+  const handleUnselectAllDDEvidence = useCallback(() => {
+    void patchDDEvidenceControls({
+      excludedSelectedSourceIds: (ddEvidencePreview?.selectedSources || []).map(item => item.sourceId),
+    })
+  }, [ddEvidencePreview?.selectedSources, patchDDEvidenceControls])
+
+  const handleResetDDEvidenceControls = useCallback(() => {
+    void patchDDEvidenceControls({
+      excludedSelectedSourceIds: [],
+      excludedGuardrailSourceIds: [],
+      removeSourceTextOverrideIds: (ddEvidencePreview?.selectedSources || [])
+        .filter(item => item.edited)
+        .map(item => item.sourceId),
+    })
+  }, [ddEvidencePreview?.selectedSources, patchDDEvidenceControls])
+
+  const startEditingDDEvidenceSource = useCallback((item: DDEvidencePreviewItem) => {
+    setDdEvidenceEditingSourceId(item.sourceId)
+    setDdEvidenceEditDraft(item.edited ? item.injectedText : item.originalInjectedText)
+  }, [])
+
+  const handleSaveDDEvidenceOverride = useCallback(() => {
+    if (!ddEvidenceEditingSourceId) return
+    const text = ddEvidenceEditDraft.trim()
+    if (!text) {
+      alert('Injected text override cannot be empty. Use Reset to original instead.')
+      return
+    }
+    void patchDDEvidenceControls({
+      sourceTextOverrides: {
+        [ddEvidenceEditingSourceId]: { text },
+      },
+    })
+    setDdEvidenceEditingSourceId(null)
+    setDdEvidenceEditDraft('')
+  }, [ddEvidenceEditingSourceId, ddEvidenceEditDraft, patchDDEvidenceControls])
+
+  const handleResetDDEvidenceOverride = useCallback((sourceId: string) => {
+    void patchDDEvidenceControls({ removeSourceTextOverrideIds: [sourceId] })
+    setDdEvidenceEditingSourceId(null)
+    setDdEvidenceEditDraft('')
+  }, [patchDDEvidenceControls])
 
   // Keep add-jurisdiction dropdown updated
   useEffect(() => {
@@ -3051,7 +3219,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   }
   
   // Helper function to generate a single section (used by auto-mode)
-  const generateSingleSection = async (sectionKey: string, isReference: boolean): Promise<{ success: boolean; content?: string; error?: string; cancelled?: boolean }> => {
+  const generateSingleSection = async (
+    sectionKey: string,
+    isReference: boolean,
+    options: { suppressRefresh?: boolean } = {}
+  ): Promise<{ success: boolean; content?: string; error?: string; cancelled?: boolean }> => {
     try {
       if (isReference) {
         // Use REFERENCE-specific API
@@ -3083,7 +3255,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           sections: [sectionKey],
           usePersonaStyle,
           personaSelection, // Pass selected personas for multi-persona style support
-          jurisdiction: activeJurisdiction
+          jurisdiction: activeJurisdiction,
+          suppressRefresh: options.suppressRefresh === true
         })
         if (res?.cancelled) {
           return { success: false, cancelled: true, error: 'Generation cancelled' }
@@ -3172,9 +3345,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         
         setCurrentKeys([sectionKey])
         setSectionLoading(prev => ({ ...prev, [sectionKey]: true }))
+        setDebugSteps([{ step: `llm_call_${sectionKey}`, status: 'running' }])
         
         // First attempt
-        let result = await generateSingleSection(sectionKey, isReference)
+        let result = await generateSingleSection(sectionKey, isReference, { suppressRefresh: true })
         if (result.cancelled) {
           autoModeCancelledRef.current = true
           setSectionLoading(prev => ({ ...prev, [sectionKey]: false }))
@@ -3195,7 +3369,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             break
           }
           
-          result = await generateSingleSection(sectionKey, isReference)
+          result = await generateSingleSection(sectionKey, isReference, { suppressRefresh: true })
           if (result.cancelled) {
             autoModeCancelledRef.current = true
             setSectionLoading(prev => ({ ...prev, [sectionKey]: false }))
@@ -3207,7 +3381,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         
         if (result.success && result.content) {
           setGenerated(prev => ({ ...prev, [sectionKey]: result.content! }))
-          setDebugSteps([{ step: `generate_${sectionKey}`, status: 'done' }])
+          setDebugSteps([{ step: `llm_call_${sectionKey}`, status: 'ok' }])
           successCount++
         } else {
           // Failed after retry - stop auto-mode and notify user
@@ -3306,9 +3480,45 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     // REMOVED: onRefresh() - content is already persisted via onComplete
   }
 
+  const handleDeleteSectionContent = async (key: string, confirmFirst = true) => {
+    if (!session?.id) return
+    if (confirmFirst && !confirm(`Delete "${displayName[key] || key}" section content?\n\nThis will clear the generated content. You can regenerate it later.`)) {
+      return
+    }
+
+    const previousValue = generated?.[key] || editDrafts?.[key] || ''
+    setGenerated(prev => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    setEditDrafts(prev => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+
+    try {
+      const response = await onComplete({
+        action: 'autosave_sections',
+        sessionId: session.id,
+        patch: { [key]: null },
+        suppressRefresh: true
+      })
+      if (response?.error) throw new Error(response.error)
+      if (editingKey === key) setEditingKey(null)
+    } catch (error) {
+      if (previousValue) setGenerated(prev => ({ ...prev, [key]: previousValue }))
+      alert(`Failed to delete section: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
   const handleAutosaveSection = async (key: string) => {
     const value = (editDrafts?.[key] ?? generated?.[key] ?? '').trim()
-    if (!value) return
+    if (!value) {
+      await handleDeleteSectionContent(key, false)
+      return
+    }
     setGenerated(prev => ({ ...prev, [key]: value }))
     await onComplete({ action: 'autosave_sections', sessionId: session?.id, patch: { [key]: value } })
     setEditingKey(null)
@@ -4203,7 +4413,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           onClose={() => setShowActivity(false)}
                           steps={(Array.isArray(debugSteps) ? debugSteps : []).map((s: any) => ({
                             id: String(s.step || ''),
-                            state: s.status === 'fail' ? 'error' : (s.status || 'running')
+                            state: s.status === 'fail'
+                              ? 'error'
+                              : (s.status === 'done' ? 'ok' : (s.status || 'running'))
                           }))}
                         />
                       </div>
@@ -4221,28 +4433,252 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         <svg className={`w-4 h-4 text-amber-600 transform transition-transform ${ddUserDataExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
-                        <span className="text-sm font-medium text-amber-800">User Data (Illustrative Only)</span>
+                        <span className="text-sm font-medium text-amber-800">Detailed Description Data</span>
                         {ddUserData && (
                           <span className="text-xs px-2 py-0.5 bg-amber-200 text-amber-800 rounded-full">
-                            {Math.round(new TextEncoder().encode(ddUserData).length / 1024)}KB
+                            user {Math.round(new TextEncoder().encode(ddUserData).length / 1024)}KB
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
-                        {/* Show "Enabled" if ANY jurisdiction toggle is on */}
-                        {Object.values(ddUserDataToggles).some(v => v === true) ? (
-                          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                            Enabled
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {ddEvidencePreview?.selectedSources?.length ? (
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            ddAutoIncludedCount > 0
+                              ? 'bg-blue-100 text-blue-700'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            Auto sources: {ddAutoIncludedCount}/{ddEvidencePreview.selectedSources.length}
                           </span>
-                        ) : (
-                          <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Disabled</span>
-                        )}
+                        ) : null}
+                        {ddEvidencePreview?.guardrailSources?.length ? (
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            ddGuardrailIncludedCount > 0
+                              ? 'bg-slate-100 text-slate-700'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            Guardrails: {ddGuardrailIncludedCount}/{ddEvidencePreview.guardrailSources.length}
+                          </span>
+                        ) : null}
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          ddManualInjectionEnabled
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-gray-100 text-gray-500'
+                        }`}>
+                          Additional: {ddManualInjectionEnabled ? ddManualInjectedTargets.join(', ') : 'Off'}
+                        </span>
                       </div>
                     </button>
                     
                     {ddUserDataExpanded && (
                       <div className="px-4 pb-4 border-t border-amber-200">
+                        <div className="mt-3 rounded-md border border-blue-200 bg-white p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-slate-800">Auto-selected source support</div>
+                              <div className="text-xs text-slate-500">
+                                {ddEvidencePreview?.status === 'ready'
+                                  ? `${ddAutoIncludedCount} / ${ddEvidencePreview.selectedSources.length} support item${ddEvidencePreview.selectedSources.length === 1 ? '' : 's'} will be injected`
+                                  : ddEvidencePreview?.status === 'failed'
+                                    ? 'Selection fell back to safe filtering'
+                                    : 'Evidence pack has not been generated yet'}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              {ddEvidenceJurisdictionOptions.length > 1 && (
+                                <select
+                                  value={ddEvidenceJurisdiction}
+                                  onChange={(e) => setDdEvidenceJurisdiction(e.target.value)}
+                                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                                  disabled={ddEvidenceSaving}
+                                >
+                                  {ddEvidenceJurisdictionOptions.map(code => (
+                                    <option key={code} value={code}>{code}</option>
+                                  ))}
+                                </select>
+                              )}
+                              {ddEvidencePreview?.status && (
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  ddEvidencePreview.status === 'ready'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : ddEvidencePreview.status === 'failed'
+                                      ? 'bg-amber-100 text-amber-700'
+                                      : 'bg-gray-100 text-gray-600'
+                                }`}>
+                                  {ddEvidencePreview.status}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {ddEvidencePreview?.controlsStale ? (
+                            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                              Evidence changed. Review controls before applying previous edits.
+                            </div>
+                          ) : null}
+
+                          {ddEvidencePreview?.warnings?.length ? (
+                            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                              {ddEvidencePreview.warnings[0]}
+                            </div>
+                          ) : null}
+
+                          {!ddAnyInjectionEnabled ? (
+                            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                              No Detailed Description data is currently selected for prompt injection.
+                            </div>
+                          ) : null}
+
+                          {ddEvidencePreview?.selectedSources?.length ? (
+                            <>
+                              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button type="button" onClick={handleSelectAllDDEvidence} disabled={ddEvidenceSaving} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">Select all</button>
+                                  <button type="button" onClick={handleUnselectAllDDEvidence} disabled={ddEvidenceSaving} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">Unselect all</button>
+                                  <button type="button" onClick={handleResetDDEvidenceControls} disabled={ddEvidenceSaving} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">Reset auto-selection</button>
+                                </div>
+                                <input
+                                  value={ddEvidenceSearch}
+                                  onChange={(e) => setDdEvidenceSearch(e.target.value)}
+                                  placeholder="Search source ID, label, role, kind"
+                                  className="min-w-[220px] rounded border border-slate-300 px-2 py-1 text-xs text-slate-700"
+                                />
+                              </div>
+                              {ddAutoIncludedCount === 0 && (
+                                <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                                  No positive source support is selected for injection. The Detailed Description may have less claim support.
+                                </div>
+                              )}
+                              <div className="mt-3 grid gap-2">
+                                {ddEvidenceFilteredSelectedSources.map(item => (
+                                  <div key={item.sourceId} className={`rounded border p-2 ${item.included ? 'border-slate-200 bg-slate-50' : 'border-slate-200 bg-white opacity-70'}`}>
+                                    <div className="flex items-start gap-2">
+                                      <input
+                                        type="checkbox"
+                                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                                        checked={item.included}
+                                        disabled={ddEvidenceSaving}
+                                        onChange={(e) => handleToggleDDEvidenceSource(item.sourceId, e.target.checked)}
+                                      />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className="font-mono text-[11px] text-slate-500">{item.sourceId}</span>
+                                          <span className="text-xs font-medium text-slate-800">{item.label}</span>
+                                          {item.role && <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">{item.role.replace(/_/g, ' ')}</span>}
+                                          {item.confidence && <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{item.confidence}</span>}
+                                          {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">excluded</span>}
+                                          {item.edited && <span className="text-[11px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">edited</span>}
+                                          {item.controlsStale && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">stale</span>}
+                                        </div>
+                                        <div className="mt-1 text-xs text-slate-600">{item.excerpt}</div>
+                                        {item.reason && <div className="mt-1 text-[11px] text-slate-500">{item.reason}</div>}
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => setDdEvidenceExpandedSources(prev => ({ ...prev, [item.sourceId]: !prev[item.sourceId] }))}
+                                            className="text-xs font-medium text-blue-700 hover:text-blue-900"
+                                          >
+                                            {ddEvidenceExpandedSources[item.sourceId] ? 'Hide injected data' : 'View injected data'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => startEditingDDEvidenceSource(item)}
+                                            className="text-xs font-medium text-slate-700 hover:text-slate-900"
+                                          >
+                                            Edit injected text
+                                          </button>
+                                          {item.edited && (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleResetDDEvidenceOverride(item.sourceId)}
+                                              className="text-xs font-medium text-rose-600 hover:text-rose-800"
+                                            >
+                                              Reset to original
+                                            </button>
+                                          )}
+                                        </div>
+                                        {ddEvidenceExpandedSources[item.sourceId] && (
+                                          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-700">{item.injectedText || item.originalInjectedText}</pre>
+                                        )}
+                                        {ddEvidenceEditingSourceId === item.sourceId && (
+                                          <div className="mt-2 rounded border border-violet-200 bg-violet-50 p-2">
+                                            <div className="mb-1 text-[11px] font-medium text-violet-800">Prompt-only edit. Original source data is unchanged.</div>
+                                            <div className="mb-1 text-[11px] text-slate-600">Original source data</div>
+                                            <pre className="mb-2 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-600">{item.originalInjectedText}</pre>
+                                            <div className="mb-1 text-[11px] text-slate-600">Injected text override</div>
+                                            <textarea
+                                              value={ddEvidenceEditDraft}
+                                              onChange={(e) => setDdEvidenceEditDraft(e.target.value)}
+                                              rows={5}
+                                              className="w-full rounded border border-violet-300 bg-white p-2 text-xs text-slate-800"
+                                            />
+                                            <div className="mt-2 flex justify-end gap-2">
+                                              <button type="button" onClick={() => { setDdEvidenceEditingSourceId(null); setDdEvidenceEditDraft('') }} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700">Cancel</button>
+                                              <button type="button" onClick={() => handleResetDDEvidenceOverride(item.sourceId)} className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-700">Reset to original</button>
+                                              <button type="button" onClick={handleSaveDDEvidenceOverride} disabled={ddEvidenceSaving} className="rounded bg-violet-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50">Save override</button>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                                {!ddEvidenceFilteredSelectedSources.length && (
+                                  <div className="rounded border border-slate-200 bg-white p-3 text-xs text-slate-500">No source support matches the search.</div>
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="mt-3 text-xs text-slate-500">No auto-selected source support is available yet.</div>
+                          )}
+
+                          {(ddEvidencePreview?.guardrailSources?.length || ddEvidencePreview?.excludedSources?.length) ? (
+                            <div className="mt-3 border-t border-slate-200 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setDdEvidenceGuardrailsExpanded(prev => !prev)}
+                                className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                              >
+                                {ddEvidenceGuardrailsExpanded ? 'Hide' : 'Show'} guardrails and exclusions
+                              </button>
+                              {ddEvidenceGuardrailsExpanded && (
+                                <div className="mt-2 grid gap-2">
+                                  {(ddEvidencePreview.guardrailSources || []).map(item => (
+                                    <div key={`${item.sourceId}-guardrail`} className="rounded border border-slate-200 bg-white p-2">
+                                      <label className="flex items-start gap-2">
+                                        <input
+                                          type="checkbox"
+                                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                                          checked={item.included}
+                                          disabled={ddEvidenceSaving}
+                                          onChange={(e) => handleToggleDDGuardrailSource(item.sourceId, e.target.checked)}
+                                        />
+                                        <span className="min-w-0 flex-1">
+                                          <span className="flex flex-wrap items-center gap-2">
+                                            <span className="font-mono text-[11px] text-slate-500">{item.sourceId}</span>
+                                            <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                                            {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">excluded</span>}
+                                          </span>
+                                          {item.reason && <span className="mt-1 block text-[11px] text-slate-500">{item.reason}</span>}
+                                        </span>
+                                      </label>
+                                    </div>
+                                  ))}
+                                  {(ddEvidencePreview.excludedSources || []).slice(0, 8).map(item => (
+                                    <div key={`${item.sourceId}-excluded`} className="rounded border border-slate-200 bg-gray-50 p-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-mono text-[11px] text-slate-500">{item.sourceId}</span>
+                                        <span className="text-xs font-medium text-slate-700">{item.label}</span>
+                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">not eligible</span>
+                                      </div>
+                                      {item.reason && <div className="mt-1 text-[11px] text-slate-500">{item.reason}</div>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+
                         <div className="mt-3 mb-2 p-3 bg-amber-100/50 rounded-md border border-amber-200">
                           <p className="text-xs text-amber-800">
                             <strong>Legal Notice:</strong> Data entered here is for illustrative purposes only. 
@@ -4251,6 +4687,18 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           </p>
                         </div>
                         
+                        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs font-medium text-amber-800">Additional user data</div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            ddManualInjectionEnabled
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {ddManualInjectionEnabled
+                              ? `Additional data included for ${ddManualInjectedTargets.join(', ')}`
+                              : 'Additional data not included'}
+                          </span>
+                        </div>
                         <textarea
                           className="w-full border border-amber-300 rounded-md p-3 text-sm focus:ring-amber-500 focus:border-amber-500 bg-white resize-none"
                           rows={6}
@@ -4260,18 +4708,18 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           disabled={ddUserDataLoading || ddUserDataSaving}
                         />
                         
-                        {/* Master Enable/Disable Slider Toggle */}
+                        {/* Additional user data include toggle */}
                         <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
                           <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-700">Enable Data Injection</span>
-                              <span className="text-xs text-gray-500">(inject into generation prompt)</span>
+                            <div>
+                              <div className="text-sm font-medium text-gray-700">Include additional user data</div>
+                              <div className="text-xs text-gray-500">Only controls the pasted text below. Auto-selected source support is controlled above.</div>
                             </div>
                             {/* Slider Toggle */}
                             <button
                               type="button"
                               onClick={() => {
-                                // Determine current state - is ANY jurisdiction enabled?
+                                // Determine current manual-data state - is ANY jurisdiction enabled?
                                 const isCurrentlyEnabled = Object.values(ddUserDataToggles).some(v => v === true)
                                 
                                 if (isCurrentlyEnabled) {
@@ -4306,7 +4754,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   : 'bg-gray-300'
                               }`}
                               disabled={ddUserDataLoading || ddUserDataSaving || !ddUserData.trim()}
-                              title={!ddUserData.trim() ? 'Enter data first before enabling' : ''}
+                              title={!ddUserData.trim() ? 'Enter additional data before including it' : ''}
                             >
                               <span
                                 className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
@@ -4321,7 +4769,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           {/* Jurisdiction Selection - Only show when enabled */}
                           {Object.values(ddUserDataToggles).some(v => v === true) && (
                             <div className="mt-3 pt-3 border-t border-gray-200">
-                              <span className="text-xs text-gray-600 block mb-2">Select jurisdictions to include:</span>
+                              <span className="text-xs text-gray-600 block mb-2">Select jurisdictions for additional data:</span>
                               <div className="flex flex-wrap gap-2">
                                 {isMultiJurisdiction ? (
                                   // Multi-jurisdiction mode: Show REFERENCE first, then individual jurisdictions
@@ -4410,7 +4858,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               className="px-4 py-1.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded shadow-sm disabled:opacity-50 flex items-center gap-2"
                             >
                               {ddUserDataSaving && <span className="animate-spin h-3 w-3 border-2 border-white border-t-transparent rounded-full"></span>}
-                              {ddUserDataSaving ? 'Saving...' : 'Save User Data'}
+                              {ddUserDataSaving ? 'Saving...' : 'Save Additional Data'}
                             </button>
                           </div>
                         </div>
@@ -4597,26 +5045,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                >
                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
                                </button>
-                               {/* Delete section button */}
-                               <button
-                                 onClick={() => {
-                                   if (confirm(`Delete "${displayName[keyName] || keyName}" section content?\n\nThis will clear the generated content. You can regenerate it later.`)) {
-                                     setGenerated(prev => {
-                                       const next = { ...prev }
-                                       delete next[keyName]
-                                       return next
-                                     })
-                                     // Also save the deletion to the backend
-                                     onComplete({ 
-                                       action: 'autosave_sections', 
-                                       sessionId: session?.id, 
-                                       patch: { [keyName]: null } 
-                                     })
-                                   }
-                                 }}
-                                 className="p-1.5 rounded text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                                 title="Delete section"
-                               >
+                                {/* Delete section button */}
+                                <button
+                                  onClick={() => handleDeleteSectionContent(keyName)}
+                                  className="p-1.5 rounded text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                  title="Delete section"
+                                >
                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                  </svg>

@@ -450,8 +450,9 @@ export default function PatentDraftingPage() {
           'run_ai_review' // Avoid aggressive refresh; keep UI smooth while review completes
         ]
       
-      const skipRefresh = skipRefreshActions.includes(action)
-      const needsDelayedRefresh = delayedRefreshActions.includes(action)
+      const suppressRefresh = stageData?.suppressRefresh === true
+      const skipRefresh = suppressRefresh || skipRefreshActions.includes(action)
+      const needsDelayedRefresh = !suppressRefresh && delayedRefreshActions.includes(action)
 
       if (!skipRefresh && !needsDelayedRefresh) {
         await refreshSessionData()

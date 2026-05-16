@@ -19,6 +19,7 @@ import { getSectionStageCode } from '@/lib/metering/section-stage-mapping'
 import {
   buildUniversalDraftingBundle,
   buildAntiHallucinationGuards,
+  buildDetailedDescriptionScopeContext,
   buildDetailedDescriptionSourceLockBlock,
   filterDetailedDescriptionConstraints,
   shouldGateSection,
@@ -1397,6 +1398,9 @@ export async function generateReferenceDraft(
     let { sections: dynamicSections, sectionDetails, jurisdictionMappings } =
       await computeDynamicSuperset(selectedJurisdictions)
     dynamicSections = filterDrawingSectionKeys(session, dynamicSections)
+    const detailedDescriptionScope = dynamicSections.includes('detailedDescription')
+      ? buildDetailedDescriptionScopeContext(normalizedData, idea, components, figures, { figuresSkipped })
+      : null
     sectionDetails = Object.fromEntries(
       Object.entries(sectionDetails).filter(([key]) => !isDrawingSectionKey(key))
     )
@@ -1493,8 +1497,15 @@ export async function generateReferenceDraft(
           }
         }
         
+        const figuresAvailableForKey = key === 'detailedDescription' && detailedDescriptionScope
+          ? detailedDescriptionScope.scopedFigures
+          : figures
+        const componentsAvailableForKey = key === 'detailedDescription' && detailedDescriptionScope
+          ? detailedDescriptionScope.scopedComponents
+          : components
+
         // Figures instructions
-        if (requirements.requiresFigures && figures.length > 0) {
+        if (requirements.requiresFigures && figuresAvailableForKey.length > 0) {
           if (key === 'briefDescriptionOfDrawings') {
             contextAddendum += `
    
@@ -1512,7 +1523,7 @@ export async function generateReferenceDraft(
         }
         
         // Components instructions
-        if (requirements.requiresComponents && components.length > 0) {
+        if (requirements.requiresComponents && componentsAvailableForKey.length > 0) {
           if (key === 'detailedDescription' || key === 'briefDescriptionOfDrawings') {
             contextAddendum += `
    
@@ -1524,8 +1535,14 @@ export async function generateReferenceDraft(
    
    COMPONENTS CONTEXT (database-driven):
    - Use consistent terminology matching the COMPONENTS list.
-   - Maintain proper antecedent basis throughout claims.`
+            - Maintain proper antecedent basis throughout claims.`
           }
+        }
+
+        if (key === 'detailedDescription' && detailedDescriptionScope?.guard) {
+          contextAddendum += `
+
+${detailedDescriptionScope.guard}`
         }
         
         // Independent-claims anchoring/avoidance instructions (config-driven)
@@ -1560,7 +1577,8 @@ export async function generateReferenceDraft(
           buildSupportDataSourcePromptBlock(
             normalizedData,
             key,
-            `SUPPORT DATA SOURCES FOR ${String(key).toUpperCase()}`
+            `SUPPORT DATA SOURCES FOR ${String(key).toUpperCase()}`,
+            { jurisdiction: 'REFERENCE' }
           ) ||
           buildSourceFactLedgerPromptBlock(
             normalizedData.sourceFactLedger,
@@ -1648,7 +1666,9 @@ ${patentLines}
     if (batchNeeds.needsFigures && figures.length > 0) {
       // Use language-aware figure selection for primary jurisdiction
       const primaryJurisdiction = selectedJurisdictions[0] || 'US'
-      const languageAwareFigures = getFiguresForJurisdiction(session, primaryJurisdiction)
+      const languageAwareFigures = figureSections.length === 1 && figureSections[0] === 'detailedDescription' && detailedDescriptionScope
+        ? detailedDescriptionScope.scopedFigures
+        : getFiguresForJurisdiction(session, primaryJurisdiction)
       
       figuresContext = `
 FIGURES (for sections: ${figureSections.join(', ')}):
@@ -1659,12 +1679,19 @@ ${languageAwareFigures.map((f: FigureInfo) => `  Fig.${f.figureNo}: ${f.title}${
     
     // Components context - only if any section needs it
     let componentsContext = ''
-    if (batchNeeds.needsComponents && components.length > 0) {
+    const componentContextSources = componentSections.length === 1 && componentSections[0] === 'detailedDescription' && detailedDescriptionScope
+      ? detailedDescriptionScope.scopedComponents
+      : components
+    if (batchNeeds.needsComponents && componentContextSources.length > 0) {
       componentsContext = `
 COMPONENTS (for sections: ${componentSections.join(', ')}):
-${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
+${componentContextSources.map((c: any) => {
+  const ref = c.referenceLabel || c.numeral
+  const description = c.description ? `: ${c.description}` : ''
+  return `  - ${c.name}${ref ? ` (${ref})` : ''}${description}`
+}).join('\n')}
 `
-      console.log(`[generateReferenceDraft] Components context: ${components.length} components included`)
+      console.log(`[generateReferenceDraft] Components context: ${componentContextSources.length} components included`)
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -1748,6 +1775,7 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
     
     const udbResult = buildUniversalDraftingBundle(representativeSection, normalizedData, idea, undefined, {
       patentTypePrimary: (session as any)?.patentTypePrimary,
+      jurisdiction: 'REFERENCE',
       suppressSupportDataSources: true
     })
     const claim1Available = isClaim1Available(normalizedData)
@@ -1762,9 +1790,10 @@ ${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
     // ══════════════════════════════════════════════════════════════════════════════
     // ANTI-HALLUCINATION GUARDS (automatic)
     // ══════════════════════════════════════════════════════════════════════════════
-    const hasFigures = figures.length > 0
+    const scopedOnlyDetailedDescription = dynamicSections.length === 1 && dynamicSections[0] === 'detailedDescription' && detailedDescriptionScope
+    const hasFigures = (scopedOnlyDetailedDescription ? detailedDescriptionScope.scopedFigures : figures).length > 0
     const hasPriorArt = !!(manualPriorArt?.manualPriorArtText || manualPriorArt?.text || selectedPriorArtPatents.length > 0)
-    const hasComponents = components.length > 0
+    const hasComponents = (scopedOnlyDetailedDescription ? detailedDescriptionScope.scopedComponents : components).length > 0
     const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
       figuresSkipped
     })
@@ -1786,6 +1815,7 @@ The reference draft serves as the master source from which jurisdiction-specific
 
     // Add additional context (components, figures, claims, prior art) - only if non-empty
     const additionalContextParts: string[] = []
+    if (detailedDescriptionScope?.guard) additionalContextParts.push(detailedDescriptionScope.guard)
     if (componentsContext) additionalContextParts.push(componentsContext)
     if (figuresContext) additionalContextParts.push(figuresContext)
     if (claimsContext) additionalContextParts.push(claimsContext)
@@ -1803,15 +1833,17 @@ The reference draft serves as the master source from which jurisdiction-specific
         
         if (ddUserData?.userData) {
           const toggles = (ddUserData.jurisdictionToggles as Record<string, boolean>) || {}
-          // For REFERENCE draft, always check REFERENCE toggle (default true for REFERENCE)
-          const isReferenceEnabled = toggles['REFERENCE'] !== false
+          // For REFERENCE draft, inject only when explicitly enabled.
+          const isReferenceEnabled = toggles['REFERENCE'] === true
           
           if (isReferenceEnabled) {
             const ddUserDataContext = `
 ────────────────────────────────────────
 ${DD_USER_DATA_LEGAL_WRAPPER}
 
+BEGIN USER-ADDED DETAILED DESCRIPTION DATA
 ${ddUserData.userData}
+END USER-ADDED DETAILED DESCRIPTION DATA
 
 ────────────────────────────────────────
 END OF ILLUSTRATIVE DATA
@@ -2200,9 +2232,15 @@ ${contextParts.join('\n\n')}
     // UNIVERSAL DRAFTING BUNDLE (UDB) - Normalized Data + Claim 1
     // ══════════════════════════════════════════════════════════════════════════════
     const normalizedData = idea.normalizedData || {}
+    const detailedDescriptionScope = sectionKey === 'detailedDescription'
+      ? buildDetailedDescriptionScopeContext(normalizedData, idea, components, figures, { figuresSkipped })
+      : null
+    const figuresForSection = detailedDescriptionScope?.scopedFigures || figures
+    const componentsForSection = detailedDescriptionScope?.scopedComponents || components
     // Pass existingSections so the AI-generated title (if available) is used
     const udbResult = buildUniversalDraftingBundle(sectionKey, normalizedData, idea, existingSections, {
-      patentTypePrimary: (session as any)?.patentTypePrimary
+      patentTypePrimary: (session as any)?.patentTypePrimary,
+      jurisdiction: 'REFERENCE'
     })
     
     // Check gating: if section requires Claim 1 but it's missing, return error
@@ -2273,9 +2311,11 @@ ${patentLines}
     
     // Figures context - only if this section needs it (use language-aware selection)
     let figuresContext = ''
-    if (contextRequirements.requiresFigures && figures.length > 0) {
+    if (contextRequirements.requiresFigures && figuresForSection.length > 0) {
       const primaryJurisdiction = selectedJurisdictions[0] || 'US'
-      const languageAwareFigures = getFiguresForJurisdiction(session, primaryJurisdiction)
+      const languageAwareFigures = sectionKey === 'detailedDescription'
+        ? figuresForSection
+        : getFiguresForJurisdiction(session, primaryJurisdiction)
       figuresContext = `
 FIGURES (REQUIRED for this section):
 ${languageAwareFigures.map((f: FigureInfo) => `  Fig.${f.figureNo}: ${f.title}${f.description ? ` - ${f.description}` : ''}${f.language && f.language !== 'en' ? ` [${f.language}]` : ''}`).join('\n')}
@@ -2285,12 +2325,16 @@ ${languageAwareFigures.map((f: FigureInfo) => `  Fig.${f.figureNo}: ${f.title}${
     
     // Components context - only if this section needs it
     let componentsContext = ''
-    if (contextRequirements.requiresComponents && components.length > 0) {
+    if (contextRequirements.requiresComponents && componentsForSection.length > 0) {
       componentsContext = `
 COMPONENTS (REQUIRED for this section):
-${components.map((c: any) => `  - ${c.name} (${c.numeral})`).join('\n')}
+${componentsForSection.map((c: any) => {
+  const ref = c.referenceLabel || c.numeral
+  const description = c.description ? `: ${c.description}` : ''
+  return `  - ${c.name}${ref ? ` (${ref})` : ''}${description}`
+}).join('\n')}
 `
-      console.log(`[generateReferenceDraftSection] Components context: ${components.length} components`)
+      console.log(`[generateReferenceDraftSection] Components context: ${componentsForSection.length} components`)
     }
     
     // ══════════════════════════════════════════════════════════════════════════════
@@ -2342,7 +2386,7 @@ FIGURES REQUIREMENTS:
     }
     
     // Components instructions
-    if (contextRequirements.requiresComponents && components.length > 0) {
+    if (contextRequirements.requiresComponents && componentsForSection.length > 0) {
       contextInstructions += `
 
 COMPONENTS REQUIREMENTS:
@@ -2356,9 +2400,9 @@ COMPONENTS REQUIREMENTS:
     // ══════════════════════════════════════════════════════════════════════════════
     // ANTI-HALLUCINATION GUARDS (automatic, not admin-controlled)
     // ══════════════════════════════════════════════════════════════════════════════
-    const hasFigures = figures.length > 0
+    const hasFigures = figuresForSection.length > 0
     const hasPriorArt = !!(manualPriorArt?.manualPriorArtText || manualPriorArt?.text || selectedPriorArtPatents.length > 0)
-    const hasComponents = components.length > 0
+    const hasComponents = componentsForSection.length > 0
     const antiHallucinationBlock = buildAntiHallucinationGuards(hasFigures, hasPriorArt, hasComponents, {
       figuresSkipped
     })
@@ -2377,6 +2421,7 @@ COMPONENTS REQUIREMENTS:
 
     // Add additional context (components, figures, prior art, existing sections) - only if non-empty
     const additionalContextParts: string[] = []
+    if (detailedDescriptionScope?.guard) additionalContextParts.push(detailedDescriptionScope.guard)
     if (componentsContext) additionalContextParts.push(componentsContext)
     if (figuresContext) additionalContextParts.push(figuresContext)
     if (priorArtContext) additionalContextParts.push(priorArtContext)
@@ -2394,15 +2439,17 @@ COMPONENTS REQUIREMENTS:
         
         if (ddUserData?.userData) {
           const toggles = (ddUserData.jurisdictionToggles as Record<string, boolean>) || {}
-          // For REFERENCE draft, always check REFERENCE toggle (default true for REFERENCE)
-          const isReferenceEnabled = toggles['REFERENCE'] !== false
+          // For REFERENCE draft, inject only when explicitly enabled.
+          const isReferenceEnabled = toggles['REFERENCE'] === true
           
           if (isReferenceEnabled) {
             const ddUserDataContext = `
 ────────────────────────────────────────
 ${DD_USER_DATA_LEGAL_WRAPPER}
 
+BEGIN USER-ADDED DETAILED DESCRIPTION DATA
 ${ddUserData.userData}
+END USER-ADDED DETAILED DESCRIPTION DATA
 
 ────────────────────────────────────────
 END OF ILLUSTRATIVE DATA

@@ -42,6 +42,7 @@ import {
 import {
   completeSupportDataSources,
 } from '@/lib/support-data-sources';
+import { ensureDetailedDescriptionSourceSelection } from '@/lib/dd-source-selection-service';
 import { normalizeComponentDisplayName } from '@/lib/component-naming';
 import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper';
 import {
@@ -242,6 +243,17 @@ export class DraftingService {
     advantageousEffects: ['advantageous_effects', 'advantages', 'effects_of_invention'],
     industrialApplicability: ['industrialApplicability', 'industrial_applicability', 'utility'],
     listOfNumerals: ['listOfNumerals', 'reference_numerals', 'reference_signs', 'list_of_numerals']
+  }
+
+  private static canonicalizeSectionKey(section: string): string {
+    const raw = String(section || '').trim()
+    if (!raw) return ''
+    const compact = raw.replace(/[_\-\s.]/g, '').toLowerCase()
+    for (const [canonical, aliases] of Object.entries(this.sectionKeyMap)) {
+      if (canonical.replace(/[_\-\s.]/g, '').toLowerCase() === compact) return canonical
+      if (aliases.some(alias => alias.replace(/[_\-\s.]/g, '').toLowerCase() === compact)) return canonical
+    }
+    return raw
   }
 
   static normalizePatentTypePrimary(value: unknown): PatentTypePrimary | null {
@@ -788,6 +800,8 @@ export class DraftingService {
     try {
       const figuresSkipped = areFiguresSkipped(session)
       const requestedSections = [...sections]
+      sections = sections.map(section => this.canonicalizeSectionKey(section)).filter(Boolean)
+      sections = Array.from(new Set(sections))
       sections = filterDrawingSectionKeys(session, sections)
       if (figuresSkipped && requestedSections.length !== sections.length) {
         debugSteps.push({
@@ -1157,6 +1171,37 @@ export class DraftingService {
         (idea as any)?.title || (idea as any)?.normalizedData?.title || ''
       ).primary
 
+      if (sections.includes('detailedDescription')) {
+        try {
+          const ddEvidenceResult = await ensureDetailedDescriptionSourceSelection({
+            session,
+            jurisdiction: jurisdictionCode,
+            requestHeaders,
+            tenantId,
+          })
+          if (idea && typeof idea === 'object') {
+            ;(idea as any).normalizedData = ddEvidenceResult.normalizedData
+          }
+          debugSteps.push({
+            step: 'dd_evidence_selection',
+            status: ddEvidenceResult.selection.status === 'ready' ? 'ok' : 'warning',
+            meta: {
+              usedCache: ddEvidenceResult.usedCache,
+              selectedCount: ddEvidenceResult.selection.selectedSources?.length || 0,
+              guardrailCount: ddEvidenceResult.selection.guardrailSources?.length || 0,
+              warnings: ddEvidenceResult.selection.warnings || []
+            }
+          })
+        } catch (selectionError) {
+          console.warn('[DraftingService] DD evidence selection failed:', selectionError)
+          debugSteps.push({
+            step: 'dd_evidence_selection',
+            status: 'warning',
+            meta: { error: selectionError instanceof Error ? selectionError.message : String(selectionError) }
+          })
+        }
+      }
+
       // Build payload available across sections
       const payload = { idea, referenceMap, figures, figuresSkipped, approved: session.annexureDrafts?.[0] || {}, instructions: instructions || {}, manualPriorArt, selectedPriorArtPatents, inventionBasics, patentTypePrimary }
 
@@ -1171,11 +1216,11 @@ export class DraftingService {
           })
           if (ddUserData?.userData) {
             const toggles = (ddUserData.jurisdictionToggles as Record<string, boolean>) || {}
-            // Check if enabled for this jurisdiction (REFERENCE defaults to true)
-            const isEnabled = jurisdictionCode === 'REFERENCE' 
-              ? toggles['REFERENCE'] !== false 
+            // Check if explicitly enabled for this jurisdiction
+            const isEnabled = jurisdictionCode === 'REFERENCE'
+              ? toggles['REFERENCE'] === true
               : toggles[jurisdictionCode] === true
-            
+
             ddUserDataContext = {
               userData: ddUserData.userData,
               isEnabled
@@ -2054,7 +2099,17 @@ Norms:
       const ref = c.referenceLabel || c.numeral
       return ref ? `${c.name} (${ref})` : c.name
     }).join(', ')
+    const detailedNumeralsContext = componentsForContext.map((c: any) => {
+      const ref = c.referenceLabel || c.numeral
+      const label = ref ? `${c.name} (${ref})` : c.name
+      const description = c.description ? `: ${c.description}` : ''
+      return label ? `- ${label}${description}` : ''
+    }).filter(Boolean).join('\n')
     const figs = (figuresForContext || []).map((f: any) => `Fig.${f.figureNo}: ${f.title}`).join('; ')
+    const detailedFiguresContext = (figuresForContext || []).map((f: any) => {
+      const description = f.description ? ` - ${f.description}` : ''
+      return `Fig.${f.figureNo}: ${f.title}${description}`
+    }).join('\n')
     const instr = (instructions && instructions[section]) ? String(instructions[section]) : 'none'
 
     const jurisdiction = (ctx?.jurisdiction || 'IN').toUpperCase()
@@ -2222,6 +2277,7 @@ ${writingSampleBlock}`
       const udbResult = buildUniversalDraftingBundle(section, normalizedData, idea, undefined, {
         patentTypePrimary,
         archetype,
+        jurisdiction,
         suppressClaimInjection: independentClaimsTemplateUsed,
       })
       
@@ -2273,8 +2329,12 @@ ${writingSampleBlock}`
         case 'detailedDescription':
           // Components + Figures - ONLY if respective admin flags allow
           const detailParts: string[] = []
-          if (shouldInjectComponents && numeralsContext) detailParts.push(numeralsContext)
-          if (shouldInjectFigures && figuresContext) detailParts.push(figuresContext)
+          if (shouldInjectComponents && detailedNumeralsContext) {
+            detailParts.push(`Reference numerals:\n${detailedNumeralsContext}`)
+          }
+          if (shouldInjectFigures && detailedFiguresContext) {
+            detailParts.push(`Figures:\n${detailedFiguresContext}`)
+          }
           additionalContext = detailParts.join('\n')
           break
         case 'listOfNumerals':
@@ -2393,7 +2453,9 @@ ${additionalContext}`)
           promptParts.push(`
 ${DD_USER_DATA_LEGAL_WRAPPER}
 
+BEGIN USER-ADDED DETAILED DESCRIPTION DATA
 ${ctx.ddUserData.userData}
+END USER-ADDED DETAILED DESCRIPTION DATA
 
 ────────────────────────────────────────
 END OF ILLUSTRATIVE DATA

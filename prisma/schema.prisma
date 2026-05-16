@@ -1865,8 +1865,8 @@ model DDUserData {
   // User-provided data (plain text, opaque - no parsing/normalization)
   userData String @db.Text @map("user_data") // Max 50KB enforced at application level
 
-  // Per-jurisdiction injection toggles (default: only REFERENCE gets injection)
-  // JSON object: { "REFERENCE": true, "US": false, "EP": false, ... }
+  // Per-jurisdiction injection toggles (default: all jurisdictions OFF)
+  // JSON object: { "REFERENCE": false, "US": false, "EP": false, ... }
   jurisdictionToggles Json @default("{}") @map("jurisdiction_toggles")
 
   // Audit fields

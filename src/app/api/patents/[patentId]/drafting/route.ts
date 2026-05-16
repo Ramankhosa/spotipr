@@ -85,6 +85,7 @@ import {
   buildSupportDataSourcePromptBlock,
   coerceSupportDataSources
 } from '@/lib/support-data-sources'
+import { ensureDetailedDescriptionSourceSelection } from '@/lib/dd-source-selection-service'
 import {
   buildFigureScopePromptBlock,
   coerceScopeRecommendations,
@@ -491,6 +492,32 @@ const canonicalSectionMap: Record<string, string> = {
   reference_numerals: 'listOfNumerals',
   reference_signs: 'listOfNumerals',
   list_of_numerals: 'listOfNumerals'
+}
+
+function normalizeSectionKeyLocal(key: unknown): string {
+  const raw = String(key || '').trim()
+  if (!raw) return ''
+  const compact = raw.replace(/[\s.-]+/g, '_').toLowerCase()
+  const noSeparators = raw.replace(/[_\-\s.]/g, '').toLowerCase()
+  if (noSeparators === 'detaileddescription') return 'detailedDescription'
+  return canonicalSectionMap[raw] || canonicalSectionMap[compact] || raw
+}
+
+async function normalizeRequestedSectionList(keys: unknown): Promise<string[]> {
+  if (!Array.isArray(keys)) return []
+  const out: string[] = []
+  for (const key of keys) {
+    const local = normalizeSectionKeyLocal(key)
+    if (!local) continue
+    let canonical = local
+    try {
+      canonical = await resolveCanonicalKey(local)
+    } catch {
+      canonical = local
+    }
+    if (!out.includes(canonical)) out.push(canonical)
+  }
+  return out
 }
 
 const defaultExportSections: ExportSectionDef[] = [
@@ -910,7 +937,12 @@ export async function POST(
       case 'autosave_sections': {
         // PRE-CHECK: Verify user has patent drafting quota before expensive operations
         // This provides early feedback and prevents wasted LLM calls
-        if (authResult.user.tenantId && data.sessionId) {
+        const isClearOnlyAutosave = action === 'autosave_sections' &&
+          data?.patch &&
+          typeof data.patch === 'object' &&
+          Object.values(data.patch).every(value => value == null || (typeof value === 'string' && !value.trim()))
+
+        if (!isClearOnlyAutosave && authResult.user.tenantId && data.sessionId) {
           const quotaCheck = await canDraftPatent(authResult.user.tenantId, data.sessionId)
           if (!quotaCheck.allowed) {
             return NextResponse.json(
@@ -1082,7 +1114,7 @@ export async function POST(
         return await handleResetClaims(authResult.user, patentId, data);
 
       case 'freeze_claims':
-        return await handleFreezeClaims(authResult.user, patentId, data);
+        return await handleFreezeClaims(authResult.user, patentId, data, requestHeaders);
 
       case 'unfreeze_claims':
         return await handleUnfreezeClaims(authResult.user, patentId, data);
@@ -1097,7 +1129,7 @@ export async function POST(
         return await handleAddComponentNumbersToClaims(authResult.user, patentId, data, requestHeaders);
 
       case 'set_stage':
-        return await handleSetStage(authResult.user, patentId, data);
+        return await handleSetStage(authResult.user, patentId, data, requestHeaders);
 
       case 'resume':
         return await handleResume(authResult.user, patentId);
@@ -5318,7 +5350,92 @@ async function handleResetClaims(user: any, patentId: string, data: any) {
   return NextResponse.json({ success: true, resetAt })
 }
 
-async function handleFreezeClaims(user: any, patentId: string, data: any) {
+async function loadSessionForDDEvidenceSelection(sessionId: string, patentId: string, userId: string) {
+  const sessionData = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId },
+    include: {
+      ideaRecord: true,
+      referenceMap: true,
+      figurePlans: true,
+      diagramSources: true,
+      sketchRecords: {
+        where: { isDeleted: false, status: 'SUCCESS' }
+      }
+    }
+  })
+  if (!sessionData) return null
+  const sequenceMeta = await prisma.draftingSession.findUnique({
+    where: { id: sessionId },
+    select: { figureSequence: true, figureSequenceFinalized: true }
+  })
+  return {
+    ...sessionData,
+    figureSequence: sequenceMeta?.figureSequence ?? (sessionData as any).figureSequence,
+    figureSequenceFinalized: sequenceMeta?.figureSequenceFinalized ?? (sessionData as any).figureSequenceFinalized
+  }
+}
+
+async function ensureDDEvidenceSelectionBestEffort(
+  sessionId: string,
+  patentId: string,
+  user: any,
+  requestHeaders: Record<string, string>,
+  jurisdiction?: string,
+  force = false
+) {
+  try {
+    const session = await loadSessionForDDEvidenceSelection(sessionId, patentId, user.id)
+    if (!session) return null
+    return await ensureDetailedDescriptionSourceSelection({
+      session,
+      jurisdiction,
+      requestHeaders,
+      tenantId: user.tenantId,
+      force,
+    })
+  } catch (error) {
+    console.warn('[DD Evidence] Best-effort source selection failed:', error)
+    return null
+  }
+}
+
+function queueDDEvidenceSelectionBestEffort(
+  sessionId: string,
+  patentId: string,
+  user: any,
+  requestHeaders: Record<string, string>,
+  jurisdiction?: string,
+  force = false
+) {
+  const run = async () => {
+    const result = await ensureDDEvidenceSelectionBestEffort(
+      sessionId,
+      patentId,
+      user,
+      requestHeaders,
+      jurisdiction,
+      force
+    )
+    if (result?.selection) {
+      console.log('[DD Evidence] Background source selection completed:', {
+        sessionId,
+        jurisdiction: result.selection.jurisdiction,
+        status: result.selection.status,
+        selectedCount: result.selection.selectedSources?.length || 0,
+        guardrailCount: result.selection.guardrailSources?.length || 0,
+        usedCache: result.usedCache
+      })
+    }
+  }
+
+  setTimeout(() => {
+    void run().catch(error => {
+      console.warn('[DD Evidence] Background source selection failed:', error)
+    })
+  }, 0)
+}
+
+async function handleFreezeClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const { sessionId, claims, claimsStructured, jurisdiction, skipPriorArt, useInitialClaimsForDrafting } = data
 
   if (!sessionId) {
@@ -5396,11 +5513,24 @@ async function handleFreezeClaims(user: any, patentId: string, data: any) {
     })
   }
 
+  queueDDEvidenceSelectionBestEffort(
+    sessionId,
+    patentId,
+    user,
+    requestHeaders,
+    updatedNormalized.claimsJurisdiction,
+    true
+  )
+
   return NextResponse.json({
     success: true,
     frozenAt: updatedNormalized.claimsApprovedAt,
     jurisdiction: updatedNormalized.claimsJurisdiction,
-    patentType: patentTypePrimary // Return frozen patent type
+    patentType: patentTypePrimary, // Return frozen patent type
+    ddEvidenceSelection: {
+      status: 'queued',
+      background: true
+    }
   })
 }
 
@@ -6088,7 +6218,7 @@ function parseClaimsFromHtml(html: string): Array<{ number: number; text: string
   return claims
 }
 
-async function handleSetStage(user: any, patentId: string, data: any) {
+async function handleSetStage(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const {
     sessionId,
     stage,
@@ -6511,6 +6641,14 @@ async function handleSetStage(user: any, patentId: string, data: any) {
         where: { sessionId },
         data: { normalizedData: normalizedUpdate }
       })
+      queueDDEvidenceSelectionBestEffort(
+        sessionId,
+        patentId,
+        user,
+        requestHeaders,
+        normalizedUpdate.claimsJurisdiction,
+        true
+      )
       
       console.log('[handleSetStage] Froze preliminary claims as final (skipped claim refinement)')
     }
@@ -6548,6 +6686,14 @@ async function handleSetStage(user: any, patentId: string, data: any) {
       where: { sessionId },
       data: { normalizedData: normalizedUpdate }
     })
+    queueDDEvidenceSelectionBestEffort(
+      sessionId,
+      patentId,
+      user,
+      requestHeaders,
+      normalizedUpdate.claimsJurisdiction,
+      true
+    )
 
     updateData.priorArtConfig = {
       skipped: true,
@@ -13537,19 +13683,37 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
   }
 
   const prevExtraSections = parseObject((last as any)?.extraSections)
-  const extraSections: Record<string, string> = { ...prevExtraSections }
+  const extraSections: Record<string, any> = { ...prevExtraSections }
   const updateData: Record<string, any> = {}
+  const clearedSections: string[] = []
+  let hasSetSections = false
 
   for (const [canonicalKey, raw] of Object.entries(normalizedPatch)) {
+    const shouldClear = raw === null || raw === undefined || (typeof raw === 'string' && !raw.trim())
+
+    if (shouldClear) {
+      clearedSections.push(canonicalKey)
+      if (legacyFields.includes(canonicalKey)) {
+        updateData[canonicalKey] = canonicalKey === 'title' ? '' : null
+      } else {
+        delete extraSections[canonicalKey]
+      }
+      continue
+    }
+
     if (typeof raw !== 'string') continue
     const value = raw.trim()
-    if (!value) continue
+    hasSetSections = true
 
     if (legacyFields.includes(canonicalKey)) {
       updateData[canonicalKey] = value
     } else {
       extraSections[canonicalKey] = value
     }
+  }
+
+  if (!last && clearedSections.length > 0 && !hasSetSections) {
+    return NextResponse.json({ draft: null, clearedSections })
   }
 
   // Create or update a working draft in place: if last exists, update it; else create version 1
@@ -13559,7 +13723,7 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
       where: { id: last.id },
       data: {
         ...(Object.keys(updateData).length ? updateData : {}),
-        ...(Object.keys(extraSections).length ? { extraSections } : {})
+        extraSections
       }
     })
   } else {
@@ -13623,7 +13787,7 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
     }
   }
 
-  return NextResponse.json({ draft })
+  return NextResponse.json({ draft, clearedSections })
 }
 
 
@@ -13680,7 +13844,7 @@ async function handleDeleteAnnexureDraft(user: any, patentId: string, data: any)
 async function handleGenerateSections(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const {
     sessionId,
-    sections,
+    sections: rawSections,
     instructions,
     selectedPatents,
     jurisdiction,
@@ -13688,8 +13852,9 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     personaSelection: personaSelectionFromData,
     acceptPersonaWarnings
   } = data
+  const sections = await normalizeRequestedSectionList(rawSections)
 
-  if (!sessionId || !Array.isArray(sections) || sections.length === 0) {
+  if (!sessionId || sections.length === 0) {
     return NextResponse.json({ error: 'sessionId and sections[] are required' }, { status: 400 })
   }
 
@@ -14033,9 +14198,10 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
 
 // Check for warnings before auto-generation starts
 async function handleCheckWarnings(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, sections, jurisdiction } = data
+  const { sessionId, sections: rawSections, jurisdiction } = data
+  const sections = await normalizeRequestedSectionList(rawSections)
 
-  if (!sessionId || !Array.isArray(sections) || sections.length === 0) {
+  if (!sessionId || sections.length === 0) {
     return NextResponse.json({ error: 'sessionId and sections[] are required' }, { status: 400 })
   }
 
@@ -14531,6 +14697,20 @@ async function handleGenerateReferenceDraft(
   }
   const hasFrozenClaims = !!frozenClaimsForDraft
 
+  if (hasFrozenClaims) {
+    try {
+      const ddEvidenceResult = await ensureDetailedDescriptionSourceSelection({
+        session,
+        jurisdiction: 'REFERENCE',
+        requestHeaders,
+        tenantId: user.tenantId,
+      })
+      ;(session.ideaRecord as any).normalizedData = ddEvidenceResult.normalizedData
+    } catch (error) {
+      console.warn('[handleGenerateReferenceDraft] DD evidence selection failed:', error)
+    }
+  }
+
   // Generate reference draft with ONLY the sections needed by selected jurisdictions
   const result = await generateReferenceDraft(session, jurisdictionsToUse, user.tenantId, requestHeaders, hasFrozenClaims ? frozenClaimsForDraft : undefined)
 
@@ -14738,7 +14918,8 @@ async function handleGenerateReferenceSection(
   data: any,
   requestHeaders: Record<string, string>
 ) {
-  const { sessionId, sectionKey } = data
+  const { sessionId, sectionKey: rawSectionKey } = data
+  const sectionKey = (await normalizeRequestedSectionList([rawSectionKey]))[0] || normalizeSectionKeyLocal(rawSectionKey)
 
   if (!sessionId || !sectionKey) {
     return NextResponse.json({ error: 'Session ID and sectionKey are required' }, { status: 400 })
@@ -14824,6 +15005,20 @@ async function handleGenerateReferenceSection(
     frozenClaimsForDraft = frozenClaimsStructured.map((c: any) => `${c.number}. ${c.text}`).join('\n\n')
   } else if (frozenClaimsHtml) {
     frozenClaimsForDraft = htmlToPlainText(frozenClaimsHtml)
+  }
+
+  if (sectionKey === 'detailedDescription' && frozenClaimsForDraft) {
+    try {
+      const ddEvidenceResult = await ensureDetailedDescriptionSourceSelection({
+        session,
+        jurisdiction: 'REFERENCE',
+        requestHeaders,
+        tenantId: user.tenantId,
+      })
+      ;(session.ideaRecord as any).normalizedData = ddEvidenceResult.normalizedData
+    } catch (error) {
+      console.warn('[handleGenerateReferenceSection] DD evidence selection failed:', error)
+    }
   }
 
   // Import and use generateReferenceDraftSection

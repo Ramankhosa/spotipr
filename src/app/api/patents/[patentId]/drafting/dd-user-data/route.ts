@@ -14,6 +14,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { verifyAuthForPatent } from '@/lib/api-auth'
 import { DD_USER_DATA_DISPLAY_WRAPPER } from '@/lib/dd-user-data-wrapper'
+import {
+  buildDetailedDescriptionEvidencePreview,
+  updateDetailedDescriptionInjectionControls,
+} from '@/lib/support-data-sources'
 
 // Maximum size for user data (50KB)
 const MAX_USER_DATA_SIZE = 50 * 1024
@@ -39,6 +43,7 @@ export async function GET(
     const { searchParams } = new URL(request.url)
     const sessionId = searchParams.get('sessionId')
     const sectionKey = searchParams.get('sectionKey')
+    const jurisdiction = searchParams.get('jurisdiction') || 'US'
 
     // Access control: Only allow access for detailedDescription sections
     if (sectionKey !== 'detailedDescription') {
@@ -67,7 +72,8 @@ export async function GET(
         id: sessionId,
         patentId,
         userId: authResult.user.id
-      }
+      },
+      include: { ideaRecord: true }
     })
 
     if (!session) {
@@ -89,6 +95,7 @@ export async function GET(
         createdAt: ddUserData.createdAt,
         updatedAt: ddUserData.updatedAt
       } : null,
+      evidencePreview: buildDetailedDescriptionEvidencePreview((session.ideaRecord?.normalizedData as any) || {}, jurisdiction),
       legalWrapper: DD_USER_DATA_LEGAL_WRAPPER
     })
 
@@ -215,6 +222,108 @@ export async function POST(
     console.error('[DD-User-Data:POST] Error:', error)
     return NextResponse.json(
       { error: 'Failed to save DD user data' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * PATCH /api/patents/[patentId]/drafting/dd-user-data
+ *
+ * Body:
+ * - sessionId: Required drafting session ID
+ * - sectionKey: Required - must be 'detailedDescription'
+ * - jurisdiction: Required jurisdiction key for evidence controls, e.g. 'US' or 'REFERENCE'
+ * - excludedSelectedSourceIds: Optional string[]
+ * - excludedGuardrailSourceIds: Optional string[]
+ * - sourceTextOverrides: Optional { [sourceId]: { text } }
+ * - removeSourceTextOverrideIds: Optional string[]
+ */
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ patentId: string }> }
+) {
+  try {
+    const { patentId } = await params
+    const body = await request.json()
+    const {
+      sessionId,
+      sectionKey,
+      jurisdiction,
+      excludedSelectedSourceIds,
+      excludedGuardrailSourceIds,
+      sourceTextOverrides,
+      removeSourceTextOverrideIds,
+    } = body
+
+    if (sectionKey !== 'detailedDescription') {
+      return NextResponse.json(
+        { error: 'Access denied: DD evidence controls can only be saved for detailedDescription sections' },
+        { status: 403 }
+      )
+    }
+
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: 'sessionId is required' },
+        { status: 400 }
+      )
+    }
+
+    const normalizedJurisdiction = String(jurisdiction || '').trim().toUpperCase()
+    if (!normalizedJurisdiction) {
+      return NextResponse.json(
+        { error: 'jurisdiction is required' },
+        { status: 400 }
+      )
+    }
+
+    const authResult = await verifyAuthForPatent(request, patentId)
+    if (!authResult.authorized) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status })
+    }
+
+    const session = await prisma.draftingSession.findFirst({
+      where: {
+        id: sessionId,
+        patentId,
+        userId: authResult.user.id
+      },
+      include: { ideaRecord: true }
+    })
+
+    if (!session?.ideaRecord) {
+      return NextResponse.json(
+        { error: 'Session not found or access denied' },
+        { status: 404 }
+      )
+    }
+
+    const normalizedData = (session.ideaRecord.normalizedData as Record<string, any>) || {}
+    const controls = updateDetailedDescriptionInjectionControls(normalizedData, normalizedJurisdiction, {
+      excludedSelectedSourceIds,
+      excludedGuardrailSourceIds,
+      sourceTextOverrides,
+      removeSourceTextOverrideIds,
+    })
+    const updatedNormalizedData = {
+      ...normalizedData,
+      detailedDescriptionInjectionControls: controls,
+    }
+
+    await prisma.ideaRecord.update({
+      where: { sessionId },
+      data: { normalizedData: updatedNormalizedData },
+    })
+
+    return NextResponse.json({
+      success: true,
+      evidencePreview: buildDetailedDescriptionEvidencePreview(updatedNormalizedData, normalizedJurisdiction),
+    })
+  } catch (error) {
+    console.error('[DD-User-Data:PATCH] Error:', error)
+    return NextResponse.json(
+      { error: 'Failed to save DD evidence controls' },
       { status: 500 }
     )
   }
