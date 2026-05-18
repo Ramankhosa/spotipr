@@ -31,6 +31,7 @@ import { TaskCode } from '@prisma/client'
 import type { UserRole, ServiceType, TeamRole } from '@prisma/client'
 import { getPatentDraftingQuota } from './patent-drafting-tracker'
 import { checkServiceQuota, getServiceUsage } from './service-usage-tracker'
+import { getCurrentUtcPeriods } from './usage-periods'
 
 const TEAM_MAX_MEMBERS = Number.parseInt(process.env.TEAM_MAX_MEMBERS || '', 10)
 const TEAM_MAX_TEAMS = Number.parseInt(process.env.TEAM_MAX_TEAMS || '', 10)
@@ -738,8 +739,7 @@ export async function checkServiceAccess(
     }
     
     if (tokenLimits.dailyTokenLimit !== null || tokenLimits.monthlyTokenLimit !== null) {
-      const currentMonth = new Date().toISOString().substring(0, 7)
-      const currentDay = new Date().toISOString().substring(0, 10)
+      const { currentDay, currentMonth } = getCurrentUtcPeriods()
       
       const [monthlyMeter, dailyMeter] = await Promise.all([
         prisma.usageMeter.findFirst({
@@ -811,8 +811,7 @@ export async function checkServiceAccess(
     // Fallback to legacy token-based metering if new system fails
     console.warn(`[ServiceAccess] Unified tracker failed for ${serviceType}, falling back to legacy metering:`, error)
     
-    const currentMonth = new Date().toISOString().substring(0, 7)
-    const currentDay = new Date().toISOString().substring(0, 10)
+    const { currentDay, currentMonth } = getCurrentUtcPeriods()
     
     const [monthlyMeter, dailyMeter] = await Promise.all([
       prisma.usageMeter.findFirst({
@@ -994,7 +993,6 @@ export async function incrementServiceUsage(
   amount: number = 1
 ): Promise<void> {
   const today = new Date()
-  const currentDay = today.toISOString().substring(0, 10)
   
   await prisma.userServiceQuota.upsert({
     where: { userId_serviceType: { userId, serviceType } },

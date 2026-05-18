@@ -15,6 +15,8 @@ import {
 
 export type PreliminaryPatentType = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
 
+export type PreliminaryClaimScopeStyle = 'broad' | 'default' | 'narrow'
+
 export type PreliminaryClaimQualityStatus = 'source_supported' | 'needs_review' | 'thin_disclosure'
 
 export type PreliminaryClaimQualityWarning = {
@@ -135,6 +137,7 @@ type BuildPreliminaryClaimsPromptParams = {
   context: PreliminaryClaimContext
   patentTypePrimary: PreliminaryPatentType
   userClaimRemarks?: string
+  claimScopeStyle?: PreliminaryClaimScopeStyle
 }
 
 type AnalyzePreliminaryClaimQualityParams = {
@@ -203,6 +206,12 @@ const MATERIAL_TERMS = [
   'steel',
   'titanium',
 ]
+
+export function normalizePreliminaryClaimScopeStyle(value: unknown): PreliminaryClaimScopeStyle {
+  const style = String(value || '').trim().toLowerCase()
+  if (style === 'broad' || style === 'narrow') return style
+  return 'default'
+}
 
 function normalizeText(value: unknown) {
   return String(value || '')
@@ -299,6 +308,34 @@ function formatWarnings(warnings: unknown) {
   return `NORMALIZATION REVIEW WARNINGS (USER-REVIEW HINTS)\n${values.map(item => `- ${item}`).join('\n')}`
 }
 
+function buildClaimScopeStyleStrategyBlock(style: PreliminaryClaimScopeStyle) {
+  const normalizedStyle = normalizePreliminaryClaimScopeStyle(style)
+  if (normalizedStyle === 'broad') {
+    return `CLAIM SCOPE STYLE STRATEGY
+Selected style: Broad Style
+- Draft Claim 1 at the broadest reasonable level that is still source-supported, enabled, and consistent with the disclosure.
+- Claim 1 should recite the minimum source-supported inventive combination needed for patentable distinction and statutory category clarity.
+- Do not add optional embodiments, examples, ranges, materials, use cases, performance results, or fallback details to Claim 1 unless they are required for source support or enablement.
+- Put concrete embodiments, numeric values, materials, examples, alternatives, and fallback limitations into dependent claims when source-supported.
+- Broad does not mean generic: avoid unsupported processor/module/results-only language and map every broad element to source support.`
+  }
+  if (normalizedStyle === 'narrow') {
+    return `CLAIM SCOPE STYLE STRATEGY
+Selected style: Narrow Claims
+- Draft independent claims with more concrete source-supported differentiators for tighter initial coverage.
+- Include central structural, operational, conditional, numeric, material, or relationship limitations in independent claims when they appear important to novelty, support, or enablement.
+- Do not import every embodiment into Claim 1; keep dependent claims for additional fallbacks and alternatives.
+- Do not include unsupported limitations merely to narrow the claim. Every narrowing limitation must map to SDS-ID, SF-ID, or normalized source context.
+- Preserve jurisdiction rules, antecedent basis, and the machine-readable output contract.`
+  }
+  return `CLAIM SCOPE STYLE STRATEGY
+Selected style: Default Style
+- Use the current balanced strategy: source-supported independent claims with dependent fallback positions.
+- Claim 1 should recite the source-supported inventive combination without unnecessary embodiment detail.
+- Use dependent claims to add commercially valuable limitations, embodiments, ranges, materials, examples, and fallbacks.
+- Keep the claim set neither obviously overbroad nor unnecessarily narrow, and preserve the source-support discipline.`
+}
+
 export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromptParams): string {
   const {
     jurisdiction,
@@ -314,7 +351,9 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     context,
     patentTypePrimary,
     userClaimRemarks,
+    claimScopeStyle,
   } = params
+  const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle)
 
   const sourceFactLedgerBlock = buildSourceFactLedgerPromptBlock(
     context.sourceFactLedger,
@@ -419,6 +458,8 @@ For dependent claims under each independent claim:
 - Middle dependents: add structural/operational detail from claimableFeatures.
 - Final dependents: add fallback limitations, specific ranges, or embodiment details from fallbackLimitations.
 - Each dependent adds exactly ONE limitation — no compound narrowing.
+
+${buildClaimScopeStyleStrategyBlock(normalizedClaimScopeStyle)}
 
 ${userClaimRemarks ? `USER CLAIM REMARKS (scope/emphasis only; do not treat as new source facts unless supported above):\n${userClaimRemarks}` : ''}
 

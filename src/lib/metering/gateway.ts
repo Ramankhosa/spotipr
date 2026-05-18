@@ -259,15 +259,18 @@ export class LLMGateway {
 
       // 7. Record usage (metering for billing/quotas)
       if (decision.reservationId) {
+        const responseInputTokens = response.metadata?.inputTokens
         const usageStats: UsageStats = {
-          // Use ?? (nullish coalescing) to handle 0 as a valid value
-          inputTokens: llmRequest.inputTokens ?? 0,
-          outputTokens: response.outputTokens,
+          // Prefer provider-reported token usage; request.inputTokens is often just an estimate.
+          inputTokens: responseInputTokens ?? llmRequest.inputTokens ?? 0,
+          outputTokens: response.outputTokens ?? response.metadata?.outputTokens ?? 0,
           modelClass: response.modelClass as any,
           apiCalls: 1,
           metadata: {
             ...llmRequest.metadata,
             stageCode: llmRequest.stageCode,
+            providerInputTokens: responseInputTokens ?? null,
+            providerOutputTokens: response.outputTokens ?? response.metadata?.outputTokens ?? null,
             modelSource: explicitModelCode ? 'explicit' : modelResolution?.source
           }
         }
@@ -415,10 +418,14 @@ export class LLMGateway {
   private readonly VISION_CAPABLE_MODELS = new Set([
     // OpenAI
     'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5-mini', 'gpt-5-nano',
+    'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.5-pro',
     'gpt-5.1-thinking', 'gpt-5.2-thinking',
     // Anthropic
+    'claude-opus-4-7', 'claude-opus-4-6',
     'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
     'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
+    // Z.AI GLM
+    'glm-5v-turbo', 'glm-4.5v',
     // Google Gemini
     'gemini-2.5-pro',
     'gemini-2.0-flash', 'gemini-2.0-flash-001',
@@ -461,6 +468,12 @@ export class LLMGateway {
       'gpt-5': { maxInput: 400000, maxOutput: 128000 },
       'gpt-5.1': { maxInput: 400000, maxOutput: 128000 },
       'gpt-5.2': { maxInput: 400000, maxOutput: 128000 },
+      'gpt-5.4': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.4-mini': { maxInput: 400000, maxOutput: 128000 },
+      'gpt-5.4-nano': { maxInput: 400000, maxOutput: 128000 },
+      'gpt-5.4-pro': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.5': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.5-pro': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5-mini': { maxInput: 200000, maxOutput: 64000 },
       'gpt-5-nano': { maxInput: 128000, maxOutput: 32000 },
       // OpenAI - GPT-5 Thinking Variants (alias to base)
@@ -504,6 +517,23 @@ export class LLMGateway {
       // DeepSeek
       'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
       'deepseek-reasoner': { maxInput: 128000, maxOutput: 8192 },
+
+      // Z.AI GLM
+      'glm-5.1': { maxInput: 200000, maxOutput: 128000 },
+      'glm-5': { maxInput: 200000, maxOutput: 128000 },
+      'glm-5-turbo': { maxInput: 200000, maxOutput: 128000 },
+      'glm-5v-turbo': { maxInput: 200000, maxOutput: 128000 },
+      'glm-4.7': { maxInput: 128000, maxOutput: 128000 },
+      'glm-4.7-flash': { maxInput: 128000, maxOutput: 128000 },
+      'glm-4.7-flashx': { maxInput: 128000, maxOutput: 128000 },
+      'glm-4.6': { maxInput: 128000, maxOutput: 128000 },
+      'glm-4.5': { maxInput: 128000, maxOutput: 96000 },
+      'glm-4.5-air': { maxInput: 128000, maxOutput: 96000 },
+      'glm-4.5-x': { maxInput: 128000, maxOutput: 96000 },
+      'glm-4.5-airx': { maxInput: 128000, maxOutput: 96000 },
+      'glm-4.5-flash': { maxInput: 128000, maxOutput: 96000 },
+      'glm-4.5v': { maxInput: 128000, maxOutput: 16000 },
+      'glm-4-32b-0414-128k': { maxInput: 128000, maxOutput: 16000 },
       
       // Groq - Friendly names (prefixed)
       'groq-llama-3.3-70b': { maxInput: 128000, maxOutput: 8192 },
@@ -527,7 +557,8 @@ export class LLMGateway {
     // Fallback: try to match by prefix for unknown model variants
     const lowerCode = modelCode.toLowerCase()
     if (lowerCode.startsWith('gpt-4')) return { maxInput: 128000, maxOutput: 16384 }
-    if (lowerCode.startsWith('gpt-5')) return { maxInput: 200000, maxOutput: 64000 }
+    if (lowerCode.startsWith('gpt-5.4') || lowerCode.startsWith('gpt-5.5')) return { maxInput: 1050000, maxOutput: 128000 }
+    if (lowerCode.startsWith('gpt-5')) return { maxInput: 400000, maxOutput: 128000 }
     if (lowerCode.startsWith('gpt-3')) return { maxInput: 16385, maxOutput: 4096 }
     if (lowerCode.startsWith('o1')) return { maxInput: 128000, maxOutput: 65536 }
     if (lowerCode.startsWith('claude')) return { maxInput: 200000, maxOutput: 8192 }
@@ -535,6 +566,11 @@ export class LLMGateway {
     if (lowerCode.startsWith('llama') || lowerCode.startsWith('groq-llama')) return { maxInput: 128000, maxOutput: 8192 }
     if (lowerCode.startsWith('mixtral') || lowerCode.startsWith('groq-mixtral')) return { maxInput: 32768, maxOutput: 8192 }
     if (lowerCode.startsWith('deepseek')) return { maxInput: 128000, maxOutput: 8192 }
+    if (lowerCode.startsWith('glm-5')) return { maxInput: 200000, maxOutput: 128000 }
+    if (lowerCode.startsWith('glm-4.7') || lowerCode.startsWith('glm-4.6')) return { maxInput: 128000, maxOutput: 128000 }
+    if (lowerCode.startsWith('glm-4.5v')) return { maxInput: 128000, maxOutput: 16000 }
+    if (lowerCode.startsWith('glm-4.5')) return { maxInput: 128000, maxOutput: 96000 }
+    if (lowerCode.startsWith('glm') || lowerCode.startsWith('zai') || lowerCode.startsWith('z.ai')) return { maxInput: 128000, maxOutput: 96000 }
     
     // Safe defaults for truly unknown models
     console.warn(`[getProviderContextLimits] Unknown model: ${modelCode}, using safe defaults`)

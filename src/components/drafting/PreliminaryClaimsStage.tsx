@@ -55,9 +55,39 @@ interface Claim {
   category?: 'method' | 'system' | 'apparatus' | 'composition' | 'product'
 }
 
+type ClaimScopeStyle = 'broad' | 'default' | 'narrow'
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const CLAIM_SCOPE_STYLE_STAGES: Array<{
+  value: ClaimScopeStyle
+  label: string
+  help: string
+}> = [
+  {
+    value: 'broad',
+    label: 'Broad Style',
+    help: 'Use the minimum source-supported inventive combination in Claim 1; move embodiments, examples, ranges, and fallback details into dependent claims.',
+  },
+  {
+    value: 'default',
+    label: 'Default Style',
+    help: 'Use the current balanced strategy: source-supported Claim 1 with dependent fallback positions.',
+  },
+  {
+    value: 'narrow',
+    label: 'Narrow Claims',
+    help: 'Include more concrete source-supported differentiators in independent claims for tighter initial coverage.',
+  },
+]
+
+const normalizeClaimScopeStyle = (value: unknown): ClaimScopeStyle => {
+  const style = String(value || '').trim().toLowerCase()
+  if (style === 'broad' || style === 'narrow') return style
+  return 'default'
+}
 
 const Tooltip = ({ children, content, position = 'bottom' }: { children: React.ReactNode; content: string; position?: 'top' | 'bottom' | 'left' | 'right' }) => (
   <div className="relative group">
@@ -167,6 +197,7 @@ function ClaimGenerationProgress({
   hasUserRemarks,
   usePersonaStyle,
   personaName,
+  claimScopeStyle,
   hasSourceFactLedger,
   hasScopeRecommendations,
 }: {
@@ -176,6 +207,7 @@ function ClaimGenerationProgress({
   hasUserRemarks: boolean
   usePersonaStyle: boolean
   personaName?: string
+  claimScopeStyle: ClaimScopeStyle
   hasSourceFactLedger: boolean
   hasScopeRecommendations: boolean
 }) {
@@ -208,6 +240,7 @@ function ClaimGenerationProgress({
     `${activeJurisdiction} rules`,
     patentType ? `${patentType} claim form` : 'claim type review',
     componentCount > 0 ? `${componentCount} component${componentCount === 1 ? '' : 's'}` : 'source text',
+    `${CLAIM_SCOPE_STYLE_STAGES.find(stage => stage.value === claimScopeStyle)?.label || 'Default Style'} scope`,
     hasSourceFactLedger ? 'source fact ledger' : null,
     hasScopeRecommendations ? 'scope recommendations' : null,
     hasUserRemarks ? 'user remarks' : null,
@@ -342,6 +375,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
   // ---- User claim remarks ----
   const [userClaimRemarks, setUserClaimRemarks] = useState('')
+  const [claimScopeStyle, setClaimScopeStyle] = useState<ClaimScopeStyle>('default')
+  const [claimScopeTooltipStage, setClaimScopeTooltipStage] = useState<ClaimScopeStyle | null>(null)
+  const [isSavingClaimScopeStyle, setIsSavingClaimScopeStyle] = useState(false)
 
   // ---- Persona / style state ----
   const [usePersonaStyle, setUsePersonaStyle] = useState(false)
@@ -418,6 +454,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     } else {
       setUserClaimRemarks('')
     }
+    setClaimScopeStyle(normalizeClaimScopeStyle(nd.claimScopeStyle))
 
     const savedPersonaSelection = (session as any)?.personaSelection as PersonaSelection | undefined
     const savedPersonaEnabled = Boolean((session as any)?.usePersonaStyle ?? (session as any)?.personaStyleEnabled)
@@ -466,6 +503,12 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   const strippedClaims = typeof claimsText === 'string' ? claimsText.replace(/<[^>]*>/g, '').trim() : ''
   const hasClaims = strippedClaims.length > 0 || claims.length > 0
   const canProceed = hasClaims
+  const claimScopeStageIndex = Math.max(0, CLAIM_SCOPE_STYLE_STAGES.findIndex(stage => stage.value === claimScopeStyle))
+  const claimScopeFillPercent = CLAIM_SCOPE_STYLE_STAGES.length > 1
+    ? (claimScopeStageIndex / (CLAIM_SCOPE_STYLE_STAGES.length - 1)) * 100
+    : 0
+  const activeClaimScopeStage = CLAIM_SCOPE_STYLE_STAGES[claimScopeStageIndex] || CLAIM_SCOPE_STYLE_STAGES[1]
+  const claimScopeSliderDisabled = claimsFrozen || isGeneratingClaims || isSavingClaimScopeStyle
 
   const qualityStatus = claimGenerationQuality?.status as string | undefined
   const qualityWarnings: any[] = Array.isArray(claimGenerationQuality?.warnings) ? claimGenerationQuality.warnings : []
@@ -560,6 +603,32 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
     }
   }
 
+  const handleClaimScopeStyleChange = async (nextStyle: ClaimScopeStyle) => {
+    if (claimScopeSliderDisabled || nextStyle === claimScopeStyle) return
+    const previousStyle = claimScopeStyle
+    setClaimScopeStyle(nextStyle)
+    setClaimScopeTooltipStage(null)
+    if (!session?.id) return
+    try {
+      setIsSavingClaimScopeStyle(true)
+      setError(null)
+      const response = await onComplete({
+        action: 'update_idea_record',
+        sessionId: session.id,
+        patch: {
+          claimScopeStyle: nextStyle,
+        },
+      })
+      if (response?.error) throw new Error(response.error)
+    } catch (e) {
+      setClaimScopeStyle(previousStyle)
+      console.error('Failed to save claim scope style:', e)
+      setError(e instanceof Error ? e.message : 'Failed to save claim scope style.')
+    } finally {
+      setIsSavingClaimScopeStyle(false)
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Claims handlers
   // ---------------------------------------------------------------------------
@@ -595,6 +664,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         jurisdiction: activeJurisdiction,
         userInstructions: regenerateInstructions.trim() || undefined,
         userClaimRemarks: userClaimRemarks.trim() || undefined,
+        claimScopeStyle,
         usePersonaStyle,
         personaSelection,
         ideaContext
@@ -633,6 +703,9 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
       if (response?.patentType) {
         setPatentType(response.patentType as any)
+      }
+      if (response?.claimScopeStyle) {
+        setClaimScopeStyle(normalizeClaimScopeStyle(response.claimScopeStyle))
       }
       setClaimGenerationQuality(response.claimGenerationQuality || null)
 
@@ -1088,6 +1161,72 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                     </Tooltip>
                   </div>
                 </div>
+
+                <div className="mt-3 rounded-md border border-indigo-100 bg-white/80 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-medium text-gray-700">Claim Scope</div>
+                    <div className="flex items-center gap-2">
+                      {isSavingClaimScopeStyle && <RefreshCw className="h-3 w-3 animate-spin text-indigo-500" />}
+                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                        {activeClaimScopeStage.label}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="relative mt-4" role="group" aria-label="Claim scope style">
+                    <div className="absolute left-4 right-4 top-3 h-1 rounded-full bg-slate-200">
+                      <div
+                        className="h-1 rounded-full bg-indigo-500 transition-all"
+                        style={{ width: `${claimScopeFillPercent}%` }}
+                      />
+                    </div>
+                    <div className="relative grid grid-cols-3 gap-2">
+                      {CLAIM_SCOPE_STYLE_STAGES.map((stage, index) => {
+                        const active = stage.value === claimScopeStyle
+                        const reached = index <= claimScopeStageIndex
+                        const tooltipPosition = index === 0
+                          ? 'left-0'
+                          : index === CLAIM_SCOPE_STYLE_STAGES.length - 1
+                            ? 'right-0'
+                            : 'left-1/2 -translate-x-1/2'
+                        return (
+                          <button
+                            key={stage.value}
+                            type="button"
+                            onClick={() => handleClaimScopeStyleChange(stage.value)}
+                            onMouseEnter={() => setClaimScopeTooltipStage(stage.value)}
+                            onMouseLeave={() => setClaimScopeTooltipStage(current => current === stage.value ? null : current)}
+                            onFocus={() => setClaimScopeTooltipStage(stage.value)}
+                            onBlur={() => setClaimScopeTooltipStage(current => current === stage.value ? null : current)}
+                            disabled={claimScopeSliderDisabled}
+                            aria-pressed={active}
+                            className="relative flex min-w-0 flex-col items-center gap-1 rounded px-1 pb-1 text-center disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <span className={`z-10 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors ${
+                              active
+                                ? 'border-indigo-600 bg-indigo-600 text-white'
+                                : reached
+                                  ? 'border-indigo-500 bg-white text-indigo-700'
+                                  : 'border-slate-300 bg-white text-slate-500'
+                            }`}>
+                              {index + 1}
+                            </span>
+                            <span className={`text-[11px] font-medium sm:text-xs ${active ? 'text-gray-900' : 'text-gray-600'}`}>
+                              {stage.label}
+                            </span>
+                            <span
+                              role="tooltip"
+                              className={`pointer-events-none absolute bottom-full z-20 mb-2 w-56 rounded border border-slate-200 bg-white px-2 py-1 text-left text-[11px] font-normal text-slate-700 shadow-lg transition-opacity ${
+                                claimScopeTooltipStage === stage.value ? 'opacity-100' : 'opacity-0'
+                              } ${tooltipPosition}`}
+                            >
+                              {stage.help}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1165,6 +1304,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                             hasUserRemarks={Boolean(userClaimRemarks.trim() || regenerateInstructions.trim())}
                             usePersonaStyle={usePersonaStyle}
                             personaName={personaSelection?.primaryPersonaName}
+                            claimScopeStyle={claimScopeStyle}
                             hasSourceFactLedger={Boolean(normalizedRecord.sourceFactLedger)}
                             hasScopeRecommendations={Boolean(normalizedRecord.scopeRecommendations)}
                           />

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { computePatentCosts } from '@/lib/admin-usage-service'
+import { normalizeUsageDateRange } from '@/lib/usage-periods'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,7 +73,6 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid startDate format' }, { status: 400 })
       }
       
-      // Ensure startDate is before endDate
       if (startDate > endDate) {
         return NextResponse.json({ error: 'startDate must be before endDate' }, { status: 400 })
       }
@@ -80,10 +80,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid date format' }, { status: 400 })
     }
 
+    const normalizedRange = normalizeUsageDateRange(startDate, endDate)
+
     const patentCosts = await computePatentCosts(
       parsed.tenantId,
-      startDate,
-      endDate,
+      normalizedRange.start,
+      normalizedRange.endInclusive,
       parsed.userId
     )
 
@@ -105,8 +107,8 @@ export async function GET(request: NextRequest) {
     })
 
     return NextResponse.json({
-      startDate,
-      endDate,
+      startDate: normalizedRange.start,
+      endDate: normalizedRange.endInclusive,
       tenantId: parsed.tenantId,
       userId: parsed.userId,
       totals,

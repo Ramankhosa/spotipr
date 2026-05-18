@@ -130,11 +130,16 @@ export type DetailedDescriptionSourceTextOverride = {
   updatedAt?: string
 }
 
+export type DetailedDescriptionCoveragePreset = 'lean' | 'balanced' | 'full' | 'custom'
+
 export type DetailedDescriptionJurisdictionInjectionControls = {
   selectionInputHash?: string
+  coveragePreset?: DetailedDescriptionCoveragePreset
   excludedSelectedSourceIds?: string[]
   excludedGuardrailSourceIds?: string[]
   sourceTextOverrides?: Record<string, DetailedDescriptionSourceTextOverride>
+  customIncludeInstruction?: string
+  customIntegrationInstruction?: string
   updatedAt?: string
 }
 
@@ -166,6 +171,11 @@ export type DetailedDescriptionEvidencePreview = {
   inputHash?: string
   generatedAt?: string
   controlsStale?: boolean
+  coveragePreset?: DetailedDescriptionCoveragePreset
+  customIncludeInstruction?: string
+  customIntegrationInstruction?: string
+  includedSelectedCount?: number
+  totalSelectedCount?: number
   selectedSources: DetailedDescriptionEvidencePreviewItem[]
   guardrailSources: DetailedDescriptionEvidencePreviewItem[]
   excludedSources: DetailedDescriptionEvidencePreviewItem[]
@@ -175,6 +185,8 @@ export type DetailedDescriptionEvidencePreview = {
 const MAX_LABEL_CHARS = 160
 const MAX_VALUE_CHARS = 2200
 const MAX_SOURCE_TEXT_CHARS = 2200
+const MAX_DD_CUSTOM_INSTRUCTION_CHARS = 1200
+const DD_MAX_SELECTED_PROMPT_SOURCES = 40
 const MAX_DETAIL_STRING_CHARS = 1600
 const MAX_DETAIL_ARRAY_ITEMS = 120
 const MAX_DETAIL_OBJECT_KEYS = 40
@@ -799,6 +811,47 @@ function normalizeSourceTextOverrides(value: unknown): Record<string, DetailedDe
   return out
 }
 
+function normalizeCoveragePreset(value: unknown): DetailedDescriptionCoveragePreset | undefined {
+  const preset = cleanString(value, 20).toLowerCase()
+  if (preset === 'lean' || preset === 'balanced' || preset === 'full' || preset === 'custom') {
+    return preset
+  }
+  return undefined
+}
+
+function normalizeCustomInstruction(value: unknown): string | undefined {
+  const instruction = cleanString(value, MAX_DD_CUSTOM_INSTRUCTION_CHARS)
+  return instruction || undefined
+}
+
+function coveragePresetForControls(controls: DetailedDescriptionJurisdictionInjectionControls): DetailedDescriptionCoveragePreset {
+  return controls.coveragePreset || ((controls.excludedSelectedSourceIds || []).length ? 'custom' : 'full')
+}
+
+function selectedSourceIdsForCoverage(selection: DetailedDescriptionSourceSelection | null | undefined): string[] {
+  return uniqueBySourceId(selection?.selectedSources || [])
+    .map(item => item.sourceId)
+    .filter(Boolean)
+}
+
+function coverageCountForPreset(total: number, preset: DetailedDescriptionCoveragePreset): number {
+  if (total <= 0) return 0
+  if (preset === 'lean') return Math.min(5, Math.ceil(total * 0.25))
+  if (preset === 'balanced') return Math.min(12, Math.ceil(total * 0.5))
+  if (preset === 'full') return Math.min(total, DD_MAX_SELECTED_PROMPT_SOURCES)
+  return total
+}
+
+function excludedSelectedSourceIdsForCoverage(
+  selection: DetailedDescriptionSourceSelection | null | undefined,
+  preset: DetailedDescriptionCoveragePreset
+): string[] | undefined {
+  if (preset === 'custom') return undefined
+  const selectedSourceIds = selectedSourceIdsForCoverage(selection)
+  const included = new Set(selectedSourceIds.slice(0, coverageCountForPreset(selectedSourceIds.length, preset)))
+  return selectedSourceIds.filter(sourceId => !included.has(sourceId))
+}
+
 function normalizeJurisdictionCode(value: unknown, fallback = 'US') {
   const code = cleanString(value || fallback, 24).toUpperCase()
   return code || fallback
@@ -807,11 +860,17 @@ function normalizeJurisdictionCode(value: unknown, fallback = 'US') {
 function normalizeJurisdictionControls(value: unknown): DetailedDescriptionJurisdictionInjectionControls {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const record = value as Record<string, any>
+  const coveragePreset = normalizeCoveragePreset(record.coveragePreset)
+  const customIncludeInstruction = normalizeCustomInstruction(record.customIncludeInstruction)
+  const customIntegrationInstruction = normalizeCustomInstruction(record.customIntegrationInstruction)
   return {
     ...(record.selectionInputHash ? { selectionInputHash: cleanString(record.selectionInputHash, 120) } : {}),
+    ...(coveragePreset ? { coveragePreset } : {}),
     excludedSelectedSourceIds: normalizeSourceIdList(record.excludedSelectedSourceIds),
     excludedGuardrailSourceIds: normalizeSourceIdList(record.excludedGuardrailSourceIds),
     sourceTextOverrides: normalizeSourceTextOverrides(record.sourceTextOverrides),
+    ...(customIncludeInstruction ? { customIncludeInstruction } : {}),
+    ...(customIntegrationInstruction ? { customIntegrationInstruction } : {}),
     ...(record.updatedAt ? { updatedAt: cleanString(record.updatedAt, 80) } : {}),
   }
 }
@@ -1006,13 +1065,16 @@ export function buildDetailedDescriptionEvidencePromptBlock(
   const excludedSelected = new Set(controls.excludedSelectedSourceIds || [])
   const excludedGuardrails = new Set(controls.excludedGuardrailSourceIds || [])
   const overrides = controls.sourceTextOverrides || {}
+  const coveragePreset = coveragePresetForControls(controls)
+  const customIncludeInstruction = coveragePreset === 'custom' ? controls.customIncludeInstruction : undefined
+  const customIntegrationInstruction = coveragePreset === 'custom' ? controls.customIntegrationInstruction : undefined
 
   const selected = uniqueBySourceId(effectiveSelection.selectedSources || [])
     .map(item => ({ selection: item, source: byId.get(item.sourceId) }))
     .filter((entry): entry is { selection: DetailedDescriptionSourceSelectionItem; source: SupportDataSource } =>
       !!entry.source && isDetailedDescriptionPositiveCandidate(entry.source) && !excludedSelected.has(entry.selection.sourceId)
     )
-    .slice(0, 40)
+    .slice(0, DD_MAX_SELECTED_PROMPT_SOURCES)
 
   const guardrails = uniqueBySourceId(effectiveSelection.guardrailSources || [])
     .map(item => ({ selection: item, source: byId.get(item.sourceId) }))
@@ -1032,6 +1094,17 @@ export function buildDetailedDescriptionEvidencePromptBlock(
     blocks.push(`Selection status: ${effectiveSelection.status || 'unknown'}${effectiveSelection.inputHash ? `; inputHash=${effectiveSelection.inputHash}` : ''}`)
     blocks.push(...selected.map(entry => formatSelectedSupportLine(entry.source, entry.selection, overrides[entry.selection.sourceId]?.text)))
     blocks.push(`END ${heading}`)
+  }
+
+  if (customIncludeInstruction || customIntegrationInstruction) {
+    blocks.push('BEGIN ATTORNEY CUSTOM INSTRUCTIONS FOR SELECTED DETAILED DESCRIPTION DATA')
+    if (customIncludeInstruction) {
+      blocks.push(`What to include: ${customIncludeInstruction}`)
+    }
+    if (customIntegrationInstruction) {
+      blocks.push(`How to integrate: ${customIntegrationInstruction}`)
+    }
+    blocks.push('END ATTORNEY CUSTOM INSTRUCTIONS FOR SELECTED DETAILED DESCRIPTION DATA')
   }
 
   if (guardrails.length) {
@@ -1092,6 +1165,7 @@ export function buildDetailedDescriptionEvidencePreview(
   const excludedSelected = new Set(controls.excludedSelectedSourceIds || [])
   const excludedGuardrails = new Set(controls.excludedGuardrailSourceIds || [])
   const overrides = controls.sourceTextOverrides || {}
+  const coveragePreset = coveragePresetForControls(controls)
 
   const selectedSources = uniqueBySourceId(selection.selectedSources || [])
     .map(item => {
@@ -1143,6 +1217,11 @@ export function buildDetailedDescriptionEvidencePreview(
     ...(selection.inputHash ? { inputHash: selection.inputHash } : {}),
     ...(selection.generatedAt ? { generatedAt: selection.generatedAt } : {}),
     controlsStale,
+    coveragePreset,
+    ...(controls.customIncludeInstruction ? { customIncludeInstruction: controls.customIncludeInstruction } : {}),
+    ...(controls.customIntegrationInstruction ? { customIntegrationInstruction: controls.customIntegrationInstruction } : {}),
+    includedSelectedCount: selectedSources.filter(item => item.included).length,
+    totalSelectedCount: selectedSources.length,
     selectedSources,
     guardrailSources,
     excludedSources,
@@ -1154,10 +1233,13 @@ export function updateDetailedDescriptionInjectionControls(
   normalizedData: unknown,
   jurisdiction: string,
   update: {
+    coveragePreset?: unknown
     excludedSelectedSourceIds?: unknown
     excludedGuardrailSourceIds?: unknown
     sourceTextOverrides?: unknown
     removeSourceTextOverrideIds?: unknown
+    customIncludeInstruction?: unknown
+    customIntegrationInstruction?: unknown
   }
 ): DetailedDescriptionInjectionControls {
   const root = normalizeDetailedDescriptionInjectionControls((normalizedData as any)?.detailedDescriptionInjectionControls)
@@ -1167,9 +1249,21 @@ export function updateDetailedDescriptionInjectionControls(
   const existing = normalizeJurisdictionControls(root.jurisdictions?.[selectedJurisdiction])
   const existingStale = !!(existing.selectionInputHash && currentHash && existing.selectionInputHash !== currentHash)
   const next: DetailedDescriptionJurisdictionInjectionControls = existingStale ? {} : existing
+  const coveragePreset = normalizeCoveragePreset(update.coveragePreset)
+
+  if (coveragePreset) {
+    next.coveragePreset = coveragePreset
+    const presetExcludedIds = excludedSelectedSourceIdsForCoverage(selection, coveragePreset)
+    if (presetExcludedIds) {
+      next.excludedSelectedSourceIds = presetExcludedIds
+    }
+  }
 
   if (update.excludedSelectedSourceIds !== undefined) {
     next.excludedSelectedSourceIds = normalizeSourceIdList(update.excludedSelectedSourceIds)
+    if (!coveragePreset) {
+      next.coveragePreset = 'custom'
+    }
   }
   if (update.excludedGuardrailSourceIds !== undefined) {
     next.excludedGuardrailSourceIds = normalizeSourceIdList(update.excludedGuardrailSourceIds)
@@ -1190,6 +1284,22 @@ export function updateDetailedDescriptionInjectionControls(
   })
 
   next.sourceTextOverrides = overrides
+  if (update.customIncludeInstruction !== undefined) {
+    const customIncludeInstruction = normalizeCustomInstruction(update.customIncludeInstruction)
+    if (customIncludeInstruction) {
+      next.customIncludeInstruction = customIncludeInstruction
+    } else {
+      delete next.customIncludeInstruction
+    }
+  }
+  if (update.customIntegrationInstruction !== undefined) {
+    const customIntegrationInstruction = normalizeCustomInstruction(update.customIntegrationInstruction)
+    if (customIntegrationInstruction) {
+      next.customIntegrationInstruction = customIntegrationInstruction
+    } else {
+      delete next.customIntegrationInstruction
+    }
+  }
   next.selectionInputHash = currentHash
   next.updatedAt = new Date().toISOString()
 

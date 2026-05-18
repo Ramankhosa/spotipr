@@ -975,6 +975,7 @@ model PatentDraftingUsage {
   @@index([tenantId, countedAt])
   @@index([tenantId, countedMonth])
   @@index([sessionId])
+  @@unique([tenantId, patentId])
   @@map("patent_drafting_usage")
 }
 

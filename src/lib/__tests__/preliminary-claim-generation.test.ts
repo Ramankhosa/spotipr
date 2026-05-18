@@ -46,6 +46,34 @@ describe('preliminary claim generation helper', () => {
     expect(prompt).toContain('supportMatrix')
     expect(prompt).toContain('qualityWarnings')
     expect(prompt).toContain('SF-numericValuesAndUnits-1')
+    expect(prompt).toContain('CLAIM SCOPE STYLE STRATEGY')
+    expect(prompt).toContain('Selected style: Default Style')
+  })
+
+  test('injects broad claim scope strategy without changing the output contract', () => {
+    const prompt = buildPreliminaryClaimsPrompt({
+      ...basePromptParams,
+      claimScopeStyle: 'broad',
+    })
+
+    expect(prompt).toContain('Selected style: Broad Style')
+    expect(prompt).toContain('minimum source-supported inventive combination')
+    expect(prompt).toContain('Put concrete embodiments, numeric values, materials, examples, alternatives, and fallback limitations into dependent claims')
+    expect(prompt).toContain('Broad does not mean generic')
+    expect(prompt).toContain('Return ONLY one JSON object')
+    expect(prompt).toContain('supportMatrix')
+  })
+
+  test('injects narrow claim scope strategy without relaxing source support', () => {
+    const prompt = buildPreliminaryClaimsPrompt({
+      ...basePromptParams,
+      claimScopeStyle: 'narrow',
+    })
+
+    expect(prompt).toContain('Selected style: Narrow Claims')
+    expect(prompt).toContain('more concrete source-supported differentiators')
+    expect(prompt).toContain('Every narrowing limitation must map to SDS-ID, SF-ID, or normalized source context')
+    expect(prompt).toContain('Every claim element MUST map to at least one source fact')
   })
 
   test('uses patent-type-specific output examples', () => {
@@ -188,6 +216,7 @@ describe('preliminary claim generation helper', () => {
       title: 'Irrigation Controller',
       problem: 'Water waste from irrigation.',
       userClaimRemarks: 'Keep claim 1 broad.',
+      claimScopeStyle: 'broad',
       patentTypePrimary: 'SYSTEM',
       claims: '<p>1. A system...</p>',
       claimsStructured: [{ number: 1, text: 'A system...' }],
@@ -211,6 +240,7 @@ describe('preliminary claim generation helper', () => {
       title: 'Irrigation Controller',
       problem: 'Water waste from irrigation.',
       userClaimRemarks: 'Keep claim 1 broad.',
+      claimScopeStyle: 'broad',
       patentTypePrimary: 'SYSTEM',
     })
     expect(reset).not.toHaveProperty('claims')

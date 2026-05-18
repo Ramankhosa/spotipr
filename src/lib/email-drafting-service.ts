@@ -11,6 +11,7 @@ import { generateToken, hashToken } from '@/lib/token-utils'
 import { upsertUserInstruction } from '@/lib/user-instruction-service'
 import { checkServiceAccess } from '@/lib/org-access-service'
 import {
+  AUTO_DRAFTING_BULK_RECIPIENT,
   EMAIL_DRAFTING_INBOUND_ADDRESS,
   EMAIL_DRAFTING_DOWNLOAD_TTL_DAYS,
   EMAIL_DRAFTING_MAX_REQUESTS_PER_HOUR,
@@ -31,6 +32,8 @@ type CanonicalAttachment = {
 
 export type EmailDraftPayload = {
   parserVersion: 1
+  source?: 'email' | 'bulk_upload'
+  suppressNotificationEmails?: boolean
   title: string
   jurisdictions: string[]
   filingType: string
@@ -556,6 +559,28 @@ async function getOrCreateEmailDraftingProject(userId: string) {
   })
 }
 
+async function getProjectForDraftRequest(userId: string, requestRecord: any) {
+  if (requestRecord.projectId) {
+    const project = await prisma.project.findFirst({
+      where: {
+        id: requestRecord.projectId,
+        OR: [
+          { userId },
+          { collaborators: { some: { userId } } }
+        ]
+      }
+    })
+
+    if (!project) {
+      throw Object.assign(new Error('Project not found or access denied.'), { code: 'PROJECT_ACCESS_DENIED' })
+    }
+
+    return project
+  }
+
+  return getOrCreateEmailDraftingProject(userId)
+}
+
 async function createPatentForEmailRequest(projectId: string, userId: string, title: string) {
   return prisma.patent.create({
     data: {
@@ -991,8 +1016,10 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
   try {
     await transitionRequest(requestId, 'VALIDATING', { startedAt: requestRecord.startedAt || new Date() })
     const access = await checkServiceAccess(user.id, requestRecord.tenantId, 'PATENT_DRAFTING')
-    if (!access.allowed || user.status !== 'ACTIVE' || !user.emailVerified || !user.emailDraftingEnabled) {
-      throw Object.assign(new Error(access.reason || 'Email drafting access is no longer valid for this user.'), { code: 'ACCESS_REVOKED' })
+    const requestPayload = requestRecord.parsedPayload as Partial<EmailDraftPayload> | null
+    const isBulkUpload = requestPayload?.source === 'bulk_upload' || requestRecord.recipientEmail === AUTO_DRAFTING_BULK_RECIPIENT
+    if (!access.allowed || user.status !== 'ACTIVE' || !user.emailVerified || (!isBulkUpload && !user.emailDraftingEnabled)) {
+      throw Object.assign(new Error(access.reason || (isBulkUpload ? 'Auto drafting access is no longer valid for this user.' : 'Email drafting access is no longer valid for this user.')), { code: 'ACCESS_REVOKED' })
     }
     await heartbeatRequest(requestId, workerId)
 
@@ -1000,12 +1027,15 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
     const payload = requestRecord.parsedPayload?.parserVersion === 1
       ? requestRecord.parsedPayload as EmailDraftPayload
       : await buildCanonicalEmailDraftPayload(requestRecord)
+    const suppressNotificationEmails = payload.suppressNotificationEmails === true || payload.source === 'bulk_upload'
     await persistParsedPayload(requestId, payload)
-    await sendAcknowledgementEmail(user, requestRecord, payload)
+    if (!suppressNotificationEmails) {
+      await sendAcknowledgementEmail(user, requestRecord, payload)
+    }
     await heartbeatRequest(requestId, workerId)
 
     await transitionRequest(requestId, 'INITIALIZING')
-    const project = await getOrCreateEmailDraftingProject(user.id)
+    const project = await getProjectForDraftRequest(user.id, requestRecord)
     const patent = requestRecord.patentId
       ? await prisma.patent.findUnique({ where: { id: requestRecord.patentId } })
       : await createPatentForEmailRequest(project.id, user.id, payload.title)
@@ -1382,7 +1412,9 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
       lockedUntil: null
     })
     await createEvent(requestId, completionStatus, 'completed', 'Draft exported successfully', { artifacts: artifacts.map(item => item.id) })
-    await sendCompletionEmail(user, requestRecord, downloadToken, exportWarnings)
+    if (!suppressNotificationEmails) {
+      await sendCompletionEmail(user, requestRecord, downloadToken, exportWarnings)
+    }
 
     return await (prisma as any).emailDraftRequest.findUnique({ where: { id: requestId } })
   } catch (error: any) {
@@ -1390,7 +1422,11 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
     const message = error?.message || 'Email drafting request failed.'
     await failRequest(requestId, code, message, code === 'REJECTED_AMBIGUOUS' || code === 'EMPTY_USABLE_CONTENT' || code === 'AUTO_RESPONDER' ? 'REJECTED' : 'FAILED')
     const failedRequest = await (prisma as any).emailDraftRequest.findUnique({ where: { id: requestId } })
-    await sendFailureEmail(user, failedRequest)
+    const failedPayload = requestRecord.parsedPayload as Partial<EmailDraftPayload> | null
+    const suppressFailureEmail = failedPayload?.suppressNotificationEmails === true || failedPayload?.source === 'bulk_upload' || requestRecord.recipientEmail === AUTO_DRAFTING_BULK_RECIPIENT
+    if (!suppressFailureEmail) {
+      await sendFailureEmail(user, failedRequest)
+    }
     return failedRequest
   }
 }

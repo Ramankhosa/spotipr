@@ -12,6 +12,10 @@ export const EMAIL_DRAFTING_MAX_CONCURRENT_WORKERS = 2
 
 export const EMAIL_DRAFTING_STALE_LOCK_MINUTES = 15
 
+export const AUTO_DRAFTING_BULK_RECIPIENT = 'bulk-auto-drafting@patentnest.local'
+
+export const AUTO_DRAFTING_MAX_UPLOAD_ROWS = 25
+
 export const EMAIL_DRAFTING_PROGRESS: Record<string, number> = {
   RECEIVED: 5,
   VALIDATING: 10,

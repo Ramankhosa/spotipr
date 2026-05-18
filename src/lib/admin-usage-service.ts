@@ -1,6 +1,7 @@
 import { prisma } from './prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER, ensurePricingLoaded } from './metering/cost-calculator'
 import { getMetaActualCost } from './usage-log-cost'
+import { normalizeUsageDateRange, toInclusiveDateRange } from './usage-periods'
 
 export interface TenantUsageMetrics {
   tenantId: string | null
@@ -30,6 +31,61 @@ export interface UsageSummaryResult {
   endDate: Date
   global: GlobalUsageSummary
   tenants: TenantUsageMetrics[]
+}
+
+export interface UnifiedAdminUsageUserRow {
+  userId: string
+  userName: string
+  userEmail: string
+  tenantId: string | null
+  tenantName: string | null
+  tenantType: string | null
+  registrationSource: string | null
+  signupAtiTokenId: string | null
+  signupAtiFingerprint: string | null
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalApiCalls: number
+  totalCost: number
+  patentsDrafted: number
+  draftingSessionsStarted: number
+  patentDraftsInProgress: number
+  noveltySearches: number
+  ideasReserved: number
+  lastActivity: Date | null
+}
+
+export interface UnifiedAdminUsageTenantRow extends TenantUsageMetrics {
+  registrationSource: string | null
+  atiTokenCount: number
+  users: UnifiedAdminUsageUserRow[]
+  draftingSessionsStarted: number
+  patentDraftsInProgress: number
+}
+
+export interface UnifiedAdminUsagePatentRow {
+  patentId: string
+  patentTitle: string
+  tenantId: string
+  userId: string
+  sessionId: string
+  hasDescription: boolean
+  hasClaims: boolean
+  isCounted: boolean
+  countedAt: Date | null
+  createdAt: Date
+}
+
+export interface UnifiedAdminUsageResult {
+  startDate: Date
+  endDate: Date
+  summary: GlobalUsageSummary & {
+    totalDraftingSessionsStarted: number
+    totalPatentDraftsInProgress: number
+  }
+  tenants: UnifiedAdminUsageTenantRow[]
+  users: UnifiedAdminUsageUserRow[]
+  patents: UnifiedAdminUsagePatentRow[]
 }
 
 /**
@@ -68,15 +124,8 @@ export async function computeUsageSummary(
   endDate: Date,
   tenantFilterId?: string
 ): Promise<UsageSummaryResult> {
-  const normalizedStart = new Date(startDate)
-  const normalizedEnd = new Date(endDate)
-  normalizedStart.setHours(0, 0, 0, 0)
-  normalizedEnd.setHours(23, 59, 59, 999)
-
-  const dateRange = {
-    gte: normalizedStart,
-    lte: normalizedEnd
-  }
+  const normalizedRange = normalizeUsageDateRange(startDate, endDate)
+  const dateRange = toInclusiveDateRange(normalizedRange)
 
   const usageWhere: any = {
     startedAt: dateRange,
@@ -281,10 +330,321 @@ export async function computeUsageSummary(
   })
 
   return {
-    startDate: normalizedStart,
-    endDate: normalizedEnd,
+    startDate: normalizedRange.start,
+    endDate: normalizedRange.endInclusive,
     global,
     tenants
+  }
+}
+
+export async function computeUnifiedAdminUsage(
+  startDate: Date,
+  endDate: Date,
+  tenantFilterId?: string
+): Promise<UnifiedAdminUsageResult> {
+  const range = normalizeUsageDateRange(startDate, endDate)
+  const dateRange = toInclusiveDateRange(range)
+
+  await ensurePricingLoaded()
+
+  const usageWhere: any = {
+    startedAt: dateRange,
+    status: 'COMPLETED'
+  }
+  if (tenantFilterId) usageWhere.tenantId = tenantFilterId
+
+  const [usageLogs, patentUsageRows, sessionsStarted, noveltyRuns, reservations, tenantRecords, atiTokens] = await Promise.all([
+    prisma.usageLog.findMany({
+      where: usageWhere,
+      select: {
+        tenantId: true,
+        userId: true,
+        inputTokens: true,
+        outputTokens: true,
+        apiCalls: true,
+        modelClass: true,
+        meta: true,
+        startedAt: true
+      }
+    }),
+    prisma.patentDraftingUsage.findMany({
+      where: {
+        ...(tenantFilterId ? { tenantId: tenantFilterId } : {}),
+        OR: [
+          { countedAt: dateRange },
+          { createdAt: dateRange }
+        ]
+      },
+      select: {
+        tenantId: true,
+        sessionId: true,
+        patentId: true,
+        userId: true,
+        hasDescription: true,
+        hasClaims: true,
+        isCounted: true,
+        countedAt: true,
+        createdAt: true
+      }
+    }),
+    prisma.draftingSession.findMany({
+      where: {
+        ...(tenantFilterId ? { tenantId: tenantFilterId } : {}),
+        createdAt: dateRange
+      },
+      select: {
+        tenantId: true,
+        userId: true,
+        createdAt: true
+      }
+    }),
+    prisma.noveltySearchRun.findMany({
+      where: {
+        createdAt: dateRange,
+        status: 'COMPLETED',
+        ...(tenantFilterId ? { user: { tenantId: tenantFilterId } } : {})
+      },
+      select: {
+        userId: true,
+        user: { select: { tenantId: true } }
+      }
+    }),
+    prisma.ideaBankReservation.findMany({
+      where: {
+        reservedAt: dateRange,
+        ...(tenantFilterId ? { user: { tenantId: tenantFilterId } } : {})
+      },
+      select: {
+        userId: true,
+        user: { select: { tenantId: true } }
+      }
+    }),
+    prisma.tenant.findMany({
+      where: tenantFilterId ? { id: tenantFilterId } : {},
+      select: { id: true, name: true, type: true, registrationSource: true }
+    }),
+    prisma.aTIToken.findMany({
+      where: tenantFilterId ? { tenantId: tenantFilterId } : {},
+      select: { id: true, tenantId: true }
+    })
+  ])
+
+  const userIds = new Set<string>()
+  for (const log of usageLogs) if (log.userId) userIds.add(log.userId)
+  for (const row of patentUsageRows) userIds.add(row.userId)
+  for (const row of sessionsStarted) userIds.add(row.userId)
+  for (const row of noveltyRuns) userIds.add(row.userId)
+  for (const row of reservations) userIds.add(row.userId)
+
+  const users = userIds.size
+    ? await prisma.user.findMany({
+        where: { id: { in: Array.from(userIds) } },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          tenantId: true,
+          tenant: { select: { id: true, name: true, type: true, registrationSource: true } },
+          signupAtiTokenId: true,
+          signupAtiToken: { select: { id: true, fingerprint: true } }
+        }
+      })
+    : []
+
+  const patentIds = Array.from(new Set(patentUsageRows.map(row => row.patentId)))
+  const patentRecords = patentIds.length
+    ? await prisma.patent.findMany({
+        where: { id: { in: patentIds } },
+        select: { id: true, title: true }
+      })
+    : []
+
+  const userMeta = new Map(users.map(user => [user.id, user]))
+  const tenantMeta = new Map(tenantRecords.map(t => [t.id, t]))
+  for (const user of users) {
+    if (user.tenant) tenantMeta.set(user.tenant.id, user.tenant)
+  }
+  const patentTitleMap = new Map(patentRecords.map(p => [p.id, p.title || 'Untitled Patent']))
+
+  const atiTokenCounts = new Map<string, number>()
+  for (const token of atiTokens) {
+    if (!token.tenantId) continue
+    atiTokenCounts.set(token.tenantId, (atiTokenCounts.get(token.tenantId) || 0) + 1)
+  }
+
+  const userBuckets = new Map<string, UnifiedAdminUsageUserRow>()
+  const ensureUser = (userId: string, tenantIdHint?: string | null): UnifiedAdminUsageUserRow => {
+    if (userBuckets.has(userId)) return userBuckets.get(userId)!
+    const user = userMeta.get(userId)
+    const tenantId = user?.tenantId || tenantIdHint || null
+    const tenant = tenantId ? tenantMeta.get(tenantId) : undefined
+    const row: UnifiedAdminUsageUserRow = {
+      userId,
+      userName: user?.name || user?.email || userId,
+      userEmail: user?.email || '',
+      tenantId,
+      tenantName: tenant?.name || null,
+      tenantType: tenant?.type || null,
+      registrationSource: tenant?.registrationSource || null,
+      signupAtiTokenId: user?.signupAtiTokenId || null,
+      signupAtiFingerprint: user?.signupAtiToken?.fingerprint || null,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalApiCalls: 0,
+      totalCost: 0,
+      patentsDrafted: 0,
+      draftingSessionsStarted: 0,
+      patentDraftsInProgress: 0,
+      noveltySearches: 0,
+      ideasReserved: 0,
+      lastActivity: null
+    }
+    userBuckets.set(userId, row)
+    return row
+  }
+
+  const global: UnifiedAdminUsageResult['summary'] = {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalApiCalls: 0,
+    totalCost: 0,
+    totalPatentsDrafted: 0,
+    totalNoveltySearches: 0,
+    totalIdeasReserved: 0,
+    totalDraftingSessionsStarted: 0,
+    totalPatentDraftsInProgress: 0
+  }
+
+  for (const log of usageLogs) {
+    const input = log.inputTokens ?? 0
+    const output = log.outputTokens ?? 0
+    const calls = log.apiCalls ?? 0
+    const cost = calculateCostForLog(log)
+
+    global.totalInputTokens += input
+    global.totalOutputTokens += output
+    global.totalApiCalls += calls
+    global.totalCost += cost
+
+    if (!log.userId) continue
+    const row = ensureUser(log.userId, log.tenantId)
+    row.totalInputTokens += input
+    row.totalOutputTokens += output
+    row.totalApiCalls += calls
+    row.totalCost += cost
+    if (!row.lastActivity || log.startedAt > row.lastActivity) {
+      row.lastActivity = log.startedAt
+    }
+  }
+
+  const patents: UnifiedAdminUsagePatentRow[] = patentUsageRows.map(row => ({
+    patentId: row.patentId,
+    patentTitle: patentTitleMap.get(row.patentId) || 'Untitled Patent',
+    tenantId: row.tenantId,
+    userId: row.userId,
+    sessionId: row.sessionId,
+    hasDescription: row.hasDescription,
+    hasClaims: row.hasClaims,
+    isCounted: row.isCounted,
+    countedAt: row.countedAt,
+    createdAt: row.createdAt
+  }))
+
+  for (const row of patentUsageRows) {
+    const bucket = ensureUser(row.userId, row.tenantId)
+    const countedInRange = row.isCounted && row.countedAt && row.countedAt >= range.start && row.countedAt <= range.endInclusive
+    const inProgressInRange = !row.isCounted && row.createdAt >= range.start && row.createdAt <= range.endInclusive
+    if (countedInRange) {
+      bucket.patentsDrafted += 1
+      global.totalPatentsDrafted += 1
+    }
+    if (inProgressInRange) {
+      bucket.patentDraftsInProgress += 1
+      global.totalPatentDraftsInProgress += 1
+    }
+  }
+
+  for (const session of sessionsStarted) {
+    const bucket = ensureUser(session.userId, session.tenantId)
+    bucket.draftingSessionsStarted += 1
+    global.totalDraftingSessionsStarted += 1
+  }
+
+  for (const run of noveltyRuns) {
+    const bucket = ensureUser(run.userId, run.user?.tenantId)
+    bucket.noveltySearches += 1
+    global.totalNoveltySearches += 1
+  }
+
+  for (const reservation of reservations) {
+    const bucket = ensureUser(reservation.userId, reservation.user?.tenantId)
+    bucket.ideasReserved += 1
+    global.totalIdeasReserved += 1
+  }
+
+  const usersCombined = Array.from(userBuckets.values()).sort((a, b) => {
+    const tokenDiff = (b.totalInputTokens + b.totalOutputTokens) - (a.totalInputTokens + a.totalOutputTokens)
+    if (tokenDiff !== 0) return tokenDiff
+    const actionDiff =
+      (b.patentsDrafted + b.noveltySearches + b.ideasReserved) -
+      (a.patentsDrafted + a.noveltySearches + a.ideasReserved)
+    if (actionDiff !== 0) return actionDiff
+    return a.userName.localeCompare(b.userName)
+  })
+
+  const tenantBuckets = new Map<string, UnifiedAdminUsageTenantRow>()
+  const ensureTenant = (tenantId: string | null): UnifiedAdminUsageTenantRow => {
+    const key = tenantId || 'no-tenant'
+    if (tenantBuckets.has(key)) return tenantBuckets.get(key)!
+    const tenant = tenantId ? tenantMeta.get(tenantId) : undefined
+    const row: UnifiedAdminUsageTenantRow = {
+      tenantId,
+      tenantName: tenantId ? (tenant?.name ?? 'Unknown tenant') : 'No tenant',
+      tenantType: tenant?.type ?? null,
+      registrationSource: tenant?.registrationSource ?? null,
+      atiTokenCount: tenantId ? (atiTokenCounts.get(tenantId) || 0) : 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalApiCalls: 0,
+      totalCost: 0,
+      patentDrafts: 0,
+      noveltySearches: 0,
+      ideasReserved: 0,
+      users: [],
+      draftingSessionsStarted: 0,
+      patentDraftsInProgress: 0
+    }
+    tenantBuckets.set(key, row)
+    return row
+  }
+
+  for (const user of usersCombined) {
+    const tenant = ensureTenant(user.tenantId)
+    tenant.users.push(user)
+    tenant.totalInputTokens += user.totalInputTokens
+    tenant.totalOutputTokens += user.totalOutputTokens
+    tenant.totalApiCalls += user.totalApiCalls
+    tenant.totalCost += user.totalCost
+    tenant.patentDrafts += user.patentsDrafted
+    tenant.noveltySearches += user.noveltySearches
+    tenant.ideasReserved += user.ideasReserved
+    tenant.draftingSessionsStarted += user.draftingSessionsStarted
+    tenant.patentDraftsInProgress += user.patentDraftsInProgress
+  }
+
+  if (tenantFilterId) {
+    for (const tenant of tenantRecords) {
+      ensureTenant(tenant.id)
+    }
+  }
+
+  return {
+    startDate: range.start,
+    endDate: range.endInclusive,
+    summary: global,
+    tenants: Array.from(tenantBuckets.values()).sort((a, b) => b.totalInputTokens - a.totalInputTokens),
+    users: usersCombined,
+    patents
   }
 }
 
@@ -310,19 +670,14 @@ export async function computeUserCostsByTenant(
   startDate: Date,
   endDate: Date
 ): Promise<UserCostMetrics[]> {
-  const normalizedStart = new Date(startDate)
-  const normalizedEnd = new Date(endDate)
-  normalizedStart.setHours(0, 0, 0, 0)
-  normalizedEnd.setHours(23, 59, 59, 999)
+  const normalizedRange = normalizeUsageDateRange(startDate, endDate)
+  const dateRange = toInclusiveDateRange(normalizedRange)
 
   // Get all usage logs for this tenant with user info
   const usageLogs = await prisma.usageLog.findMany({
     where: {
       tenantId,
-      startedAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
-      },
+      startedAt: dateRange,
       status: 'COMPLETED'
     },
     select: {
@@ -341,7 +696,7 @@ export async function computeUserCostsByTenant(
     where: {
       tenantId,
       isCounted: true,
-      countedAt: { gte: normalizedStart, lte: normalizedEnd }
+      countedAt: dateRange
     },
     _count: { _all: true }
   })
@@ -350,10 +705,7 @@ export async function computeUserCostsByTenant(
   const noveltyRuns = await prisma.noveltySearchRun.findMany({
     where: {
       user: { tenantId },
-      createdAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
-      },
+      createdAt: dateRange,
       status: 'COMPLETED'
     },
     select: {
@@ -491,36 +843,26 @@ export async function computePatentCosts(
   endDate: Date,
   userId?: string
 ): Promise<PatentCostMetrics[]> {
-  const normalizedStart = new Date(startDate)
-  const normalizedEnd = new Date(endDate)
-  normalizedStart.setHours(0, 0, 0, 0)
-  normalizedEnd.setHours(23, 59, 59, 999)
+  const normalizedRange = normalizeUsageDateRange(startDate, endDate)
+  const dateRange = toInclusiveDateRange(normalizedRange)
 
-  // Get drafting sessions with patent info
-  const sessionWhere: any = {
-    tenantId,
-    createdAt: {
-      gte: normalizedStart,
-      lte: normalizedEnd
-    }
-  }
-  if (userId) {
-    sessionWhere.userId = userId
-  }
-
-  const sessions = await prisma.draftingSession.findMany({
-    where: sessionWhere,
+  // Get usage logs that have patent IDs in their metadata
+  const usageLogs = await prisma.usageLog.findMany({
+    where: {
+      tenantId,
+      startedAt: dateRange,
+      status: 'COMPLETED',
+      ...(userId ? { userId } : {})
+    },
     select: {
-      id: true,
-      patentId: true,
       userId: true,
-      createdAt: true,
-      patent: {
-        select: {
-          id: true,
-          title: true
-        }
-      },
+      startedAt: true,
+      inputTokens: true,
+      outputTokens: true,
+      apiCalls: true,
+      modelClass: true,
+      taskCode: true,
+      meta: true,
       user: {
         select: {
           id: true,
@@ -531,26 +873,55 @@ export async function computePatentCosts(
     }
   })
 
-  // Get usage logs that have patent IDs in their metadata
-  const usageLogs = await prisma.usageLog.findMany({
-    where: {
-      tenantId,
-      startedAt: {
-        gte: normalizedStart,
-        lte: normalizedEnd
-      },
-      status: 'COMPLETED',
-      ...(userId ? { userId } : {})
-    },
-    select: {
-      inputTokens: true,
-      outputTokens: true,
-      apiCalls: true,
-      modelClass: true,
-      taskCode: true,
-      meta: true
-    }
-  })
+  const patentIdsFromUsage = Array.from(new Set(
+    usageLogs
+      .map(log => (log.meta as any)?.patentId)
+      .filter((patentId): patentId is string => typeof patentId === 'string' && patentId.length > 0)
+  ))
+
+  const sessionWhere: any = {
+    tenantId,
+    OR: [
+      { createdAt: dateRange },
+      ...(patentIdsFromUsage.length ? [{ patentId: { in: patentIdsFromUsage } }] : [])
+    ]
+  }
+  if (userId) {
+    sessionWhere.userId = userId
+  }
+
+  const [sessions, patentRecords] = await Promise.all([
+    prisma.draftingSession.findMany({
+      where: sessionWhere,
+      select: {
+        id: true,
+        patentId: true,
+        userId: true,
+        createdAt: true,
+        patent: {
+          select: {
+            id: true,
+            title: true
+          }
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
+      }
+    }),
+    patentIdsFromUsage.length
+      ? prisma.patent.findMany({
+          where: { id: { in: patentIdsFromUsage } },
+          select: { id: true, title: true, createdBy: true }
+        })
+      : Promise.resolve([])
+  ])
+
+  const patentTitleMap = new Map(patentRecords.map(p => [p.id, p.title || 'Untitled Patent']))
 
   // Map sessions to metrics
   const patentMap = new Map<string, PatentCostMetrics>()
@@ -580,7 +951,23 @@ export async function computePatentCosts(
     const meta = log.meta as any
     const patentId = meta?.patentId
     
-    if (!patentId || !patentMap.has(patentId)) continue
+    if (!patentId) continue
+    if (!patentMap.has(patentId)) {
+      patentMap.set(patentId, {
+        patentId,
+        patentTitle: patentTitleMap.get(patentId) || 'Untitled Patent',
+        userId: log.userId || 'unknown',
+        userName: log.user?.name ?? null,
+        userEmail: log.user?.email || 'unknown@unknown.com',
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalApiCalls: 0,
+        actualCost: 0,
+        contingencyCost: 0,
+        createdAt: log.startedAt,
+        stageBreakdown: []
+      })
+    }
 
     const metrics = patentMap.get(patentId)!
     // Use ?? (nullish coalescing) to handle 0 as a valid value

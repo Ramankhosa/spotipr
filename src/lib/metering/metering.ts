@@ -5,24 +5,31 @@ import type { MeteringConfig, MeteringService, FeatureRequest, QuotaCheckResult,
 import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER } from './cost-calculator'
+import { getUtcDayWindow, getUtcMonthWindow } from '@/lib/usage-periods'
 
 function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date, end: Date } {
   const now = new Date()
-  let key: string
-  let start: Date
-  let end: Date
 
   if (type === 'DAILY') {
-    key = now.toISOString().split('T')[0] // YYYY-MM-DD
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-  } else {
-    key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` // YYYY-MM
-    start = new Date(now.getFullYear(), now.getMonth(), 1)
-    end = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+    const window = getUtcDayWindow(now)
+    return {
+      key: now.toISOString().split('T')[0],
+      start: window.start,
+      end: window.endExclusive
+    }
   }
 
-  return { key, start, end }
+  const window = getUtcMonthWindow(now)
+  return {
+    key: now.toISOString().substring(0, 7),
+    start: window.start,
+    end: window.endExclusive
+  }
+}
+
+function getUsageUnits(stats: UsageStats): number {
+  const totalTokens = (stats.inputTokens ?? 0) + (stats.outputTokens ?? 0)
+  return totalTokens > 0 ? totalTokens : (stats.apiCalls || 1)
 }
 
 export function createMeteringService(config: MeteringConfig): MeteringService {
@@ -375,6 +382,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
     async updateUsageMeters(reservation: any, stats: UsageStats): Promise<void> {
       const updates = []
+      const usageUnits = getUsageUnits(stats)
 
       // Update monthly meter
       const monthlyPeriod = getCurrentPeriod('MONTHLY')
@@ -391,7 +399,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           },
           update: {
             currentUsage: {
-              increment: stats.outputTokens || stats.apiCalls || 1
+              increment: usageUnits
             },
             lastUpdated: new Date()
           },
@@ -401,7 +409,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
             taskCode: reservation.taskCode,
             periodType: 'MONTHLY',
             periodKey: monthlyPeriod.key,
-            currentUsage: stats.outputTokens || stats.apiCalls || 1
+            currentUsage: usageUnits
           }
         })
       )
@@ -421,7 +429,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
           },
           update: {
             currentUsage: {
-              increment: stats.outputTokens || stats.apiCalls || 1
+              increment: usageUnits
             },
             lastUpdated: new Date()
           },
@@ -431,7 +439,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
             taskCode: reservation.taskCode,
             periodType: 'DAILY',
             periodKey: dailyPeriod.key,
-            currentUsage: stats.outputTokens || stats.apiCalls || 1
+            currentUsage: usageUnits
           }
         })
       )

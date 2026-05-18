@@ -17,6 +17,7 @@
 
 import { prisma } from './prisma'
 import type { ServiceType } from '@prisma/client'
+import { getCurrentUtcPeriods } from './usage-periods'
 
 // ============================================================================
 // Types
@@ -75,11 +76,7 @@ export interface QuotaCheckResult {
 // ============================================================================
 
 function getCurrentPeriods() {
-  const now = new Date()
-  return {
-    currentDay: now.toISOString().substring(0, 10),
-    currentMonth: now.toISOString().substring(0, 7)
-  }
+  return getCurrentUtcPeriods()
 }
 
 /**

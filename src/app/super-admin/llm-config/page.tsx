@@ -66,7 +66,8 @@ const PROVIDER_COLORS: Record<string, string> = {
   openai: 'bg-green-100 text-green-800 border-green-200',
   anthropic: 'bg-orange-100 text-orange-800 border-orange-200',
   deepseek: 'bg-purple-100 text-purple-800 border-purple-200',
-  groq: 'bg-pink-100 text-pink-800 border-pink-200'
+  groq: 'bg-pink-100 text-pink-800 border-pink-200',
+  zai: 'bg-teal-100 text-teal-800 border-teal-200'
 }
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -458,7 +459,7 @@ export default function LLMConfigPage() {
             {/* Provider Status */}
             <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
               <h2 className="text-lg font-semibold mb-4">Provider Status</h2>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                 {providers.map(p => (
                   <div
                     key={p.name}

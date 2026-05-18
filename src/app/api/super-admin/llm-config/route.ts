@@ -124,15 +124,16 @@ export async function GET(request: NextRequest) {
 }
 
 function checkProviderApiKey(provider: string): boolean {
-  const envMap: Record<string, string> = {
-    google: 'GOOGLE_AI_API_KEY',
-    openai: 'OPENAI_API_KEY',
-    anthropic: 'ANTHROPIC_API_KEY',
-    deepseek: 'DEEPSEEK_API_KEY',
-    groq: 'GROQ_API_KEY'
+  const envMap: Record<string, string[]> = {
+    google: ['GOOGLE_AI_API_KEY', 'GOOGLE_API_KEY'],
+    openai: ['OPENAI_API_KEY'],
+    anthropic: ['ANTHROPIC_API_KEY'],
+    deepseek: ['DEEPSEEK_API_KEY'],
+    groq: ['GROQ_API_KEY'],
+    zai: ['ZAI_API_KEY', 'ZHIPU_API_KEY', 'GLM_API_KEY']
   }
-  const envVar = envMap[provider]
-  return envVar ? !!process.env[envVar] : false
+  const envVars = envMap[provider]
+  return envVars ? envVars.some(envVar => !!process.env[envVar]) : false
 }
 
 // ============================================================================
@@ -184,7 +185,7 @@ export async function POST(request: NextRequest) {
 // ============================================================================
 
 // Valid providers that have implementations
-const VALID_PROVIDERS = ['google', 'openai', 'anthropic', 'deepseek', 'groq']
+const VALID_PROVIDERS = ['google', 'openai', 'anthropic', 'deepseek', 'groq', 'zai']
 
 async function createModel(body: any) {
   const { code, displayName, provider, contextWindow, supportsVision, supportsStreaming, inputCostPer1M, outputCostPer1M } = body

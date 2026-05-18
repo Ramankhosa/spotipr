@@ -56,17 +56,35 @@ interface DDEvidencePreviewItem {
   controlsStale: boolean
 }
 
+type DDEvidenceCoveragePreset = 'lean' | 'balanced' | 'full' | 'custom'
+
 interface DDEvidencePreview {
   status: 'ready' | 'failed' | 'missing'
   jurisdiction?: string
   inputHash?: string
   generatedAt?: string
   controlsStale?: boolean
+  coveragePreset?: DDEvidenceCoveragePreset
+  customIncludeInstruction?: string
+  customIntegrationInstruction?: string
+  includedSelectedCount?: number
+  totalSelectedCount?: number
   selectedSources: DDEvidencePreviewItem[]
   guardrailSources: DDEvidencePreviewItem[]
   excludedSources: DDEvidencePreviewItem[]
   warnings: string[]
 }
+
+const DD_EVIDENCE_COVERAGE_STAGES: Array<{
+  value: DDEvidenceCoveragePreset
+  label: string
+  help: string
+}> = [
+  { value: 'lean', label: 'Lean', help: 'Use only essential high-confidence support data.' },
+  { value: 'balanced', label: 'Balanced', help: 'Use representative support data without overloading the section.' },
+  { value: 'full', label: 'Full', help: 'Use all LLM-selected support data available for this section.' },
+  { value: 'custom', label: 'Custom', help: 'Tell the drafting model what selected data to use and how to integrate it.' },
+]
 
 // ============================================================================
 // Inline Diff View Component - Shows changes between original and revised text
@@ -1775,6 +1793,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const [ddEvidenceExpandedSources, setDdEvidenceExpandedSources] = useState<Record<string, boolean>>({})
   const [ddEvidenceEditingSourceId, setDdEvidenceEditingSourceId] = useState<string | null>(null)
   const [ddEvidenceEditDraft, setDdEvidenceEditDraft] = useState('')
+  const [ddCustomInstructionsOpen, setDdCustomInstructionsOpen] = useState(false)
+  const [ddCustomIncludeDraft, setDdCustomIncludeDraft] = useState('')
+  const [ddCustomIntegrationDraft, setDdCustomIntegrationDraft] = useState('')
+  const [ddCoverageTooltipStage, setDdCoverageTooltipStage] = useState<DDEvidenceCoveragePreset | null>(null)
+  const ddCustomIncludeRef = useRef<HTMLTextAreaElement | null>(null)
   const DD_USER_DATA_MAX_SIZE = 50 * 1024 // 50KB
 
   // Add Component Numbers to Claims
@@ -2545,6 +2568,22 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     loadDDUserData()
   }, [session?.id, patent?.id, getDefaultDdToggles, ddEvidenceJurisdiction])
 
+  useEffect(() => {
+    if (ddCustomInstructionsOpen) return
+    setDdCustomIncludeDraft(ddEvidencePreview?.customIncludeInstruction || '')
+    setDdCustomIntegrationDraft(ddEvidencePreview?.customIntegrationInstruction || '')
+  }, [
+    ddCustomInstructionsOpen,
+    ddEvidencePreview?.customIncludeInstruction,
+    ddEvidencePreview?.customIntegrationInstruction,
+  ])
+
+  useEffect(() => {
+    if (!ddCustomInstructionsOpen) return
+    const timer = window.setTimeout(() => ddCustomIncludeRef.current?.focus(), 0)
+    return () => window.clearTimeout(timer)
+  }, [ddCustomInstructionsOpen])
+
   // Save DD User Data handler
   const handleSaveDDUserData = useCallback(async () => {
     if (!session?.id || !patent?.id) return
@@ -2630,6 +2669,15 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   const ddAutoIncludedCount = ddEvidencePreview?.selectedSources?.filter(item => item.included).length || 0
   const ddGuardrailIncludedCount = ddEvidencePreview?.guardrailSources?.filter(item => item.included).length || 0
   const ddAnyInjectionEnabled = ddAutoIncludedCount > 0 || ddGuardrailIncludedCount > 0 || ddManualInjectionEnabled
+  const ddCoveragePreset: DDEvidenceCoveragePreset = ddEvidencePreview?.coveragePreset || 'full'
+  const ddCoverageStageIndex = Math.max(0, DD_EVIDENCE_COVERAGE_STAGES.findIndex(stage => stage.value === ddCoveragePreset))
+  const ddCoverageFillPercent = DD_EVIDENCE_COVERAGE_STAGES.length > 1
+    ? (ddCoverageStageIndex / (DD_EVIDENCE_COVERAGE_STAGES.length - 1)) * 100
+    : 0
+  const ddHasCustomInstructions = !!(
+    ddEvidencePreview?.customIncludeInstruction ||
+    ddEvidencePreview?.customIntegrationInstruction
+  )
   const ddEvidenceFilteredSelectedSources = useMemo(() => {
     const items = ddEvidencePreview?.selectedSources || []
     const query = ddEvidenceSearch.trim().toLowerCase()
@@ -2675,12 +2723,48 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     }
   }, [session?.id, patent?.id, ddEvidenceJurisdiction])
 
+  const handleSelectDDEvidenceCoveragePreset = useCallback((coveragePreset: DDEvidenceCoveragePreset) => {
+    if (coveragePreset === 'custom') {
+      setDdCustomIncludeDraft(ddEvidencePreview?.customIncludeInstruction || '')
+      setDdCustomIntegrationDraft(ddEvidencePreview?.customIntegrationInstruction || '')
+      setDdCustomInstructionsOpen(true)
+      void patchDDEvidenceControls({ coveragePreset: 'custom' })
+      return
+    }
+    setDdCustomInstructionsOpen(false)
+    void patchDDEvidenceControls({ coveragePreset })
+  }, [
+    ddEvidencePreview?.customIncludeInstruction,
+    ddEvidencePreview?.customIntegrationInstruction,
+    patchDDEvidenceControls,
+  ])
+
+  const handleSaveDDEvidenceCustomInstructions = useCallback(() => {
+    void patchDDEvidenceControls({
+      coveragePreset: 'custom',
+      customIncludeInstruction: ddCustomIncludeDraft.trim(),
+      customIntegrationInstruction: ddCustomIntegrationDraft.trim(),
+    })
+    setDdCustomInstructionsOpen(false)
+  }, [ddCustomIncludeDraft, ddCustomIntegrationDraft, patchDDEvidenceControls])
+
+  const handleClearDDEvidenceCustomInstructions = useCallback(() => {
+    setDdCustomIncludeDraft('')
+    setDdCustomIntegrationDraft('')
+    void patchDDEvidenceControls({
+      coveragePreset: 'custom',
+      customIncludeInstruction: '',
+      customIntegrationInstruction: '',
+    })
+  }, [patchDDEvidenceControls])
+
   const handleToggleDDEvidenceSource = useCallback((sourceId: string, included: boolean) => {
     if (!ddEvidencePreview) return
     const excludedSelectedSourceIds = ddEvidencePreview.selectedSources
       .filter(item => item.sourceId === sourceId ? !included : !item.included)
       .map(item => item.sourceId)
-    void patchDDEvidenceControls({ excludedSelectedSourceIds })
+    setDdCustomInstructionsOpen(false)
+    void patchDDEvidenceControls({ coveragePreset: 'custom', excludedSelectedSourceIds })
   }, [ddEvidencePreview, patchDDEvidenceControls])
 
   const handleToggleDDGuardrailSource = useCallback((sourceId: string, included: boolean) => {
@@ -2692,22 +2776,30 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   }, [ddEvidencePreview, patchDDEvidenceControls])
 
   const handleSelectAllDDEvidence = useCallback(() => {
-    void patchDDEvidenceControls({ excludedSelectedSourceIds: [] })
+    setDdCustomInstructionsOpen(false)
+    void patchDDEvidenceControls({ coveragePreset: 'full' })
   }, [patchDDEvidenceControls])
 
   const handleUnselectAllDDEvidence = useCallback(() => {
+    setDdCustomInstructionsOpen(false)
     void patchDDEvidenceControls({
+      coveragePreset: 'custom',
       excludedSelectedSourceIds: (ddEvidencePreview?.selectedSources || []).map(item => item.sourceId),
     })
   }, [ddEvidencePreview?.selectedSources, patchDDEvidenceControls])
 
   const handleResetDDEvidenceControls = useCallback(() => {
+    setDdCustomInstructionsOpen(false)
+    setDdCustomIncludeDraft('')
+    setDdCustomIntegrationDraft('')
     void patchDDEvidenceControls({
-      excludedSelectedSourceIds: [],
+      coveragePreset: 'full',
       excludedGuardrailSourceIds: [],
       removeSourceTextOverrideIds: (ddEvidencePreview?.selectedSources || [])
         .filter(item => item.edited)
         .map(item => item.sourceId),
+      customIncludeInstruction: '',
+      customIntegrationInstruction: '',
     })
   }, [ddEvidencePreview?.selectedSources, patchDDEvidenceControls])
 
@@ -4530,6 +4622,167 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
                           {ddEvidencePreview?.selectedSources?.length ? (
                             <>
+                              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <div className="text-xs font-medium text-slate-800">LLM-selected data amount</div>
+                                    <div className="text-[11px] text-slate-500">
+                                      {ddAutoIncludedCount} / {ddEvidencePreview.selectedSources.length} selected support item{ddEvidencePreview.selectedSources.length === 1 ? '' : 's'} will be injected
+                                    </div>
+                                  </div>
+                                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                    ddCoveragePreset === 'custom'
+                                      ? 'bg-violet-100 text-violet-700'
+                                      : 'bg-blue-100 text-blue-700'
+                                  }`}>
+                                    {DD_EVIDENCE_COVERAGE_STAGES.find(stage => stage.value === ddCoveragePreset)?.label || 'Full'}
+                                  </span>
+                                </div>
+                                <div className="relative mt-4" role="group" aria-label="Detailed Description data amount">
+                                  <div className="absolute left-3 right-3 top-3 h-1 rounded-full bg-slate-200">
+                                    <div
+                                      className="h-1 rounded-full bg-blue-500 transition-all"
+                                      style={{ width: `${ddCoverageFillPercent}%` }}
+                                    />
+                                  </div>
+                                  <div className="relative grid grid-cols-4 gap-2">
+                                    {DD_EVIDENCE_COVERAGE_STAGES.map((stage, index) => {
+                                      const active = stage.value === ddCoveragePreset
+                                      const reached = index <= ddCoverageStageIndex
+                                      const tooltipPosition = index === 0
+                                        ? 'left-0'
+                                        : index === DD_EVIDENCE_COVERAGE_STAGES.length - 1
+                                          ? 'right-0'
+                                          : 'left-1/2 -translate-x-1/2'
+                                      return (
+                                        <button
+                                          key={stage.value}
+                                          type="button"
+                                          onClick={() => handleSelectDDEvidenceCoveragePreset(stage.value)}
+                                          onMouseEnter={() => setDdCoverageTooltipStage(stage.value)}
+                                          onMouseLeave={() => setDdCoverageTooltipStage(current => current === stage.value ? null : current)}
+                                          onFocus={() => setDdCoverageTooltipStage(stage.value)}
+                                          onBlur={() => setDdCoverageTooltipStage(current => current === stage.value ? null : current)}
+                                          disabled={ddEvidenceSaving}
+                                          title={stage.help}
+                                          aria-pressed={active}
+                                          className="relative flex min-w-0 flex-col items-center gap-1 rounded px-1 pb-1 text-center disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                          <span className={`z-10 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors ${
+                                            active
+                                              ? 'border-blue-600 bg-blue-600 text-white'
+                                              : reached
+                                                ? 'border-blue-500 bg-white text-blue-700'
+                                                : 'border-slate-300 bg-white text-slate-500'
+                                          }`}>
+                                            {index + 1}
+                                          </span>
+                                          <span className={`text-[11px] font-medium ${active ? 'text-slate-900' : 'text-slate-600'}`}>{stage.label}</span>
+                                          <span
+                                            role="tooltip"
+                                            className={`pointer-events-none absolute bottom-full z-20 mb-2 w-48 rounded border border-slate-200 bg-white px-2 py-1 text-left text-[11px] font-normal text-slate-700 shadow-lg transition-opacity ${
+                                              ddCoverageTooltipStage === stage.value ? 'opacity-100' : 'opacity-0'
+                                            } ${tooltipPosition}`}
+                                          >
+                                            {stage.help}
+                                          </span>
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                                {ddCoveragePreset === 'custom' && (
+                                  <div className="mt-3 rounded border border-violet-200 bg-white p-3">
+                                    {ddCustomInstructionsOpen ? (
+                                      <div className="grid gap-3">
+                                        <label className="grid gap-1">
+                                          <span className="text-xs font-medium text-slate-700">What should be included?</span>
+                                          <textarea
+                                            ref={ddCustomIncludeRef}
+                                            value={ddCustomIncludeDraft}
+                                            onChange={(e) => setDdCustomIncludeDraft(e.target.value)}
+                                            rows={3}
+                                            className="w-full rounded border border-violet-200 bg-white p-2 text-xs text-slate-800 focus:border-violet-500 focus:ring-violet-500"
+                                            placeholder="Topics, experiments, results, embodiments, source labels, or examples to prioritize..."
+                                            disabled={ddEvidenceSaving}
+                                          />
+                                        </label>
+                                        <label className="grid gap-1">
+                                          <span className="text-xs font-medium text-slate-700">How should it be added?</span>
+                                          <textarea
+                                            value={ddCustomIntegrationDraft}
+                                            onChange={(e) => setDdCustomIntegrationDraft(e.target.value)}
+                                            rows={3}
+                                            className="w-full rounded border border-violet-200 bg-white p-2 text-xs text-slate-800 focus:border-violet-500 focus:ring-violet-500"
+                                            placeholder="Drafting style, density, emphasis, ordering, or exclusions..."
+                                            disabled={ddEvidenceSaving}
+                                          />
+                                        </label>
+                                        <div className="flex flex-wrap justify-end gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setDdCustomIncludeDraft(ddEvidencePreview?.customIncludeInstruction || '')
+                                              setDdCustomIntegrationDraft(ddEvidencePreview?.customIntegrationInstruction || '')
+                                              setDdCustomInstructionsOpen(false)
+                                            }}
+                                            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                                            disabled={ddEvidenceSaving}
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={handleClearDDEvidenceCustomInstructions}
+                                            className="rounded border border-violet-200 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50"
+                                            disabled={ddEvidenceSaving || (!ddCustomIncludeDraft.trim() && !ddCustomIntegrationDraft.trim() && !ddHasCustomInstructions)}
+                                          >
+                                            Clear
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={handleSaveDDEvidenceCustomInstructions}
+                                            className="rounded bg-violet-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                                            disabled={ddEvidenceSaving}
+                                          >
+                                            Save custom instructions
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-wrap items-start justify-between gap-2">
+                                        <div className="min-w-0 text-xs text-slate-600">
+                                          {ddHasCustomInstructions ? (
+                                            <>
+                                              <div className="font-medium text-slate-800">Custom instructions saved</div>
+                                              {ddEvidencePreview.customIncludeInstruction && (
+                                                <div className="mt-1 truncate">Include: {ddEvidencePreview.customIncludeInstruction}</div>
+                                              )}
+                                              {ddEvidencePreview.customIntegrationInstruction && (
+                                                <div className="mt-1 truncate">Integrate: {ddEvidencePreview.customIntegrationInstruction}</div>
+                                              )}
+                                            </>
+                                          ) : (
+                                            <div>Custom source selection is active. Add attorney instructions to guide how the selected data is used.</div>
+                                          )}
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setDdCustomIncludeDraft(ddEvidencePreview?.customIncludeInstruction || '')
+                                            setDdCustomIntegrationDraft(ddEvidencePreview?.customIntegrationInstruction || '')
+                                            setDdCustomInstructionsOpen(true)
+                                          }}
+                                          className="rounded border border-violet-200 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50"
+                                          disabled={ddEvidenceSaving}
+                                        >
+                                          {ddHasCustomInstructions ? 'Edit instructions' : 'Add instructions'}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <button type="button" onClick={handleSelectAllDDEvidence} disabled={ddEvidenceSaving} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">Select all</button>

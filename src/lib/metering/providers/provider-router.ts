@@ -38,7 +38,7 @@ const VISION_CAPABLE_MODELS = new Set([
   'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
   'claude-3-sonnet-20240229', 'claude-3-haiku-20240307',
   // Z.AI GLM
-  'glm-5v-turbo',
+  'glm-5v-turbo', 'glm-4.5v',
   // Google Gemini
   'gemini-2.5-pro',
   'gemini-2.0-flash', 'gemini-2.0-flash-001',
@@ -59,8 +59,8 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'o1': { maxInput: 200000, maxOutput: 100000 },
   'o1-mini': { maxInput: 128000, maxOutput: 65536 },
   // GPT-5 additions (for fallback validation)
-  'gpt-5': { maxInput: 256000, maxOutput: 32768 },
-  'gpt-5.1': { maxInput: 256000, maxOutput: 32768 },
+  'gpt-5': { maxInput: 400000, maxOutput: 128000 },
+  'gpt-5.1': { maxInput: 400000, maxOutput: 128000 },
   'gpt-5.2': { maxInput: 400000, maxOutput: 128000 },
   'gpt-5.4': { maxInput: 1050000, maxOutput: 128000 },
   'gpt-5.4-mini': { maxInput: 400000, maxOutput: 128000 },
@@ -102,7 +102,18 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'glm-5.1': { maxInput: 200000, maxOutput: 128000 },
   'glm-5': { maxInput: 200000, maxOutput: 128000 },
   'glm-5-turbo': { maxInput: 200000, maxOutput: 128000 },
-  'glm-5v-turbo': { maxInput: 200000, maxOutput: 128000 }
+  'glm-5v-turbo': { maxInput: 200000, maxOutput: 128000 },
+  'glm-4.7': { maxInput: 128000, maxOutput: 128000 },
+  'glm-4.7-flash': { maxInput: 128000, maxOutput: 128000 },
+  'glm-4.7-flashx': { maxInput: 128000, maxOutput: 128000 },
+  'glm-4.6': { maxInput: 128000, maxOutput: 128000 },
+  'glm-4.5': { maxInput: 128000, maxOutput: 96000 },
+  'glm-4.5-air': { maxInput: 128000, maxOutput: 96000 },
+  'glm-4.5-x': { maxInput: 128000, maxOutput: 96000 },
+  'glm-4.5-airx': { maxInput: 128000, maxOutput: 96000 },
+  'glm-4.5-flash': { maxInput: 128000, maxOutput: 96000 },
+  'glm-4.5v': { maxInput: 128000, maxOutput: 16000 },
+  'glm-4-32b-0414-128k': { maxInput: 128000, maxOutput: 16000 }
 }
 
 // All supported provider configurations

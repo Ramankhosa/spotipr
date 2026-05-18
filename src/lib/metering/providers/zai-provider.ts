@@ -12,7 +12,18 @@ export class ZAIProvider implements LLMProvider {
     'glm-5.1',
     'glm-5',
     'glm-5-turbo',
-    'glm-5v-turbo'
+    'glm-5v-turbo',
+    'glm-4.7',
+    'glm-4.7-flash',
+    'glm-4.7-flashx',
+    'glm-4.6',
+    'glm-4.5',
+    'glm-4.5-air',
+    'glm-4.5-x',
+    'glm-4.5-airx',
+    'glm-4.5-flash',
+    'glm-4.5v',
+    'glm-4-32b-0414-128k'
   ]
 
   private config: ProviderConfig
@@ -50,8 +61,8 @@ export class ZAIProvider implements LLMProvider {
     const actualModel = this.normalizeModelCode(modelToUse)
     const hasImageInput = !!request.content?.parts.some(part => part.type === 'image')
 
-    if (hasImageInput && actualModel !== 'glm-5v-turbo') {
-      throw new Error(`${actualModel} does not support image inputs; use glm-5v-turbo for vision requests`)
+    if (hasImageInput && !this.supportsVision(actualModel)) {
+      throw new Error(`${actualModel} does not support image inputs; use a GLM vision model for vision requests`)
     }
 
     try {
@@ -68,8 +79,9 @@ export class ZAIProvider implements LLMProvider {
         temperature: request.parameters?.temperature ?? 0.7
       }
 
-      if (request.parameters?.thinking !== undefined) {
-        requestBody.thinking = this.normalizeThinkingParameter(request.parameters.thinking)
+      const thinking = this.resolveThinkingParameter(request, modelToUse, actualModel)
+      if (thinking) {
+        requestBody.thinking = thinking
       }
 
       const response = await this.client.chat.completions.create(requestBody)
@@ -78,6 +90,15 @@ export class ZAIProvider implements LLMProvider {
       const outputTokens = response.usage?.completion_tokens || 0
       const thoughtTokens = response.usage?.completion_tokens_details?.reasoning_tokens || 0
       const latency = Date.now() - startTime
+      const finishReason = response.choices?.[0]?.finish_reason
+
+      if (!outputText.trim()) {
+        throw new Error(
+          `Z.AI API returned empty response (finishReason: ${finishReason || 'unknown'}, ` +
+          `completionTokens: ${outputTokens}, thoughtTokens: ${thoughtTokens}). ` +
+          `Increase maxTokensOut or disable thinking for short outputs.`
+        )
+      }
 
       return {
         output: outputText,
@@ -90,7 +111,7 @@ export class ZAIProvider implements LLMProvider {
           thoughtTokens,
           reasoningContent: response.choices?.[0]?.message?.reasoning_content,
           latencyMs: latency,
-          finishReason: response.choices?.[0]?.finish_reason
+          finishReason
         }
       }
     } catch (error: any) {
@@ -104,9 +125,26 @@ export class ZAIProvider implements LLMProvider {
       'glm-5.1': { input: 200000, output: 128000 },
       'glm-5': { input: 200000, output: 128000 },
       'glm-5-turbo': { input: 200000, output: 128000 },
-      'glm-5v-turbo': { input: 200000, output: 128000 }
+      'glm-5v-turbo': { input: 200000, output: 128000 },
+      'glm-4.7': { input: 128000, output: 128000 },
+      'glm-4.7-flash': { input: 128000, output: 128000 },
+      'glm-4.7-flashx': { input: 128000, output: 128000 },
+      'glm-4.6': { input: 128000, output: 128000 },
+      'glm-4.5': { input: 128000, output: 96000 },
+      'glm-4.5-air': { input: 128000, output: 96000 },
+      'glm-4.5-x': { input: 128000, output: 96000 },
+      'glm-4.5-airx': { input: 128000, output: 96000 },
+      'glm-4.5-flash': { input: 128000, output: 96000 },
+      'glm-4.5v': { input: 128000, output: 16000 },
+      'glm-4-32b-0414-128k': { input: 128000, output: 16000 }
     }
-    return limits[this.normalizeModelCode(modelName)] || { input: 200000, output: 128000 }
+    const normalized = this.normalizeModelCode(modelName)
+    if (limits[normalized]) return limits[normalized]
+    if (normalized.startsWith('glm-5')) return { input: 200000, output: 128000 }
+    if (normalized.startsWith('glm-4.7') || normalized.startsWith('glm-4.6')) return { input: 128000, output: 128000 }
+    if (normalized.startsWith('glm-4.5v')) return { input: 128000, output: 16000 }
+    if (normalized.startsWith('glm-4.5')) return { input: 128000, output: 96000 }
+    return { input: 128000, output: 96000 }
   }
 
   getCostPerToken(modelName: string): { input: number; output: number } {
@@ -114,9 +152,20 @@ export class ZAIProvider implements LLMProvider {
       'glm-5.1': { input: 0.0000014, output: 0.0000044 },
       'glm-5': { input: 0.000001, output: 0.0000032 },
       'glm-5-turbo': { input: 0.0000012, output: 0.000004 },
-      'glm-5v-turbo': { input: 0.0000012, output: 0.000004 }
+      'glm-5v-turbo': { input: 0.0000012, output: 0.000004 },
+      'glm-4.7': { input: 0.000001, output: 0.0000032 },
+      'glm-4.7-flash': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.7-flashx': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.6': { input: 0.000001, output: 0.0000032 },
+      'glm-4.5': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-air': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-x': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-airx': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5-flash': { input: 0.0000002, output: 0.0000011 },
+      'glm-4.5v': { input: 0.0000006, output: 0.0000018 },
+      'glm-4-32b-0414-128k': { input: 0.0000002, output: 0.0000011 }
     }
-    return costs[this.normalizeModelCode(modelName)] || { input: 0.000001, output: 0.000004 }
+    return costs[this.normalizeModelCode(modelName)] || { input: 0.0000002, output: 0.0000011 }
   }
 
   async isHealthy(): Promise<boolean> {
@@ -124,7 +173,36 @@ export class ZAIProvider implements LLMProvider {
   }
 
   private normalizeModelCode(modelName: string): string {
-    return modelName.toLowerCase()
+    return modelName.toLowerCase().replace(/-thinking$/, '')
+  }
+
+  private supportsVision(modelName: string): boolean {
+    return modelName === 'glm-5v-turbo' || modelName === 'glm-4.5v'
+  }
+
+  private supportsThinkingParameter(modelName: string): boolean {
+    return (
+      modelName.startsWith('glm-5') ||
+      modelName.startsWith('glm-4.7') ||
+      modelName.startsWith('glm-4.6') ||
+      modelName.startsWith('glm-4.5')
+    )
+  }
+
+  private resolveThinkingParameter(request: LLMRequest, requestedModel: string, actualModel: string): any | undefined {
+    if (!this.supportsThinkingParameter(actualModel)) return undefined
+
+    if (request.parameters?.thinking !== undefined) {
+      return this.normalizeThinkingParameter(request.parameters.thinking)
+    }
+
+    if (requestedModel.toLowerCase().endsWith('-thinking')) {
+      return { type: 'enabled' }
+    }
+
+    // Z.AI defaults GLM-5/4.5+ to thinking mode. For product workflows with
+    // explicit output caps, default to visible output unless the caller opts in.
+    return { type: 'disabled' }
   }
 
   private normalizeThinkingParameter(value: any): any {

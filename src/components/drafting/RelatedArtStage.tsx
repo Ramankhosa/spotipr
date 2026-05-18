@@ -43,10 +43,19 @@ type ResultItem = {
   title: string
   pn: string
   snippet?: string
+  abstract?: string
   publication_date?: string
   score?: number
   inventors?: string[] | string
   assignees?: string[] | string
+}
+
+type AnalysisProgressState = {
+  processed: number
+  total: number
+  currentBatch: number
+  totalBatches: number
+  message: string
 }
 
 const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, onComplete, onRefresh }: RelatedArtStageProps) {
@@ -76,6 +85,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   // AI review states
   const [reviewing, setReviewing] = useState(false)
   const [reviewInfo, setReviewInfo] = useState<string>('')
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgressState | null>(null)
+  const [patentDetailsMap, setPatentDetailsMap] = useState<Record<string, any>>({})
+  const [detailsLoading, setDetailsLoading] = useState(false)
   const [ideaBankOpen, setIdeaBankOpen] = useState(false)
   const [ideaBank, setIdeaBank] = useState<Array<{ title: string; core_principle: string; expected_advantage: string; tags: string[]; non_obvious_extension: string }>>([])
   const [hasRestoredFromStorage, setHasRestoredFromStorage] = useState(false)
@@ -156,6 +168,116 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const lastLoadedRunIdRef = useRef<string | null>(null)
   // Track the current session ID to detect when it changes (new patent)
   const currentSessionIdRef = useRef<string | null>(null)
+
+  function canonicalizePatentNumber(value: any) {
+    if (!value) return ''
+    const normalized = String(value).toUpperCase().replace(/[^A-Z0-9]/g, '')
+    return normalized.replace(/[A-Z]\d*$/, '')
+  }
+
+  function getPatentNumber(item: any) {
+    return String(
+      item?.publicationNumber ||
+      item?.publication_number ||
+      item?.patent_number ||
+      item?.pn ||
+      item?.publication_id ||
+      item?.publicationId ||
+      item?.patentId ||
+      item?.patent_id ||
+      item?.id ||
+      ''
+    ).trim()
+  }
+
+  function firstText(...values: any[]) {
+    for (const value of values) {
+      if (value === null || value === undefined) continue
+      const text = String(value).trim()
+      if (text) return text
+    }
+    return ''
+  }
+
+  function normalizeTextList(value: any): string[] {
+    if (Array.isArray(value)) {
+      return value.map(item => String(item || '').trim()).filter(Boolean)
+    }
+    if (typeof value === 'string') {
+      return value
+        .split(/[|;,]/)
+        .map(item => item.trim())
+        .filter(Boolean)
+    }
+    return []
+  }
+
+  function findStoredPatentDetails(item: any) {
+    const rawPn = getPatentNumber(item)
+    const canonical = canonicalizePatentNumber(rawPn)
+    return patentDetailsMap[rawPn] || patentDetailsMap[canonical] || {}
+  }
+
+  function getPatentDisplayData(item: any, index: number) {
+    const db = findStoredPatentDetails(item)
+    const rawPn = firstText(
+      db.publicationNumber,
+      item?.publicationNumber,
+      item?.publication_number,
+      item?.patent_number,
+      item?.pn,
+      item?.publication_id,
+      item?.id
+    )
+    const pn = rawPn || `Result ${index + 1}`
+    const title = firstText(db.title, item?.title, item?.invention_title, 'Untitled patent')
+    const abstract = firstText(
+      db.abstract,
+      db.description,
+      item?.abstract,
+      item?.abstract_text,
+      item?.abstractText,
+      item?.abstract_en,
+      item?.abstractEnglish,
+      item?.snippet,
+      item?.summary,
+      item?.description
+    )
+    const publicationDate = firstText(db.publicationDate, item?.publication_date, item?.pub_date, item?.date, item?.year)
+    const filingDate = firstText(db.filingDate, item?.filing_date, item?.filingDate, item?.application_date, item?.app_date)
+    const priorityDate = firstText(db.priorityDate, item?.priority_date, item?.priorityDate)
+    const applicationNumber = firstText(item?.application_number, item?.applicationNumber, item?.app_no)
+    const inventors = [
+      ...normalizeTextList(db.inventors),
+      ...normalizeTextList(item?.inventors),
+      ...normalizeTextList(item?.inventor_names),
+      ...normalizeTextList(item?.inventor)
+    ].filter((value, idx, arr) => arr.indexOf(value) === idx)
+    const assignees = [
+      ...normalizeTextList(db.assignees),
+      ...normalizeTextList(item?.assignees),
+      ...normalizeTextList(item?.assignee_names),
+      ...normalizeTextList(item?.assignee),
+      ...normalizeTextList(item?.applicants)
+    ].filter((value, idx, arr) => arr.indexOf(value) === idx)
+    const cpcCodes = [
+      ...normalizeTextList(db.cpcs),
+      ...normalizeTextList(item?.cpcCodes),
+      ...normalizeTextList(item?.cpc_codes),
+      ...normalizeTextList(item?.cpc)
+    ].filter((value, idx, arr) => arr.indexOf(value) === idx)
+    const ipcCodes = [
+      ...normalizeTextList(db.ipcs),
+      ...normalizeTextList(item?.ipcCodes),
+      ...normalizeTextList(item?.ipc_codes),
+      ...normalizeTextList(item?.ipc)
+    ].filter((value, idx, arr) => arr.indexOf(value) === idx)
+    const rawScore = item?.relevanceScore ?? item?.score ?? item?.relevance
+    const score = typeof rawScore === 'number' ? (rawScore > 1 ? rawScore : rawScore * 100) : null
+    const link = firstText(db.link, db.pdfLink, item?.link, item?.url, item?.patent_url, rawPn ? `https://patents.google.com/patent/${rawPn}` : '')
+
+    return { pn, title, abstract, publicationDate, filingDate, priorityDate, applicationNumber, inventors, assignees, cpcCodes, ipcCodes, score, link }
+  }
 
   // DEBUG: Log renders
   console.log('RelatedArtStage render - ideaBank:', ideaBank.length, 'ideaBankOpen:', ideaBankOpen, 'version:', ideaBankVersion)
@@ -279,6 +401,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setShowAdvancedSettings(false)
       setReviewing(false)
       setReviewInfo('')
+      setAnalysisProgress(null)
+      setPatentDetailsMap({})
+      setDetailsLoading(false)
       setIdeaBank([])
       setIdeaBankVersion(0)
       setHasRestoredFromStorage(false)
@@ -477,6 +602,60 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setHasLoadedSelections(true)
     }
   }, [session])
+
+  useEffect(() => {
+    if (results.length === 0) {
+      setPatentDetailsMap({})
+      return
+    }
+
+    const publicationNumbers = Array.from(
+      new Set(
+        results
+          .map((item) => getPatentNumber(item))
+          .filter((pn) => pn && pn !== 'N/A')
+      )
+    )
+
+    if (publicationNumbers.length === 0) {
+      setPatentDetailsMap({})
+      return
+    }
+
+    let cancelled = false
+
+    const loadStoredPatentDetails = async () => {
+      setDetailsLoading(true)
+      try {
+        const response = await fetch('/api/patents/details/batch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({ publicationNumbers })
+        })
+
+        if (!cancelled && response.ok) {
+          const data = await response.json()
+          setPatentDetailsMap(data?.success && data?.patents ? data.patents : {})
+        } else if (!cancelled) {
+          setPatentDetailsMap({})
+        }
+      } catch (error) {
+        console.warn('Failed to load stored patent details:', error)
+        if (!cancelled) setPatentDetailsMap({})
+      } finally {
+        if (!cancelled) setDetailsLoading(false)
+      }
+    }
+
+    loadStoredPatentDetails()
+
+    return () => {
+      cancelled = true
+    }
+  }, [results])
 
   // Auto-persist checkbox selections without refreshing the whole page
   useEffect(() => {
@@ -836,6 +1015,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
       // Reset AI analysis and selections for new search to ensure fresh workflow
       setAiAnalysis({})
+      setAnalysisProgress(null)
+      setPatentDetailsMap({})
       setSelected({})
       setIdeaBank([])
       setIdeaBankVersion(prev => prev + 1) // Force re-render
@@ -853,10 +1034,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     } catch (e) {
       console.log('Search error:', e)
       const errorData = (e as any)?.response?.data || e
+      const serviceError = String((errorData as any)?.error || 'Search failed. Please try again.')
+        .replace(/PQAI API/gi, 'Patent Search Service')
+        .replace(/PQAI/gi, 'Patent Search Service')
       if ((errorData as any)?.showMockOption) {
-        setError(`${(errorData as any).error || 'Search failed'}. Try using "Mock Search" for testing.`)
+        setError(`${serviceError} Please retry the search later.`)
       } else {
-        setError((errorData as any)?.error || 'Search failed. Please try again.')
+        setError(serviceError)
       }
     } finally {
       setBusy(false)
@@ -865,7 +1049,243 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     }
   }
 
+  const applyAIReviewResponse = async (resp: any) => {
+    console.log('=== AI REVIEW RESPONSE DEBUG ===')
+    console.log('AI Review Response received:', !!resp)
+    console.log('Response type:', typeof resp)
+
+    if (!resp) {
+      console.error('AI Review API returned null/undefined response')
+      setError('AI review failed: No response from server. Please try again.')
+      return false
+    }
+
+    console.log('Response keys:', Object.keys(resp))
+    console.log('Response has decisions:', Array.isArray(resp.decisions))
+    console.log('Response has ideaBankSuggestions:', Array.isArray(resp.ideaBankSuggestions))
+    console.log('Decisions count:', resp.decisions?.length || 0)
+    console.log('IdeaBankSuggestions count:', resp.ideaBankSuggestions?.length || 0)
+
+    const decisions: Array<{ pn: string; title: string; relevance: number; decision: string; summary: string }> = Array.isArray(resp?.decisions) ? resp.decisions : []
+
+    let ideas: any[] = []
+    if (Array.isArray(resp?.ideaBankSuggestions)) {
+      ideas = resp.ideaBankSuggestions
+      console.log('Found ideas in resp.ideaBankSuggestions')
+    } else if (Array.isArray(resp?.data?.ideaBankSuggestions)) {
+      ideas = resp.data.ideaBankSuggestions
+      console.log('Found ideas in resp.data.ideaBankSuggestions')
+    } else if (resp?.data && Array.isArray(resp.data.ideaBankSuggestions)) {
+      ideas = resp.data.ideaBankSuggestions
+      console.log('Found ideas in resp.data (nested)')
+    } else {
+      console.log('No ideas found in any expected location')
+    }
+
+    console.log('Final Idea Bank Ideas:', ideas)
+    console.log('Ideas length:', ideas.length)
+    console.log('=== END AI REVIEW RESPONSE DEBUG ===')
+
+    setIdeaBank([...ideas])
+    setIdeaBankVersion(prev => prev + 1)
+
+    const byPn: Record<string, { relevance: number; novelty_threat: string; summary: string; title: string; relevant_parts?: string[]; irrelevant_parts?: string[]; novelty_comparison?: string }> = {}
+    for (const d of decisions) {
+      if (!d?.pn) continue
+      byPn[d.pn] = {
+        relevance: typeof d.relevance === 'number' ? d.relevance : 0,
+        novelty_threat: String((d as any).novelty_threat || 'remote'),
+        summary: String(d.summary || '').slice(0, 260),
+        title: d.title || '',
+        relevant_parts: (d as any).detailedAnalysis?.relevant_parts || [],
+        irrelevant_parts: (d as any).detailedAnalysis?.irrelevant_parts || [],
+        novelty_comparison: (d as any).detailedAnalysis?.novelty_comparison || ''
+      }
+    }
+
+    const newAiAnalysis: Record<string, any> = {}
+    results.forEach((r) => {
+      const pn = getPatentNumber(r) || 'N/A'
+      if (!pn || pn === 'N/A') return
+      const dec = byPn[pn]
+      if (!dec) return
+
+      newAiAnalysis[pn] = {
+        aiSummary: dec.summary,
+        noveltyThreat: dec.novelty_threat,
+        relevantParts: Array.isArray(dec.relevant_parts) ? dec.relevant_parts : [],
+        irrelevantParts: Array.isArray(dec.irrelevant_parts) ? dec.irrelevant_parts : [],
+        noveltyComparison: String(dec.novelty_comparison || '').trim()
+      }
+    })
+
+    setAiAnalysis(newAiAnalysis)
+
+    try {
+      await onComplete({ action: 'save_ai_analysis', sessionId: session?.id, aiAnalysisData: newAiAnalysis })
+      console.log('AI analysis data saved to database')
+    } catch (e) {
+      console.error('Failed to save AI analysis data:', e)
+    }
+
+    setSelected(prev => {
+      const next = { ...prev }
+      Object.keys(next).forEach(key => {
+        const dec = byPn[key]
+        if (dec) {
+          next[key] = {
+            ...next[key],
+            aiSummary: dec.summary,
+            noveltyThreat: dec.novelty_threat,
+            tags: ['AI_REVIEWED'].concat(
+              dec.novelty_threat === 'anticipates' ? ['AI_ANTICIPATES'] :
+              dec.novelty_threat === 'obvious' ? ['AI_OBVIOUS'] :
+              dec.novelty_threat === 'adjacent' ? ['AI_ADJACENT'] :
+              ['AI_REMOTE']
+            )
+          }
+        }
+      })
+      return next
+    })
+
+    const reviewedCount = decisions.length
+    setAnalysisProgress(prev => ({
+      processed: reviewedCount,
+      total: prev?.total || results.length,
+      currentBatch: prev?.totalBatches || prev?.currentBatch || 1,
+      totalBatches: prev?.totalBatches || prev?.currentBatch || 1,
+      message: `Analysis complete for ${reviewedCount} patent${reviewedCount !== 1 ? 's' : ''}.`
+    }))
+    setReviewInfo(`AI reviewed ${reviewedCount} items${resp?.batches ? ` in ${resp.batches} batch(es)` : ''}.`)
+    return true
+  }
+
   const runAIReview = async () => {
+    if (!runId) { setError('Run a search first.'); return }
+    if (results.length === 0) { setError('No results to review.'); return }
+
+    try {
+      setError(null)
+      setReviewing(true)
+      setReviewInfo(`Preparing AI analysis for ${results.length} patents...`)
+      setAnalysisProgress({
+        processed: 0,
+        total: results.length,
+        currentBatch: 0,
+        totalBatches: 0,
+        message: 'Preparing patent batches...'
+      })
+
+      const normalizedData = (session?.ideaRecord?.normalizedData || {}) as any
+      const claimsSnapshot = getAuthoritativeClaims(normalizedData)
+      const frozenClaims = claimsSnapshot.structured
+      const claimsText = claimsSnapshot.html
+      const claimsApprovedAt = normalizedData.claimsApprovedAt
+      const claimsContext = claimsApprovedAt ? {
+        claims: frozenClaims.length > 0 ? frozenClaims : claimsText,
+        jurisdiction: normalizedData.claimsJurisdiction,
+        frozenAt: claimsApprovedAt
+      } : null
+
+      const updateProgress = (event: any) => {
+        const total = typeof event.total === 'number' && event.total > 0 ? event.total : results.length
+        const processed = typeof event.processed === 'number' ? Math.min(event.processed, total) : 0
+        const currentBatch = typeof event.batch === 'number' ? event.batch : 0
+        const totalBatches = typeof event.totalBatches === 'number' ? event.totalBatches : 0
+        const message = String(event.message || '').trim()
+
+        if (event.type === 'start') {
+          setAnalysisProgress({ processed: 0, total, currentBatch: 0, totalBatches, message: message || `Starting analysis for ${total} patents...` })
+          setReviewInfo(`Starting AI analysis for ${total} patents...`)
+        } else if (event.type === 'batch_started') {
+          setAnalysisProgress({ processed, total, currentBatch, totalBatches, message: message || `Analyzing batch ${currentBatch} of ${totalBatches}...` })
+          setReviewInfo(`Analyzing batch ${currentBatch} of ${totalBatches}...`)
+        } else if (event.type === 'batch_completed') {
+          setAnalysisProgress({ processed, total, currentBatch, totalBatches, message: message || `Analyzed ${processed} of ${total} patents.` })
+          setReviewInfo(`Analyzed ${processed} of ${total} patents...`)
+        } else if (event.type === 'saving') {
+          setAnalysisProgress({ processed: total, total, currentBatch: totalBatches, totalBatches, message: message || 'Saving AI analysis results...' })
+          setReviewInfo('Saving AI analysis results...')
+        } else if (event.type === 'saved') {
+          setAnalysisProgress({ processed: total, total, currentBatch: totalBatches, totalBatches, message: message || 'Finalizing AI analysis...' })
+          setReviewInfo('Finalizing AI analysis...')
+        }
+      }
+
+      let finalResponse: any = null
+
+      if (patent?.id && typeof window !== 'undefined') {
+        const response = await fetch(`/api/patents/${patent.id}/drafting`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          },
+          body: JSON.stringify({
+            action: 'related_art_llm_review_stream',
+            sessionId: session?.id,
+            runId,
+            claimsContext
+          })
+        })
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}))
+          throw new Error(err?.error || 'AI review failed. Please try again.')
+        }
+
+        if (response.body) {
+          const reader = response.body.getReader()
+          const decoder = new TextDecoder()
+          let buffer = ''
+
+          const handleLine = (line: string) => {
+            if (!line.trim()) return
+            const event = JSON.parse(line)
+            if (event.type === 'error') {
+              throw new Error(event.error || 'AI review failed. Please try again.')
+            }
+            if (event.type === 'complete') {
+              finalResponse = event.response || event.data || event
+              return
+            }
+            updateProgress(event)
+          }
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+            for (const line of lines) handleLine(line)
+          }
+
+          buffer += decoder.decode()
+          if (buffer.trim()) handleLine(buffer)
+        }
+      }
+
+      if (!finalResponse) {
+        finalResponse = await onComplete({
+          action: 'related_art_llm_review',
+          sessionId: session?.id,
+          runId,
+          claimsContext
+        })
+      }
+
+      await applyAIReviewResponse(finalResponse)
+    } catch (e) {
+      console.error('AI review failed:', e)
+      setError(e instanceof Error ? e.message : 'AI review failed. Please try again.')
+    } finally {
+      setReviewing(false)
+    }
+  }
+
+  const runAIReviewLegacy = async () => {
     if (!runId) { setError('Run a search first.'); return }
     if (results.length === 0) { setError('No results to review.'); return }
     try {
@@ -1412,7 +1832,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               </div>
             </div>
 
-            {/* Search Results Preview (if any) */}
+            {/* Search Results (if any) */}
             {results.length > 0 && (
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex items-center justify-between">
@@ -1422,6 +1842,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     </h3>
                     <p className="text-sm text-gray-500 mt-1">
                       Found {results.length} potentially relevant patents
+                      {detailsLoading ? ' - loading Patent Search Service metadata' : ''}
                     </p>
                   </div>
                   <span className="px-3 py-1.5 bg-green-100 text-green-700 rounded-full text-sm font-medium">
@@ -1429,34 +1850,225 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   </span>
                 </div>
 
-                <div className="divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
-                  {results.slice(0, 5).map((r, i) => {
-                    const pn = r.pn || (r as any).patent_number || 'N/A'
-                    const score = (r.score || 0) * 100
+                <div className="divide-y divide-gray-100 max-h-[650px] overflow-y-auto">
+                  {results.map((r, i) => {
+                    const details = getPatentDisplayData(r, i)
+                    const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
                     return (
-                      <div key={i} className="p-4 hover:bg-gray-50 transition-colors">
+                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-gray-50 transition-colors">
                         <div className="flex items-start gap-4">
                           <div className="text-sm text-gray-400 w-6">{i + 1}</div>
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium text-gray-900 truncate">{r.title}</div>
-                            <div className="text-xs text-gray-500 mt-1">{pn}</div>
+                            <div className="font-medium text-gray-900">{details.title}</div>
+                            <div className="text-xs text-gray-500 mt-1">{details.pn}</div>
+                            <div className="mt-3 text-sm text-gray-700 leading-relaxed">
+                              {details.abstract || 'No abstract or snippet was returned for this patent.'}
+                            </div>
+
+                            {isExpanded && (
+                              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                                <div className="grid gap-3 md:grid-cols-2">
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Publication: </span>
+                                    {details.publicationDate || 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Filing: </span>
+                                    {details.filingDate || 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Priority: </span>
+                                    {details.priorityDate || 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Application: </span>
+                                    {details.applicationNumber || 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Inventors: </span>
+                                    {details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">Assignees: </span>
+                                    {details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">CPC: </span>
+                                    {details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    <span className="font-semibold text-gray-800">IPC: </span>
+                                    {details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}
+                                  </div>
+                                </div>
+                                {details.link && (
+                                  <a
+                                    href={details.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                                  >
+                                    View patent source
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedPatentDetails(prev => {
+                                  const next = new Set(prev)
+                                  const key = `search-${details.pn}`
+                                  if (next.has(key)) next.delete(key)
+                                  else next.add(key)
+                                  return next
+                                })
+                              }}
+                              className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                            >
+                              {isExpanded ? 'Hide details' : 'Show details'}
+                            </button>
                           </div>
-                          <div className={`px-2 py-1 rounded text-xs font-medium ${
-                            score >= 80 ? 'bg-indigo-100 text-indigo-700' :
-                            score >= 60 ? 'bg-blue-100 text-blue-700' :
-                            'bg-gray-100 text-gray-600'
-                          }`}>
-                            {score.toFixed(0)}% match
-                          </div>
+                          {details.score !== null && (
+                            <div className={`px-2 py-1 rounded text-xs font-medium ${
+                              details.score >= 80 ? 'bg-indigo-100 text-indigo-700' :
+                              details.score >= 60 ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-600'
+                            }`}>
+                              {details.score.toFixed(0)}% match
+                            </div>
+                          )}
                         </div>
                       </div>
                     )
                   })}
-                  {results.length > 5 && (
-                    <div className="p-4 text-center text-sm text-gray-500 bg-gray-50">
-                      +{results.length - 5} more patents
-                    </div>
-                  )}
+                </div>
+              </div>
+            )}
+
+            {false && results.length > 0 && (
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-gray-100 flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="font-semibold text-gray-900">Patent Details From Patent Search Service</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Full metadata and abstracts/snippets for all {results.length} search results.
+                      {detailsLoading ? ' Loading stored patent metadata...' : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMainTab('analyze')}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                  >
+                    Analyze These Results
+                  </button>
+                </div>
+
+                <div className="divide-y divide-gray-100 max-h-[650px] overflow-y-auto">
+                  {results.map((r, i) => {
+                    const details = getPatentDisplayData(r, i)
+                    const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
+                    const metadataItems = [
+                      details.publicationDate ? ['Publication', details.publicationDate] : null,
+                      details.filingDate ? ['Filing', details.filingDate] : null,
+                      details.priorityDate ? ['Priority', details.priorityDate] : null,
+                      details.applicationNumber ? ['Application', details.applicationNumber] : null
+                    ].filter(Boolean) as Array<[string, string]>
+
+                    return (
+                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-gray-50 transition-colors">
+                        <div className="flex items-start gap-4">
+                          <div className="text-sm text-gray-400 w-6">{i + 1}</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="font-semibold text-gray-900">{details.title}</div>
+                              <div className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">{details.pn}</div>
+                            </div>
+
+                            {metadataItems.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {metadataItems.map(([label, value]) => (
+                                  <span key={label} className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                                    <span className="font-medium text-gray-700">{label}:</span> {value}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className={`mt-3 text-sm text-gray-700 leading-relaxed ${isExpanded ? '' : 'line-clamp-3'}`}>
+                              {details.abstract || 'No abstract or snippet was returned for this patent.'}
+                            </div>
+
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                              <div className="text-xs text-gray-600">
+                                <span className="font-semibold text-gray-800">Inventors: </span>
+                                {details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}
+                              </div>
+                              <div className="text-xs text-gray-600">
+                                <span className="font-semibold text-gray-800">Assignees: </span>
+                                {details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}
+                              </div>
+                            </div>
+
+                            {isExpanded && (
+                              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                                <div className="grid gap-3 md:grid-cols-2">
+                                  <div>
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">CPC</div>
+                                    <div className="mt-1 text-sm text-gray-700">{details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">IPC</div>
+                                    <div className="mt-1 text-sm text-gray-700">{details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}</div>
+                                  </div>
+                                </div>
+                                {details.link && (
+                                  <a
+                                    href={details.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                                  >
+                                    View patent source
+                                    <svg className="ml-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h4m0 0v4m0-4L10 14m-5 3h14" />
+                                    </svg>
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedPatentDetails(prev => {
+                                  const next = new Set(prev)
+                                  const key = `search-${details.pn}`
+                                  if (next.has(key)) next.delete(key)
+                                  else next.add(key)
+                                  return next
+                                })
+                              }}
+                              className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                            >
+                              {isExpanded ? 'Show less' : 'Show full details'}
+                            </button>
+                          </div>
+                          {details.score !== null && (
+                            <div className={`px-2 py-1 rounded text-xs font-medium ${
+                              details.score >= 80 ? 'bg-indigo-100 text-indigo-700' :
+                              details.score >= 60 ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-600'
+                            }`}>
+                              {details.score.toFixed(0)}% match
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -1494,6 +2106,38 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         'Start AI Analysis'
                       )}
                     </button>
+                    {analysisProgress && (reviewing || analysisProgress.processed > 0) && (
+                      <div className="mt-5 bg-white/15 rounded-xl p-4 border border-white/20">
+                        <div className="flex items-center justify-between gap-4 text-sm font-medium">
+                          <span>
+                            Processed {analysisProgress.processed} of {analysisProgress.total} patents
+                          </span>
+                          <span>
+                            {analysisProgress.total > 0
+                              ? `${Math.round((analysisProgress.processed / analysisProgress.total) * 100)}%`
+                              : '0%'}
+                          </span>
+                        </div>
+                        <div className="mt-3 h-2 rounded-full bg-white/25 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-white transition-all duration-500"
+                            style={{
+                              width: `${analysisProgress.total > 0
+                                ? Math.min(100, Math.round((analysisProgress.processed / analysisProgress.total) * 100))
+                                : 0}%`
+                            }}
+                          />
+                        </div>
+                        <div className="mt-2 text-sm text-emerald-100">
+                          {analysisProgress.message}
+                          {analysisProgress.totalBatches > 0 && (
+                            <span className="ml-2">
+                              Batch {Math.max(analysisProgress.currentBatch, 1)} of {analysisProgress.totalBatches}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

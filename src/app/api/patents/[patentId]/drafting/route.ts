@@ -28,7 +28,7 @@ import {
 import { resolveCanonicalKey, normalizeSectionKeys } from '@/lib/section-alias-service';
 import { enforceServiceAccess } from '@/lib/service-access-middleware';
 import { getDiagramConfig, generateDiagramPromptInstructions } from '@/lib/jurisdiction-style-service';
-import { trackSectionDrafted, canDraftPatent } from '@/lib/patent-drafting-tracker';
+import { trackSectionDrafted, canDraftPatent, canTrackSectionDrafts } from '@/lib/patent-drafting-tracker';
 import { resolveSourceOfTruth, computeJurisdictionStateOnDelete } from '@/lib/jurisdiction-state-service';
 import { cloneInstructionsBetweenSessions } from '@/lib/user-instruction-service';
 import { getSupersetSectionKeys, isNonApplicableHeading, getSectionContextRequirements } from '@/lib/multi-jurisdiction-service';
@@ -49,6 +49,7 @@ import {
 import {
   analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
+  normalizePreliminaryClaimScopeStyle,
   resetPreliminaryClaimFields,
   shouldBlockPreliminaryClaimReset,
 } from '@/lib/preliminary-claim-generation';
@@ -910,6 +911,8 @@ export async function POST(
         return await handleRelatedArtSelect(authResult.user, patentId, data);
       case 'related_art_llm_review':
         return await handleRelatedArtLLMReview(authResult.user, patentId, data, requestHeaders);
+      case 'related_art_llm_review_stream':
+        return handleRelatedArtLLMReviewStream(authResult.user, patentId, data, requestHeaders);
 
       case 'clear_related_art_selections':
         return await handleClearRelatedArtSelections(authResult.user, patentId, data);
@@ -943,7 +946,7 @@ export async function POST(
           Object.values(data.patch).every(value => value == null || (typeof value === 'string' && !value.trim()))
 
         if (!isClearOnlyAutosave && authResult.user.tenantId && data.sessionId) {
-          const quotaCheck = await canDraftPatent(authResult.user.tenantId, data.sessionId)
+          const quotaCheck = await canDraftPatent(authResult.user.tenantId, data.sessionId, patentId)
           if (!quotaCheck.allowed) {
             return NextResponse.json(
               {
@@ -1358,7 +1361,69 @@ async function handleUpdatePersonaConfig(user: any, patentId: string, data: any)
   }
 }
 
-async function handleRelatedArtLLMReview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+type RelatedArtReviewProgress = {
+  type: 'start' | 'batch_started' | 'batch_completed' | 'saving' | 'saved'
+  processed?: number
+  total?: number
+  batch?: number
+  totalBatches?: number
+  message?: string
+}
+
+type RelatedArtReviewProgressSink = (event: RelatedArtReviewProgress) => void | Promise<void>
+
+async function emitRelatedArtReviewProgress(onProgress: RelatedArtReviewProgressSink | undefined, event: RelatedArtReviewProgress) {
+  if (!onProgress) return
+  try {
+    await onProgress(event)
+  } catch (error) {
+    console.warn('[Related Art Review] Failed to emit progress event:', error)
+  }
+}
+
+function handleRelatedArtLLMReviewStream(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (payload: any) => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`))
+      }
+
+      try {
+        const response = await handleRelatedArtLLMReview(user, patentId, data, requestHeaders, send)
+        const text = await response.text()
+        let payload: any = {}
+        try {
+          payload = text ? JSON.parse(text) : {}
+        } catch {
+          payload = { raw: text }
+        }
+
+        if (!response.ok) {
+          send({ type: 'error', error: payload?.error || 'AI review failed. Please try again.' })
+        } else {
+          send({ type: 'complete', ...payload })
+        }
+      } catch (error) {
+        console.error('[Related Art Review] Stream failed:', error)
+        send({ type: 'error', error: error instanceof Error ? error.message : 'AI review failed. Please try again.' })
+      } finally {
+        controller.close()
+      }
+    }
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no'
+    }
+  })
+}
+
+async function handleRelatedArtLLMReview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>, onProgress?: RelatedArtReviewProgressSink) {
   const { sessionId, runId, batchSize, claimsContext } = data
   if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
 
@@ -1456,11 +1521,30 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   // STEP 1: Relevance Analysis (in batches to avoid token limits)
   console.log('Starting relevance analysis with Gemini 2.5 Flash-Lite...')
   const effectiveBatchSize = batchSize || 6 // Use provided batchSize or default to 6
+  const totalBatches = Math.max(1, Math.ceil(candidates.length / effectiveBatchSize))
   let relevanceData: any[] = []
+
+  await emitRelatedArtReviewProgress(onProgress, {
+    type: 'start',
+    processed: 0,
+    total: candidates.length,
+    totalBatches,
+    message: `Starting AI analysis for ${candidates.length} patents`
+  })
 
   for (let i = 0; i < candidates.length; i += effectiveBatchSize) {
     const batch = candidates.slice(i, i + effectiveBatchSize)
+    const batchNumber = Math.floor(i / effectiveBatchSize) + 1
     const batchText = batch.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nTitle: ${b.title}\nAbstract: ${b.abstract}`).join('\n\n')
+
+    await emitRelatedArtReviewProgress(onProgress, {
+      type: 'batch_started',
+      processed: i,
+      total: candidates.length,
+      batch: batchNumber,
+      totalBatches,
+      message: `Analyzing batch ${batchNumber} of ${totalBatches}`
+    })
 
     const batchRelevancePrompt = `You are an expert patent attorney. Analyze these patent candidates for relevance to our invention and assess novelty threat to our specific claims.
 
@@ -1513,7 +1597,7 @@ ${batchText}`
       }
     })
 
-    console.log(`Relevance analysis batch ${Math.floor(i/effectiveBatchSize) + 1} model used:`, relevanceResult?.response?.modelClass || 'unknown')
+    console.log(`Relevance analysis batch ${batchNumber} model used:`, relevanceResult?.response?.modelClass || 'unknown')
 
     if (relevanceResult.success && relevanceResult.response) {
       try {
@@ -1525,9 +1609,9 @@ ${batchText}`
         const parsed = JSON.parse(json)
         const batchResults = Array.isArray(parsed?.relevance_results) ? parsed.relevance_results : []
         relevanceData.push(...batchResults)
-        console.log(`Batch ${Math.floor(i/effectiveBatchSize) + 1} successful:`, batchResults.length, 'patents analyzed')
+        console.log(`Batch ${batchNumber} successful:`, batchResults.length, 'patents analyzed')
       } catch (e) {
-        console.log(`Batch ${Math.floor(i/effectiveBatchSize) + 1} JSON parse failed:`, e instanceof Error ? e.message : String(e))
+        console.log(`Batch ${batchNumber} JSON parse failed:`, e instanceof Error ? e.message : String(e))
         // Fallback for this batch
         const fallbackResults = batch.map(c => ({
           pn: c.pn,
@@ -1538,7 +1622,25 @@ ${batchText}`
         }))
         relevanceData.push(...fallbackResults)
       }
+    } else {
+      const fallbackResults = batch.map(c => ({
+        pn: c.pn,
+        title: c.title,
+        relevance: 0.5,
+        novelty_threat: 'adjacent',
+        summary: 'Basic relevance analysis - AI response was unavailable for this batch'
+      }))
+      relevanceData.push(...fallbackResults)
     }
+
+    await emitRelatedArtReviewProgress(onProgress, {
+      type: 'batch_completed',
+      processed: Math.min(i + batch.length, candidates.length),
+      total: candidates.length,
+      batch: batchNumber,
+      totalBatches,
+      message: `Analyzed ${Math.min(i + batch.length, candidates.length)} of ${candidates.length} patents`
+    })
   }
 
   console.log('Total relevance analysis completed:', relevanceData.length, 'patents analyzed')
@@ -1597,6 +1699,15 @@ ${batchText}`
     return base
   }
 
+  await emitRelatedArtReviewProgress(onProgress, {
+    type: 'saving',
+    processed: candidates.length,
+    total: candidates.length,
+    batch: totalBatches,
+    totalBatches,
+    message: 'Saving AI analysis results'
+  })
+
   for (const d of allDecisions) {
     if (!d.pn) continue
     try {
@@ -1610,6 +1721,15 @@ ${batchText}`
     if (d.novelty_threat !== 'anticipates') autoUse.push(d.pn)
   }
 
+  await emitRelatedArtReviewProgress(onProgress, {
+    type: 'saved',
+    processed: candidates.length,
+    total: candidates.length,
+    batch: totalBatches,
+    totalBatches,
+    message: 'AI analysis results saved'
+  })
+
   // Build response - old synchronous idea bank persistence removed
   // Now handled asynchronously by unified Idea Bank Funnel (Stream A, B, C)
   const ideaFunnelEnabled = isIdeaBankGenerationEnabled()
@@ -1619,6 +1739,7 @@ ${batchText}`
     decisions: allDecisions,
     autoSelect: autoUse,
     runId: useRunId,
+    batches: totalBatches,
     // ideaBankSuggestions removed - now generated asynchronously via unified funnel
     ideaFunnelTriggered: ideaFunnelEnabled  // Indicates async idea generation is in progress
   }
@@ -4637,7 +4758,8 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   const normalizedMergeKeys = [
     'problem','objectives','components','logic','inputs','outputs','variants','bestMethod',
     'fieldOfRelevance','subfield','recommendedFocus','complianceNotes','drawingsFocus','claimStrategy','riskFlags',
-    'abstract','cpcCodes','ipcCodes','scopeRecommendations','supportDataSources','schemaVersion','sourceInputMeta'
+    'abstract','cpcCodes','ipcCodes','scopeRecommendations','supportDataSources','schemaVersion','sourceInputMeta',
+    'claimScopeStyle'
   ] as const
 
   const baseNormalized = (existing?.normalizedData as any) || {}
@@ -4665,6 +4787,9 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   if ('supportDataSources' in normalizedPatch) {
     normalizedPatch.supportDataSources = coerceSupportDataSources(normalizedPatch.supportDataSources)
     normalizedPatch.schemaVersion = 2
+  }
+  if ('claimScopeStyle' in normalizedPatch) {
+    normalizedPatch.claimScopeStyle = normalizePreliminaryClaimScopeStyle(normalizedPatch.claimScopeStyle)
   }
   if ('schemaVersion' in normalizedPatch) {
     normalizedPatch.schemaVersion = 2
@@ -4856,7 +4981,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     usePersonaStyle: usePersonaStyleFromData, 
     personaSelection: personaSelectionFromData,
     acceptPersonaWarnings,
-    userClaimRemarks  // User remarks for claim generation (influences drafting, not patent type)
+    userClaimRemarks,  // User remarks for claim generation (influences drafting, not patent type)
+    claimScopeStyle
   } = data
 
   if (!sessionId) {
@@ -4878,6 +5004,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
   if (existingNormalized.claimsApprovedAt) {
     return NextResponse.json({ error: 'Claims are frozen. Unfreeze to regenerate.' }, { status: 400 })
   }
+  const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle ?? existingNormalized.claimScopeStyle)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // PATENT TYPE DECISION - from Stage 0 normalization or user override
@@ -4905,19 +5032,25 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
   }
   console.log(`[handleGenerateClaims] Using stored patent type: ${patentTypePrimary}`)
 
-  // Save userClaimRemarks if provided (stored in normalizedData - this is descriptive, not decisional)
+  const preferencePatch: Record<string, any> = {}
   if (userClaimRemarks !== undefined) {
+    preferencePatch.userClaimRemarks = (userClaimRemarks || '').trim()
+  }
+  if (claimScopeStyle !== undefined || existingNormalized.claimScopeStyle !== normalizedClaimScopeStyle) {
+    preferencePatch.claimScopeStyle = normalizedClaimScopeStyle
+  }
+  // Save claim-generation preferences if provided. These are descriptive controls, not source facts.
+  if (Object.keys(preferencePatch).length > 0) {
     await prisma.ideaRecord.update({
       where: { sessionId },
       data: {
         normalizedData: {
           ...existingNormalized,
-          userClaimRemarks: (userClaimRemarks || '').trim()
+          ...preferencePatch
         }
       }
     })
-    // Update local copy
-    existingNormalized.userClaimRemarks = (userClaimRemarks || '').trim()
+    Object.assign(existingNormalized, preferencePatch)
   }
 
   try {
@@ -5140,7 +5273,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       writingSampleBlock,
       context,
       patentTypePrimary,
-      userClaimRemarks: existingNormalized.userClaimRemarks
+      userClaimRemarks: existingNormalized.userClaimRemarks,
+      claimScopeStyle: normalizedClaimScopeStyle
     })
 
     // Call LLM to generate claims using the proper gateway API
@@ -5154,7 +5288,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       metadata: {
         purpose: 'claims_generation',
         jurisdiction: activeJurisdiction,
-        sessionId
+        sessionId,
+        claimScopeStyle: normalizedClaimScopeStyle
       }
     })
 
@@ -5206,6 +5341,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       claimsProvisional: claimsHtml,
       claimsStructuredProvisional: generatedClaims,
       claimGenerationQuality,
+      claimScopeStyle: normalizedClaimScopeStyle,
       claimsJurisdiction: activeJurisdiction,
       claimsGeneratedAt: new Date().toISOString()
     }
@@ -5220,6 +5356,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       claimsHtml,
       claimGenerationQuality,
       jurisdiction: activeJurisdiction,
+      claimScopeStyle: normalizedClaimScopeStyle,
       patentType: patentTypePrimary, // Return patent type for UI display
       personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
       personaProvenance,
@@ -6112,7 +6249,7 @@ Preserve all HTML tags and formatting exactly as in the input.`
       prompt,
       idempotencyKey: crypto.randomUUID(),
       inputTokens: Math.ceil(prompt.length / 4),
-      metadata: { purpose: 'add_component_numbers_to_claims', sessionId, numberingStyle, patentTypePrimary }
+      metadata: { patentId, sessionId, purpose: 'add_component_numbers_to_claims', numberingStyle, patentTypePrimary }
     })
 
     if (!llmResult.success || !llmResult.response?.output) {
@@ -6886,7 +7023,15 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
       ? false
       : true
 
-  const result = await DraftingService.normalizeIdea(rawIdea, title, user.tenantId, requestHeaders, areaOfInvention, effectiveAllowRefine);
+  const result = await DraftingService.normalizeIdea(
+    rawIdea,
+    title,
+    user.tenantId,
+    requestHeaders,
+    areaOfInvention,
+    effectiveAllowRefine,
+    { patentId, sessionId: session.id }
+  );
 
   if (!result.success) {
     console.error('Idea normalization failed:', result.error);
@@ -7471,17 +7616,17 @@ async function handleUpdateFigurePlan(user: any, patentId: string, data: any) {
 }
 
 async function handleTestPQAIKey() {
-  // Direct PQAI only
+  // Direct patent search service only
   const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || ''
   if (!token) {
-    return NextResponse.json({ keyPresent: false, message: 'No PQAI API token configured. Set PQAI_API_TOKEN.' })
+    return NextResponse.json({ keyPresent: false, message: 'No Patent Search Service token configured.' })
   }
 
   const baseUrl = 'https://api.projectpq.ai/search/102'
   const params = new URLSearchParams({ q: 'drone navigation system', n: '1', type: 'patent', snip: '1', token })
   const url = `${baseUrl}?${params.toString()}`
 
-  console.log('Testing PQAI API (Direct):', { url, hasToken: !!token, tokenLength: token.length })
+  console.log('Testing Patent Search Service:', { url, hasToken: !!token, tokenLength: token.length })
 
   try {
     const controller = new AbortController()
@@ -7489,7 +7634,7 @@ async function handleTestPQAIKey() {
     const resp = await fetch(url, { method: 'GET', signal: controller.signal })
     clearTimeout(to)
     const text = await resp.text()
-    console.log('PQAI test response:', { status: resp.status, statusText: resp.statusText, bodyPreview: text.substring(0, 200) })
+    console.log('Patent Search Service test response:', { status: resp.status, statusText: resp.statusText, bodyPreview: text.substring(0, 200) })
     return NextResponse.json({
       keyPresent: true,
       usingDirect: true,
@@ -7498,11 +7643,11 @@ async function handleTestPQAIKey() {
       method: 'GET',
       url,
       responseText: text.substring(0, 300),
-      message: resp.ok ? 'API call succeeded (Direct PQAI)' : `API call returned ${resp.status}: ${resp.statusText}`
+      message: resp.ok ? 'Patent Search Service call succeeded' : `Patent Search Service call returned ${resp.status}: ${resp.statusText}`
     })
   } catch (e) {
-    console.log('PQAI test network error:', e)
-    return NextResponse.json({ keyPresent: true, usingDirect: true, testStatus: 'error', error: String(e), message: 'Network error calling PQAI test endpoint' })
+    console.log('Patent Search Service test network error:', e)
+    return NextResponse.json({ keyPresent: true, usingDirect: true, testStatus: 'error', error: 'Network error', message: 'Network error calling Patent Search Service test endpoint' })
   }
 }
 
@@ -7553,7 +7698,7 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
   const session = await prisma.draftingSession.findFirst({ where: { id: sessionId, patentId, userId: user.id }, include: { ideaRecord: true } })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
 
-  // Use only the searchQuery field from Stage 1 (compact, optimized for PQAI search)
+  // Use only the searchQuery field from Stage 1 (compact, optimized for patent search)
   const idea = session.ideaRecord as any
   const searchQueryFromDB = (idea?.searchQuery || '').toString().trim()
 
@@ -7579,7 +7724,7 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
     }, { status: 400 })
   }
 
-  // Simple normalization for PQAI (keep it compact as per Stage 1 design)
+  // Simple normalization for the patent search service (keep it compact as per Stage 1 design)
   // - remove most punctuation except hyphens
   // - collapse whitespace
   // - keep it short to avoid server errors
@@ -7590,15 +7735,15 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
     .replace(/-/g, ' ')                      // turn hyphens into spaces to avoid tokenization issues
     .replace(/\s+/g, ' ')                   // collapse whitespace
     .trim()
-  // Constrain to first 20 words (keep it compact per Stage 1 design and avoid PQAI server 500s)
+  // Constrain to first 20 words (keep it compact per Stage 1 design and avoid service errors)
   const words = safeQuery.split(/\s+/)
   if (words.length > 20) safeQuery = words.slice(0, 20).join(' ')
 
-  // Direct PQAI only
+  // Direct patent search service only
   const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || ''
-  if (!token) return NextResponse.json({ error: 'No PQAI API token configured. Set PQAI_API_TOKEN.' }, { status: 500 })
+  if (!token) return NextResponse.json({ error: 'No Patent Search Service token configured.' }, { status: 500 })
 
-  // PQAI endpoint: GET /search/102 with query parameters
+  // Patent search service endpoint: GET /search/102 with query parameters
   const baseUrl = 'https://api.projectpq.ai/search/102'
 
   const params = new URLSearchParams({
@@ -7618,7 +7763,7 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
   const url = `${baseUrl}?${params.toString()}`
 
   // Debug: Log the final URL components
-  console.log('PQAI Request Debug:', {
+  console.log('Patent Search Service request debug:', {
     baseUrl,
     queryLength: safeQuery.length,
     originalQueryLength: baseQuery.length,
@@ -7634,7 +7779,7 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   }
 
-  console.log('PQAI search (Direct):', {
+  console.log('Patent Search Service search:', {
     url,
     queryPreview: safeQuery.substring(0, 100) + '...',
     limit,
@@ -7649,14 +7794,14 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
     const to = setTimeout(() => controller.abort(), 15000)
     resp = await fetch(url, { method: 'GET', headers, signal: controller.signal, cache: 'no-store' })
     clearTimeout(to)
-    console.log('PQAI search result:', { status: resp.status, url: url.substring(0, 120) + '...' })
+    console.log('Patent Search Service search result:', { status: resp.status, url: url.substring(0, 120) + '...' })
   } catch (e) {
-    console.log('PQAI search network error:', e)
-    return NextResponse.json({ error: 'Network error contacting PQAI API', details: String(e) }, { status: 502 })
+    console.log('Patent Search Service network error:', e)
+    return NextResponse.json({ error: 'Network error contacting Patent Search Service', details: 'Network request failed' }, { status: 502 })
   }
 
   if (!resp || !resp.ok) {
-    let errorMsg = 'PQAI API request failed'
+    let errorMsg = 'Patent Search Service request failed'
     let details: string | undefined
     let shouldShowMockOption = false
 
@@ -7664,24 +7809,28 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
       errorMsg += ` (HTTP ${resp.status})`
 
       if (resp.status === 500) {
-        errorMsg = 'PQAI API server error - the service may be temporarily unavailable'
+        errorMsg = 'Patent Search Service server error - the service may be temporarily unavailable'
         shouldShowMockOption = true
       } else if (resp.status === 401 || resp.status === 403) {
-        errorMsg = 'PQAI API authentication failed - please check your API token'
+        errorMsg = 'Patent Search Service authentication failed'
       } else if (resp.status === 429) {
-        errorMsg = 'PQAI API rate limit exceeded - please try again later'
+        errorMsg = 'Patent Search Service rate limit exceeded - please try again later'
       }
       try {
         const errorText = await resp.text()
-        details = errorText || undefined
+        details = errorText
+          ? errorText
+              .replace(/PQAI API/gi, 'Patent Search Service')
+              .replace(/PQAI/gi, 'Patent Search Service')
+          : undefined
         if (errorText.includes('Server error while handling request')) {
-          errorMsg = 'PQAI API is currently experiencing server issues. Please try again later or use "Mock Search" for testing.'
+          errorMsg = 'Patent Search Service is currently experiencing server issues. Please try again later.'
           shouldShowMockOption = true
         }
       } catch {}
     }
 
-    console.log('PQAI API error:', { status: resp?.status, error: errorMsg, details })
+    console.log('Patent Search Service error:', { status: resp?.status, error: errorMsg, details })
 
     return NextResponse.json({
       error: errorMsg,
@@ -7694,7 +7843,7 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
   let dataJson: any = {}
   try { dataJson = await resp.json() } catch (e) { console.log('Failed to parse JSON response:', e) }
 
-  console.log('PQAI API full response:', JSON.stringify(dataJson, null, 2))
+  console.log('Patent Search Service full response:', JSON.stringify(dataJson, null, 2))
 
   // Try multiple possible result locations
   let results = []
@@ -7706,7 +7855,7 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
     results = dataJson
   }
 
-  console.log('PQAI API success - results count:', results.length, 'response keys:', Object.keys(dataJson))
+  console.log('Patent Search Service success - results count:', results.length, 'response keys:', Object.keys(dataJson))
   console.log('First result sample:', results[0] ? Object.keys(results[0]) : 'No results')
   if (results[0]) {
     console.log('First result data:', JSON.stringify(results[0], null, 2))
@@ -13545,6 +13694,28 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
     );
   }
 
+  if (session.tenantId) {
+    const generatedSectionKeys = [
+      result.draft?.detailedDescription?.trim() ? 'detailedDescription' : null,
+      result.draft?.claims?.trim() ? 'claims' : null
+    ].filter(Boolean) as string[]
+    const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, generatedSectionKeys)
+    if (!quotaCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: quotaCheck.reason || 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+          code: 'QUOTA_EXCEEDED',
+          quotaExceeded: true,
+          quota: {
+            daily: quotaCheck.quota.dailyUsed + '/' + (quotaCheck.quota.dailyLimit ?? '∞'),
+            monthly: quotaCheck.quota.monthlyUsed + '/' + (quotaCheck.quota.monthlyLimit ?? '∞')
+          }
+        },
+        { status: 403 }
+      )
+    }
+  }
+
   // Create new draft version
   const extraSections = { ...(result.validationReport?.extraSections || {}) }
   if (result.draft?.crossReference) {
@@ -13716,6 +13887,25 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
     return NextResponse.json({ draft: null, clearedSections })
   }
 
+  const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
+  if (session.tenantId) {
+    const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, savedSectionKeys)
+    if (!quotaCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: quotaCheck.reason || 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+          code: 'QUOTA_EXCEEDED',
+          quotaExceeded: true,
+          quota: {
+            daily: quotaCheck.quota.dailyUsed + '/' + (quotaCheck.quota.dailyLimit ?? '∞'),
+            monthly: quotaCheck.quota.monthlyUsed + '/' + (quotaCheck.quota.monthlyLimit ?? '∞')
+          }
+        },
+        { status: 403 }
+      )
+    }
+  }
+
   // Create or update a working draft in place: if last exists, update it; else create version 1
   let draft
   if (last) {
@@ -13759,7 +13949,6 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
   // Track essential sections for patent-based quota counting
   // A patent counts toward quota when both detailedDescription AND claims are drafted
   if (session.tenantId) {
-    const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
     for (const sectionKey of savedSectionKeys) {
       if (sectionKey === 'detailedDescription' || sectionKey === 'description' || sectionKey === 'claims') {
         const trackResult = await trackSectionDrafted(
@@ -14065,6 +14254,25 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     const normalizedGenerated = result.generated ? await normalizeSectionKeys(result.generated as Record<string, any>) : {}
     if (areFiguresSkipped(session)) {
       delete (normalizedGenerated as Record<string, any>).briefDescriptionOfDrawings
+    }
+
+    const generatedSectionKeys = Object.keys(normalizedGenerated).filter(k => normalizedGenerated[k] && typeof normalizedGenerated[k] === 'string' && (normalizedGenerated[k] as string).trim())
+    if (session.tenantId) {
+      const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, generatedSectionKeys)
+      if (!quotaCheck.allowed) {
+        return NextResponse.json(
+          {
+            error: quotaCheck.reason || 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+            code: 'QUOTA_EXCEEDED',
+            quotaExceeded: true,
+            quota: {
+              daily: quotaCheck.quota.dailyUsed + '/' + (quotaCheck.quota.dailyLimit ?? '∞'),
+              monthly: quotaCheck.quota.monthlyUsed + '/' + (quotaCheck.quota.monthlyLimit ?? '∞')
+            }
+          },
+          { status: 403 }
+        )
+      }
     }
     
     if (last && Object.keys(normalizedGenerated).length > 0) {
@@ -14385,6 +14593,26 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
     ...(validation.report || {})
   }
 
+  const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
+  if (session.tenantId) {
+    const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, savedSectionKeys)
+    if (!quotaCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: quotaCheck.reason || 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+          code: 'QUOTA_EXCEEDED',
+          quotaExceeded: true,
+          quota: {
+            daily: quotaCheck.quota.dailyUsed + '/' + (quotaCheck.quota.dailyLimit ?? '∞'),
+            monthly: quotaCheck.quota.monthlyUsed + '/' + (quotaCheck.quota.monthlyLimit ?? '∞')
+          },
+          validationReport
+        },
+        { status: 403 }
+      )
+    }
+  }
+
   // Note: extraSections is a JSON column added for scalability - TypeScript types may need IDE restart to update
   const draftData: any = {
       sessionId,
@@ -14430,7 +14658,6 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
   // Track essential sections for patent-based quota counting
   // A patent counts toward quota when both detailedDescription AND claims are drafted
   if (session.tenantId) {
-    const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
     for (const sectionKey of savedSectionKeys) {
       if (sectionKey === 'detailedDescription' || sectionKey === 'description' || sectionKey === 'claims') {
         const trackResult = await trackSectionDrafted(

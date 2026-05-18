@@ -281,9 +281,9 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-4-turbo': { input: 128000, output: 4096 },
       'gpt-4': { input: 8192, output: 4096 },
       // GPT-5 Series (estimated based on typical patterns)
-      'gpt-5': { input: 256000, output: 32768 },
-      'gpt-5.1': { input: 256000, output: 32768 },
-      'gpt-5.2': { input: 256000, output: 32768 },
+      'gpt-5': { input: 400000, output: 128000 },
+      'gpt-5.1': { input: 400000, output: 128000 },
+      'gpt-5.2': { input: 400000, output: 128000 },
       'gpt-5.4': { input: 1050000, output: 128000 },
       'gpt-5.4-mini': { input: 400000, output: 128000 },
       'gpt-5.4-nano': { input: 400000, output: 128000 },

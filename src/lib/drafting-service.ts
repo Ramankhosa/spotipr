@@ -440,7 +440,8 @@ export class DraftingService {
     tenantId?: string,
     requestHeaders?: Record<string, string>,
     areaOfInvention?: string,
-    allowRefine: boolean = true
+    allowRefine: boolean = true,
+    usageMetadata?: Record<string, any>
   ): Promise<IdeaNormalizationResult> {
     try {
       // Debug logging
@@ -477,7 +478,11 @@ export class DraftingService {
         stageCode: 'DRAFT_IDEA_ENTRY', // Stage for idea normalization
         prompt,
         parameters: { tenantId, ...(allowRefine ? { temperature: 0.2 } : { temperature: 0.0 }) },
-        idempotencyKey: crypto.randomUUID()
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          ...(usageMetadata || {}),
+          purpose: usageMetadata?.purpose || 'idea_normalization'
+        }
       });
 
       console.log('LLM gateway result:', {

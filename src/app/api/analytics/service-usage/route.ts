@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
+import { normalizeUsageDateRange, toInclusiveDateRange } from '@/lib/usage-periods'
 
 // Force dynamic rendering for API routes that use headers
 export const dynamic = 'force-dynamic'
@@ -62,14 +63,9 @@ export async function GET(request: NextRequest) {
       tenantId: getParam('tenantId'),
     })
 
-    const endDate = query.endDate ? new Date(query.endDate) : new Date()
-    const startDate = query.startDate
-      ? new Date(query.startDate)
-      : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000) // default last 30 days
-
-    // Normalize to full-day boundaries
-    startDate.setHours(0, 0, 0, 0)
-    endDate.setHours(23, 59, 59, 999)
+    const normalizedRange = normalizeUsageDateRange(query.startDate, query.endDate)
+    const startDate = normalizedRange.start
+    const endDate = normalizedRange.endInclusive
 
     // Base where clauses
     const userWhere: any = {}
@@ -77,10 +73,7 @@ export async function GET(request: NextRequest) {
       userWhere.tenantId = query.tenantId
     }
 
-    const dateRange = {
-      gte: startDate,
-      lte: endDate,
-    }
+    const dateRange = toInclusiveDateRange(normalizedRange)
 
     // Fetch counted patent drafts per user (quota-aligned)
     const draftingByUser = await prisma.patentDraftingUsage.groupBy({

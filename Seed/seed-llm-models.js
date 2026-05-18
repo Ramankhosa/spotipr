@@ -655,6 +655,138 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    {
+      code: 'glm-4.7',
+      displayName: 'GLM-4.7',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 320,   // $3.20
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.7-flash',
+      displayName: 'GLM-4.7 Flash',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.7-flashx',
+      displayName: 'GLM-4.7 FlashX',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.6',
+      displayName: 'GLM-4.6',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 320,   // $3.20
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5',
+      displayName: 'GLM-4.5',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-air',
+      displayName: 'GLM-4.5 Air',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-x',
+      displayName: 'GLM-4.5 X',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-airx',
+      displayName: 'GLM-4.5 AirX',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5-flash',
+      displayName: 'GLM-4.5 Flash',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4.5v',
+      displayName: 'GLM-4.5V',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 60,     // $0.60
+      outputCostPer1M: 180,   // $1.80
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'glm-4-32b-0414-128k',
+      displayName: 'GLM-4 32B 128K',
+      provider: 'zai',
+      contextWindow: 128000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 20,     // $0.20
+      outputCostPer1M: 110,   // $1.10
+      isActive: true,
+      isDefault: false
+    },
 
     // === GROQ MODELS (Fast inference) ===
     // Provider supports: llama-3.3-70b-versatile, llama-3.1-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768, gemma2-9b-it

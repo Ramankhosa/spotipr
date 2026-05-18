@@ -139,6 +139,17 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'glm-5': 'zai',
     'glm-5-turbo': 'zai',
     'glm-5v-turbo': 'zai',
+    'glm-4.7': 'zai',
+    'glm-4.7-flash': 'zai',
+    'glm-4.7-flashx': 'zai',
+    'glm-4.6': 'zai',
+    'glm-4.5': 'zai',
+    'glm-4.5-air': 'zai',
+    'glm-4.5-x': 'zai',
+    'glm-4.5-airx': 'zai',
+    'glm-4.5-flash': 'zai',
+    'glm-4.5v': 'zai',
+    'glm-4-32b-0414-128k': 'zai',
     
     // Groq - Friendly names (prefixed)
     'groq-llama-3.3-70b': 'groq',

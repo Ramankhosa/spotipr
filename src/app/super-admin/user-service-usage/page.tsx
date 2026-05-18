@@ -18,8 +18,13 @@ interface ServiceUsageUser {
   tenantName: string | null
   tenantType: 'INDIVIDUAL' | 'ENTERPRISE' | null
   patentsDrafted: number
+  draftingSessionsStarted?: number
+  patentDraftsInProgress?: number
   noveltySearches: number
   ideasReserved: number
+  registrationSource?: string | null
+  signupAtiTokenId?: string | null
+  signupAtiFingerprint?: string | null
   // Optional aggregated LLM usage metrics (filled from admin usage APIs when available)
   totalInputTokens?: number
   totalOutputTokens?: number
@@ -34,6 +39,8 @@ interface ServiceUsageResponse {
   users: ServiceUsageUser[]
   summary: {
     totalPatentsDrafted: number
+    totalDraftingSessionsStarted?: number
+    totalPatentDraftsInProgress?: number
     totalNoveltySearches: number
     totalIdeasReserved: number
   }
@@ -50,8 +57,12 @@ interface AdminUsageTenant {
   totalApiCalls: number
   totalCost: number
   patentDrafts: number
+  draftingSessionsStarted?: number
+  patentDraftsInProgress?: number
   noveltySearches: number
   ideasReserved: number
+  registrationSource?: string | null
+  atiTokenCount?: number
 }
 
 interface AdminUsageSummaryResponse {
@@ -63,6 +74,8 @@ interface AdminUsageSummaryResponse {
     totalApiCalls: number
     totalCost: number
     totalPatentsDrafted: number
+    totalDraftingSessionsStarted?: number
+    totalPatentDraftsInProgress?: number
     totalNoveltySearches: number
     totalIdeasReserved: number
   }
@@ -301,52 +314,54 @@ export default function UserServiceUsagePage() {
         endDate: end.toISOString()
       }
 
-      const serviceParams = new URLSearchParams(baseParams)
-      if (selectedTenantId) {
-        serviceParams.append('tenantId', selectedTenantId)
-      }
-
       const adminParams = new URLSearchParams(baseParams)
       if (selectedTenantId) {
         adminParams.append('tenantId', selectedTenantId)
       }
-      adminParams.append('pageSize', '1000')
-      adminParams.append('sortBy', 'inputTokens')
-      adminParams.append('sortDir', 'desc')
 
       const headers = {
         Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`
       }
 
-      const [serviceResponse, adminResponse] = await Promise.all([
-        fetch(`/api/analytics/service-usage?${serviceParams.toString()}`, {
-          headers
-        }),
-        fetch(`/api/admin/usage/summary?${adminParams.toString()}`, {
-          headers
-        })
-      ])
+      const response = await fetch(`/api/admin/usage/unified?${adminParams.toString()}`, {
+        headers
+      })
 
-      if (!serviceResponse.ok) {
-        const errorData = await serviceResponse.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Failed to fetch service usage data')
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to fetch unified usage data')
       }
 
-      const serviceBody: ServiceUsageResponse = await serviceResponse.json()
-      setData(serviceBody.users)
-      setSummary(serviceBody.summary)
-
-      if (adminResponse.ok) {
-        const adminBody: AdminUsageSummaryResponse = await adminResponse.json()
-        setAdminSummary(adminBody)
-      } else {
-        const adminError = await adminResponse.json().catch(() => ({}))
-        console.error(
-          'Failed to fetch admin usage summary:',
-          (adminError as any).error || adminResponse.statusText
-        )
-        setAdminSummary(null)
-      }
+      const body = await response.json()
+      setData(body.users || [])
+      setSummary({
+        totalPatentsDrafted: body.summary?.totalPatentsDrafted || 0,
+        totalDraftingSessionsStarted: body.summary?.totalDraftingSessionsStarted || 0,
+        totalPatentDraftsInProgress: body.summary?.totalPatentDraftsInProgress || 0,
+        totalNoveltySearches: body.summary?.totalNoveltySearches || 0,
+        totalIdeasReserved: body.summary?.totalIdeasReserved || 0
+      })
+      setAdminSummary({
+        startDate: body.startDate,
+        endDate: body.endDate,
+        summary: {
+          totalInputTokens: body.summary?.totalInputTokens || 0,
+          totalOutputTokens: body.summary?.totalOutputTokens || 0,
+          totalApiCalls: body.summary?.totalApiCalls || 0,
+          totalCost: body.summary?.totalCost || 0,
+          totalPatentsDrafted: body.summary?.totalPatentsDrafted || 0,
+          totalDraftingSessionsStarted: body.summary?.totalDraftingSessionsStarted || 0,
+          totalPatentDraftsInProgress: body.summary?.totalPatentDraftsInProgress || 0,
+          totalNoveltySearches: body.summary?.totalNoveltySearches || 0,
+          totalIdeasReserved: body.summary?.totalIdeasReserved || 0
+        },
+        tenants: body.tenants || [],
+        pagination: {
+          page: 1,
+          pageSize: body.tenants?.length || 0,
+          totalTenants: body.tenants?.length || 0
+        }
+      })
 
       // Reset token and tenant user details when filters change
       setTokenDetails(null)
@@ -628,8 +643,12 @@ export default function UserServiceUsagePage() {
           realTenantId: t.tenantId,
           name: t.tenantName || 'No tenant',
           type: t.tenantType,
+          registrationSource: t.registrationSource || null,
+          atiTokenCount: t.atiTokenCount || 0,
           users: usersForTenant,
           patentsDrafted: t.patentDrafts,
+          draftingSessionsStarted: t.draftingSessionsStarted || 0,
+          patentDraftsInProgress: t.patentDraftsInProgress || 0,
           noveltySearches: t.noveltySearches,
           ideasReserved: t.ideasReserved,
           totalInputTokens: t.totalInputTokens,
@@ -644,8 +663,12 @@ export default function UserServiceUsagePage() {
     const buckets: Record<string, {
       name: string
       type: string | null
+      registrationSource: string | null
+      atiTokenCount: number
       users: ServiceUsageUser[]
       patentsDrafted: number
+      draftingSessionsStarted: number
+      patentDraftsInProgress: number
       noveltySearches: number
       ideasReserved: number
     }> = {}
@@ -655,14 +678,20 @@ export default function UserServiceUsagePage() {
         buckets[key] = {
           name: u.tenantName || 'No tenant',
           type: u.tenantType || null,
+          registrationSource: u.registrationSource || null,
+          atiTokenCount: u.signupAtiTokenId ? 1 : 0,
           users: [],
           patentsDrafted: 0,
+          draftingSessionsStarted: 0,
+          patentDraftsInProgress: 0,
           noveltySearches: 0,
           ideasReserved: 0
         }
       }
       buckets[key].users.push(u)
       buckets[key].patentsDrafted += u.patentsDrafted
+      buckets[key].draftingSessionsStarted += u.draftingSessionsStarted || 0
+      buckets[key].patentDraftsInProgress += u.patentDraftsInProgress || 0
       buckets[key].noveltySearches += u.noveltySearches
       buckets[key].ideasReserved += u.ideasReserved
     })
@@ -748,7 +777,7 @@ export default function UserServiceUsagePage() {
           <div>
             <h1 className="text-3xl font-bold text-gray-900">User Wise Service Usage</h1>
             <p className="text-gray-600 mt-1">
-              Monitor how many patents, novelty searches, idea reservations, and LLM tokens each user consumes.
+              Monitor counted patent drafts, sessions, ATI context, service actions, and LLM/API cost.
             </p>
           </div>
           <div className="flex items-center space-x-4">
@@ -858,14 +887,34 @@ export default function UserServiceUsagePage() {
         </div>
 
         {/* Summary cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
           <div className="bg-white p-6 rounded-lg shadow border">
-            <h3 className="text-sm font-medium text-gray-600 mb-2">Patents drafted</h3>
+            <h3 className="text-sm font-medium text-gray-600 mb-2">Counted patent drafts</h3>
             <div className="text-2xl font-bold text-gray-900">
               {summary ? formatNumber(summary.totalPatentsDrafted) : '—'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
-              Total drafting sessions started in the selected period.
+              Completed drafts counted against patent quota.
+            </p>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow border">
+            <h3 className="text-sm font-medium text-gray-600 mb-2">Sessions started</h3>
+            <div className="text-2xl font-bold text-gray-900">
+              {summary ? formatNumber(summary.totalDraftingSessionsStarted || 0) : 'â€”'}
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              New drafting sessions opened in the selected period.
+            </p>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow border">
+            <h3 className="text-sm font-medium text-gray-600 mb-2">In-progress drafts</h3>
+            <div className="text-2xl font-bold text-gray-900">
+              {summary ? formatNumber(summary.totalPatentDraftsInProgress || 0) : 'â€”'}
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              Partial patent drafts not counted yet.
             </p>
           </div>
 
@@ -946,8 +995,10 @@ export default function UserServiceUsagePage() {
               <thead>
                 <tr className="border-b bg-gray-50">
                   <th className="px-4 py-2 text-left">Tenant</th>
-                  <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-right">Patents drafted</th>
+                  <th className="px-4 py-2 text-left">Type / ATI</th>
+                  <th className="px-4 py-2 text-right">Counted drafts</th>
+                  <th className="px-4 py-2 text-right">Sessions</th>
+                  <th className="px-4 py-2 text-right">In progress</th>
                   <th className="px-4 py-2 text-right">Novelty searches</th>
                   <th className="px-4 py-2 text-right">Ideas reserved</th>
                   <th className="px-4 py-2 text-right">Total actions</th>
@@ -957,7 +1008,7 @@ export default function UserServiceUsagePage() {
               <tbody>
                 {tenantsAggregated.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={9} className="px-4 py-6 text-center text-gray-500">
                       No tenant data for the selected filters.
                     </td>
                   </tr>
@@ -970,8 +1021,13 @@ export default function UserServiceUsagePage() {
                         <div className="font-medium">{t.name}</div>
                         <div className="text-xs text-gray-500">{t.tenantId}</div>
                       </td>
-                      <td className="px-4 py-2 text-xs text-gray-700">{t.type || 'N/A'}</td>
+                      <td className="px-4 py-2 text-xs text-gray-700">
+                        <div>{t.type || 'N/A'}</div>
+                        <div className="text-gray-500">{t.registrationSource || 'Unknown'}{t.atiTokenCount ? ` - ${t.atiTokenCount} ATI` : ''}</div>
+                      </td>
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.patentsDrafted)}</td>
+                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.draftingSessionsStarted || 0)}</td>
+                      <td className="px-4 py-2 text-right font-mono">{formatNumber(t.patentDraftsInProgress || 0)}</td>
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.noveltySearches)}</td>
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.ideasReserved)}</td>
                       <td className="px-4 py-2 text-right font-mono font-semibold">{formatNumber(t.totalActions)}</td>
@@ -1003,7 +1059,11 @@ export default function UserServiceUsagePage() {
                     'tenantType',
                     'userName',
                     'userEmail',
-                    'patentsDrafted',
+                    'registrationSource',
+                    'signupAtiFingerprint',
+                    'countedPatentDrafts',
+                    'draftingSessionsStarted',
+                    'patentDraftsInProgress',
                     'noveltySearches',
                     'ideasReserved',
                     'totalActions'
@@ -1013,7 +1073,11 @@ export default function UserServiceUsagePage() {
                     row.tenantType || '',
                     row.userName,
                     row.userEmail,
+                    row.registrationSource || '',
+                    row.signupAtiFingerprint || '',
                     row.patentsDrafted,
+                    row.draftingSessionsStarted || 0,
+                    row.patentDraftsInProgress || 0,
                     row.noveltySearches,
                     row.ideasReserved,
                     row.patentsDrafted + row.noveltySearches + row.ideasReserved
@@ -1051,7 +1115,9 @@ export default function UserServiceUsagePage() {
                     <th className="px-4 py-2 text-left">Tenant type</th>
                     <th className="px-4 py-2 text-left">User</th>
                     <th className="px-4 py-2 text-left">Email</th>
-                    <th className="px-4 py-2 text-right">Patents drafted</th>
+                    <th className="px-4 py-2 text-right">Counted drafts</th>
+                    <th className="px-4 py-2 text-right">Sessions</th>
+                    <th className="px-4 py-2 text-right">In progress</th>
                     <th className="px-4 py-2 text-right">Novelty searches</th>
                     <th className="px-4 py-2 text-right">Ideas reserved</th>
                     <th className="px-4 py-2 text-right">Total actions</th>
@@ -1062,7 +1128,7 @@ export default function UserServiceUsagePage() {
                   {visibleUsers.length === 0 && (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={11}
                         className="px-4 py-8 text-center text-gray-500"
                       >
                         No activity found for the selected filters.
@@ -1095,10 +1161,22 @@ export default function UserServiceUsagePage() {
                           <td className="px-4 py-2">
                             <div className="font-medium">{row.userName}</div>
                             <div className="text-xs text-gray-500">ID: {row.userId}</div>
+                            {(row.registrationSource || row.signupAtiFingerprint) && (
+                              <div className="text-xs text-gray-500">
+                                {row.registrationSource || 'Unknown source'}
+                                {row.signupAtiFingerprint ? ` - ATI ${row.signupAtiFingerprint}` : ''}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-2">{row.userEmail}</td>
                           <td className="px-4 py-2 text-right font-mono">
                             {formatNumber(row.patentsDrafted)}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {formatNumber(row.draftingSessionsStarted || 0)}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {formatNumber(row.patentDraftsInProgress || 0)}
                           </td>
                           <td className="px-4 py-2 text-right font-mono">
                             {formatNumber(row.noveltySearches)}
@@ -1135,7 +1213,7 @@ export default function UserServiceUsagePage() {
                         </tr>
                         {isExpanded && tokenDetails && (
                           <tr className="bg-gray-50">
-                            <td colSpan={9} className="px-4 py-3">
+                            <td colSpan={11} className="px-4 py-3">
                               {tokenDetails.loading ? (
                                 <div className="text-xs text-gray-500">Loading token usage...</div>
                               ) : tokenDetails.error ? (

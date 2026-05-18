@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getMetaActualCost } from '@/lib/usage-log-cost'
+import { normalizeUsageDateRange, toInclusiveDateRange } from '@/lib/usage-periods'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -83,18 +84,14 @@ export async function GET(
       apiCode: getParam('apiCode')
     })
 
-    const endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
-    const startDate = parsed.startDate ? new Date(parsed.startDate) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
-    startDate.setHours(0, 0, 0, 0)
-    endDate.setHours(23, 59, 59, 999)
+    const normalizedRange = normalizeUsageDateRange(parsed.startDate, parsed.endDate)
+    const startDate = normalizedRange.start
+    const endDate = normalizedRange.endInclusive
 
     const where: any = {
       tenantId: params.tenantId,
       userId: params.userId,
-      startedAt: {
-        gte: startDate,
-        lte: endDate
-      },
+      startedAt: toInclusiveDateRange(normalizedRange),
       status: 'COMPLETED'
     }
 

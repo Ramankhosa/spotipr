@@ -16,6 +16,7 @@
  */
 
 import { prisma } from './prisma'
+import { getUtcDayWindow, getUtcMonthWindow } from './usage-periods'
 
 // Essential sections that must be drafted before a patent counts toward quota
 const ESSENTIAL_SECTIONS = ['detailedDescription', 'claims'] as const
@@ -56,23 +57,6 @@ export interface PatentDraftingQuota {
 // Billing period helpers (subscription-cycle based monthly quota)
 // ======================================================================
 
-function getUtcMonthWindow(now: Date): { start: Date; endExclusive: Date } {
-  const year = now.getUTCFullYear()
-  const month = now.getUTCMonth()
-  const start = new Date(Date.UTC(year, month, 1, 0, 0, 0, 0))
-  const endExclusive = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0, 0))
-  return { start, endExclusive }
-}
-
-function getUtcDayWindow(now: Date): { start: Date; endInclusive: Date } {
-  const year = now.getUTCFullYear()
-  const month = now.getUTCMonth()
-  const day = now.getUTCDate()
-  const start = new Date(Date.UTC(year, month, day, 0, 0, 0, 0))
-  const endInclusive = new Date(Date.UTC(year, month, day, 23, 59, 59, 999))
-  return { start, endInclusive }
-}
-
 function addMonthsClampedUtc(base: Date, months: number): Date {
   const year = base.getUTCFullYear()
   const month = base.getUTCMonth() + months
@@ -105,9 +89,10 @@ function resolveAnchoredMonthlyWindow(now: Date, anchorStart: Date): { start: Da
 
 async function resolveBillingPeriod(
   tenantId: string,
-  now: Date
+  now: Date,
+  client: typeof prisma | any = prisma
 ): Promise<{ start: Date; endExclusive: Date; key: string; source: 'subscription' | 'calendar' }> {
-  const subscription = await prisma.subscription.findFirst({
+  const subscription = await client.subscription.findFirst({
     where: {
       tenantId,
       status: { in: ['ACTIVE', 'PENDING', 'AUTHENTICATED'] },
@@ -158,152 +143,127 @@ async function resolveBillingPeriod(
   }
 }
 
-/**
- * Track that a section has been drafted for a session
- * Returns whether this section drafting caused the patent to be counted
- */
-export async function trackSectionDrafted(
+async function findPatentUsageRecord(
+  client: typeof prisma | any,
   tenantId: string,
-  sessionId: string,
   patentId: string,
-  userId: string,
-  sectionKey: string
-): Promise<{ counted: boolean; quotaExceeded: boolean }> {
-  const isDescription = sectionKey === 'detailedDescription' || sectionKey === 'description'
-  const isClaims = sectionKey === 'claims'
-  
-  if (!isDescription && !isClaims) {
-    // Non-essential section - no impact on quota counting
-    return { counted: false, quotaExceeded: false }
-  }
-  
-  const now = new Date()
-  const billingPeriod = await resolveBillingPeriod(tenantId, now)
-  const periodKey = billingPeriod.key
-  
-  // Upsert the tracking record
-  const usage = await prisma.patentDraftingUsage.upsert({
-    where: { sessionId },
-    create: {
-      tenantId,
-      sessionId,
-      patentId,
-      userId,
-      hasDescription: isDescription,
-      hasClaims: isClaims,
-      isCounted: false
-    },
-    update: {
-      hasDescription: isDescription ? true : undefined,
-      hasClaims: isClaims ? true : undefined
-    }
+  sessionId?: string
+) {
+  const byPatent = await client.patentDraftingUsage.findFirst({
+    where: { tenantId, patentId }
   })
-  
-  // Re-fetch to get accurate state after update
-  const updatedUsage = await prisma.patentDraftingUsage.findUnique({
+  if (byPatent || !sessionId) return byPatent
+
+  return client.patentDraftingUsage.findUnique({
     where: { sessionId }
   })
-  
-  if (!updatedUsage) {
-    return { counted: false, quotaExceeded: false }
-  }
-  
-  // Check if patent should now be counted (has both essential sections)
-  const shouldCount = updatedUsage.hasDescription && updatedUsage.hasClaims && !updatedUsage.isCounted
-  
-  if (shouldCount) {
-    // Check if counting this would exceed quota
-    const quota = await getPatentDraftingQuota(tenantId)
-    
-    // Check daily quota
-    if (quota.dailyLimit !== null && quota.dailyUsed >= quota.dailyLimit) {
-      return { counted: false, quotaExceeded: true }
-    }
-    
-    // Check monthly quota
-    if (quota.monthlyLimit !== null && quota.monthlyUsed >= quota.monthlyLimit) {
-      return { counted: false, quotaExceeded: true }
-    }
-    
-    // Mark as counted
-    await prisma.patentDraftingUsage.update({
-      where: { sessionId },
-      data: {
-        isCounted: true,
-        countedMonth: periodKey,
-        countedAt: new Date()
-      }
-    })
-    
-    console.log(`[PatentDraftingTracker] Patent counted for session ${sessionId} (tenant: ${tenantId})`)
-    return { counted: true, quotaExceeded: false }
-  }
-  
-  return { counted: false, quotaExceeded: false }
 }
 
-/**
- * Get current patent drafting quota status for a tenant
- */
-export async function getPatentDraftingQuota(tenantId: string): Promise<PatentDraftingQuota> {
-  const now = new Date()
-  const billingPeriod = await resolveBillingPeriod(tenantId, now)
+async function upsertPatentUsageRecord(
+  client: typeof prisma | any,
+  params: {
+    tenantId: string
+    sessionId: string
+    patentId: string
+    userId: string
+    hasDescription: boolean
+    hasClaims: boolean
+    isCounted?: boolean
+    countedMonth?: string | null
+    countedAt?: Date | null
+  }
+) {
+  const existing = await findPatentUsageRecord(client, params.tenantId, params.patentId, params.sessionId)
+  if (existing) {
+    return client.patentDraftingUsage.update({
+      where: { id: existing.id },
+      data: {
+        patentId: params.patentId,
+        sessionId: params.sessionId,
+        userId: params.isCounted && !existing.isCounted ? params.userId : existing.userId,
+        hasDescription: params.hasDescription,
+        hasClaims: params.hasClaims,
+        isCounted: params.isCounted ?? existing.isCounted,
+        countedMonth: params.countedMonth === undefined ? existing.countedMonth : params.countedMonth,
+        countedAt: params.countedAt === undefined ? existing.countedAt : params.countedAt
+      }
+    })
+  }
+
+  return client.patentDraftingUsage.create({
+    data: {
+      tenantId: params.tenantId,
+      sessionId: params.sessionId,
+      patentId: params.patentId,
+      userId: params.userId,
+      hasDescription: params.hasDescription,
+      hasClaims: params.hasClaims,
+      isCounted: params.isCounted ?? false,
+      countedMonth: params.countedMonth ?? null,
+      countedAt: params.countedAt ?? null
+    }
+  })
+}
+
+async function getPatentDraftingQuotaForClient(
+  client: typeof prisma | any,
+  tenantId: string,
+  now: Date
+): Promise<PatentDraftingQuota> {
+  const billingPeriod = await resolveBillingPeriod(tenantId, now, client)
   const periodEndInclusive = new Date(billingPeriod.endExclusive.getTime() - 1)
   const dayWindow = getUtcDayWindow(now)
-  
-  // Get daily and monthly counted patents
-  const [dailyCount, monthlyCount] = await Promise.all([
-    prisma.patentDraftingUsage.count({
+
+  const [dailyCount, monthlyCount, tenantPlan] = await Promise.all([
+    client.patentDraftingUsage.count({
       where: {
         tenantId,
         isCounted: true,
         countedAt: { gte: dayWindow.start, lte: dayWindow.endInclusive }
       }
     }),
-    prisma.patentDraftingUsage.count({
+    client.patentDraftingUsage.count({
       where: {
         tenantId,
         isCounted: true,
         countedAt: { gte: billingPeriod.start, lte: periodEndInclusive }
       }
-    })
-  ])
-  
-  // Get quota limits from tenant plan
-  const tenantPlan = await prisma.tenantPlan.findFirst({
-    where: {
-      tenantId,
-      status: 'ACTIVE',
-      effectiveFrom: { lte: new Date() },
-      OR: [
-        { expiresAt: null },
-        { expiresAt: { gt: new Date() } }
-      ]
-    },
-    include: {
-      plan: {
-        include: {
-          planFeatures: {
-            include: { feature: true }
+    }),
+    client.tenantPlan.findFirst({
+      where: {
+        tenantId,
+        status: 'ACTIVE',
+        effectiveFrom: { lte: now },
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } }
+        ]
+      },
+      include: {
+        plan: {
+          include: {
+            planFeatures: {
+              include: { feature: true }
+            }
           }
         }
       }
-    }
-  })
-  
+    })
+  ])
+
   let dailyLimit: number | null = null
   let monthlyLimit: number | null = null
-  
+
   if (tenantPlan) {
     const patentFeature = tenantPlan.plan.planFeatures?.find(
-      pf => pf.feature.code === 'PATENT_DRAFTING'
+      (pf: any) => pf.feature.code === 'PATENT_DRAFTING'
     )
     if (patentFeature) {
       dailyLimit = patentFeature.dailyQuota
       monthlyLimit = patentFeature.monthlyQuota
     }
   }
-  
+
   return {
     dailyUsed: dailyCount,
     dailyLimit,
@@ -318,20 +278,116 @@ export async function getPatentDraftingQuota(tenantId: string): Promise<PatentDr
   }
 }
 
+function essentialFlagsFromSections(sectionKeys: string[]) {
+  return {
+    hasDescription: sectionKeys.some(s => s === 'detailedDescription' || s === 'description'),
+    hasClaims: sectionKeys.includes('claims')
+  }
+}
+
+/**
+ * Track that a section has been drafted for a session
+ * Returns whether this section drafting caused the patent to be counted
+ */
+export async function trackSectionDrafted(
+  tenantId: string,
+  sessionId: string,
+  patentId: string,
+  userId: string,
+  sectionKey: string
+): Promise<{ counted: boolean; quotaExceeded: boolean }> {
+  const { hasDescription: isDescription, hasClaims: isClaims } = essentialFlagsFromSections([sectionKey])
+  
+  if (!isDescription && !isClaims) {
+    // Non-essential section - no impact on quota counting
+    return { counted: false, quotaExceeded: false }
+  }
+  
+  const now = new Date()
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const existing = await findPatentUsageRecord(tx, tenantId, patentId, sessionId)
+        const nextHasDescription = Boolean(existing?.hasDescription || isDescription)
+        const nextHasClaims = Boolean(existing?.hasClaims || isClaims)
+        const shouldCount = nextHasDescription && nextHasClaims && !existing?.isCounted
+
+        if (shouldCount) {
+          const quota = await getPatentDraftingQuotaForClient(tx, tenantId, now)
+          if (quota.dailyLimit !== null && quota.dailyUsed >= quota.dailyLimit) {
+            return { counted: false, quotaExceeded: true }
+          }
+          if (quota.monthlyLimit !== null && quota.monthlyUsed >= quota.monthlyLimit) {
+            return { counted: false, quotaExceeded: true }
+          }
+
+          const billingPeriod = await resolveBillingPeriod(tenantId, now, tx)
+          await upsertPatentUsageRecord(tx, {
+            tenantId,
+            sessionId,
+            patentId,
+            userId,
+            hasDescription: nextHasDescription,
+            hasClaims: nextHasClaims,
+            isCounted: true,
+            countedMonth: billingPeriod.key,
+            countedAt: now
+          })
+
+          console.log(`[PatentDraftingTracker] Patent counted for patent ${patentId} (tenant: ${tenantId})`)
+          return { counted: true, quotaExceeded: false }
+        }
+
+        await upsertPatentUsageRecord(tx, {
+          tenantId,
+          sessionId,
+          patentId,
+          userId,
+          hasDescription: nextHasDescription,
+          hasClaims: nextHasClaims,
+          isCounted: existing?.isCounted ?? false,
+          countedMonth: existing?.countedMonth ?? null,
+          countedAt: existing?.countedAt ?? null
+        })
+
+        return { counted: false, quotaExceeded: false }
+      }, { isolationLevel: 'Serializable' } as any)
+    } catch (error: any) {
+      if (attempt === 0 && (error?.code === 'P2002' || error?.code === 'P2034')) {
+        continue
+      }
+      throw error
+    }
+  }
+
+  return { counted: false, quotaExceeded: false }
+}
+
+/**
+ * Get current patent drafting quota status for a tenant
+ */
+export async function getPatentDraftingQuota(tenantId: string): Promise<PatentDraftingQuota> {
+  const now = new Date()
+  return getPatentDraftingQuotaForClient(prisma, tenantId, now)
+}
+
 /**
  * Check if tenant can draft a new patent (has quota remaining)
  * This should be called BEFORE starting to draft sections
  */
-export async function canDraftPatent(tenantId: string, sessionId?: string): Promise<{
+export async function canDraftPatent(tenantId: string, sessionId?: string, patentId?: string): Promise<{
   allowed: boolean
   reason?: string
   quota: PatentDraftingQuota
 }> {
   // If session already exists and is counted, always allow (continue drafting)
-  if (sessionId) {
-    const existingUsage = await prisma.patentDraftingUsage.findUnique({
-      where: { sessionId }
-    })
+  if (sessionId || patentId) {
+    const existingUsage = patentId
+      ? await findPatentUsageRecord(prisma, tenantId, patentId, sessionId)
+      : await prisma.patentDraftingUsage.findUnique({
+          where: { sessionId }
+        })
     
     if (existingUsage?.isCounted) {
       // Patent already counted - allow continued drafting
@@ -340,7 +396,7 @@ export async function canDraftPatent(tenantId: string, sessionId?: string): Prom
     }
     
     // Check if essential sections are partially drafted
-    if (existingUsage && (existingUsage.hasDescription || existingUsage.hasClaims)) {
+    if (existingUsage && (existingUsage.hasDescription || existingUsage.hasClaims) && !(existingUsage.hasDescription && existingUsage.hasClaims)) {
       // Allow completing the patent
       const quota = await getPatentDraftingQuota(tenantId)
       return { allowed: true, quota }
@@ -367,6 +423,55 @@ export async function canDraftPatent(tenantId: string, sessionId?: string): Prom
     }
   }
   
+  return { allowed: true, quota }
+}
+
+export async function canTrackSectionDrafts(
+  tenantId: string,
+  sessionId: string,
+  patentId: string,
+  sectionKeys: string[]
+): Promise<{
+  allowed: boolean
+  reason?: string
+  quota: PatentDraftingQuota
+}> {
+  const flags = essentialFlagsFromSections(sectionKeys)
+  const quota = await getPatentDraftingQuota(tenantId)
+
+  if (!flags.hasDescription && !flags.hasClaims) {
+    return { allowed: true, quota }
+  }
+
+  const existing = await findPatentUsageRecord(prisma, tenantId, patentId, sessionId)
+  if (existing?.isCounted) {
+    return { allowed: true, quota }
+  }
+
+  const nextHasDescription = Boolean(existing?.hasDescription || flags.hasDescription)
+  const nextHasClaims = Boolean(existing?.hasClaims || flags.hasClaims)
+  const wouldCount = nextHasDescription && nextHasClaims
+
+  if (!wouldCount) {
+    return { allowed: true, quota }
+  }
+
+  if (quota.dailyLimit !== null && quota.dailyUsed >= quota.dailyLimit) {
+    return {
+      allowed: false,
+      reason: 'Tenant daily quota exceeded for PATENT_DRAFTING',
+      quota
+    }
+  }
+
+  if (quota.monthlyLimit !== null && quota.monthlyUsed >= quota.monthlyLimit) {
+    return {
+      allowed: false,
+      reason: 'Tenant monthly quota exceeded for PATENT_DRAFTING',
+      quota
+    }
+  }
+
   return { allowed: true, quota }
 }
 
@@ -404,18 +509,27 @@ export async function initializeSessionTracking(
   patentId: string,
   userId: string
 ): Promise<void> {
-  await prisma.patentDraftingUsage.upsert({
-    where: { sessionId },
-    create: {
-      tenantId,
-      sessionId,
-      patentId,
-      userId,
-      hasDescription: false,
-      hasClaims: false,
-      isCounted: false
-    },
-    update: {} // No updates if already exists
+  await prisma.$transaction(async (tx) => {
+    const existing = await findPatentUsageRecord(tx, tenantId, patentId, sessionId)
+    if (existing) {
+      await tx.patentDraftingUsage.update({
+        where: { id: existing.id },
+        data: { sessionId }
+      })
+      return
+    }
+
+    await tx.patentDraftingUsage.create({
+      data: {
+        tenantId,
+        sessionId,
+        patentId,
+        userId,
+        hasDescription: false,
+        hasClaims: false,
+        isCounted: false
+      }
+    })
   })
 }
 
@@ -439,9 +553,7 @@ export async function syncExistingSections(
   const billingPeriod = await resolveBillingPeriod(tenantId, now)
   const periodKey = billingPeriod.key
   
-  const existing = await prisma.patentDraftingUsage.findUnique({
-    where: { sessionId }
-  })
+  const existing = await findPatentUsageRecord(prisma, tenantId, patentId, sessionId)
   
   if (existing?.isCounted) {
     // Already counted, nothing to do
@@ -457,10 +569,14 @@ export async function syncExistingSections(
     // Check daily quota
     if (quota.dailyLimit !== null && quota.dailyUsed >= quota.dailyLimit) {
       // Update tracking without counting
-      await prisma.patentDraftingUsage.upsert({
-        where: { sessionId },
-        create: { tenantId, sessionId, patentId, userId, hasDescription, hasClaims, isCounted: false },
-        update: { hasDescription, hasClaims }
+      await upsertPatentUsageRecord(prisma, {
+        tenantId,
+        sessionId,
+        patentId,
+        userId,
+        hasDescription,
+        hasClaims,
+        isCounted: false
       })
       return { counted: false, quotaExceeded: true }
     }
@@ -468,35 +584,29 @@ export async function syncExistingSections(
     // Check monthly quota
     if (quota.monthlyLimit !== null && quota.monthlyUsed >= quota.monthlyLimit) {
       // Update tracking without counting
-      await prisma.patentDraftingUsage.upsert({
-        where: { sessionId },
-        create: { tenantId, sessionId, patentId, userId, hasDescription, hasClaims, isCounted: false },
-        update: { hasDescription, hasClaims }
+      await upsertPatentUsageRecord(prisma, {
+        tenantId,
+        sessionId,
+        patentId,
+        userId,
+        hasDescription,
+        hasClaims,
+        isCounted: false
       })
       return { counted: false, quotaExceeded: true }
     }
   }
   
-  await prisma.patentDraftingUsage.upsert({
-    where: { sessionId },
-    create: {
-      tenantId,
-      sessionId,
-      patentId,
-      userId,
-      hasDescription,
-      hasClaims,
-      isCounted: shouldCount,
-      countedMonth: shouldCount ? periodKey : null,
-      countedAt: shouldCount ? new Date() : null
-    },
-    update: {
-      hasDescription,
-      hasClaims,
-      isCounted: shouldCount,
-      countedMonth: shouldCount ? periodKey : undefined,
-      countedAt: shouldCount ? new Date() : undefined
-    }
+  await upsertPatentUsageRecord(prisma, {
+    tenantId,
+    sessionId,
+    patentId,
+    userId,
+    hasDescription,
+    hasClaims,
+    isCounted: shouldCount,
+    countedMonth: shouldCount ? periodKey : (existing?.countedMonth ?? null),
+    countedAt: shouldCount ? new Date() : (existing?.countedAt ?? null)
   })
   
   return { counted: shouldCount, quotaExceeded: false }

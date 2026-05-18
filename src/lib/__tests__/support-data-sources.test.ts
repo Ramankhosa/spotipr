@@ -7,6 +7,7 @@ import {
   coerceSupportDataSources,
   extractSupportDataSourceCandidates,
   previewSupportDataSource,
+  updateDetailedDescriptionInjectionControls,
 } from '@/lib/support-data-sources'
 
 describe('support data sources', () => {
@@ -147,6 +148,104 @@ describe('support data sources', () => {
     expect(preview.selectedSources[0]).toMatchObject({ sourceId: 'SDS-001', included: true, edited: true })
     expect(preview.selectedSources[1]).toMatchObject({ sourceId: 'SDS-002', included: false })
     expect(preview.guardrailSources[0]).toMatchObject({ sourceId: 'SDS-003', included: false })
+  })
+
+  test('applies DD coverage presets to LLM-selected source support', () => {
+    const supportDataSources = coerceSupportDataSources(
+      Array.from({ length: 20 }, (_, index) => ({
+        kind: 'component',
+        label: `Component ${index + 1}`,
+        value: `Detailed description support detail ${index + 1}.`,
+        claimUse: 'dependent',
+        sectionTargets: ['detailedDescription'],
+      }))
+    )
+    const normalizedData = {
+      supportDataSources,
+      detailedDescriptionSourceSelection: {
+        schemaVersion: 1,
+        status: 'ready',
+        sectionKey: 'detailedDescription',
+        jurisdiction: 'US',
+        inputHash: 'hash-coverage',
+        selectedSources: supportDataSources.map(source => ({
+          sourceId: source.id,
+          role: 'component_support',
+          confidence: 'medium',
+        })),
+        guardrailSources: [],
+        excludedSources: [],
+        warnings: [],
+      },
+    }
+
+    const leanControls = updateDetailedDescriptionInjectionControls(normalizedData, 'US', { coveragePreset: 'lean' })
+    const leanData = { ...normalizedData, detailedDescriptionInjectionControls: leanControls }
+    const leanPreview = buildDetailedDescriptionEvidencePreview(leanData, 'US')
+    const leanBlock = buildDetailedDescriptionEvidencePromptBlock(leanData, { jurisdiction: 'US' })
+
+    expect(leanPreview.coveragePreset).toBe('lean')
+    expect(leanPreview.includedSelectedCount).toBe(5)
+    expect(leanBlock).toContain('Detailed description support detail 5.')
+    expect(leanBlock).not.toContain('Detailed description support detail 6.')
+
+    const balancedControls = updateDetailedDescriptionInjectionControls(normalizedData, 'US', { coveragePreset: 'balanced' })
+    const balancedPreview = buildDetailedDescriptionEvidencePreview({ ...normalizedData, detailedDescriptionInjectionControls: balancedControls }, 'US')
+
+    expect(balancedPreview.coveragePreset).toBe('balanced')
+    expect(balancedPreview.includedSelectedCount).toBe(10)
+
+    const fullControls = updateDetailedDescriptionInjectionControls(normalizedData, 'US', { coveragePreset: 'full' })
+    const fullPreview = buildDetailedDescriptionEvidencePreview({ ...normalizedData, detailedDescriptionInjectionControls: fullControls }, 'US')
+
+    expect(fullPreview.coveragePreset).toBe('full')
+    expect(fullPreview.includedSelectedCount).toBe(20)
+  })
+
+  test('adds custom DD coverage instructions only in custom mode', () => {
+    const normalizedData = {
+      supportDataSources: coerceSupportDataSources([
+        { kind: 'example', label: 'Battery test', value: 'Prototype A retained 91% capacity after cycling.', claimUse: 'dependent', sectionTargets: ['detailedDescription'] },
+      ]),
+      detailedDescriptionSourceSelection: {
+        schemaVersion: 1,
+        status: 'ready',
+        sectionKey: 'detailedDescription',
+        jurisdiction: 'US',
+        inputHash: 'hash-custom',
+        selectedSources: [{ sourceId: 'SDS-001', role: 'example_support', confidence: 'high' }],
+        guardrailSources: [],
+        excludedSources: [],
+        warnings: [],
+      },
+    }
+
+    const customControls = updateDetailedDescriptionInjectionControls(normalizedData, 'US', {
+      coveragePreset: 'custom',
+      customIncludeInstruction: 'Prioritize cycling performance examples.',
+      customIntegrationInstruction: 'Use concise embodiment language and avoid numeric thresholds.',
+    })
+    const customData = { ...normalizedData, detailedDescriptionInjectionControls: customControls }
+    const customBlock = buildDetailedDescriptionEvidencePromptBlock(customData, { jurisdiction: 'US' })
+    const customPreview = buildDetailedDescriptionEvidencePreview(customData, 'US')
+
+    expect(customPreview).toMatchObject({
+      coveragePreset: 'custom',
+      customIncludeInstruction: 'Prioritize cycling performance examples.',
+      customIntegrationInstruction: 'Use concise embodiment language and avoid numeric thresholds.',
+    })
+    expect(customBlock).toContain('BEGIN ATTORNEY CUSTOM INSTRUCTIONS FOR SELECTED DETAILED DESCRIPTION DATA')
+    expect(customBlock).toContain('What to include: Prioritize cycling performance examples.')
+    expect(customBlock).toContain('How to integrate: Use concise embodiment language and avoid numeric thresholds.')
+
+    const fullControls = updateDetailedDescriptionInjectionControls(customData, 'US', { coveragePreset: 'full' })
+    const fullBlock = buildDetailedDescriptionEvidencePromptBlock(
+      { ...normalizedData, detailedDescriptionInjectionControls: fullControls },
+      { jurisdiction: 'US' }
+    )
+
+    expect(fullBlock).not.toContain('ATTORNEY CUSTOM INSTRUCTIONS')
+    expect(fullBlock).toContain('Prototype A retained 91% capacity')
   })
 
   test('ignores stale DD injection controls when the selection hash changes', () => {

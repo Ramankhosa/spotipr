@@ -234,10 +234,13 @@ export async function POST(
  * - sessionId: Required drafting session ID
  * - sectionKey: Required - must be 'detailedDescription'
  * - jurisdiction: Required jurisdiction key for evidence controls, e.g. 'US' or 'REFERENCE'
+ * - coveragePreset: Optional 'lean' | 'balanced' | 'full' | 'custom'
  * - excludedSelectedSourceIds: Optional string[]
  * - excludedGuardrailSourceIds: Optional string[]
  * - sourceTextOverrides: Optional { [sourceId]: { text } }
  * - removeSourceTextOverrideIds: Optional string[]
+ * - customIncludeInstruction: Optional string
+ * - customIntegrationInstruction: Optional string
  */
 export async function PATCH(
   request: NextRequest,
@@ -250,10 +253,13 @@ export async function PATCH(
       sessionId,
       sectionKey,
       jurisdiction,
+      coveragePreset,
       excludedSelectedSourceIds,
       excludedGuardrailSourceIds,
       sourceTextOverrides,
       removeSourceTextOverrideIds,
+      customIncludeInstruction,
+      customIntegrationInstruction,
     } = body
 
     if (sectionKey !== 'detailedDescription') {
@@ -301,10 +307,13 @@ export async function PATCH(
 
     const normalizedData = (session.ideaRecord.normalizedData as Record<string, any>) || {}
     const controls = updateDetailedDescriptionInjectionControls(normalizedData, normalizedJurisdiction, {
+      coveragePreset,
       excludedSelectedSourceIds,
       excludedGuardrailSourceIds,
       sourceTextOverrides,
       removeSourceTextOverrideIds,
+      customIncludeInstruction,
+      customIntegrationInstruction,
     })
     const updatedNormalizedData = {
       ...normalizedData,
