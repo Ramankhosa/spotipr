@@ -21,6 +21,8 @@
     "seed:adminplans": "node scripts/adminplans-seed.js",
     "llm:add-thinking-models": "tsx scripts/add-thinking-models.ts",
     "email-drafting:worker": "tsx scripts/email-drafting-worker.ts",
+    "patent-corpus:worker": "tsx scripts/patent-corpus-worker.ts",
+    "patent-corpus:worker:once": "tsx scripts/patent-corpus-worker.ts --once",
     "test": "vitest run"
   },
   "dependencies": {
@@ -84,6 +86,7 @@
     "openai": "^6.10.0",
     "pdf-parse-fork": "^1.2.0",
     "pdf2text": "^1.1.0",
+    "pdfjs-dist": "^4.10.38",
     "pdfkit": "^0.17.2",
     "plantuml-encoder": "^1.4.0",
     "react": "^18",

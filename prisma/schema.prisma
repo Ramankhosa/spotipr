@@ -10,14 +10,14 @@ datasource db {
 enum TenantStatus {
   ACTIVE
   SUSPENDED
-  PENDING_PAYMENT  // For self-service signups awaiting payment
+  PENDING_PAYMENT // For self-service signups awaiting payment
 }
 
 // How the tenant was created
 enum RegistrationSource {
-  MANUAL_ATI       // Created by admin with manual ATI token invitation
-  PAID_SIGNUP      // Self-service paid signup (auto-generated ATI)
-  TRIAL            // Trial signup
+  MANUAL_ATI // Created by admin with manual ATI token invitation
+  PAID_SIGNUP // Self-service paid signup (auto-generated ATI)
+  TRIAL // Trial signup
 }
 
 enum UserRole {
@@ -69,20 +69,20 @@ enum ATITokenStatus {
 }
 
 model Tenant {
-  id                 String              @id @default(cuid())
-  name               String
-  atiId              String              @unique
-  type               TenantType          @default(ENTERPRISE) // Default to enterprise for existing tenants
-  status             TenantStatus        @default(ACTIVE)
-  registrationSource RegistrationSource  @default(MANUAL_ATI) // How tenant was created
-  selectedPlanCode   String?             // For PAID_SIGNUP: BASIC, PRO, ENTERPRISE
-  selectedBillingCycle String?           // For PAID_SIGNUP: monthly, yearly
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id                   String             @id @default(cuid())
+  name                 String
+  atiId                String             @unique
+  type                 TenantType         @default(ENTERPRISE) // Default to enterprise for existing tenants
+  status               TenantStatus       @default(ACTIVE)
+  registrationSource   RegistrationSource @default(MANUAL_ATI) // How tenant was created
+  selectedPlanCode     String? // For PAID_SIGNUP: BASIC, PRO, ENTERPRISE
+  selectedBillingCycle String? // For PAID_SIGNUP: monthly, yearly
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
-  users               User[]
-  atiTokens           ATIToken[]
-  auditLogs           AuditLog[]
+  users                User[]
+  atiTokens            ATIToken[]
+  auditLogs            AuditLog[]
   tenantInboundAliases TenantInboundAlias[]
   emailDraftRequests   EmailDraftRequest[]
 
@@ -193,9 +193,9 @@ model User {
   ideaBankHistory      IdeaBankHistory[]
 
   // Style Profile relations
-  styleProfiles       StyleProfile[]     @relation("StyleProfileCreator")
-  lockedStyleProfiles StyleProfile[]     @relation("StyleProfileLocker")
-  ownedStyleProfiles  StyleProfile[]     @relation("StyleProfileUser")
+  styleProfiles       StyleProfile[]       @relation("StyleProfileCreator")
+  lockedStyleProfiles StyleProfile[]       @relation("StyleProfileLocker")
+  ownedStyleProfiles  StyleProfile[]       @relation("StyleProfileUser")
   styleTrainingJobs   StyleTrainingJob[]
   documents           Document[]
   documentAccessLinks DocumentAccessLink[]
@@ -230,9 +230,10 @@ model User {
   sectionInstructions UserSectionInstruction[]
 
   // Payment relations
-  subscriptions    Subscription[]
-  payments         Payment[]
-  createdDiscounts AdminDiscount[] @relation("DiscountCreator")
+  subscriptions     Subscription[]
+  payments          Payment[]
+  createdDiscounts  AdminDiscount[]     @relation("DiscountCreator")
+  PatentImportBatch PatentImportBatch[]
 
   @@map("users")
 }
@@ -419,17 +420,17 @@ model UserServiceQuota {
 }
 
 model Project {
-  id                String                @id @default(cuid())
-  name              String
-  userId            String
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
-  applicantProfile  ApplicantProfile?
-  collaborators     ProjectCollaborator[]
-  patents           Patent[]
+  id                 String                @id @default(cuid())
+  name               String
+  userId             String
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  applicantProfile   ApplicantProfile?
+  collaborators      ProjectCollaborator[]
+  patents            Patent[]
   emailDraftRequests EmailDraftRequest[]
-  noveltySearchRuns NoveltySearchRun[]
-  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  noveltySearchRuns  NoveltySearchRun[]
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("projects")
 }
@@ -735,10 +736,10 @@ model TenantFeatureOverride {
   dailyTokenLimit   Int? // Custom daily token limit
 
   // Metadata
-  reason    String?  // Business reason for override (e.g., "Enterprise negotiation Q1 2026")
-  createdBy String?  // Super admin who created the override
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  reason    String? // Business reason for override (e.g., "Enterprise negotiation Q1 2026")
+  createdBy String? // Super admin who created the override
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   expiresAt DateTime? // Optional expiration for time-limited overrides
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -972,10 +973,10 @@ model PatentDraftingUsage {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
+  @@unique([tenantId, patentId])
   @@index([tenantId, countedAt])
   @@index([tenantId, countedMonth])
   @@index([sessionId])
-  @@unique([tenantId, patentId])
   @@map("patent_drafting_usage")
 }
 
@@ -1431,18 +1432,146 @@ model PriorArtScholarContent {
 }
 
 // === LOCAL PATENT DATASET (e.g., Indian patents) ===
+enum PatentImportStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+}
+
+enum PatentEmbeddingStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model LocalPatent {
-  id                Int     @id @default(autoincrement())
-  publicationNumber String  @unique
-  kind              String?
-  title             String
-  abstract          String?
-  abstractOriginal  String?
+  id                     Int       @id @default(autoincrement())
+  publicationNumber      String    @unique
+  applicationNumberRaw   String?
+  kind                   String?
+  country                String?
+  filingDate             DateTime?
+  publicationDate        DateTime?
+  title                  String
+  abstract               String?
+  abstractOriginal       String?
+  applicants             Json?
+  inventors              String[]  @default([])
+  classifications        String[]  @default([])
+  rawApplicantBlock      String?
+  rawInventorBlock       String?
+  rawClassificationBlock String?
+  rawText                String?
+  numberOfPages          Int?
+  numberOfClaims         Int?
+  sourcePdfName          String?
+  sourceFileHash         String?
+  sourcePageNumber       Int?
+  ragText                String?
+  embeddingText          String?
+  extractionVersion      String?
+  extractionConfidence   Float?
+  extractionWarnings     Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  embeddings LocalPatentEmbedding[]
+
   @@map("local_patents")
+}
+
+model PatentImportBatch {
+  id                 String             @id @default(cuid())
+  status             PatentImportStatus @default(QUEUED)
+  originalFileCount  Int                @default(0)
+  totalFiles         Int                @default(0)
+  processedFiles     Int                @default(0)
+  failedFiles        Int                @default(0)
+  totalPages         Int                @default(0)
+  patentPages        Int                @default(0)
+  patentsCreated     Int                @default(0)
+  patentsUpdated     Int                @default(0)
+  lowConfidencePages Int                @default(0)
+  warningCount       Int                @default(0)
+  errorMessage       String?
+  uploadedBy         String
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  uploader User               @relation(fields: [uploadedBy], references: [id])
+  files    PatentImportFile[]
+
+  @@index([status, createdAt])
+  @@index([uploadedBy, createdAt])
+  @@map("patent_import_batches")
+}
+
+model PatentImportFile {
+  id                 String             @id @default(cuid())
+  batchId            String
+  status             PatentImportStatus @default(QUEUED)
+  originalName       String
+  storedPath         String
+  mimeType           String?
+  fileHash           String
+  fileSizeBytes      Int
+  totalPages         Int                @default(0)
+  patentPages        Int                @default(0)
+  patentsCreated     Int                @default(0)
+  patentsUpdated     Int                @default(0)
+  ignoredPages       Int                @default(0)
+  lowConfidencePages Int                @default(0)
+  warningCount       Int                @default(0)
+  errorMessage       String?
+  extractionVersion  String?
+  lockedBy           String?
+  lockedUntil        DateTime?
+  heartbeatAt        DateTime?
+  attemptCount       Int                @default(0)
+  nextAttemptAt      DateTime           @default(now())
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  batch PatentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, fileHash])
+  @@index([status, nextAttemptAt])
+  @@index([batchId, status])
+  @@map("patent_import_files")
+}
+
+model LocalPatentEmbedding {
+  id            String                       @id @default(cuid())
+  localPatentId Int
+  model         String
+  dimensions    Int
+  textHash      String
+  status        PatentEmbeddingStatus        @default(QUEUED)
+  errorMessage  String?
+  embedding     Unsupported("vector(1536)")?
+  lockedBy      String?
+  lockedUntil   DateTime?
+  heartbeatAt   DateTime?
+  attemptCount  Int                          @default(0)
+  nextAttemptAt DateTime                     @default(now())
+  embeddedAt    DateTime?
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+
+  patent LocalPatent @relation(fields: [localPatentId], references: [id], onDelete: Cascade)
+
+  @@unique([localPatentId, model, textHash])
+  @@index([status, nextAttemptAt])
+  @@index([localPatentId])
+  @@map("local_patent_embeddings")
 }
 
 // === NOVELTY ASSESSMENT MODELS ===
@@ -1778,7 +1907,7 @@ model DraftingSession {
   user                    User                     @relation(fields: [userId], references: [id])
   tenant                  Tenant?                  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   ideaRecord              IdeaRecord?
-  ddUserData              DDUserData?              // Sidecar for DD section user data
+  ddUserData              DDUserData? // Sidecar for DD section user data
   referenceMap            ReferenceMap?
   figurePlans             FigurePlan[]
   diagramSources          DiagramSource[]
@@ -1799,22 +1928,22 @@ model DraftingSession {
   aiReviews AIReviewResult[]
 
   // Sketch records
-  sketchRecords SketchRecord[]
+  sketchRecords     SketchRecord[]
   emailDraftRequest EmailDraftRequest?
 
   // Figure sequence for unified ordering of diagrams + sketches
   // Array of { type: 'diagram'|'sketch', sourceId: string, finalFigNo: number }
   figureSequence          Json?
-  figureSequenceFinalized Boolean @default(false) @map("figure_sequence_finalized")
-  figuresSkipped          Boolean @default(false) @map("figures_skipped")
+  figureSequenceFinalized Boolean   @default(false) @map("figure_sequence_finalized")
+  figuresSkipped          Boolean   @default(false) @map("figures_skipped")
   figuresSkippedAt        DateTime? @map("figures_skipped_at")
 
   // Patent Type Decision (separate from idea normalization - decided pre-claims)
   // Stores: 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
-  patentTypePrimary       String?   @map("patent_type_primary")
-  patentTypeDecidedAt     DateTime? @map("patent_type_decided_at")
-  patentTypeFrozenAt      DateTime? @map("patent_type_frozen_at")
-  patentTypeComponentsHash String?  @map("patent_type_components_hash")
+  patentTypePrimary         String?   @map("patent_type_primary")
+  patentTypeDecidedAt       DateTime? @map("patent_type_decided_at")
+  patentTypeFrozenAt        DateTime? @map("patent_type_frozen_at")
+  patentTypeComponentsHash  String?   @map("patent_type_components_hash")
   normalizationInProgressAt DateTime? @map("normalization_in_progress_at")
   normalizationRequestId    String?   @map("normalization_request_id")
 
@@ -1864,7 +1993,7 @@ model DDUserData {
   sessionId String @unique @map("session_id")
 
   // User-provided data (plain text, opaque - no parsing/normalization)
-  userData String @db.Text @map("user_data") // Max 50KB enforced at application level
+  userData String @map("user_data") @db.Text // Max 50KB enforced at application level
 
   // Per-jurisdiction injection toggles (default: all jurisdictions OFF)
   // JSON object: { "REFERENCE": false, "US": false, "EP": false, ... }
@@ -2457,8 +2586,8 @@ model Document {
   createdAt  DateTime     @default(now())
 
   // Relations
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id])
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User                 @relation(fields: [userId], references: [id])
   accessLinks DocumentAccessLink[]
 
   // Indexes
@@ -2507,7 +2636,7 @@ model EmailDraftRequest {
   rawMimeStorageKey  String?
   rawMimeText        String?                 @db.Text
   parsedPayload      Json?
-  normalizationBrief String?                @db.Text
+  normalizationBrief String?                 @db.Text
   warnings           Json?
   status             EmailDraftRequestStatus @default(RECEIVED)
   progressPct        Int                     @default(5)
@@ -2526,12 +2655,12 @@ model EmailDraftRequest {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 
-  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  alias       TenantInboundAlias? @relation(fields: [aliasId], references: [id], onDelete: Restrict)
-  project     Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  patent      Patent?             @relation(fields: [patentId], references: [id], onDelete: SetNull)
-  session     DraftingSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alias       TenantInboundAlias?    @relation(fields: [aliasId], references: [id], onDelete: Restrict)
+  project     Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  patent      Patent?                @relation(fields: [patentId], references: [id], onDelete: SetNull)
+  session     DraftingSession?       @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   attachments EmailDraftAttachment[]
   events      EmailDraftEvent[]
   accessLinks DocumentAccessLink[]
@@ -2581,15 +2710,15 @@ model EmailDraftEvent {
 }
 
 model DocumentAccessLink {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   documentId     String
   userId         String
   requestId      String?
-  tokenHash      String   @unique
+  tokenHash      String    @unique
   expiresAt      DateTime
   revokedAt      DateTime?
   lastAccessedAt DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   document Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
   user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2836,7 +2965,7 @@ model CountrySectionPromptHistory {
 model UserSectionInstruction {
   id           String   @id @default(cuid())
   sessionId    String?  @map("session_id") // NULL = user-level persistent instruction
-  userId       String   @map("user_id")    // Required - owner of the instruction
+  userId       String   @map("user_id") // Required - owner of the instruction
   jurisdiction String   @default("*") // "*" = all jurisdictions, or specific like "IN", "US"
   sectionKey   String   @map("section_key")
   instruction  String   @db.Text // User's custom instruction for this section
@@ -3650,47 +3779,47 @@ model TrialCampaign {
 
   // Campaign details
   name        String
-  description String? @db.Text
+  description String?             @db.Text
   status      TrialCampaignStatus @default(DRAFT)
 
   // Email template settings
-  emailSubject    String  @default("You're Invited to Try Our Patent Platform")
-  emailTemplate   String? @db.Text // Custom HTML template (uses default if null)
-  senderName      String  @default("Patent Platform Team")
-  replyToEmail    String?
+  emailSubject  String  @default("You're Invited to Try Our Patent Platform")
+  emailTemplate String? @db.Text // Custom HTML template (uses default if null)
+  senderName    String  @default("Patent Platform Team")
+  replyToEmail  String?
 
   // Campaign settings
-  trialDurationDays Int      @default(14) // How long trial lasts after signup
-  inviteExpiryDays  Int      @default(30) // How long invite link is valid
-  autoExpireInvites Boolean  @default(true)
+  trialDurationDays Int     @default(14) // How long trial lasts after signup
+  inviteExpiryDays  Int     @default(30) // How long invite link is valid
+  autoExpireInvites Boolean @default(true)
 
   // ATI Token settings
   trialAtiTokenId String? // Link to a specific trial ATI token (optional)
-  maxSignups      Int?    // Max total signups for this campaign
+  maxSignups      Int? // Max total signups for this campaign
 
   // Trial Plan Limits (per-user limits for this campaign's trial users)
   // NULL means use the default TRIAL plan limits
-  patentDraftLimit     Int? // Max patents a trial user can draft
-  noveltySearchLimit   Int? // Max novelty searches
-  ideationRunLimit     Int? // Max ideation runs
-  priorArtSearchLimit  Int? // Max prior art searches
-  diagramLimit         Int? // Max diagram generations
-  
+  patentDraftLimit    Int? // Max patents a trial user can draft
+  noveltySearchLimit  Int? // Max novelty searches
+  ideationRunLimit    Int? // Max ideation runs
+  priorArtSearchLimit Int? // Max prior art searches
+  diagramLimit        Int? // Max diagram generations
+
   // Token budget for trial users (optional)
-  totalTokenBudget     Int? // Max total tokens for all features combined
+  totalTokenBudget Int? // Max total tokens for all features combined
 
   // Scheduling
   defaultSendTime String? // Default time to send scheduled emails (HH:MM format)
   timezone        String  @default("UTC")
 
   // Stats (denormalized for quick access)
-  totalInvites    Int @default(0)
-  sentCount       Int @default(0)
-  deliveredCount  Int @default(0)
-  openedCount     Int @default(0)
-  clickedCount    Int @default(0)
-  signedUpCount   Int @default(0)
-  bouncedCount    Int @default(0)
+  totalInvites   Int @default(0)
+  sentCount      Int @default(0)
+  deliveredCount Int @default(0)
+  openedCount    Int @default(0)
+  clickedCount   Int @default(0)
+  signedUpCount  Int @default(0)
+  bouncedCount   Int @default(0)
 
   // Metadata
   createdBy String // Super admin who created
@@ -3713,22 +3842,22 @@ model TrialInvite {
   campaignId String
 
   // Recipient info
-  email       String
-  firstName   String?
-  lastName    String?
-  country     String?
-  company     String?
-  jobTitle    String?
-  customData  Json?  // Any additional custom fields from CSV
+  email      String
+  firstName  String?
+  lastName   String?
+  country    String?
+  company    String?
+  jobTitle   String?
+  customData Json? // Any additional custom fields from CSV
 
   // Invite status
   status TrialInviteStatus @default(PENDING)
 
   // Email-locked ATI token (unique per invite)
-  inviteToken       String  @unique // Unique token for this invite
-  inviteTokenHash   String  @unique // Hashed version for security
-  allowedEmail      String  // Email that can use this token (prevents sharing)
-  tokenExpiresAt    DateTime?
+  inviteToken     String    @unique // Unique token for this invite
+  inviteTokenHash String    @unique // Hashed version for security
+  allowedEmail    String // Email that can use this token (prevents sharing)
+  tokenExpiresAt  DateTime?
 
   // Scheduling
   scheduledSendAt DateTime? // When to send (null = send immediately when triggered)
@@ -3743,7 +3872,7 @@ model TrialInvite {
   lastClickedAt  DateTime?
   clickCount     Int       @default(0)
   signedUpAt     DateTime?
-  signedUpUserId String?   // Link to User if they signed up
+  signedUpUserId String? // Link to User if they signed up
   bouncedAt      DateTime?
   bounceReason   String?
   unsubscribedAt DateTime?
@@ -3753,16 +3882,16 @@ model TrialInvite {
   mailjetStatus    String? // Last status from Mailjet
 
   // Resend tracking
-  resendCount     Int       @default(0)
-  lastResendAt    DateTime?
-  resendReason    String?
+  resendCount  Int       @default(0)
+  lastResendAt DateTime?
+  resendReason String?
 
   // Metadata
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  campaign TrialCampaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign TrialCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   events   TrialInviteEvent[]
 
   @@unique([campaignId, email]) // One invite per email per campaign
@@ -3784,14 +3913,14 @@ model TrialInviteEvent {
 
   // Event details
   eventType String // CREATED, SCHEDULED, SENT, DELIVERED, OPENED, CLICKED, SIGNED_UP, BOUNCED, FAILED, RESENT, UNSUBSCRIBED
-  eventData Json?  // Additional event data (e.g., IP, user agent, bounce reason)
+  eventData Json? // Additional event data (e.g., IP, user agent, bounce reason)
 
   // Source
   source String? // "mailjet_webhook", "tracking_pixel", "link_click", "signup", "manual"
 
   // IP tracking (for opens/clicks)
-  ipAddress String?
-  userAgent String?
+  ipAddress  String?
+  userAgent  String?
   geoCountry String?
   geoCity    String?
 
@@ -3813,7 +3942,7 @@ model TrialEmailTemplate {
   name        String
   description String?
   subject     String
-  htmlContent String @db.Text
+  htmlContent String  @db.Text
   textContent String? @db.Text // Plain text fallback
 
   // Variables available: {{firstName}}, {{lastName}}, {{inviteLink}}, {{expiryDate}}, {{companyName}}
@@ -3831,7 +3960,7 @@ model TrialUnsubscribe {
   id        String   @id @default(cuid())
   email     String   @unique
   reason    String?
-  source    String?  // Which campaign/invite triggered unsubscribe
+  source    String? // Which campaign/invite triggered unsubscribe
   createdAt DateTime @default(now())
 
   @@index([email])
@@ -3843,69 +3972,69 @@ model TrialUnsubscribe {
 // ============================================================================
 
 enum SubscriptionStatus {
-  CREATED      // Order created, waiting for payment
+  CREATED // Order created, waiting for payment
   AUTHENTICATED // User authenticated but not yet charged
-  ACTIVE       // Subscription is active
-  PENDING      // Payment pending
-  HALTED       // Payment failed, subscription halted
-  CANCELLED    // User cancelled
-  COMPLETED    // Subscription term completed
-  EXPIRED      // Subscription expired
+  ACTIVE // Subscription is active
+  PENDING // Payment pending
+  HALTED // Payment failed, subscription halted
+  CANCELLED // User cancelled
+  COMPLETED // Subscription term completed
+  EXPIRED // Subscription expired
 }
 
 enum PaymentStatus {
-  CREATED     // Order created
-  AUTHORIZED  // Payment authorized
-  CAPTURED    // Payment captured successfully
-  FAILED      // Payment failed
-  REFUNDED    // Payment refunded
-  PENDING     // Payment pending (for UPI, etc.)
+  CREATED // Order created
+  AUTHORIZED // Payment authorized
+  CAPTURED // Payment captured successfully
+  FAILED // Payment failed
+  REFUNDED // Payment refunded
+  PENDING // Payment pending (for UPI, etc.)
 }
 
 // Subscription management
 model Subscription {
-  id                     String             @id @default(cuid())
-  tenantId               String
-  userId                 String
-  
+  id       String @id @default(cuid())
+  tenantId String
+  userId   String
+
   // Razorpay identifiers
-  razorpaySubscriptionId String?            @unique
-  razorpayPlanId         String?            // Razorpay Plan ID (for recurring)
-  razorpayCustomerId     String?            // Razorpay Customer ID
-  
+  razorpaySubscriptionId String? @unique
+  razorpayPlanId         String? // Razorpay Plan ID (for recurring)
+  razorpayCustomerId     String? // Razorpay Customer ID
+
   // Internal plan reference
-  planId                 String
-  planCode               String             // BASIC, PRO, ENTERPRISE
-  
+  planId   String
+  planCode String // BASIC, PRO, ENTERPRISE
+
   // Billing details
-  billingCycle           String             // MONTHLY, YEARLY
-  currency               String             @default("USD")
-  amount                 Int                // Amount in smallest unit (cents/paise)
-  
+  billingCycle String // MONTHLY, YEARLY
+  currency     String @default("USD")
+  amount       Int // Amount in smallest unit (cents/paise)
+
   // Discount/coupon applied
-  discountId             String?            // Reference to AdminDiscount if applied
-  discountAmount         Int?               // Discount amount applied
-  originalAmount         Int?               // Original amount before discount
-  
+  discountId     String? // Reference to AdminDiscount if applied
+  discountAmount Int? // Discount amount applied
+  originalAmount Int? // Original amount before discount
+
   // Status and dates
-  status                 SubscriptionStatus @default(CREATED)
-  currentPeriodStart     DateTime?
-  currentPeriodEnd       DateTime?
-  nextBillingDate        DateTime?
-  cancelledAt            DateTime?
-  cancelReason           String?
-  
+  status             SubscriptionStatus @default(CREATED)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  nextBillingDate    DateTime?
+  cancelledAt        DateTime?
+  cancelReason       String?
+
   // Metadata
-  metadata               Json?              // Additional subscription data
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
+  metadata  Json? // Additional subscription data
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  tenant                 Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan                   Plan               @relation(fields: [planId], references: [id])
-  discount               AdminDiscount?     @relation(fields: [discountId], references: [id])
-  payments               Payment[]
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan     Plan           @relation(fields: [planId], references: [id])
+  discount AdminDiscount? @relation(fields: [discountId], references: [id])
+  payments Payment[]
 
   @@index([tenantId])
   @@index([userId])
@@ -3916,59 +4045,59 @@ model Subscription {
 
 // Individual payment records
 model Payment {
-  id                  String        @id @default(cuid())
-  subscriptionId      String?
-  userId              String
-  tenantId            String
-  
+  id             String  @id @default(cuid())
+  subscriptionId String?
+  userId         String
+  tenantId       String
+
   // Razorpay identifiers
-  razorpayOrderId     String?       @unique
-  razorpayPaymentId   String?       @unique
-  razorpaySignature   String?
-  
+  razorpayOrderId   String? @unique
+  razorpayPaymentId String? @unique
+  razorpaySignature String?
+
   // Payment details
-  amount              Int           // Amount in smallest currency unit (cents/paise)
-  currency            String        @default("USD")
-  status              PaymentStatus @default(CREATED)
-  method              String?       // card, upi, netbanking, wallet
-  
+  amount   Int // Amount in smallest currency unit (cents/paise)
+  currency String        @default("USD")
+  status   PaymentStatus @default(CREATED)
+  method   String? // card, upi, netbanking, wallet
+
   // Plan details at time of payment
-  planId              String
-  planCode            String
-  billingCycle        String        // MONTHLY, YEARLY
-  
+  planId       String
+  planCode     String
+  billingCycle String // MONTHLY, YEARLY
+
   // Discount applied
-  discountId          String?
-  discountAmount      Int?
-  
+  discountId     String?
+  discountAmount Int?
+
   // Receipt and description
-  receipt             String?       @unique // Unique receipt number
-  description         String?
-  
+  receipt     String? @unique // Unique receipt number
+  description String?
+
   // Failure tracking
-  failureCode         String?
-  failureReason       String?
-  
+  failureCode   String?
+  failureReason String?
+
   // Timestamps
-  paidAt              DateTime?
-  refundedAt          DateTime?
-  
+  paidAt     DateTime?
+  refundedAt DateTime?
+
   // Customer info (for records)
-  customerEmail       String?
-  customerPhone       String?
-  customerCountry     String?
-  
+  customerEmail   String?
+  customerPhone   String?
+  customerCountry String?
+
   // Metadata
-  metadata            Json?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  subscription        Subscription? @relation(fields: [subscriptionId], references: [id])
-  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant              Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plan                Plan          @relation(fields: [planId], references: [id])
-  discount            AdminDiscount? @relation(fields: [discountId], references: [id])
+  subscription Subscription?  @relation(fields: [subscriptionId], references: [id])
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan         Plan           @relation(fields: [planId], references: [id])
+  discount     AdminDiscount? @relation(fields: [discountId], references: [id])
 
   @@index([userId])
   @@index([tenantId])
@@ -3980,32 +4109,32 @@ model Payment {
 
 // Pricing configuration for plans (multi-currency)
 model PlanPricing {
-  id           String   @id @default(cuid())
-  planId       String
-  planCode     String   // BASIC, PRO, ENTERPRISE
-  
+  id       String @id @default(cuid())
+  planId   String
+  planCode String // BASIC, PRO, ENTERPRISE
+
   // Pricing in different currencies
-  priceUSD     Int      // Price in cents (e.g., 5900 = $59)
-  priceINR     Int      // Price in paise (e.g., 499900 = ₹4,999)
-  
+  priceUSD Int // Price in cents (e.g., 5900 = $59)
+  priceINR Int // Price in paise (e.g., 499900 = ₹4,999)
+
   // Billing cycle
-  billingCycle String   // MONTHLY, YEARLY
-  
+  billingCycle String // MONTHLY, YEARLY
+
   // Yearly discount (if applicable)
   yearlyDiscountMonths Int @default(1) // Number of months free for yearly
-  
+
   // Razorpay Plan IDs for recurring subscriptions
   razorpayPlanIdUSD String? // Razorpay plan ID for USD
   razorpayPlanIdINR String? // Razorpay plan ID for INR
-  
+
   // Status
-  isActive     Boolean  @default(true)
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  plan         Plan     @relation(fields: [planId], references: [id])
+  plan Plan @relation(fields: [planId], references: [id])
 
   @@unique([planId, billingCycle])
   @@index([planCode])
@@ -4015,51 +4144,51 @@ model PlanPricing {
 
 // Admin discount/coupon system (backdoor for special pricing)
 model AdminDiscount {
-  id              String    @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Discount code (optional - for coupon codes)
-  code            String?   @unique // e.g., "SPECIAL50", null for admin-applied
-  
+  code String? @unique // e.g., "SPECIAL50", null for admin-applied
+
   // Discount details
-  name            String    // e.g., "Special Partner Discount"
-  description     String?
-  
+  name        String // e.g., "Special Partner Discount"
+  description String?
+
   // Discount type and value
-  discountType    String    // PERCENTAGE, FIXED_AMOUNT
-  discountValue   Int       // For PERCENTAGE: 10 = 10%, For FIXED_AMOUNT: amount in cents/paise
-  
+  discountType  String // PERCENTAGE, FIXED_AMOUNT
+  discountValue Int // For PERCENTAGE: 10 = 10%, For FIXED_AMOUNT: amount in cents/paise
+
   // Currency for fixed amount discounts
-  currency        String?   // Required if discountType is FIXED_AMOUNT
-  
+  currency String? // Required if discountType is FIXED_AMOUNT
+
   // Applicable plans (null = all plans)
-  applicablePlans String[]  // Array of plan codes: ["BASIC", "PRO"] or empty for all
-  
+  applicablePlans String[] // Array of plan codes: ["BASIC", "PRO"] or empty for all
+
   // Usage limits
-  maxUses         Int?      // Maximum total uses (null = unlimited)
-  maxUsesPerUser  Int       @default(1) // Max uses per user
-  currentUses     Int       @default(0) // Track total uses
-  
+  maxUses        Int? // Maximum total uses (null = unlimited)
+  maxUsesPerUser Int  @default(1) // Max uses per user
+  currentUses    Int  @default(0) // Track total uses
+
   // Validity period
-  validFrom       DateTime  @default(now())
-  validUntil      DateTime?
-  
+  validFrom  DateTime  @default(now())
+  validUntil DateTime?
+
   // Restriction: specific users only (for admin-applied discounts)
   restrictedToUserIds String[] // If not empty, only these users can use
   restrictedToEmails  String[] // If not empty, only these emails can use
-  
+
   // Who created this discount
   createdByUserId String
-  
+
   // Status
-  isActive        Boolean   @default(true)
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  createdBy       User      @relation("DiscountCreator", fields: [createdByUserId], references: [id])
-  subscriptions   Subscription[]
-  payments        Payment[]
+  createdBy     User           @relation("DiscountCreator", fields: [createdByUserId], references: [id])
+  subscriptions Subscription[]
+  payments      Payment[]
 
   @@index([code])
   @@index([isActive])
