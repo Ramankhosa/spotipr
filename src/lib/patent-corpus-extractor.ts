@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import path from 'path'
 import { pathToFileURL } from 'url'
 
-export const PATENT_CORPUS_EXTRACTION_VERSION = 'indian-journal-layout-v1'
+export const PATENT_CORPUS_EXTRACTION_VERSION = 'indian-journal-layout-v2'
 
 export type PdfTextSegment = {
   text: string
@@ -360,11 +360,13 @@ export function parseApplicants(rawBlock: string | null): ParsedApplicant[] {
 
   const addressMatch = cleaned.match(/Address\s+of\s+Applicant\s*:?\s*/i)
   if (!addressMatch || addressMatch.index == null) {
-    return parseNumberedList(cleaned).map(item => ({
-      sequence: item.sequence,
-      name: item.value,
-      raw: item.raw,
-    }))
+    return parseNumberedList(cleaned)
+      .map(item => ({
+        sequence: item.sequence,
+        name: cleanPartyName(item.value),
+        raw: item.raw,
+      }))
+      .filter(item => item.name)
   }
 
   const beforeAddress = cleaned.slice(0, addressMatch.index)
@@ -381,13 +383,24 @@ export function parseApplicants(rawBlock: string | null): ParsedApplicant[] {
   }
 
   const commonAddress = beforeEntries.length > 1 && trailingEntries.length === 0 ? address : undefined
-  return allEntries.map((item, index) => ({
-    sequence: item.sequence || index + 1,
-    name: item.value,
-    raw: item.raw,
-    ...(address && beforeEntries.length === 1 && index === 0 ? { address } : {}),
-    ...(commonAddress ? { commonAddress } : {}),
-  }))
+  return allEntries
+    .map((item, index) => ({
+      sequence: item.sequence || index + 1,
+      name: cleanPartyName(item.value),
+      raw: item.raw,
+      ...(address && beforeEntries.length === 1 && index === 0 ? { address } : {}),
+      ...(commonAddress ? { commonAddress } : {}),
+    }))
+    .filter(item => item.name)
+}
+
+function cleanPartyName(value: string) {
+  return compactWhitespace(
+    value
+      .replace(/\bAddress\s+of\s+(?:Applicant|Inventor)\s*:?.*$/i, '')
+      .replace(/\bName\s+of\s+Applicant\s*:?.*$/i, '')
+      .replace(/\bName\s+of\s+Inventor\s*:?.*$/i, '')
+  )
 }
 
 export function parseInventors(rawBlock: string | null) {
@@ -398,7 +411,9 @@ export function parseInventors(rawBlock: string | null) {
       .replace(/\(57\)\s*Abstract\s*:?.*$/i, ''),
     /^/
   )
-  return parseNumberedList(cleaned).map(item => item.value)
+  return parseNumberedList(cleaned)
+    .map(item => cleanPartyName(item.value))
+    .filter(Boolean)
 }
 
 export function normalizeClassifications(rawBlock: string | null) {
@@ -461,8 +476,6 @@ function buildRagText(record: {
     `Title: ${record.title}`,
     record.abstract ? `Abstract: ${record.abstract}` : '',
     record.classifications.length ? `Classifications: ${record.classifications.join(', ')}` : '',
-    record.applicants.length ? `Applicants: ${record.applicants.map(item => item.name).join('; ')}` : '',
-    record.inventors.length ? `Inventors: ${record.inventors.join('; ')}` : '',
   ].filter(Boolean).join('\n')
 }
 
@@ -480,8 +493,7 @@ function confidenceFor(record: Partial<ExtractedPatentRecord>, anchorScore: numb
   if (record.title && !record.title.startsWith('[Unparsed')) score += 0.15
   if (record.abstract) score += 0.15
   if (record.applicants?.length) score += 0.04
-  if (record.inventors?.length) score += 0.03
-  if (record.classifications?.length) score += 0.03
+  if (record.classifications?.length) score += 0.06
   score -= Math.min(warnings.length * 0.025, 0.15)
   return Math.max(0, Math.min(1, Number(score.toFixed(3))))
 }
@@ -574,7 +586,6 @@ function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFil
   if (!title) warnings.push('Missing title')
   if (!abstract) warnings.push('Missing abstract')
   if (!applicants.length) warnings.push('Missing applicants')
-  if (!inventors.length) warnings.push('Missing inventors')
   if (!classifications.length) warnings.push('Missing classifications')
   if (!counts.numberOfPages || !counts.numberOfClaims) warnings.push('Missing or malformed page/claim counts')
 

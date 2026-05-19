@@ -6,6 +6,7 @@ import { IdeaBankService } from './idea-bank-service';
 import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from './idea-bank-funnel';
 import { checkServiceQuota, trackServiceUsage } from './service-usage-tracker';
 import crypto from 'crypto';
+import { patentSearchOrchestrator, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
 
 // LLM Prompt Specification for Novelty Search (enhanced versions)
 export const NOVELTY_SEARCH_NORMALIZATION_PROMPT = `
@@ -552,6 +553,13 @@ export interface NoveltySearchConfig {
   jurisdiction: string;
   filingType: string;
   tenantId?: string;
+  searchSource?: {
+    mode?: PatentSearchSourceMode;
+    providerIds?: string[];
+    searchMode?: 'intelligent' | 'manual';
+    llmExpansion?: boolean;
+    filters?: Record<string, any>;
+  };
   // Stage 1.5 - AI Relevance gate on PQAI results
   stage15: {
     modelPreference: 'gemini-2.5-flash-lite' | 'gemini-2.5-pro' | 'gemini-2.0-flash-lite' | 'gpt-4o-mini' | 'gpt-4o' | 'claude-2.5';
@@ -623,6 +631,9 @@ export interface NormalizedIdea {
   searchQuery: string;
   inventionFeatures?: string[];
   inventionType?: string[];
+  cpcCodes?: string[];
+  ipcCodes?: string[];
+  queryPlan?: any;
 }
 
 export interface ScreeningResult {
@@ -806,6 +817,10 @@ export class NoveltySearchService extends BasePatentService {
   private defaultConfig: NoveltySearchConfig = {
     jurisdiction: 'IN',
     filingType: 'utility',
+    searchSource: {
+      llmExpansion: true,
+      filters: {}
+    },
     // New Stage 1.5 (AI Relevance) defaults
     stage15: {
       modelPreference: 'gemini-2.5-flash-lite',
@@ -847,6 +862,29 @@ export class NoveltySearchService extends BasePatentService {
     }
   };
 
+  private mergeConfig(input?: Partial<NoveltySearchConfig>): NoveltySearchConfig {
+    const requestConfig = input || {};
+    return {
+      ...this.defaultConfig,
+      ...requestConfig,
+      searchSource: {
+        ...this.defaultConfig.searchSource,
+        ...(requestConfig.searchSource || {}),
+        filters: {
+          ...(this.defaultConfig.searchSource?.filters || {}),
+          ...((requestConfig.searchSource as any)?.filters || {}),
+        }
+      },
+      stage0: { ...this.defaultConfig.stage0, ...(requestConfig.stage0 || {}) },
+      stage1: { ...this.defaultConfig.stage1, ...(requestConfig.stage1 || {}) },
+      stage15: { ...this.defaultConfig.stage15, ...(requestConfig.stage15 || {}) },
+      stage35a: { ...this.defaultConfig.stage35a, ...(requestConfig.stage35a || {}) },
+      stage35b: { ...this.defaultConfig.stage35b, ...(requestConfig.stage35b || {}) },
+      stage35c: { ...this.defaultConfig.stage35c, ...(requestConfig.stage35c || {}) },
+      stage4: { ...this.defaultConfig.stage4, ...(requestConfig.stage4 || {}) },
+    } as NoveltySearchConfig;
+  }
+
   /**
    * Start a complete novelty search workflow
    */
@@ -868,7 +906,7 @@ export class NoveltySearchService extends BasePatentService {
       }
 
       // Merge config with defaults
-      const config = { ...this.defaultConfig, ...request.config };
+      const config = this.mergeConfig(request.config);
 
       // Validate patent access if provided
       if (request.patentId) {
@@ -896,7 +934,7 @@ export class NoveltySearchService extends BasePatentService {
           userId: user.id,
           status: NoveltySearchStatus.PENDING,
           currentStage: NoveltySearchStage.STAGE_0,
-          config: config,
+          config: config as any,
           inventionDescription: request.inventionDescription,
           title: request.title,
           jurisdiction: config.jurisdiction,
@@ -951,11 +989,27 @@ export class NoveltySearchService extends BasePatentService {
       const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
       const stage1Data = searchRun.stage1Results as unknown as any;
       if (!stage1Data || !Array.isArray(stage1Data?.pqaiResults) || stage1Data.pqaiResults.length === 0) {
         return { success: false, error: 'Stage 1 results are required before Stage 1.5' };
+      }
+
+      if (stage1Data.aiRelevance?.byPn) {
+        const pqai = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
+        const maxCandidates = config.stage15.maxCandidates;
+        const candidates = pqai.slice(0, Math.min(maxCandidates, pqai.length));
+        const cacheKey = this.createStage15CacheKey(stage0Data, candidates);
+        if (!stage1Data.aiRelevance.cacheKey || stage1Data.aiRelevance.cacheKey === cacheKey) {
+        return {
+          success: true,
+          searchId,
+          status: NoveltySearchStatus.STAGE_1_COMPLETED,
+          currentStage: NoveltySearchStage.STAGE_1,
+          results: stage1Data
+        };
+        }
       }
 
       const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders);
@@ -997,11 +1051,11 @@ export class NoveltySearchService extends BasePatentService {
       //   return { success: false, error: 'Invalid stage progression' };
       // }
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
 
-      // Perform Stage 1 screening using PQAI only; return raw results for UI display
-      const stage1Result = await this.performStage1(searchId, stage0Data, config);
+      // Perform Stage 1 screening through the modular provider orchestrator.
+      const stage1Result = await this.performStage1(searchRun, stage0Data, config, requestHeaders);
 
       if (!stage1Result.success) {
         await prisma.noveltySearchRun.update({
@@ -1065,7 +1119,7 @@ export class NoveltySearchService extends BasePatentService {
         return { success: false, error: 'Novelty search not found' };
       }
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
       let stage1Data = searchRun.stage1Results as unknown as any;
 
@@ -1100,7 +1154,7 @@ export class NoveltySearchService extends BasePatentService {
             searchId,
             stage0Data,
             stage1Data,
-            searchRun.config as unknown as NoveltySearchConfig,
+            this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>),
             requestHeaders
           );
           if (stage15.success && stage15.data) {
@@ -1176,7 +1230,7 @@ export class NoveltySearchService extends BasePatentService {
         return { success: false, error: 'Novelty search not found' };
       }
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
       const stage35aData = searchRun.stage35Results as unknown as FeatureMapBatchResult;
 
@@ -1229,7 +1283,7 @@ export class NoveltySearchService extends BasePatentService {
       const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
-      const config = (searchRun.config as unknown as NoveltySearchConfig) || this.defaultConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
       const stage1Data = searchRun.stage1Results as unknown as any;
       const stage35aData = searchRun.stage35Results as unknown as FeatureMapBatchResult;
@@ -1270,14 +1324,22 @@ export class NoveltySearchService extends BasePatentService {
 
       const featureMaps = stage35aData.feature_map;
       const features = stage0Data.inventionFeatures;
-      const limit = config.stage35c?.maxPatentsForRemarks && config.stage35c.maxPatentsForRemarks > 0 ? config.stage35c.maxPatentsForRemarks : featureMaps.length;
+      const rankedFeatureMaps = [...featureMaps].sort((a: any, b: any) => {
+        const aScore = Number(a?.coverage?.coverage_score ?? 0);
+        const bScore = Number(b?.coverage?.coverage_score ?? 0);
+        return bScore - aScore;
+      });
+      const configuredLimit = config.stage35c?.maxPatentsForRemarks && config.stage35c.maxPatentsForRemarks > 0
+        ? config.stage35c.maxPatentsForRemarks
+        : undefined;
+      const limit = Math.min(configuredLimit || 8, rankedFeatureMaps.length);
 
       const perPatentRemarks: PerPatentRemark[] = [];
 
       // Batch mode: try to generate remarks in groups to reduce LLM calls
       try {
         const batchSize = Math.max(1, config.stage35c?.batchSize || 8);
-        const capped = featureMaps.slice(0, Math.min(limit, featureMaps.length));
+        const capped = rankedFeatureMaps.slice(0, limit);
         const batches = this.createBatches(capped, batchSize);
         for (let bi = 0; bi < batches.length; bi++) {
           const batch = batches[bi];
@@ -1446,9 +1508,9 @@ export class NoveltySearchService extends BasePatentService {
       }
 
       // If batch produced results for all, skip single-call fallback
-      if (perPatentRemarks.length < Math.min(limit, featureMaps.length)) {
-        for (let i = perPatentRemarks.length; i < Math.min(limit, featureMaps.length); i++) {
-          const p = featureMaps[i];
+      if (perPatentRemarks.length < limit) {
+        for (let i = perPatentRemarks.length; i < limit; i++) {
+          const p = rankedFeatureMaps[i];
           const pn = String(p.pn || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
           const title = p.title || titleByPn.get(pn);
           const abstract = abstractByPn.get(pn) || p.link || '';
@@ -1718,7 +1780,7 @@ export class NoveltySearchService extends BasePatentService {
         return { success: false, error: 'Search is already completed' };
       }
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
 
       // Determine which stage to resume from based on current status
       let resumeFromStage: NoveltySearchStage;
@@ -1804,7 +1866,7 @@ export class NoveltySearchService extends BasePatentService {
         return { success: false, error: 'Novelty search not found' };
       }
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
 
       // Create a minimal user object for stage 0 execution
       // Since we already validated the userId, we can create a basic user object
@@ -1875,7 +1937,7 @@ export class NoveltySearchService extends BasePatentService {
       //   return { success: false, error: 'Invalid stage progression' };
       // }
 
-      const config = searchRun.config as unknown as NoveltySearchConfig;
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
 
       // Perform Stage 4 report generation
       const stage4Result = await this.performStage4(searchRun, config, requestHeaders);
@@ -2110,6 +2172,32 @@ RESPONSE:`;
     try {
       console.log('ðŸ§  Starting Stage 0: Idea Normalization');
 
+      if (config.searchSource?.searchMode === 'manual') {
+        const filters = config.searchSource.filters || {};
+        const filterValues = Object.values(filters)
+          .flatMap((value: any) => Array.isArray(value) ? value : [value])
+          .map((value: any) => String(value || '').trim())
+          .filter(Boolean);
+        const searchText = filterValues.join(' ').replace(/\s+/g, ' ').trim();
+        const featureSeeds = filterValues
+          .flatMap(value => value.split(/[,;\n]/))
+          .map(value => value.trim())
+          .filter(value => value.length > 2);
+
+        return {
+          success: true,
+          data: {
+            searchQuery: searchText || 'manual fielded patent search',
+            inventionFeatures: Array.from(new Set(featureSeeds)).slice(0, 8),
+            inventionType: ['GENERAL'],
+            queryPlan: {
+              searchMode: 'manual',
+              fieldFilters: filters,
+            },
+          },
+        };
+      }
+
       // Build prompt
       console.log('ðŸ“ Stage 0 Input - Title:', request.title, 'Description length:', request.inventionDescription?.length);
 
@@ -2146,7 +2234,9 @@ RESPONSE:`;
           : undefined,
         inventionType: Array.isArray(normalizedData?.inventionType) 
           ? normalizedData.inventionType 
-          : (normalizedData?.inventionType ? [normalizedData.inventionType] : ['GENERAL'])
+          : (normalizedData?.inventionType ? [normalizedData.inventionType] : ['GENERAL']),
+        cpcCodes: Array.isArray(normalizedData?.cpcCodes) ? normalizedData.cpcCodes.filter(Boolean) : [],
+        ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : []
       };
 
       if (!extractedFields.searchQuery) {
@@ -2175,9 +2265,10 @@ RESPONSE:`;
   }
 
   private async performStage1(
-    searchId: string,
+    searchRun: any,
     stage0Data: NormalizedIdea,
-    config: NoveltySearchConfig
+    config: NoveltySearchConfig,
+    requestHeaders?: Record<string, string>
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       console.log('🔍 Starting Stage 1: Initial Screening');
@@ -2186,17 +2277,78 @@ RESPONSE:`;
       console.log(`🔍 STAGE 1: Starting PQAI search with query: "${stage0Data.searchQuery}"`);
       console.log(`📊 Requesting up to ${config.stage1.maxPatents} patents from PQAI`);
 
-      const pqaiResults = await this.searchPQAI(stage0Data.searchQuery, config.stage1.maxPatents);
+      const jurisdiction = (config.jurisdiction || searchRun?.jurisdiction || 'IN').toUpperCase();
+      const sourceMode = config.searchSource?.mode || (jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY');
+      const providerIds = config.searchSource?.providerIds;
+      const searchMode = config.searchSource?.searchMode === 'manual' ? 'manual' : 'intelligent';
+      const stage0SearchQuery = String(stage0Data.searchQuery || '').trim();
+      const stage0Features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures.filter(Boolean) : [];
+      const stage0CpcCodes = Array.isArray(stage0Data.cpcCodes) ? stage0Data.cpcCodes.filter(Boolean) : [];
+      const stage0IpcCodes = Array.isArray(stage0Data.ipcCodes) ? stage0Data.ipcCodes.filter(Boolean) : [];
+      const stage0QueryPlan: Partial<PatentSearchQueryPlan> | undefined = searchMode === 'manual'
+        ? undefined
+        : {
+          originalQuery: stage0SearchQuery,
+          normalizedQuery: stage0SearchQuery,
+          searchQuery: stage0SearchQuery,
+          semanticQuery: [stage0SearchQuery, ...stage0Features].join(' ').trim(),
+          inventionFeatures: stage0Features,
+          technicalKeywords: Array.from(new Set(stage0SearchQuery.split(/\s+/).filter(word => word.length > 3))).slice(0, 20),
+          synonyms: [],
+          mustHaveTerms: [],
+          excludedTerms: [],
+          cpcCodes: stage0CpcCodes,
+          ipcCodes: stage0IpcCodes,
+          classificationHints: Array.from(new Set([...stage0CpcCodes, ...stage0IpcCodes])),
+          fieldFilters: config.searchSource?.filters || {},
+          explicitFilters: config.searchSource?.filters || {},
+          searchVariants: stage0SearchQuery ? [stage0SearchQuery] : [],
+          llmExpanded: false,
+          confidence: 0.9,
+          warnings: ['Using Stage 0 query plan; Stage 1 LLM query expansion disabled.'],
+        };
+
+      const searchResponse = await patentSearchOrchestrator.search({
+        searchMode,
+        query: searchMode === 'manual' ? '' : stage0SearchQuery,
+        title: searchRun?.title || '',
+        inventionText: searchRun?.inventionDescription || '',
+        filters: config.searchSource?.filters || {},
+        providerIds,
+        jurisdictions: [jurisdiction],
+        sourceMode,
+        llmExpansion: false,
+        queryPlan: stage0QueryPlan,
+        limit: config.stage1.maxPatents,
+        requestHeaders,
+      });
+
+      const priorArtResults = searchResponse.results;
+      const pqaiResults = priorArtResults;
 
       // Return raw PQAI results for UI
-      console.log(' Stage 1 completed successfully - found', pqaiResults.length, 'patents');
-      return { success: true, data: { pqaiResults } };
+      console.log(' Stage 1 completed successfully - found', priorArtResults.length, 'patents');
+      return {
+        success: true,
+        data: {
+          priorArtResults,
+          pqaiResults,
+          queryPlan: searchResponse.queryPlan,
+          providerStats: searchResponse.providerStats,
+          searchWarnings: searchResponse.warnings,
+          searchSource: {
+            mode: sourceMode,
+            providerIds: providerIds || searchResponse.providerStats.map(stat => stat.providerId),
+            searchMode,
+          },
+        },
+      };
 
     } catch (error) {
-      console.error('Stage 1 PQAI search failed:', error);
+      console.error('Stage 1 provider search failed:', error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'PQAI search failed'
+        error: error instanceof Error ? error.message : 'Provider patent search failed'
       };
     }
   }
@@ -2221,6 +2373,10 @@ RESPONSE:`;
 
       // Use up to maxCandidates for gating
       const candidates = pqai.slice(0, Math.min(maxCandidates, pqai.length));
+      const cacheKey = this.createStage15CacheKey(stage0Data, candidates);
+      if (stage1Data.aiRelevance?.byPn && stage1Data.aiRelevance.cacheKey === cacheKey) {
+        return { success: true, data: stage1Data.aiRelevance };
+      }
 
       // Build batch prompt (10-20 items) so the model returns an array of results
       const buildBatchPrompt = (batch: any[]) => {
@@ -2305,7 +2461,20 @@ RESPONSE:`;
         if (trimmedBorderline.length >= borderlineQuota) break;
       }
 
-      return { success: true, data: { accepted: accept, borderline: trimmedBorderline, rejected: reject, byPn, thresholds } };
+      return {
+        success: true,
+        data: {
+          accepted: accept,
+          borderline: trimmedBorderline,
+          rejected: reject,
+          byPn,
+          thresholds,
+          consideredCount: candidates.length,
+          totalCandidates: pqai.length,
+          boundedToTopCandidates: candidates.length < pqai.length,
+          cacheKey
+        }
+      };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Stage 1.5 gating failed' };
     }
@@ -2393,11 +2562,6 @@ RESPONSE:`;
           if (setB.has(k) || setBc.has(kc)) selectedPatents.push(r);
         }
 
-        // 3) If still below the base quota (selectedCount), fill from remaining PQAI to reach selectedCount
-        for (const r of pqaiResults) {
-          if (selectedPatents.length >= selectedCount) break;
-          if (!selectedPatents.includes(r)) selectedPatents.push(r);
-        }
       } else {
         selectedPatents = pqaiResults.slice(0, selectedCount);
       }
@@ -2423,7 +2587,7 @@ RESPONSE:`;
         console.log(`   - Score distribution: ${scores.map((s: number) => (s * 100).toFixed(1) + '%').join(', ')}`);
       }
 
-      console.log(`\nðŸš€ PROCEEDING TO STAGE 3.5a FEATURE MAPPING WITH ${selectedCount} PATENTS`);
+      console.log(`\nProceeding to Stage 3.5a feature mapping with ${selectedPatents.length} patent(s)`);
 
       // Normalize and canonicalize selected patents
       const normalizedPatents = this.normalizePatentsForFeatureMappingV2(selectedPatents, selectedCount);
@@ -4552,7 +4716,9 @@ Abstract: ${patent.abstract}
 
       if (!llmResult.success || !llmResult.response) {
         console.warn(`LLM call failed for batch ${batchNumber}`);
-        return { success: false, error: 'LLM call failed' };
+        const fallbackFeatureMaps = this.createDeterministicFeatureMap(batch, inventionFeatures);
+        await this.cacheFeatureMappingResults(searchId, ideaHash, batchHash, fallbackFeatureMaps);
+        return { success: true, featureMaps: fallbackFeatureMaps };
       }
 
       // Parse and validate response
@@ -4594,7 +4760,7 @@ Abstract: ${patent.abstract}
 
     } catch (error) {
       console.error(`Batch ${batchNumber} processing error:`, error);
-      return { success: false, error: error instanceof Error ? error.message : 'Batch processing failed' };
+      return { success: true, featureMaps: this.createDeterministicFeatureMap(batch, inventionFeatures) };
     }
   }
 
@@ -4656,6 +4822,19 @@ Abstract: ${patent.abstract}
     const batchData = batch.map(p => `${p.canonicalPn}:${p.title}`).join('|');
     const featuresData = inventionFeatures.join('|');
     return crypto.createHash('md5').update(`${batchData}||${featuresData}`).digest('hex');
+  }
+
+  private createStage15CacheKey(stage0Data: NormalizedIdea, candidates: any[]): string {
+    const features = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    const candidateData = candidates.map(item => {
+      const pn = item.publication_number || item.publicationNumber || item.pn || item.id || '';
+      const score = item.relevanceScore || item.score || item.relevance || 0;
+      return `${pn}:${score}`;
+    }).join('|');
+    return crypto
+      .createHash('sha1')
+      .update(`${stage0Data?.searchQuery || ''}||${features.join('|')}||${candidateData}`)
+      .digest('hex');
   }
 
   private createIdeaHash(inventionFeatures: string[]): string {
@@ -4752,6 +4931,79 @@ Abstract: ${patent.abstract}
       quality_flags: { low_evidence: true, ambiguous_abstracts: false, language_mismatch: false },
       stats: { patents_analyzed: batch.length, avg_abstract_length_words: 0 }
     };
+  }
+
+  private createDeterministicFeatureMap(batch: any[], inventionFeatures: string[]): PatentFeatureMap[] {
+    const tokenize = (value: string) => value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(token => token.length > 3);
+
+    const quoteFor = (text: string, tokens: string[]) => {
+      const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+      const match = sentences.find(sentence => {
+        const lower = sentence.toLowerCase();
+        return tokens.some(token => lower.includes(token));
+      });
+      return (match || text).slice(0, 220);
+    };
+
+    return batch.map(patent => {
+      const title = String(patent.title || '');
+      const abstract = String(patent.abstract || '');
+      const combined = `${title} ${abstract}`;
+      const combinedLower = combined.toLowerCase();
+      const featureAnalysis: FeatureMapCell[] = inventionFeatures.map(feature => {
+        const featureText = String(feature || '').trim();
+        const tokens = Array.from(new Set(tokenize(featureText)));
+        const matched = tokens.filter(token => combinedLower.includes(token));
+        const overlap = tokens.length > 0 ? matched.length / tokens.length : 0;
+        const phraseMatch = featureText.length > 8 && combinedLower.includes(featureText.toLowerCase());
+        const status: FeatureMapCell['status'] = phraseMatch || overlap >= 0.65
+          ? 'Present'
+          : overlap >= 0.25
+            ? 'Partial'
+            : 'Absent';
+
+        return {
+          feature: featureText,
+          status,
+          confidence: status === 'Present' ? 0.55 : status === 'Partial' ? 0.4 : 0.35,
+          quote: status === 'Absent' ? undefined : quoteFor(combined, matched.length ? matched : tokens),
+          field: status === 'Absent' ? undefined : 'title/abstract',
+          reason: status === 'Absent'
+            ? 'No deterministic title or abstract token overlap was found.'
+            : `Deterministic token overlap matched ${matched.length} of ${Math.max(tokens.length, 1)} feature terms.`
+        };
+      });
+
+      const present = featureAnalysis.filter(cell => cell.status === 'Present');
+      const partial = featureAnalysis.filter(cell => cell.status === 'Partial');
+      const absent = featureAnalysis.filter(cell => cell.status === 'Absent');
+      const total = Math.max(1, featureAnalysis.length);
+      const coverageScore = (present.length + partial.length * 0.5) / total;
+
+      return {
+        pn: patent.canonicalPn,
+        title,
+        link: patent.link || patent.sourceUrl || null,
+        coverage: {
+          present: present.length,
+          partial: partial.length,
+          absent: absent.length,
+          coverage_score: coverageScore
+        },
+        present,
+        partial,
+        absent,
+        feature_analysis: featureAnalysis,
+        remarks: coverageScore > 0
+          ? `Deterministic fallback found ${present.length} present and ${partial.length} partial feature overlap(s) in title/abstract text.`
+          : 'Deterministic fallback found no direct feature overlap in title/abstract text.',
+        decision: coverageScore >= 0.6 ? 'obvious' : coverageScore >= 0.35 ? 'partial_novelty' : 'novel'
+      };
+    });
   }
 
   private validateAndRepairFeatureMaps(featureMaps: PatentFeatureMap[], batch: any[], inventionFeatures: string[]): PatentFeatureMap[] {

@@ -22,12 +22,37 @@ export async function POST(request: NextRequest) {
       config
     } = body;
 
-    if (!inventionDescription || !title) {
+    const searchMode = config?.searchSource?.searchMode === 'manual' ? 'manual' : 'intelligent';
+    const manualFilters = config?.searchSource?.filters || {};
+    const hasManualCriteria = Object.values(manualFilters).some((value: any) => (
+      Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && String(value).trim() !== ''
+    ));
+
+    if (searchMode === 'intelligent' && (!inventionDescription || !title)) {
       return NextResponse.json(
         { error: 'inventionDescription and title are required' },
         { status: 400 }
       );
     }
+
+    if (searchMode === 'manual' && !hasManualCriteria) {
+      return NextResponse.json(
+        { error: 'At least one manual patent search field is required' },
+        { status: 400 }
+      );
+    }
+
+    const manualSummary = Object.entries(manualFilters)
+      .filter(([, value]: any) => Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && String(value).trim() !== '')
+      .map(([key, value]: any) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+      .join('; ');
+
+    const resolvedTitle = searchMode === 'manual'
+      ? (String(title || '').trim() || 'Manual Patent Search')
+      : title;
+    const resolvedDescription = searchMode === 'manual'
+      ? (String(inventionDescription || '').trim() || `Manual fielded patent search. ${manualSummary}`)
+      : inventionDescription;
 
     // Get JWT token from authorization header
     const authHeader = request.headers.get('authorization');
@@ -59,8 +84,8 @@ export async function POST(request: NextRequest) {
       patentId,
       projectId,
       jwtToken,
-      inventionDescription,
-      title,
+      inventionDescription: resolvedDescription,
+      title: resolvedTitle,
       jurisdiction,
       config
     };

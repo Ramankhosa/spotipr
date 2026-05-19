@@ -50,6 +50,31 @@ describe('patent corpus field parsers', () => {
 
     expect(inventors).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'])
   })
+
+  it('keeps names clean when applicant and inventor blocks contain repeated address labels', () => {
+    const applicants = parseApplicants(`
+      (71)Name of Applicant :
+      1)Directorate of Forensic Science Services
+      Address of Applicant :Block No. 9, 8th Floor, CGO Complex, New Delhi
+      2)Panjab University
+      Name of Applicant : NA
+      Address of Applicant : NA
+    `)
+    const inventors = parseInventors(`
+      (72)Name of Inventor :
+      1)Garima Joshi
+      Address of Applicant :University Institute of Engineering and Technology, Chandigarh
+      2)Dr. S.K. Jain
+      Address of Applicant :Directorate of Forensic Science Services, New Delhi
+      3)Dr. Archana Singh
+    `)
+
+    expect(applicants.map(item => item.name)).toEqual([
+      'Directorate of Forensic Science Services',
+      'Panjab University',
+    ])
+    expect(inventors).toEqual(['Garima Joshi', 'Dr. S.K. Jain', 'Dr. Archana Singh'])
+  })
 })
 
 describe('patent corpus PDF extraction', () => {

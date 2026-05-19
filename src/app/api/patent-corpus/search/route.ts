@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { searchPatentCorpus } from '@/lib/patent-corpus-service'
+import { patentSearchOrchestrator } from '@/lib/patent-search'
 
 export const runtime = 'nodejs'
 
@@ -19,8 +19,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Search query is required.' }, { status: 400 })
     }
 
-    const results = await searchPatentCorpus(query, limit)
-    return NextResponse.json({ results })
+    const response = await patentSearchOrchestrator.search({
+      query,
+      providerIds: ['indian-corpus'],
+      sourceMode: 'INDIAN_ONLY',
+      llmExpansion: body?.llmExpansion === true,
+      filters: body?.filters || {},
+      limit,
+      requestHeaders: Object.fromEntries(request.headers.entries()),
+    })
+    return NextResponse.json({ ...response, results: response.results })
   } catch (error) {
     console.error('[PatentCorpus] Search failed:', error)
     return NextResponse.json(

@@ -286,6 +286,7 @@ export default function SuperAdminDashboard() {
         { label: 'Country Profiles', icon: '🗺️', href: '/super-admin/countries' },
         { label: 'Section Prompts', icon: '📝', href: '/super-admin/section-prompts' },
         { label: 'Jurisdiction Styles', icon: '🎨', href: '/super-admin/jurisdiction-styles' },
+        { label: 'Patent Corpus', icon: '📄', href: '/super-admin/patent-corpus', badge: 'NEW' },
         { label: 'Superset Sections', icon: '📚', href: '/super-admin/superset-sections' }
       ]
     },

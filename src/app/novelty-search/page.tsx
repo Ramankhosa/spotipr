@@ -3,7 +3,6 @@
 import { useAuth } from '@/lib/auth-context';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, Suspense } from 'react';
-import Link from 'next/link';
 import NoveltySearchWorkflow from '@/components/novelty-search/NoveltySearchWorkflow';
 import { PageLoadingBird } from '@/components/ui/loading-bird';
 
@@ -28,11 +27,6 @@ function NoveltySearchContent() {
 export default function NoveltySearchPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-
-  // Get projectId from URL for the history link (client-side only)
-  const projectId = typeof window !== 'undefined'
-    ? new URLSearchParams(window.location.search).get('projectId')
-    : null;
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -85,40 +79,23 @@ export default function NoveltySearchPage() {
     );
   }
 
-  const historyHref = projectId ? `/projects/${projectId}#novelty-search-history` : '/projects';
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-3">
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">Novelty Search</h1>
-            </div>
-            <div className="flex items-center space-x-3">
-              <Link
-                href={historyHref}
-                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                History
-              </Link>
-              <div className="text-right hidden sm:block">
-                <div className="text-xs text-gray-500">{user.email}</div>
-              </div>
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                Dashboard
-              </button>
-            </div>
-          </div>
+    <div className="min-h-screen bg-slate-50">
+      <div className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3 text-sm text-slate-500 sm:px-6 lg:px-8">
+          <button type="button" onClick={() => router.push('/dashboard')} className="hover:text-slate-900">
+            Dashboard
+          </button>
+          <span>/</span>
+          <button type="button" onClick={() => router.push('/projects')} className="hover:text-slate-900">
+            Projects
+          </button>
+          <span>/</span>
+          <span className="font-medium text-slate-900">Novelty Search</span>
         </div>
-      </header>
+      </div>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto py-4 sm:px-6 lg:px-8">
+      <main>
         <Suspense
           fallback={
             <div className="flex items-center justify-center py-8">

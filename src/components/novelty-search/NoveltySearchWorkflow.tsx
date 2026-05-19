@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import Stage4ResultsDisplay from './Stage4ResultsDisplay';
@@ -24,12 +24,21 @@ import {
   Check, 
   Eye, 
   AlertTriangle,
-  Sparkles,
   Zap,
   ArrowRight,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Menu,
+  SlidersHorizontal,
+  X
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
 
 // Local string constants for UI mapping
 const NoveltySearchStatus = {
@@ -108,6 +117,154 @@ const STAGE_TAB_LABELS: Record<StageTab, string> = {
   '5': 'Download Report'
 };
 
+type NoveltyPatentSearchMode = 'intelligent' | 'manual';
+type NoveltySearchSourceMode = 'INDIAN_ONLY' | 'PQAI_ONLY' | 'PQAI_PLUS_INDIAN';
+type NoveltySearchPath = 'manual' | 'intelligent';
+
+type ManualPatentSearchFields = {
+  anyText: string;
+  title: string;
+  abstract: string;
+  patentText: string;
+  applicant: string;
+  inventor: string;
+  publicationNumber: string;
+  applicationNumber: string;
+  classifications: string;
+  filingFrom: string;
+  filingTo: string;
+  publicationFrom: string;
+  publicationTo: string;
+  numberOfPagesMin: string;
+  numberOfPagesMax: string;
+  numberOfClaimsMin: string;
+  numberOfClaimsMax: string;
+  sourcePdfName: string;
+  excludeTerms: string;
+};
+
+type ManualSearchState = {
+  isLoading: boolean;
+  error: string | null;
+  hasSearched: boolean;
+  results: any[];
+  providerStats: any[];
+  warnings: string[];
+  queryPlan: any | null;
+};
+
+const defaultManualPatentSearchFields: ManualPatentSearchFields = {
+  anyText: '',
+  title: '',
+  abstract: '',
+  patentText: '',
+  applicant: '',
+  inventor: '',
+  publicationNumber: '',
+  applicationNumber: '',
+  classifications: '',
+  filingFrom: '',
+  filingTo: '',
+  publicationFrom: '',
+  publicationTo: '',
+  numberOfPagesMin: '',
+  numberOfPagesMax: '',
+  numberOfClaimsMin: '',
+  numberOfClaimsMax: '',
+  sourcePdfName: '',
+  excludeTerms: '',
+};
+
+const manualSearchFieldLabels: Record<keyof ManualPatentSearchFields, string> = {
+  anyText: 'Any text',
+  title: 'Patent title',
+  abstract: 'Abstract',
+  patentText: 'Patent text',
+  applicant: 'Applicant',
+  inventor: 'Inventor',
+  publicationNumber: 'Publication no.',
+  applicationNumber: 'Application no.',
+  classifications: 'IPC/CPC',
+  filingFrom: 'Filing from',
+  filingTo: 'Filing to',
+  publicationFrom: 'Published from',
+  publicationTo: 'Published to',
+  numberOfPagesMin: 'Pages min',
+  numberOfPagesMax: 'Pages max',
+  numberOfClaimsMin: 'Claims min',
+  numberOfClaimsMax: 'Claims max',
+  sourcePdfName: 'Source PDF',
+  excludeTerms: 'Excluded terms',
+};
+
+function AutoResizeTextarea({
+  value,
+  onChange,
+  className = '',
+  minHeight = 38,
+  maxHeight = 112,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  minHeight?: number;
+  maxHeight?: number;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  const resize = useCallback(() => {
+    const node = ref.current;
+    if (!node) return;
+    node.style.height = 'auto';
+    const next = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight);
+    node.style.height = `${next}px`;
+    node.style.overflowY = node.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, [maxHeight, minHeight]);
+
+  useEffect(() => {
+    resize();
+  }, [resize, value]);
+
+  return (
+    <textarea
+      {...props}
+      ref={ref}
+      value={value}
+      onChange={(event) => {
+        onChange?.(event);
+        requestAnimationFrame(resize);
+      }}
+      style={{ minHeight, maxHeight, ...(props.style || {}) }}
+      className={`w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-5 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 ${className}`}
+    />
+  );
+}
+
+function splitManualValues(value: string) {
+  return value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean);
+}
+
+function numberValue(value: string) {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function listPatentText(value: unknown, limit = 4) {
+  if (!value) return '';
+  const values = Array.isArray(value)
+    ? value.map(item => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>;
+        return String(record.name || record.applicant || record.value || '').trim();
+      }
+      return String(item || '').trim();
+    })
+    : typeof value === 'object'
+      ? Object.values(value as Record<string, unknown>).map(item => String(item || '').trim())
+      : [String(value)];
+  return values.filter(Boolean).slice(0, limit).join(', ');
+}
+
 export default function NoveltySearchWorkflow({
   patentId,
   projectId: initialProjectId,
@@ -117,14 +274,28 @@ export default function NoveltySearchWorkflow({
   initialDescription,
   ideaId
 }: NoveltySearchWorkflowProps) {
-  const [formData, setFormData] = useState({
+  const [activeSearchPath, setActiveSearchPath] = useState<NoveltySearchPath>(
+    initialSearchId || initialTitle || initialDescription ? 'intelligent' : 'manual'
+  );
+  const [formData, setFormData] = useState<{
+    title: string;
+    inventionDescription: string;
+    jurisdiction: string;
+    searchSourceMode: NoveltySearchSourceMode;
+    llmExpansion: boolean;
+    searchMode: NoveltyPatentSearchMode;
+  }>({
     title: initialTitle || '',
     inventionDescription: initialDescription || '',
-    jurisdiction: 'IN'
+    jurisdiction: 'IN',
+    searchSourceMode: 'INDIAN_ONLY',
+    llmExpansion: true,
+    searchMode: 'intelligent'
   });
   
   useEffect(() => {
     if (initialTitle || initialDescription) {
+      setActiveSearchPath('intelligent');
       setFormData(prev => ({
         ...prev,
         title: initialTitle || prev.title,
@@ -193,26 +364,39 @@ export default function NoveltySearchWorkflow({
   const [newFeatureText, setNewFeatureText] = useState('');
   const [autoMode, setAutoMode] = useState(false);
   const [stage0Approved, setStage0Approved] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isFileProcessing, setIsFileProcessing] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [manualSearchFields, setManualSearchFields] = useState<ManualPatentSearchFields>(defaultManualPatentSearchFields);
+  const [showMoreManualFilters, setShowMoreManualFilters] = useState(false);
+  const [manualSearchState, setManualSearchState] = useState<ManualSearchState>({
+    isLoading: false,
+    error: null,
+    hasSearched: false,
+    results: [],
+    providerStats: [],
+    warnings: [],
+    queryPlan: null,
+  });
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   // Progress messages
   const stage1Messages = [
-    '🔍 Scanning through 12M+ global patent database...',
-    '🎯 Applying advanced semantic analysis to your invention...',
-    '🧠 Using proprietary AI algorithms for relevance matching...',
-    '📊 Calculating multi-dimensional similarity scores...',
-    '🔬 Cross-referencing with CPC/IPC classification systems...',
-    '⚡ Filtering results through novelty assessment engine...',
-    '📈 Ranking patents by technical relevance and impact...',
-    '📋 Preparing final results with comprehensive metadata...'
+    'Scanning patent databases for matching references...',
+    'Applying semantic relevance analysis...',
+    'Ranking records by technical proximity...',
+    'Cross-referencing publication and classification data...',
+    'Filtering duplicate and low-signal results...',
+    'Preparing search results with available metadata...'
   ];
 
   const stage35Messages = [
-    'Comparing invention claims with patent claims…',
-    'Analyzing technical differences…',
-    'Evaluating novelty impact…',
-    'Assessing obviousness…',
-    'Reviewing prior art citations…',
-    'Generating assessment report…'
+    'Comparing invention features with patent disclosures...',
+    'Analyzing technical differences...',
+    'Evaluating novelty impact...',
+    'Reviewing prior art citations...',
+    'Preparing assessment data...'
   ];
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -220,9 +404,92 @@ export default function NoveltySearchWorkflow({
   const selectedProject = useMemo(() => projects.find(p => p.id === selectedProjectId), [projects, selectedProjectId]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(max-width: 1279px)');
+    const syncSidebar = () => setIsSidebarCollapsed(mediaQuery.matches);
+    syncSidebar();
+    mediaQuery.addEventListener('change', syncSidebar);
+    return () => mediaQuery.removeEventListener('change', syncSidebar);
+  }, []);
+
+  const manualSearchFilters = useMemo(() => ({
+    anyTextContains: splitManualValues(manualSearchFields.anyText),
+    titleContains: splitManualValues(manualSearchFields.title),
+    abstractContains: splitManualValues(manualSearchFields.abstract),
+    patentTextContains: splitManualValues(manualSearchFields.patentText),
+    publicationNumber: manualSearchFields.publicationNumber.trim() || undefined,
+    applicationNumber: manualSearchFields.applicationNumber.trim() || undefined,
+    applicants: splitManualValues(manualSearchFields.applicant),
+    inventors: splitManualValues(manualSearchFields.inventor),
+    classifications: splitManualValues(manualSearchFields.classifications),
+    filingDateFrom: manualSearchFields.filingFrom || undefined,
+    filingDateTo: manualSearchFields.filingTo || undefined,
+    publicationDateFrom: manualSearchFields.publicationFrom || undefined,
+    publicationDateTo: manualSearchFields.publicationTo || undefined,
+    numberOfPagesMin: numberValue(manualSearchFields.numberOfPagesMin),
+    numberOfPagesMax: numberValue(manualSearchFields.numberOfPagesMax),
+    numberOfClaimsMin: numberValue(manualSearchFields.numberOfClaimsMin),
+    numberOfClaimsMax: numberValue(manualSearchFields.numberOfClaimsMax),
+    sourcePdfName: manualSearchFields.sourcePdfName.trim() || undefined,
+    excludeTerms: splitManualValues(manualSearchFields.excludeTerms),
+  }), [manualSearchFields]);
+
+  const manualSearchHasCriteria = useMemo(() => Object.values(manualSearchFilters).some(value => (
+    Array.isArray(value) ? value.length > 0 : value !== undefined && value !== ''
+  )), [manualSearchFilters]);
+
+  const manualSearchSummary = useMemo(() => {
+    const labels: Array<[keyof ManualPatentSearchFields, string]> = [
+      ['anyText', 'Any text'],
+      ['title', 'Patent title'],
+      ['abstract', 'Abstract'],
+      ['patentText', 'Patent text'],
+      ['applicant', 'Applicant'],
+      ['inventor', 'Inventor'],
+      ['publicationNumber', 'Publication number'],
+      ['applicationNumber', 'Application number'],
+      ['classifications', 'IPC/CPC'],
+      ['filingFrom', 'Filing from'],
+      ['filingTo', 'Filing to'],
+      ['publicationFrom', 'Published from'],
+      ['publicationTo', 'Published to'],
+      ['sourcePdfName', 'Source PDF'],
+      ['numberOfClaimsMin', 'Claims min'],
+      ['numberOfClaimsMax', 'Claims max'],
+      ['numberOfPagesMin', 'Pages min'],
+      ['numberOfPagesMax', 'Pages max'],
+      ['excludeTerms', 'Excluded terms'],
+    ];
+
+    return labels
+      .map(([field, label]) => {
+        const value = manualSearchFields[field].trim();
+        return value ? `${label}: ${value}` : '';
+      })
+      .filter(Boolean)
+      .join('; ');
+  }, [manualSearchFields]);
+
+  const manualActiveChips = useMemo(() => {
+    return (Object.keys(manualSearchFields) as Array<keyof ManualPatentSearchFields>)
+      .map(field => {
+        const value = manualSearchFields[field].trim();
+        if (!value) return null;
+        const shortValue = value.length > 42 ? `${value.slice(0, 39)}...` : value;
+        return { field, label: manualSearchFieldLabels[field], value: shortValue };
+      })
+      .filter(Boolean) as Array<{ field: keyof ManualPatentSearchFields; label: string; value: string }>;
+  }, [manualSearchFields]);
+
+  const updateManualSearchField = (field: keyof ManualPatentSearchFields, value: string) => {
+    setManualSearchFields(prev => ({ ...prev, [field]: value }));
+  };
+
   // Load existing search if provided
   useEffect(() => {
     if (!initialSearchId) return;
+    setActiveSearchPath('intelligent');
 
     const authToken = localStorage.getItem('auth_token');
     if (!authToken) {
@@ -324,7 +591,7 @@ export default function NoveltySearchWorkflow({
 
   const stage1Results = useMemo(() => {
     const root: any = searchState.results || {};
-    const results = root.pqaiResults || root.stage1?.pqaiResults;
+    const results = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults;
     return Array.isArray(results) ? results : [];
   }, [searchState.results]);
 
@@ -468,6 +735,47 @@ export default function NoveltySearchWorkflow({
     }
   };
 
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    const allowedExtensions = ['.txt', '.md', '.markdown', '.csv', '.tsv', '.xlsx', '.doc', '.docx', '.pdf'];
+    const lowerName = file.name.toLowerCase();
+    if (!allowedExtensions.some(ext => lowerName.endsWith(ext))) {
+      setSearchState(prev => ({ ...prev, error: 'Unsupported file type. Upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or text-based .pdf files.' }));
+      input.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setSearchState(prev => ({ ...prev, error: 'File size must be less than 5MB.' }));
+      input.value = '';
+      return;
+    }
+
+    setIsFileProcessing(true);
+    setUploadedFileName(null);
+    setSearchState(prev => ({ ...prev, error: null }));
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const response = await fetch('/api/patent-search/ingest-file', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` },
+        body: form
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to extract file text.');
+      setFormData(prev => ({ ...prev, inventionDescription: data.textContent || prev.inventionDescription }));
+      setUploadedFileName(data.fileName || file.name);
+    } catch (error) {
+      setSearchState(prev => ({ ...prev, error: error instanceof Error ? error.message : 'Failed to extract file text.' }));
+    } finally {
+      setIsFileProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const startNoveltySearch = async () => {
     if (!formData.title.trim() || !formData.inventionDescription.trim()) {
       setSearchState(prev => ({ ...prev, error: 'Title and invention description are required' }));
@@ -475,22 +783,34 @@ export default function NoveltySearchWorkflow({
     }
 
     const validProjectId = selectedProjectId && projects.find(p => p.id === selectedProjectId) ? selectedProjectId : null;
+    const requestTitle = formData.title.trim();
+    const requestDescription = formData.inventionDescription.trim();
 
     setSearchState({ ...searchState, isLoading: true, error: null });
 
     try {
+      const authToken = localStorage.getItem('auth_token');
       const response = await fetch('/api/novelty-search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify({
           patentId,
           projectId: validProjectId,
           ...formData,
+          searchMode: 'intelligent',
+          title: requestTitle,
+          inventionDescription: requestDescription,
           config: {
             jurisdiction: formData.jurisdiction,
+            searchSource: {
+              mode: formData.searchSourceMode,
+              searchMode: 'intelligent',
+              llmExpansion: formData.llmExpansion,
+              filters: {}
+            },
             stage4: {
               reportFormat: 'JSON',
               includeExecutiveSummary: true,
@@ -508,22 +828,88 @@ export default function NoveltySearchWorkflow({
         throw new Error(data.error || 'Failed to start novelty search');
       }
 
-      setSearchState(prev => ({
-        ...prev,
+      const initialSearchState = {
         searchId: data.searchId,
         status: data.status,
         currentStage: data.currentStage,
         results: data.results,
-        isLoading: false
-      }));
+      };
 
       setStageProgress(prev => ({ ...prev, stage0: 100 }));
+
+      setSearchState(prev => ({
+        ...prev,
+        ...initialSearchState,
+        isLoading: false
+      }));
 
     } catch (error) {
       setSearchState(prev => ({
         ...prev,
         error: error instanceof Error ? error.message : 'Failed to start search',
         isLoading: false
+      }));
+    }
+  };
+
+  const runManualPatentSearch = async () => {
+    if (!manualSearchHasCriteria) {
+      setManualSearchState(prev => ({
+        ...prev,
+        error: 'Enter at least one patent field before searching.',
+        hasSearched: false,
+      }));
+      return;
+    }
+
+    setManualSearchState(prev => ({
+      ...prev,
+      isLoading: true,
+      error: null,
+      hasSearched: true,
+    }));
+
+    try {
+      const authToken = localStorage.getItem('auth_token');
+      const response = await fetch('/api/patent-search/advanced', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          searchMode: 'manual',
+          query: '',
+          title: '',
+          inventionText: '',
+          filters: manualSearchFilters,
+          sourceMode: formData.searchSourceMode,
+          jurisdictions: [formData.jurisdiction],
+          llmExpansion: false,
+          limit: 60,
+          sort: 'relevance',
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'Manual patent search failed.');
+      }
+
+      setManualSearchState({
+        isLoading: false,
+        error: null,
+        hasSearched: true,
+        results: Array.isArray(data.results) ? data.results : [],
+        providerStats: Array.isArray(data.providerStats) ? data.providerStats : [],
+        warnings: Array.isArray(data.warnings) ? data.warnings : [],
+        queryPlan: data.queryPlan || null,
+      });
+    } catch (error) {
+      setManualSearchState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: error instanceof Error ? error.message : 'Manual patent search failed.',
       }));
     }
   };
@@ -543,18 +929,18 @@ export default function NoveltySearchWorkflow({
         setStage1Message(stage1Messages[i]);
         await new Promise(resolve => setTimeout(resolve, 1800));
       }
-      setStage1Message('💡 Finalizing patent analysis and generating comprehensive report...');
+      setStage1Message('Finalizing patent analysis and preparing results...');
     } else if (stageNumber === '3.5') {
       setIsStage35Simulating(true);
       setStage35Message(stage35Messages[0]);
     } else if (stageNumber === '3.5a') {
       setIsStage35aSimulating(true);
       const stage35aMessages = [
-        '📊 Selecting top patents by PQAI relevance...',
-        '🎯 Applying 50% selection with max 20 and min 10...',
-        '🔄 Canonicalizing patents for feature mapping...',
-        '📝 Mapping invention features to patent evidence...',
-        '✅ Computing coverage and extracting references...'
+        'Selecting top patents by relevance...',
+        'Applying patent selection limits...',
+        'Canonicalizing patents for feature mapping...',
+        'Mapping invention features to patent evidence...',
+        'Computing coverage and extracting references...'
       ];
       setStage35aMessage(stage35aMessages[0]);
       for (let i = 1; i < stage35aMessages.length; i++) {
@@ -597,7 +983,7 @@ export default function NoveltySearchWorkflow({
         const items = Array.isArray(data?.results?.pqaiResults)
           ? data.results.pqaiResults
           : (Array.isArray(data?.results?.stage1?.pqaiResults) ? data.results.stage1.pqaiResults : []);
-        setStage1Message(`✨ Analysis complete! Found ${items.length} highly relevant patent${items.length !== 1 ? 's' : ''} from millions of global records.`);
+        setStage1Message(`Analysis complete. Found ${items.length} relevant patent${items.length !== 1 ? 's' : ''}.`);
         await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
@@ -679,17 +1065,15 @@ export default function NoveltySearchWorkflow({
         if (autoMode) {
           if (!hasStage15Results) return '1.5';
           if (!hasStage35Results) return '3.5';
-          if (!hasStage35cResults) return '3.5c';
           if (!hasStage4Results) return '4';
         }
         return hasStage15Results ? '3.5' : '1.5';
       case NoveltySearchStatus.STAGE_3_5_COMPLETED:
         // In auto mode, always progress through all stages
         if (autoMode) {
-          if (!hasStage35cResults) return '3.5c';
           if (!hasStage4Results) return '4';
         }
-        return hasStage35cResults ? '4' : '3.5c';
+        return '4';
       case NoveltySearchStatus.COMPLETED:
         return null;
       default:
@@ -701,7 +1085,7 @@ export default function NoveltySearchWorkflow({
   const runAllRemainingStages = useCallback(async () => {
     if (!searchState.searchId) return;
     
-    const stages = ['1', '1.5', '3.5', '3.5c', '4'];
+    const stages = ['1', '1.5', '3.5', '4'];
     
     for (const stageNum of stages) {
       // Check if stage already completed
@@ -869,6 +1253,423 @@ export default function NoveltySearchWorkflow({
     return Math.round((completedCount / STAGE_TABS.length) * 100);
   }, [isStageCompleted]);
 
+  const renderSearchPathTabs = () => (
+    <div className="mb-5 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+      <div className="grid gap-1 sm:grid-cols-2" role="tablist" aria-label="Novelty search paths">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSearchPath === 'manual'}
+          onClick={() => {
+            setActiveSearchPath('manual');
+            setFormData(prev => ({ ...prev, searchMode: 'manual' }));
+          }}
+          className={`flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
+            activeSearchPath === 'manual'
+              ? 'bg-indigo-600 text-white'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+          Manual Search
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSearchPath === 'intelligent'}
+          onClick={() => {
+            setActiveSearchPath('intelligent');
+            setFormData(prev => ({ ...prev, searchMode: 'intelligent' }));
+          }}
+          className={`flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
+            activeSearchPath === 'intelligent'
+              ? 'bg-indigo-600 text-white'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
+        >
+          <Search className="h-4 w-4" />
+          Intelligent Novelty Search
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderManualInput = (
+    field: keyof ManualPatentSearchFields,
+    label: string,
+    placeholder: string,
+    multiline = false
+  ) => (
+    <div className="space-y-1">
+      <Label className="text-xs font-medium text-slate-600">{label}</Label>
+      {multiline ? (
+        <AutoResizeTextarea
+          value={manualSearchFields[field]}
+          onChange={(event) => updateManualSearchField(field, event.target.value)}
+          placeholder={placeholder}
+        />
+      ) : (
+        <Input
+          value={manualSearchFields[field]}
+          onChange={(event) => updateManualSearchField(field, event.target.value)}
+          placeholder={placeholder}
+          className="h-[38px] rounded-lg border-slate-200 bg-white text-sm focus:border-indigo-500 focus:ring-indigo-500/20"
+        />
+      )}
+    </div>
+  );
+
+  const renderManualResults = () => {
+    const results = manualSearchState.results;
+    const plan = manualSearchState.queryPlan || {};
+    const requestedProviders = manualSearchState.providerStats.filter((stat: any) => stat.requested);
+    const totalProviderResults = requestedProviders.reduce((sum: number, stat: any) => sum + Number(stat.resultCount || 0), 0);
+
+    if (manualSearchState.isLoading) {
+      return (
+        <Card className="border border-slate-200 bg-white shadow-sm">
+          <CardContent className="flex items-center gap-3 py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+            <div>
+              <div className="text-sm font-medium text-slate-900">Searching patent records</div>
+              <div className="text-xs text-slate-500">Manual mode uses exact filters and disables LLM expansion.</div>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    if (manualSearchState.error) {
+      return (
+        <Alert variant="destructive" className="rounded-lg">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{manualSearchState.error}</AlertDescription>
+        </Alert>
+      );
+    }
+
+    if (!manualSearchState.hasSearched) return null;
+
+    return (
+      <div className="space-y-4">
+        <Card className="border border-slate-200 bg-white shadow-sm">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-lg font-semibold text-slate-900">Manual Search Results</CardTitle>
+                <CardDescription>
+                  {results.length} merged result{results.length !== 1 ? 's' : ''} from {requestedProviders.length || manualSearchState.providerStats.length || 0} provider{(requestedProviders.length || manualSearchState.providerStats.length) !== 1 ? 's' : ''}.
+                </CardDescription>
+              </div>
+              <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
+                LLM expansion off
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="text-xs font-medium uppercase text-slate-500">Returned</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{results.length}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="text-xs font-medium uppercase text-slate-500">Provider hits</div>
+                <div className="mt-1 text-2xl font-semibold text-indigo-600">{totalProviderResults}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="text-xs font-medium uppercase text-slate-500">Matched fields</div>
+                <div className="mt-1 text-2xl font-semibold text-emerald-600">
+                  {new Set(results.flatMap((result: any) => result.matchedFields || [])).size}
+                </div>
+              </div>
+            </div>
+
+            {manualSearchState.providerStats.length > 0 && (
+              <div className="grid gap-2 md:grid-cols-2">
+                {manualSearchState.providerStats.map((stat: any) => (
+                  <div key={stat.providerId || stat.label} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                    <div>
+                      <div className="font-medium text-slate-800">{stat.label || stat.providerId}</div>
+                      {stat.error && <div className="text-xs text-rose-600">{stat.error}</div>}
+                    </div>
+                    <Badge variant="outline" className={stat.requested ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500'}>
+                      {stat.resultCount || 0} results
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(plan.searchQuery || plan.fieldFilters) && (
+              <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700">Query plan and filters</summary>
+                <div className="mt-3 grid gap-3 text-xs text-slate-600 md:grid-cols-2">
+                  <div>
+                    <div className="font-medium text-slate-800">Search query</div>
+                    <div className="mt-1 rounded-md bg-white p-2">{plan.searchQuery || 'Field-only search'}</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-slate-800">Field filters</div>
+                    <pre className="mt-1 max-h-36 overflow-auto rounded-md bg-white p-2 text-[11px]">{JSON.stringify(plan.fieldFilters || manualSearchFilters, null, 2)}</pre>
+                  </div>
+                </div>
+              </details>
+            )}
+
+            {manualSearchState.warnings.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="text-sm font-medium text-amber-900">Search warnings</div>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-800">
+                  {manualSearchState.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {results.length === 0 ? (
+          <Card className="border border-slate-200 bg-white shadow-sm">
+            <CardContent className="py-10 text-center">
+              <Search className="mx-auto mb-3 h-9 w-9 text-slate-300" />
+              <div className="text-sm font-medium text-slate-800">No matching patent records</div>
+              <p className="mt-1 text-sm text-slate-500">Broaden a field, remove date limits, or switch sources.</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {results.map((result: any, index: number) => {
+              const patentNumber = result.publicationNumber || result.pn || result.publication_number || result.patent_number || 'Unknown';
+              const title = result.title || result.invention_title || patentNumber;
+              const abstract = result.abstract || result.snippet || '';
+              const relevanceScore = typeof result.relevanceScore === 'number'
+                ? result.relevanceScore
+                : (typeof result.score === 'number' ? result.score : 0);
+              const matchedFields = Array.isArray(result.matchedFields) ? result.matchedFields : [];
+              const matchReasons = Array.isArray(result.matchReasons) ? result.matchReasons : [];
+              const sourceProviders = Array.isArray(result.sourceProviders)
+                ? result.sourceProviders
+                : [result.sourceProvider || result.providerId].filter(Boolean);
+              const applicants = listPatentText(result.applicants, 4);
+              const classifications = Array.isArray(result.classifications) ? result.classifications.join(', ') : '';
+              const href = result.link || result.sourceUrl || `https://patents.google.com/patent/${encodeURIComponent(patentNumber)}`;
+
+              return (
+                <Card key={`${patentNumber}-${index}`} className="border border-slate-200 bg-white shadow-sm">
+                  <CardContent className="p-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <a href={href} target="_blank" rel="noreferrer" className="font-semibold text-indigo-700 hover:underline">
+                            {patentNumber}
+                          </a>
+                          {sourceProviders.map((provider: string) => (
+                            <Badge key={provider} variant="outline" className="border-slate-200 bg-slate-50 text-[11px] text-slate-600">
+                              {provider}
+                            </Badge>
+                          ))}
+                        </div>
+                        <h3 className="mt-1 line-clamp-2 text-sm font-medium text-slate-900">{title}</h3>
+                      </div>
+                      <Badge variant="outline" className="w-fit border-indigo-200 bg-indigo-50 text-indigo-700">
+                        {Math.round(relevanceScore * 100)}% match
+                      </Badge>
+                    </div>
+
+                    {abstract && <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-600">{abstract}</p>}
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {matchedFields.slice(0, 6).map((field: string) => (
+                        <Badge key={field} variant="outline" className="border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700">
+                          {field}
+                        </Badge>
+                      ))}
+                      {matchReasons.slice(0, 2).map((reason: string, reasonIndex: number) => (
+                        <Badge key={`${reason}-${reasonIndex}`} variant="outline" className="border-slate-200 bg-white text-[11px] text-slate-600">
+                          {reason}
+                        </Badge>
+                      ))}
+                    </div>
+
+                    <div className="mt-3 grid gap-2 text-xs text-slate-500 md:grid-cols-3">
+                      {applicants && <div><span className="font-medium text-slate-700">Applicant:</span> {applicants}</div>}
+                      {result.publicationDate && <div><span className="font-medium text-slate-700">Published:</span> {String(result.publicationDate).slice(0, 10)}</div>}
+                      {classifications && <div><span className="font-medium text-slate-700">IPC/CPC:</span> {classifications}</div>}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderManualSearch = () => (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25 }}
+      className="space-y-5"
+    >
+      <Card className="border border-slate-200 bg-white shadow-sm">
+        <CardHeader className="border-b border-slate-200 pb-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-xl font-semibold text-slate-900">Manual Patent Search</CardTitle>
+              <CardDescription className="mt-1 text-slate-500">
+                Deterministic fielded lookup. It does not create a novelty run and does not use LLM.
+              </CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={() => {
+                setManualSearchFields(defaultManualPatentSearchFields);
+                setManualSearchState({
+                  isLoading: false,
+                  error: null,
+                  hasSearched: false,
+                  results: [],
+                  providerStats: [],
+                  warnings: [],
+                  queryPlan: null,
+                });
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="manualJurisdiction" className="text-xs font-medium text-slate-600">Jurisdiction</Label>
+              <select
+                id="manualJurisdiction"
+                value={formData.jurisdiction}
+                onChange={(event) => {
+                  const jurisdiction = event.target.value;
+                  setFormData(prev => ({
+                    ...prev,
+                    jurisdiction,
+                    searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY'
+                  }));
+                }}
+                className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="IN">India (IN)</option>
+                <option value="US">United States (US)</option>
+                <option value="EP">European Patent (EP)</option>
+                <option value="WO">PCT (WO)</option>
+                <option value="AU">Australia (AU)</option>
+                <option value="*">Global / PQAI</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="manualSource" className="text-xs font-medium text-slate-600">Search source</Label>
+              <select
+                id="manualSource"
+                value={formData.searchSourceMode}
+                onChange={(event) => setFormData(prev => ({ ...prev, searchSourceMode: event.target.value as NoveltySearchSourceMode }))}
+                className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="INDIAN_ONLY">Indian database only</option>
+                <option value="PQAI_ONLY">PQAI global only</option>
+                <option value="PQAI_PLUS_INDIAN">PQAI + Indian database</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            {renderManualInput('anyText', 'Any text', 'Keywords across patent fields', true)}
+            {renderManualInput('title', 'Patent title', 'Title keywords', true)}
+            {renderManualInput('abstract', 'Abstract', 'Abstract keywords', true)}
+            {renderManualInput('publicationNumber', 'Publication no.', 'IN2024...', false)}
+            {renderManualInput('applicant', 'Applicant', 'Company or assignee', false)}
+            {renderManualInput('classifications', 'IPC/CPC', 'A61B, G06F...', false)}
+          </div>
+
+          {manualActiveChips.length > 0 && (
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+              {manualActiveChips.map(chip => (
+                <button
+                  key={chip.field}
+                  type="button"
+                  onClick={() => updateManualSearchField(chip.field, '')}
+                  className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                >
+                  <span>{chip.label}: {chip.value}</span>
+                  <X className="h-3 w-3" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowMoreManualFilters(prev => !prev)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              {showMoreManualFilters ? 'Hide advanced filters' : 'Advanced filters'}
+            </button>
+          </div>
+
+          {showMoreManualFilters && (
+            <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-3">
+              {renderManualInput('inventor', 'Inventor', 'Inventor name', false)}
+              {renderManualInput('applicationNumber', 'Application no.', 'Application number', false)}
+              {renderManualInput('sourcePdfName', 'Source PDF', 'PDF filename', false)}
+              {renderManualInput('patentText', 'Patent text', 'Claims/specification text', true)}
+              {renderManualInput('excludeTerms', 'Exclude terms', 'Comma-separated terms', true)}
+              <div className="grid grid-cols-2 gap-2">
+                {renderManualInput('filingFrom', 'Filing from', '', false)}
+                {renderManualInput('filingTo', 'Filing to', '', false)}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {renderManualInput('publicationFrom', 'Published from', '', false)}
+                {renderManualInput('publicationTo', 'Published to', '', false)}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {renderManualInput('numberOfClaimsMin', 'Claims min', '0', false)}
+                {renderManualInput('numberOfClaimsMax', 'Claims max', '100', false)}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {renderManualInput('numberOfPagesMin', 'Pages min', '0', false)}
+                {renderManualInput('numberOfPagesMax', 'Pages max', '500', false)}
+              </div>
+            </div>
+          )}
+
+          <Button
+            type="button"
+            onClick={runManualPatentSearch}
+            disabled={manualSearchState.isLoading || !manualSearchHasCriteria}
+            className="h-11 w-full rounded-lg bg-indigo-600 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {manualSearchState.isLoading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Searching patents...
+              </>
+            ) : (
+              <>
+                <Search className="mr-2 h-4 w-4" />
+                Search Patents
+              </>
+            )}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {renderManualResults()}
+    </motion.div>
+  );
+
   // ============================================================================
   // RENDER FORM (Initial State)
   // ============================================================================
@@ -878,25 +1679,15 @@ export default function NoveltySearchWorkflow({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
     >
-      <Card className="border-0 shadow-xl bg-white/80 backdrop-blur-sm">
-        <CardHeader className="pb-4">
-          <div className="flex items-center gap-4">
-            <motion.div 
-              className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg"
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 200 }}
-            >
-              <Sparkles className="h-6 w-6 text-white" />
-            </motion.div>
-            <div>
-              <CardTitle className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                Start Novelty Search
-              </CardTitle>
-              <CardDescription className="text-slate-500">
-                Enter your invention details to begin AI-powered novelty assessment
-              </CardDescription>
-            </div>
+      <Card className="border border-slate-200 bg-white shadow-sm">
+        <CardHeader className="border-b border-slate-200 pb-5">
+          <div>
+            <CardTitle className="text-xl font-semibold text-slate-900">
+              New Intelligent Novelty Search
+            </CardTitle>
+            <CardDescription className="mt-1 text-slate-500">
+              Provide a disclosure so the system can generate a query plan, find prior art, map features, and build a novelty report.
+            </CardDescription>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -905,10 +1696,10 @@ export default function NoveltySearchWorkflow({
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
-              className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200"
+              className="rounded-lg border border-indigo-200 bg-indigo-50 p-4"
             >
               <div className="flex items-center gap-3">
-                <Sparkles className="h-5 w-5 text-indigo-500" />
+                <FileText className="h-5 w-5 text-indigo-600" />
                 <div>
                   <p className="text-sm font-medium text-indigo-900">Loaded from Idea Bank</p>
                   <p className="text-xs text-indigo-700">The title and description have been pre-filled from your reserved idea.</p>
@@ -917,64 +1708,125 @@ export default function NoveltySearchWorkflow({
             </motion.div>
           )}
 
-          {/* Project Display */}
-          <div className="space-y-2">
-            <Label className="text-sm font-medium text-slate-700">Project</Label>
-            <div className="flex items-center gap-3 p-3 bg-gradient-to-r from-slate-50 to-slate-100 border border-slate-200 rounded-xl">
-              <div className="w-10 h-10 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-xl flex items-center justify-center shadow-sm">
-                <FolderOpen className="w-5 h-5 text-white" />
-              </div>
-              <div className="flex-1">
-                <div className="font-medium text-slate-900">{selectedProject?.name || 'Loading...'}</div>
-                <div className="text-xs text-slate-500">
-                  {selectedProject?.name === 'Default Project' ? 'Quick drafts and searches' : 'Selected project'}
+          <div className="max-w-xl">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium text-slate-700">Project</Label>
+              <div className="flex min-h-[72px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-indigo-600 ring-1 ring-slate-200">
+                  <FolderOpen className="h-5 w-5" />
                 </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-slate-900">{selectedProject?.name || 'Loading...'}</div>
+                  <div className="text-xs text-slate-500">
+                    {selectedProject?.name === 'Default Project' ? 'Quick drafts and searches' : 'Selected project'}
+                  </div>
+                </div>
+                {selectedProject?.name === 'Default Project' && (
+                  <Badge variant="secondary" className="border-indigo-200 bg-indigo-50 text-xs font-medium text-indigo-700">Default</Badge>
+                )}
               </div>
-              {selectedProject?.name === 'Default Project' && (
-                <Badge variant="secondary" className="text-xs bg-indigo-100 text-indigo-700">Default</Badge>
-              )}
             </div>
           </div>
 
-          {/* Title Input */}
-          <div className="space-y-2">
-            <Label htmlFor="title" className="text-sm font-medium text-slate-700">Invention Title</Label>
-            <Input
-              id="title"
-              value={formData.title}
-              onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
-              placeholder="Enter a clear, concise title for your invention"
-              className="h-12 rounded-xl border-slate-200 focus:border-indigo-400 focus:ring-indigo-400/20"
-            />
-          </div>
+          <div className="space-y-5 border-t border-slate-200 pt-6">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Invention Disclosure</h3>
+                <p className="mt-1 text-sm text-slate-500">Used to extract search terms and novelty features.</p>
+              </div>
 
-          {/* Description Input */}
-          <div className="space-y-2">
-            <Label htmlFor="description" className="text-sm font-medium text-slate-700">Invention Description</Label>
-            <Textarea
-              id="description"
-              value={formData.inventionDescription}
-              onChange={(e) => setFormData(prev => ({ ...prev, inventionDescription: e.target.value }))}
-              placeholder="Describe your invention in detail, including the problem it solves, how it works, and its key features..."
-              rows={8}
-              className="rounded-xl border-slate-200 focus:border-indigo-400 focus:ring-indigo-400/20 resize-none"
-            />
-          </div>
+              <div className="space-y-2">
+                <Label htmlFor="title" className="text-sm font-medium text-slate-700">Invention Title</Label>
+                <Input
+                  id="title"
+                  value={formData.title}
+                  onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
+                  placeholder="Enter a clear, concise title for your invention"
+                  className="h-11 rounded-lg border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                />
+              </div>
 
-          {/* Jurisdiction Select */}
-          <div className="space-y-2">
-            <Label htmlFor="jurisdiction" className="text-sm font-medium text-slate-700">Jurisdiction</Label>
-            <select
-              id="jurisdiction"
-              value={formData.jurisdiction}
-              onChange={(e) => setFormData(prev => ({ ...prev, jurisdiction: e.target.value }))}
-              className="w-full h-12 px-4 rounded-xl border border-slate-200 bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20 outline-none transition-all"
-            >
-              <option value="IN">India (IN)</option>
-              <option value="US">United States (US)</option>
-              <option value="EP">European Patent (EP)</option>
-              <option value="WO">PCT (WO)</option>
-            </select>
+              <div className="space-y-2">
+                <Label htmlFor="description" className="text-sm font-medium text-slate-700">Invention Description</Label>
+                <Textarea
+                  id="description"
+                  value={formData.inventionDescription}
+                  onChange={(e) => setFormData(prev => ({ ...prev, inventionDescription: e.target.value }))}
+                  placeholder="Describe the problem, core mechanism, operating steps, and key technical features."
+                  rows={8}
+                  className="rounded-lg border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20 resize-none"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-medium text-slate-700">Disclosure File</Label>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.md,.markdown,.csv,.tsv,.xlsx,.doc,.docx,.pdf"
+                  onChange={handleFileUpload}
+                  disabled={isFileProcessing}
+                  className="block w-full text-sm text-slate-500 file:mr-4 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:opacity-50"
+                />
+                <p className="text-xs text-slate-500">Text-based PDF, DOC/DOCX, spreadsheet, CSV, Markdown, or TXT. Upload replaces the description text.</p>
+                {isFileProcessing && <p className="text-xs text-indigo-600">Extracting readable text...</p>}
+                {uploadedFileName && <p className="text-xs text-emerald-600">Extracted text from {uploadedFileName}.</p>}
+              </div>
+            </div>
+
+          <div className="space-y-5 border-t border-slate-200 pt-6">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Search Configuration</h3>
+              <p className="mt-1 text-sm text-slate-500">Control the corpus and query expansion behavior.</p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="jurisdiction" className="text-sm font-medium text-slate-700">Jurisdiction</Label>
+                <select
+                  id="jurisdiction"
+                  value={formData.jurisdiction}
+                  onChange={(e) => {
+                    const jurisdiction = e.target.value;
+                    setFormData(prev => ({
+                      ...prev,
+                      jurisdiction,
+                      searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY'
+                    }));
+                  }}
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value="IN">India (IN)</option>
+                  <option value="US">United States (US)</option>
+                  <option value="EP">European Patent (EP)</option>
+                  <option value="WO">PCT (WO)</option>
+                  <option value="AU">Australia (AU)</option>
+                  <option value="*">Global / PQAI</option>
+                </select>
+              </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="searchSource" className="text-sm font-medium text-slate-700">Search Source</Label>
+              <select
+                id="searchSource"
+                value={formData.searchSourceMode}
+                onChange={(e) => setFormData(prev => ({ ...prev, searchSourceMode: e.target.value as NoveltySearchSourceMode }))}
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="INDIAN_ONLY">Indian database only</option>
+                <option value="PQAI_ONLY">PQAI global only</option>
+                <option value="PQAI_PLUS_INDIAN">PQAI + Indian database</option>
+              </select>
+            </div>
+            <label className="flex h-11 items-center justify-between self-end rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700">
+              <span>LLM query extraction</span>
+              <input
+                type="checkbox"
+                checked={formData.llmExpansion}
+                onChange={(e) => setFormData(prev => ({ ...prev, llmExpansion: e.target.checked }))}
+                className="h-4 w-4"
+              />
+            </label>
+            </div>
           </div>
 
           {/* Error Display */}
@@ -985,7 +1837,7 @@ export default function NoveltySearchWorkflow({
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
               >
-                <Alert variant="destructive" className="rounded-xl">
+                <Alert variant="destructive" className="rounded-lg">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>{searchState.error}</AlertDescription>
                 </Alert>
@@ -998,16 +1850,16 @@ export default function NoveltySearchWorkflow({
             <Button
               onClick={startNoveltySearch}
               disabled={searchState.isLoading}
-              className="w-full h-14 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold text-base shadow-lg shadow-indigo-500/30 transition-all"
+              className="h-12 w-full rounded-lg bg-indigo-600 text-base font-medium text-white shadow-sm hover:bg-indigo-700"
             >
               {searchState.isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Initializing AI Analysis...
+                  Starting novelty search...
                 </>
               ) : (
                 <>
-                  <Zap className="mr-2 h-5 w-5" />
+                  <Search className="mr-2 h-5 w-5" />
                   Start Novelty Search
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </>
@@ -1029,17 +1881,17 @@ export default function NoveltySearchWorkflow({
       className="space-y-4"
     >
       {/* Status Card */}
-      <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm overflow-hidden">
-        <div className="h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
+      <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
+        <div className="h-1 bg-indigo-500" />
         <CardContent className="p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                 searchState.status === NoveltySearchStatus.COMPLETED 
-                  ? 'bg-gradient-to-br from-emerald-400 to-emerald-600' 
+                  ? 'bg-emerald-500'
                   : searchState.status === NoveltySearchStatus.FAILED
-                  ? 'bg-gradient-to-br from-rose-400 to-rose-600'
-                  : 'bg-gradient-to-br from-indigo-400 to-purple-500'
+                  ? 'bg-rose-500'
+                  : 'bg-indigo-600'
               }`}>
                 {searchState.status === NoveltySearchStatus.COMPLETED ? (
                   <CheckCircle className="h-5 w-5 text-white" />
@@ -1099,17 +1951,13 @@ export default function NoveltySearchWorkflow({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
           >
-            <Card className="border-0 shadow-lg overflow-hidden">
-              <div className="p-4 bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50">
+            <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
+              <div className="p-4">
                 <div className="flex items-center gap-4">
                   <div className="flex-shrink-0">
-                    <motion.div 
-                      className="w-12 h-12 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-xl flex items-center justify-center shadow-lg"
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                    >
-                      <Sparkles className="w-6 h-6 text-white" />
-                    </motion.div>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    </div>
                   </div>
                   <div className="flex-1">
                     <div className="text-sm font-semibold text-slate-900 mb-1">
@@ -1121,7 +1969,7 @@ export default function NoveltySearchWorkflow({
                     </div>
                     <div className="mt-3 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                       <motion.div 
-                        className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full"
+                        className="h-full rounded-full bg-indigo-500"
                         initial={{ width: '0%' }}
                         animate={{ width: '100%' }}
                         transition={{ duration: 10, ease: 'linear' }}
@@ -1143,7 +1991,7 @@ export default function NoveltySearchWorkflow({
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
           >
-            <Alert variant="destructive" className="rounded-xl border-rose-200 bg-rose-50">
+            <Alert variant="destructive" className="rounded-lg border-rose-200 bg-rose-50">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>{searchState.error}</AlertDescription>
             </Alert>
@@ -1186,11 +2034,11 @@ export default function NoveltySearchWorkflow({
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-        <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center shadow-md">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500">
                   <CheckCircle className="h-5 w-5 text-white" />
                 </div>
                 <div>
@@ -1224,7 +2072,7 @@ export default function NoveltySearchWorkflow({
                     value={editedSearchQuery}
                     onChange={(e) => setEditedSearchQuery(e.target.value)}
                     placeholder="Enter search query..."
-                    className="min-h-[80px] rounded-xl"
+                    className="min-h-[80px] rounded-lg"
                   />
                 </div>
 
@@ -1234,7 +2082,7 @@ export default function NoveltySearchWorkflow({
                   </Label>
                   <div className="space-y-2 mb-4">
                     {editedFeatures.map((feature: string, idx: number) => (
-                      <div key={idx} className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border">
+                      <div key={idx} className="flex items-center gap-2 rounded-lg border bg-slate-50 p-3">
                         <span className="text-xs font-mono bg-indigo-100 text-indigo-700 px-2 py-1 rounded-lg">{idx + 1}</span>
                         {editingFeatureIndex === idx ? (
                           <Input
@@ -1269,17 +2117,17 @@ export default function NoveltySearchWorkflow({
                       onChange={(e) => setNewFeatureText(e.target.value)}
                       placeholder="Add new feature..."
                       onKeyPress={(e) => { if (e.key === 'Enter') addFeature(); }}
-                      className="rounded-xl"
+                            className="rounded-lg"
                     />
-                    <Button onClick={addFeature} disabled={!newFeatureText.trim()} variant="outline" size="sm" className="rounded-xl">
+                    <Button onClick={addFeature} disabled={!newFeatureText.trim()} variant="outline" size="sm" className="rounded-lg">
                       Add
                     </Button>
                   </div>
                 </div>
 
                 <div className="flex justify-end gap-3 pt-4 border-t">
-                  <Button onClick={cancelStage0Edits} variant="outline" className="rounded-xl">Cancel</Button>
-                  <Button onClick={saveStage0Edits} className="rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600" disabled={!editedSearchQuery.trim() || editedFeatures.length === 0}>
+                  <Button onClick={cancelStage0Edits} variant="outline" className="rounded-lg">Cancel</Button>
+                  <Button onClick={saveStage0Edits} className="rounded-lg bg-emerald-600 hover:bg-emerald-700" disabled={!editedSearchQuery.trim() || editedFeatures.length === 0}>
                     <CheckCircle className="w-4 h-4 mr-2" />
                     Save & Continue
                   </Button>
@@ -1289,7 +2137,7 @@ export default function NoveltySearchWorkflow({
               <div className="grid md:grid-cols-2 gap-6">
                 <div>
                   <h4 className="font-medium text-slate-900 mb-3">Search Query</h4>
-                  <div className="p-4 bg-slate-50 rounded-xl border">
+                  <div className="rounded-lg border bg-slate-50 p-4">
                     <p className="text-sm text-slate-700">"{s0.searchQuery}"</p>
                   </div>
                 </div>
@@ -1313,7 +2161,7 @@ export default function NoveltySearchWorkflow({
               <div className="mt-6 flex justify-end">
                 <Button
                   size="sm"
-                  className={`rounded-xl ${stage0Approved ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-indigo-500 hover:bg-indigo-600'}`}
+                  className={`rounded-lg ${stage0Approved ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                   onClick={async () => {
                     setStage0Approved(true);
                     // Auto-progress through all stages if autoMode is enabled
@@ -1341,20 +2189,20 @@ export default function NoveltySearchWorkflow({
   // Stage 1 Content
   const renderStage1Content = () => {
     const root: any = (searchState.results as any) || {};
-    const pqaiResults = root.pqaiResults || root.stage1?.pqaiResults || [];
+    const pqaiResults = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults || [];
     const hasStage1 = Array.isArray(pqaiResults) && pqaiResults.length > 0;
 
     if (!hasStage1) {
       return (
-        <Card className="border-0 shadow-lg bg-slate-50/50">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Patent Search Not Started</h3>
             <p className="text-sm text-slate-500 max-w-md mx-auto">
-              Execute the patent search to find relevant prior art from our global database of 12M+ patents.
+              Execute the patent search to find relevant prior art from the selected search source.
             </p>
             {canRunCurrent && selectedStageTab === '1' && (
-              <Button onClick={handleRunCurrent} className="mt-6 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600">
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
                 <Search className="w-4 h-4 mr-2" />
                 Run Patent Search
               </Button>
@@ -1366,13 +2214,17 @@ export default function NoveltySearchWorkflow({
 
     const highRelevanceCount = pqaiResults.filter((p: any) => p.relevanceScore && p.relevanceScore > 0.5).length;
     const avgRelevance = pqaiResults.length > 0 ? (pqaiResults.reduce((avg: number, p: any) => avg + (p.relevanceScore || 0), 0) / pqaiResults.length * 100) : 0;
+    const stage1Container: any = root.stage1 || root;
+    const providerStats = Array.isArray(stage1Container.providerStats) ? stage1Container.providerStats : [];
+    const searchWarnings = Array.isArray(stage1Container.searchWarnings) ? stage1Container.searchWarnings : [];
+    const queryPlan = stage1Container.queryPlan || null;
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-        <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center shadow-md">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
                 <Search className="h-5 w-5 text-white" />
               </div>
               <div>
@@ -1384,19 +2236,68 @@ export default function NoveltySearchWorkflow({
           <CardContent>
             {/* Stats Grid */}
             <div className="grid grid-cols-3 gap-4 mb-6">
-              <div className="text-center p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-100">
-                <div className="text-3xl font-bold text-blue-600">{pqaiResults.length}</div>
-                <div className="text-xs text-blue-700 font-medium">Patents Found</div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
+                <div className="text-3xl font-bold text-slate-900">{pqaiResults.length}</div>
+                <div className="text-xs font-medium text-slate-500">Patents Found</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl border border-emerald-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{highRelevanceCount}</div>
-                <div className="text-xs text-emerald-700 font-medium">High Relevance</div>
+                <div className="text-xs font-medium text-slate-500">High Relevance</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl border border-purple-100">
-                <div className="text-3xl font-bold text-purple-600">{avgRelevance.toFixed(0)}%</div>
-                <div className="text-xs text-purple-700 font-medium">Avg Relevance</div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
+                <div className="text-3xl font-bold text-indigo-600">{avgRelevance.toFixed(0)}%</div>
+                <div className="text-xs font-medium text-slate-500">Avg Relevance</div>
               </div>
             </div>
+
+            {(queryPlan || providerStats.length > 0 || searchWarnings.length > 0) && (
+              <div className="mb-6 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                {queryPlan && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-sm font-semibold text-slate-900">Query plan</div>
+                    <div className="mt-2 rounded-md bg-white p-3 text-sm text-slate-700">
+                      {queryPlan.searchQuery || queryPlan.normalizedQuery || 'Provider search query unavailable'}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {Array.isArray(queryPlan.inventionFeatures) && queryPlan.inventionFeatures.slice(0, 6).map((feature: string) => (
+                        <Badge key={feature} variant="outline" className="border-indigo-200 bg-indigo-50 text-[11px] text-indigo-700">
+                          {feature}
+                        </Badge>
+                      ))}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      LLM expanded in Stage 1: {queryPlan.llmExpanded ? 'Yes' : 'No'}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {providerStats.length > 0 && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="mb-2 text-sm font-semibold text-slate-900">Provider stats</div>
+                      <div className="space-y-2">
+                        {providerStats.map((stat: any) => (
+                          <div key={stat.providerId || stat.label} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-xs">
+                            <span className="font-medium text-slate-700">{stat.label || stat.providerId}</span>
+                            <span className={stat.error ? 'text-rose-600' : 'text-slate-600'}>
+                              {stat.error ? stat.error : `${stat.resultCount || 0} results`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {searchWarnings.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                      <div className="font-semibold">Search warnings</div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5">
+                        {searchWarnings.map((warning: string, index: number) => <li key={index}>{warning}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Patent List */}
             <div className="space-y-3 max-h-96 overflow-y-auto">
@@ -1404,8 +2305,18 @@ export default function NoveltySearchWorkflow({
                 const patentNumber = r.publicationNumber || r.pn || r.patent_number || 'N/A';
                 const title = r.title || r.invention_title || patentNumber;
                 const abstract = r.abstract || r.snippet || '';
-                const pubDate = r.year || r.publication_date || '';
+                const pubDate = r.publicationDate || r.publication_date || r.year || '';
                 const relevanceScore = r.relevanceScore || r.score || 0;
+                const provider = r.sourceProvider || r.providerId || 'patent-search';
+                const href = r.link || r.sourceUrl || `https://patents.google.com/patent/${encodeURIComponent(patentNumber)}`;
+                const applicants = listPatentText(r.applicants, 6);
+                const inventors = listPatentText(r.inventors, 6);
+                const classifications = Array.isArray(r.classifications) ? r.classifications.join(', ') : '';
+                const sourcePdf = r.sourcePdfName ? `${r.sourcePdfName}${r.sourcePageNumber ? ` page ${r.sourcePageNumber}` : ''}` : '';
+                const matchedFields = Array.isArray(r.matchedFields) ? r.matchedFields : [];
+                const sourceProviders = Array.isArray(r.sourceProviders)
+                  ? r.sourceProviders
+                  : [r.sourceProvider || r.providerId].filter(Boolean);
 
                 return (
                   <motion.div
@@ -1413,7 +2324,7 @@ export default function NoveltySearchWorkflow({
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: i * 0.02 }}
-                    className="p-4 border rounded-xl bg-white hover:shadow-md transition-shadow"
+                    className="rounded-lg border border-slate-200 bg-white p-4 transition-colors hover:bg-slate-50"
                   >
                     <div className="flex items-start gap-3">
                       <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-semibold flex-shrink-0">
@@ -1421,7 +2332,7 @@ export default function NoveltySearchWorkflow({
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
-                          <a className="font-medium text-indigo-700 hover:underline text-sm line-clamp-1" target="_blank" href={`https://lens.org/${encodeURIComponent(patentNumber)}`}>
+                          <a className="font-medium text-indigo-700 hover:underline text-sm" target="_blank" href={href}>
                             {title}
                           </a>
                           <Badge variant="outline" className="text-xs bg-indigo-50 text-indigo-700 border-indigo-200 flex-shrink-0">
@@ -1429,11 +2340,45 @@ export default function NoveltySearchWorkflow({
                           </Badge>
                         </div>
                         <div className="text-xs text-slate-500 mt-1">
-                          {patentNumber} {pubDate && `• ${String(pubDate).slice(0, 10)}`}
+                          {patentNumber} {pubDate && `- ${String(pubDate).slice(0, 10)}`}
                         </div>
-                        {abstract && (
-                          <p className="text-xs text-slate-600 mt-2 line-clamp-2">{abstract}</p>
+                        <div className="text-xs text-slate-500 mt-1">
+                          Provider: {sourceProviders.join(', ') || provider}
+                        </div>
+                        {matchedFields.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {matchedFields.slice(0, 6).map((field: string) => (
+                              <Badge key={field} variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">
+                                {field}
+                              </Badge>
+                            ))}
+                          </div>
                         )}
+                        {abstract && (
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold uppercase text-slate-500">Abstract</div>
+                            <p className="mt-1 text-xs leading-5 text-slate-600">{abstract}</p>
+                          </div>
+                        )}
+                        <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                          <summary className="cursor-pointer text-xs font-medium text-slate-700">Patent details</summary>
+                          <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+                            {r.applicationNumber && <div><span className="font-medium text-slate-800">Application:</span> {r.applicationNumber}</div>}
+                            {r.filingDate && <div><span className="font-medium text-slate-800">Filed:</span> {String(r.filingDate).slice(0, 10)}</div>}
+                            {pubDate && <div><span className="font-medium text-slate-800">Published:</span> {String(pubDate).slice(0, 10)}</div>}
+                            {sourcePdf && <div><span className="font-medium text-slate-800">Source:</span> {sourcePdf}</div>}
+                            {classifications && <div className="md:col-span-2"><span className="font-medium text-slate-800">IPC/CPC:</span> {classifications}</div>}
+                            {applicants && <div className="md:col-span-2"><span className="font-medium text-slate-800">Applicants:</span> {applicants}</div>}
+                            {inventors && <div className="md:col-span-2"><span className="font-medium text-slate-800">Inventors:</span> {inventors}</div>}
+                            {(r.numberOfPages || r.numberOfClaims) && (
+                              <div>
+                                <span className="font-medium text-slate-800">Counts:</span>
+                                {r.numberOfPages ? ` ${r.numberOfPages} pages` : ''}
+                                {r.numberOfClaims ? ` / ${r.numberOfClaims} claims` : ''}
+                              </div>
+                            )}
+                          </div>
+                        </details>
                       </div>
                     </div>
                   </motion.div>
@@ -1452,7 +2397,7 @@ export default function NoveltySearchWorkflow({
     
     if (!aiRel) {
       return (
-        <Card className="border-0 shadow-lg bg-slate-50/50">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <Zap className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">AI Relevance Not Computed</h3>
@@ -1471,16 +2416,21 @@ export default function NoveltySearchWorkflow({
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-        <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl flex items-center justify-center shadow-md">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500">
                   <Zap className="h-5 w-5 text-white" />
                 </div>
                 <div>
                   <CardTitle className="text-lg">AI Relevance Analysis</CardTitle>
-                  <CardDescription>Smart filtering of patent results</CardDescription>
+                  <CardDescription>
+                    Candidate gate over top provider-ranked results
+                    {typeof aiRel.consideredCount === 'number' && typeof aiRel.totalCandidates === 'number'
+                      ? ` (${aiRel.consideredCount} of ${aiRel.totalCandidates} reviewed)`
+                      : ''}
+                  </CardDescription>
                 </div>
               </div>
               <div className="text-xs text-slate-500">
@@ -1490,21 +2440,21 @@ export default function NoveltySearchWorkflow({
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-4 gap-4 mb-6">
-              <div className="text-center p-4 bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl border border-emerald-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{acc}</div>
-                <div className="text-xs text-emerald-700 font-medium">Accepted</div>
+                <div className="text-xs font-medium text-slate-500">Accepted</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl border border-amber-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-amber-600">{bor}</div>
-                <div className="text-xs text-amber-700 font-medium">Borderline</div>
+                <div className="text-xs font-medium text-slate-500">Borderline</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-rose-50 to-red-50 rounded-xl border border-rose-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-rose-600">{rej}</div>
-                <div className="text-xs text-rose-700 font-medium">Rejected</div>
+                <div className="text-xs font-medium text-slate-500">Rejected</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-indigo-600">{total}</div>
-                <div className="text-xs text-indigo-700 font-medium">Total</div>
+                <div className="text-xs font-medium text-slate-500">Total</div>
               </div>
             </div>
 
@@ -1546,7 +2496,7 @@ export default function NoveltySearchWorkflow({
 
     if (items.length === 0) {
       return (
-        <Card className="border-0 shadow-lg bg-slate-50/50">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Feature Analysis Not Started</h3>
@@ -1573,22 +2523,55 @@ export default function NoveltySearchWorkflow({
     // Limit for readability
     const visiblePatents = items.slice(0, 20);
     const visibleFeatures = features.slice(0, 18);
+    const cellsForPatent = (patent: any) => Array.isArray(patent.feature_analysis)
+      ? patent.feature_analysis
+      : [
+        ...(Array.isArray(patent.present) ? patent.present : []),
+        ...(Array.isArray(patent.partial) ? patent.partial : []),
+        ...(Array.isArray(patent.absent) ? patent.absent : [])
+      ];
+    const featureSignals = features.map(feature => {
+      const cells = items.flatMap((patent: any) => cellsForPatent(patent).filter((cell: any) => cell?.feature === feature));
+      const present = cells.filter((cell: any) => cell.status === 'Present').length;
+      const partial = cells.filter((cell: any) => cell.status === 'Partial').length;
+      const unknownOrWeak = cells.filter((cell: any) => cell.status === 'Unknown' || (!cell.quote && !cell.evidence && cell.status !== 'Absent')).length;
+      return { feature, present, partial, unknownOrWeak };
+    });
+    const fullyCoveredFeatures = featureSignals.filter(signal => signal.present > 0).map(signal => signal.feature).slice(0, 8);
+    const uniqueFeatures = featureSignals.filter(signal => signal.present === 0 && signal.partial === 0).map(signal => signal.feature).slice(0, 8);
+    const weakEvidenceFeatures = featureSignals.filter(signal => signal.unknownOrWeak > 0 || (signal.present === 0 && signal.partial > 0)).map(signal => signal.feature).slice(0, 8);
+    const blockingReferences = [...items]
+      .map((patent: any) => {
+        const cells = cellsForPatent(patent);
+        const present = cells.filter((cell: any) => cell.status === 'Present').length;
+        const partial = cells.filter((cell: any) => cell.status === 'Partial').length;
+        const score = Number(patent.coverage?.coverage_score ?? ((present + partial * 0.5) / Math.max(features.length, 1)));
+        return {
+          pn: patent.pn || patent.publicationNumber || patent.patent_number || patent.publication_number || 'N/A',
+          title: patent.title,
+          present,
+          partial,
+          score,
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
 
     const getStatusClass = (status: string | undefined) => {
       switch (status) {
-        case 'Present': return 'bg-emerald-100 text-emerald-700 border-emerald-300 hover:bg-emerald-200';
-        case 'Partial': return 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200';
-        case 'Absent': return 'bg-rose-100 text-rose-700 border-rose-300 hover:bg-rose-200';
-        default: return 'bg-slate-100 text-slate-600 border-slate-300';
+        case 'Present': return 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100';
+        case 'Partial': return 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100';
+        case 'Absent': return 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100';
+        default: return 'bg-slate-50 text-slate-600 border-slate-200';
       }
     };
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-        <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-purple-600 rounded-xl flex items-center justify-center shadow-md">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
                 <FileText className="h-5 w-5 text-white" />
               </div>
               <div>
@@ -1600,21 +2583,70 @@ export default function NoveltySearchWorkflow({
           <CardContent>
             {/* Summary Stats */}
             <div className="grid grid-cols-4 gap-4 mb-6">
-              <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl border border-purple-100">
-                <div className="text-3xl font-bold text-purple-600">{items.length}</div>
-                <div className="text-xs text-purple-700 font-medium">Patents Analyzed</div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
+                <div className="text-3xl font-bold text-slate-900">{items.length}</div>
+                <div className="text-xs font-medium text-slate-500">Patents Analyzed</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-emerald-50 to-green-50 rounded-xl border border-emerald-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{presentSum}</div>
-                <div className="text-xs text-emerald-700 font-medium">Present Features</div>
+                <div className="text-xs font-medium text-slate-500">Present Features</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl border border-amber-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-amber-600">{partialSum}</div>
-                <div className="text-xs text-amber-700 font-medium">Partial Features</div>
+                <div className="text-xs font-medium text-slate-500">Partial Features</div>
               </div>
-              <div className="text-center p-4 bg-gradient-to-br from-rose-50 to-red-50 rounded-xl border border-rose-100">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-rose-600">{absentSum}</div>
-                <div className="text-xs text-rose-700 font-medium">Absent Features</div>
+                <div className="text-xs font-medium text-slate-500">Absent Features</div>
+              </div>
+            </div>
+
+            <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-base font-semibold text-slate-900">Novelty Signals</h4>
+                  <p className="mt-1 text-sm text-slate-500">Deterministic summary from feature mapping evidence.</p>
+                </div>
+                <div className="text-xs text-slate-500">
+                  {stage1Results.length} searched, {items.length} mapped, {features.length} feature{features.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div className="text-sm font-semibold text-slate-900">Closest blocking references</div>
+                  <div className="mt-2 space-y-2">
+                    {blockingReferences.length > 0 ? blockingReferences.map((ref, index) => (
+                      <div key={`${ref.pn}-${index}`} className="rounded-md bg-slate-50 p-2 text-xs text-slate-700">
+                        <div className="font-medium text-slate-900">{ref.pn}</div>
+                        {ref.title && <div className="mt-0.5 line-clamp-1 text-slate-500">{ref.title}</div>}
+                        <div className="mt-1 text-slate-500">{ref.present} present, {ref.partial} partial features</div>
+                      </div>
+                    )) : <div className="text-xs text-slate-500">No blocking reference identified from mapped evidence.</div>}
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="text-sm font-semibold text-emerald-950">Covered by prior art</div>
+                    <div className="mt-2 space-y-1 text-xs text-emerald-900">
+                      {fullyCoveredFeatures.length > 0 ? fullyCoveredFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No fully covered features found.</div>}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                    <div className="text-sm font-semibold text-indigo-950">Still unique</div>
+                    <div className="mt-2 space-y-1 text-xs text-indigo-900">
+                      {uniqueFeatures.length > 0 ? uniqueFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No unique feature signal yet.</div>}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <div className="text-sm font-semibold text-amber-950">Weak evidence areas</div>
+                    <div className="mt-2 space-y-1 text-xs text-amber-900">
+                      {weakEvidenceFeatures.length > 0 ? weakEvidenceFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No weak evidence flags.</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
+                Recommended next actions: review the closest references, strengthen claim language around unique features, and rerun with broader source coverage if weak-evidence areas are important.
               </div>
             </div>
 
@@ -1630,17 +2662,17 @@ export default function NoveltySearchWorkflow({
               {features.length === 0 ? (
                 <p className="text-sm text-slate-500">No feature mapping data available to display.</p>
               ) : (
-                <div className="overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                <div className="overflow-auto rounded-lg border border-slate-200">
                   <table className="min-w-full text-sm">
-                    <thead className="bg-gradient-to-r from-slate-50 to-slate-100 sticky top-0">
+                    <thead className="sticky top-0 bg-slate-50">
                       <tr>
-                        <th className="px-3 py-3 text-left font-semibold text-slate-700 border-b border-slate-200 w-44 bg-slate-50">
+                        <th className="sticky left-0 z-20 w-48 border-b border-r border-slate-200 bg-slate-50 px-3 py-3 text-left font-semibold text-slate-700">
                           Patent
                         </th>
                         {visibleFeatures.map((f: string, idx: number) => (
                           <th key={idx} className="px-2 py-3 text-left font-medium text-slate-700 border-b border-slate-200 min-w-[120px] max-w-[160px]">
                             <div className="flex items-start gap-1">
-                              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold flex-shrink-0">
+                              <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-700">
                                 {idx + 1}
                               </span>
                               <span className="text-xs leading-tight break-words line-clamp-2" title={f}>{f}</span>
@@ -1655,9 +2687,9 @@ export default function NoveltySearchWorkflow({
                         const cellsArray = Array.isArray(patent.feature_analysis)
                           ? patent.feature_analysis
                           : [
-                              ...Array.isArray(patent.present) ? patent.present : [],
-                              ...Array.isArray(patent.partial) ? patent.partial : [],
-                              ...Array.isArray(patent.absent) ? patent.absent : []
+                              ...(Array.isArray(patent.present) ? patent.present : []),
+                              ...(Array.isArray(patent.partial) ? patent.partial : []),
+                              ...(Array.isArray(patent.absent) ? patent.absent : [])
                             ];
                         const featureToStatus = new Map<string, string>();
                         for (const c of cellsArray) {
@@ -1668,7 +2700,7 @@ export default function NoveltySearchWorkflow({
 
                         return (
                           <tr key={rowIdx} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-3 py-3 align-top border-r border-slate-100">
+                            <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-3 py-3 align-top">
                               <div className="flex items-start gap-2">
                                 <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold flex-shrink-0">
                                   {rowIdx + 1}
@@ -1701,8 +2733,8 @@ export default function NoveltySearchWorkflow({
 
                               const tooltip = (() => {
                                 if (status === 'Present' || status === 'Partial') {
-                                  const snip = quote ? (quote.length > 160 ? quote.slice(0, 157) + '…' : quote) : 'No evidence provided';
-                                  const conf = (typeof confidence === 'number') ? ` • ${confidence.toFixed(2)}` : '';
+                                  const snip = quote ? (quote.length > 160 ? quote.slice(0, 157) + '...' : quote) : 'No evidence provided';
+                                  const conf = (typeof confidence === 'number') ? ` - ${confidence.toFixed(2)}` : '';
                                   const fld = field ? ` (${field})` : '';
                                   return `${status}${conf}${fld}: "${snip}"`;
                                 }
@@ -1730,15 +2762,14 @@ export default function NoveltySearchWorkflow({
                                       link
                                     })}
                                     className={`
-                                      w-full text-center cursor-pointer 
-                                      text-[10px] font-medium px-2 py-1.5 rounded-lg border 
-                                      transition-all duration-150 
+                                      w-full cursor-pointer rounded-md border px-2 py-1.5 text-center
+                                      text-[10px] font-medium transition-all duration-150
                                       ${getStatusClass(status)}
                                     `}
                                   >
-                                    {status === 'Present' ? '✓ Present' : 
-                                     status === 'Partial' ? '◐ Partial' : 
-                                     status === 'Absent' ? '✗ Absent' : '? Unknown'}
+                                    {status === 'Present' ? 'Present' :
+                                     status === 'Partial' ? 'Partial' :
+                                     status === 'Absent' ? 'Absent' : 'Unknown'}
                                   </button>
                                 </td>
                               );
@@ -1786,7 +2817,7 @@ export default function NoveltySearchWorkflow({
                   {items
                     .filter((p: any) => p.remarks)
                     .map((p: any, idx: number) => (
-                      <div key={p.pn || idx} className="rounded-xl border bg-slate-50 p-3">
+                      <div key={p.pn || idx} className="rounded-lg border bg-slate-50 p-3">
                         <div className="flex items-start gap-2">
                           <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-bold flex-shrink-0">
                             {idx + 1}
@@ -1818,7 +2849,7 @@ export default function NoveltySearchWorkflow({
 
     if (remarks.length === 0) {
       return (
-        <Card className="border-0 shadow-lg bg-slate-50/50">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Patent Remarks Not Generated</h3>
@@ -1867,11 +2898,11 @@ export default function NoveltySearchWorkflow({
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-        <Card className="border-0 shadow-lg bg-white">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3 border-b">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-md">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
                   <FileText className="h-5 w-5 text-white" />
                 </div>
                 <div>
@@ -1990,7 +3021,7 @@ export default function NoveltySearchWorkflow({
                                 <ul className="space-y-1.5">
                                   {relevantParts.map((part: string, i: number) => (
                                     <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
-                                      <span className="text-red-400 mt-0.5 flex-shrink-0">•</span>
+                                      <span className="mt-0.5 flex-shrink-0 text-red-400">-</span>
                                       <span>{part}</span>
                                     </li>
                                   ))}
@@ -2010,7 +3041,7 @@ export default function NoveltySearchWorkflow({
                                 <ul className="space-y-1.5">
                                   {irrelevantParts.map((part: string, i: number) => (
                                     <li key={i} className="flex items-start gap-2 text-xs text-slate-700">
-                                      <span className="text-emerald-500 mt-0.5 flex-shrink-0">✓</span>
+                                      <span className="mt-0.5 flex-shrink-0 text-emerald-500">+</span>
                                       <span>{part}</span>
                                     </li>
                                   ))}
@@ -2070,7 +3101,7 @@ export default function NoveltySearchWorkflow({
 
     if (!r || !hasStage4Results) {
       return (
-        <Card className="border-0 shadow-lg bg-slate-50/50">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Final Report Not Generated</h3>
@@ -2098,7 +3129,7 @@ export default function NoveltySearchWorkflow({
   const renderStage5Content = () => {
     if (!hasStage4Results) {
       return (
-        <Card className="border-0 shadow-lg bg-slate-50/50">
+        <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Report Not Ready</h3>
@@ -2111,10 +3142,10 @@ export default function NoveltySearchWorkflow({
     }
 
     return (
-      <Card className="border-0 shadow-lg bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+      <Card className="border border-slate-200 bg-white shadow-sm">
         <CardHeader className="pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
               <FileText className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -2125,7 +3156,7 @@ export default function NoveltySearchWorkflow({
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Report Preview */}
-          <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm">
+          <div className="rounded-lg border border-slate-200 bg-white p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-semibold text-slate-900">{formData.title || 'Novelty Assessment Report'}</h3>
@@ -2150,7 +3181,7 @@ export default function NoveltySearchWorkflow({
               <Link
                 href={`/novelty-search/${searchState.searchId}/consolidated`}
                 target="_blank"
-                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all font-medium"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-3 font-medium text-white transition-colors hover:bg-indigo-700"
               >
                 <Eye className="w-4 h-4" />
                 View Full Report
@@ -2172,7 +3203,7 @@ export default function NoveltySearchWorkflow({
           </div>
 
           {/* Share Options */}
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <h4 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
               <ExternalLink className="w-4 h-4" />
               Share with Inventors
@@ -2185,7 +3216,7 @@ export default function NoveltySearchWorkflow({
               target="_blank"
               className="inline-flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
             >
-              Open Consolidated Report →
+              Open Consolidated Report
             </Link>
           </div>
         </CardContent>
@@ -2197,162 +3228,231 @@ export default function NoveltySearchWorkflow({
   // MAIN RENDER
   // ============================================================================
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
-      {/* Background Pattern */}
-      <div className="fixed inset-0 pointer-events-none opacity-30">
-        <div className="absolute inset-0" style={{
-          backgroundImage: `radial-gradient(circle at 1px 1px, rgb(148 163 184 / 0.3) 1px, transparent 0)`,
-          backgroundSize: '40px 40px'
-        }} />
-      </div>
+    <div className="min-h-screen bg-slate-50">
+      <div className="flex min-h-[calc(100vh-7.5rem)]">
+        {activeSearchPath === 'intelligent' && (
+          <div className={`${isSidebarCollapsed ? 'lg:w-[72px]' : 'lg:w-[260px]'} hidden flex-shrink-0 transition-all duration-200 lg:block`}>
+            <NoveltyStageNav
+              selectedStage={selectedStageTab}
+              onStageSelect={setSelectedStageTab}
+              getStageStatus={getStageStatus}
+              isStageCompleted={isStageCompleted}
+              onRunStage={runStageForKey}
+              activeExecutionStage={activeExecutionStage}
+              searchId={searchState.searchId}
+              overallProgress={overallProgress}
+              formTitle={formData.title}
+              collapsed={isSidebarCollapsed}
+              onToggleCollapsed={() => setIsSidebarCollapsed(prev => !prev)}
+            />
+          </div>
+        )}
 
-      <div className="relative flex">
-        {/* Left Navigation Sidebar */}
-        <div className="w-[280px] min-h-screen p-4 sticky top-0">
-          <NoveltyStageNav
-            selectedStage={selectedStageTab}
-            onStageSelect={setSelectedStageTab}
-            getStageStatus={getStageStatus}
-            isStageCompleted={isStageCompleted}
-            onRunStage={runStageForKey}
-            activeExecutionStage={activeExecutionStage}
-            searchId={searchState.searchId}
-            overallProgress={overallProgress}
-            formTitle={formData.title}
-          />
-        </div>
+        <main className="min-w-0 flex-1">
+          {activeSearchPath === 'intelligent' && (
+          <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
+            <button
+              type="button"
+              onClick={() => setIsMobileNavOpen(true)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-700"
+              aria-label="Open workflow navigation"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="text-sm font-medium text-slate-900">{STAGE_TAB_LABELS[selectedStageTab]}</div>
+            <div className="h-9 w-9" />
+          </div>
+          )}
 
-        {/* Main Content Area */}
-        <div className="flex-1 p-6 max-w-4xl">
-          {/* Compact Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mb-4"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <motion.div
-                  className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-md"
-                  initial={{ scale: 0, rotate: -180 }}
-                  animate={{ scale: 1, rotate: 0 }}
-                  transition={{ type: 'spring', stiffness: 200 }}
-                >
-                  <Sparkles className="w-4 h-4 text-white" />
-                </motion.div>
+          <div className={`mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+            {renderSearchPathTabs()}
+            <motion.div
+              initial={{ opacity: 0, y: -12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-5"
+            >
+              <div className="flex items-center justify-between gap-4">
                 <div>
-                  <div className="text-sm font-medium text-slate-700">{STAGE_TAB_LABELS[selectedStageTab]}</div>
-                  <div className="text-xs text-slate-500">Stage {idx + 1} of {STAGE_TABS.length}</div>
+                  <div className="text-sm font-medium text-slate-500">Novelty Search Workflow</div>
+                  <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                    {activeSearchPath === 'manual' ? 'Manual Patent Search' : STAGE_TAB_LABELS[selectedStageTab]}
+                  </h1>
+                  <div className="mt-1 text-sm text-slate-500">
+                    {activeSearchPath === 'manual'
+                      ? 'Fielded lookup using exact patent metadata and text filters'
+                      : `Stage ${idx + 1} of ${STAGE_TABS.length}`}
+                  </div>
                 </div>
+                {activeSearchPath === 'intelligent' && searchState.searchId && (
+                  <Badge variant="outline" className="hidden border-slate-200 bg-white text-slate-600 sm:inline-flex">
+                    Search {searchState.searchId.slice(0, 10)}
+                  </Badge>
+                )}
               </div>
-            </div>
-          </motion.div>
+            </motion.div>
 
-          {/* Content */}
-          <AnimatePresence mode="wait">
-            {!searchState.searchId ? (
-              <motion.div key="form" exit={{ opacity: 0, x: -20 }}>
-                {renderForm()}
-              </motion.div>
-            ) : (
-              <motion.div key="workflow" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-                {renderProgress()}
-                {renderStageContent()}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+            <AnimatePresence mode="wait">
+              {activeSearchPath === 'manual' ? (
+                <motion.div key="manual" exit={{ opacity: 0, x: -20 }}>
+                  {renderManualSearch()}
+                </motion.div>
+              ) : !searchState.searchId ? (
+                <motion.div key="form" exit={{ opacity: 0, x: -20 }}>
+                  {renderForm()}
+                </motion.div>
+              ) : (
+                <motion.div key="workflow" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
+                  {renderProgress()}
+                  {renderStageContent()}
+                  <NoveltyFloatingButtons
+                    onPrevious={prevStage ? handlePrevNav : null}
+                    onNext={nextStage ? handleNextNav : null}
+                    onRunCurrent={canRunCurrent ? handleRunCurrent : null}
+                    previousLabel={prevStage ? STAGE_TAB_LABELS[prevStage] : undefined}
+                    nextLabel={nextStage ? STAGE_TAB_LABELS[nextStage] : undefined}
+                    currentStageLabel={`Run ${STAGE_TAB_LABELS[selectedStageTab]}`}
+                    isRunning={!!activeExecutionStage}
+                    isFailed={isFailedCurrent}
+                    disabled={searchState.isLoading}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </main>
       </div>
 
-      {/* Floating Navigation Buttons */}
-      {searchState.searchId && (
-        <NoveltyFloatingButtons
-          onPrevious={prevStage ? handlePrevNav : null}
-          onNext={nextStage ? handleNextNav : null}
-          onRunCurrent={canRunCurrent ? handleRunCurrent : null}
-          previousLabel={prevStage ? STAGE_TAB_LABELS[prevStage] : undefined}
-          nextLabel={nextStage ? STAGE_TAB_LABELS[nextStage] : undefined}
-          currentStageLabel={`Run ${STAGE_TAB_LABELS[selectedStageTab]}`}
-          isRunning={!!activeExecutionStage}
-          isFailed={isFailedCurrent}
-          disabled={searchState.isLoading}
-        />
-      )}
-
-      {/* Evidence Panel Modal */}
       <AnimatePresence>
-        {selectedEvidence && (
+        {activeSearchPath === 'intelligent' && isMobileNavOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-            onClick={() => setSelectedEvidence(null)}
+            className="fixed inset-0 z-40 bg-slate-900/40 lg:hidden"
+            onClick={() => setIsMobileNavOpen(false)}
           >
             <motion.div
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6"
-              onClick={e => e.stopPropagation()}
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 260 }}
+              className="h-full w-[280px] bg-white shadow-xl"
+              onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <div className="text-xs text-slate-500">Evidence</div>
-                  <div className="text-lg font-semibold text-slate-900">
-                    {selectedEvidence.feature}
-                  </div>
-                  <div className="text-sm text-slate-600 mt-1">
-                    Patent: {selectedEvidence.pn}{selectedEvidence.patentTitle ? ` • ${selectedEvidence.patentTitle}` : ''}
-                  </div>
-                </div>
-                <Badge className={`${
-                  selectedEvidence.status === 'Present' ? 'bg-emerald-100 text-emerald-700' :
-                  selectedEvidence.status === 'Partial' ? 'bg-amber-100 text-amber-700' :
-                  'bg-rose-100 text-rose-700'
-                }`}>
-                  {selectedEvidence.status}
-                </Badge>
+              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                <div className="text-sm font-semibold text-slate-900">Workflow</div>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileNavOpen(false)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                  aria-label="Close workflow navigation"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-
-              {(selectedEvidence.status === 'Present' || selectedEvidence.status === 'Partial') && selectedEvidence.quote && (
-                <div className="mb-4">
-                  <div className="text-xs text-slate-500 mb-2">Evidence Quote</div>
-                  <div className="p-3 bg-slate-50 rounded-lg text-sm text-slate-700 whitespace-pre-wrap">
-                    "{selectedEvidence.quote}"
-                  </div>
-                </div>
-              )}
-
-              {selectedEvidence.status === 'Absent' && selectedEvidence.reason && (
-                <div className="mb-4">
-                  <div className="text-xs text-slate-500 mb-2">Reason</div>
-                  <div className="p-3 bg-slate-50 rounded-lg text-sm text-slate-700">
-                    {selectedEvidence.reason}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2 mt-6">
-                {selectedEvidence.link && (
-                  <a
-                    href={selectedEvidence.link}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-700"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                    View Patent
-                  </a>
-                )}
-                <Button variant="outline" onClick={() => setSelectedEvidence(null)} className="ml-auto rounded-lg">
-                  Close
-                </Button>
-              </div>
+              <NoveltyStageNav
+                selectedStage={selectedStageTab}
+                onStageSelect={(stage) => {
+                  setSelectedStageTab(stage);
+                  setIsMobileNavOpen(false);
+                }}
+                getStageStatus={getStageStatus}
+                isStageCompleted={isStageCompleted}
+                onRunStage={runStageForKey}
+                activeExecutionStage={activeExecutionStage}
+                searchId={searchState.searchId}
+                overallProgress={overallProgress}
+                formTitle={formData.title}
+              />
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      <Dialog open={!!selectedEvidence} onOpenChange={(open) => { if (!open) setSelectedEvidence(null); }}>
+        {selectedEvidence && (
+          <DialogContent className="left-auto right-0 top-0 h-full max-w-xl translate-x-0 translate-y-0 gap-0 overflow-y-auto rounded-none border-l border-slate-200 p-0 sm:rounded-none">
+            <DialogHeader className="border-b border-slate-200 px-6 py-5 text-left">
+              <div className="flex items-start justify-between gap-4 pr-8">
+                <div>
+                  <DialogTitle className="text-lg font-semibold text-slate-900">Evidence Detail</DialogTitle>
+                  <DialogDescription className="mt-1">
+                    Patent {selectedEvidence.pn}{selectedEvidence.patentTitle ? ` - ${selectedEvidence.patentTitle}` : ''}
+                  </DialogDescription>
+                </div>
+                <Badge className={`font-medium ${
+                  selectedEvidence.status === 'Present' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                  selectedEvidence.status === 'Partial' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                  'bg-rose-50 text-rose-700 border-rose-200'
+                }`}>
+                  {selectedEvidence.status}
+                </Badge>
+              </div>
+            </DialogHeader>
+
+            <div className="space-y-6 px-6 py-5">
+              <section>
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Feature</div>
+                <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                  {selectedEvidence.feature}
+                </div>
+              </section>
+
+              {typeof selectedEvidence.confidence === 'number' && (
+                <section>
+                  <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-medium uppercase tracking-wide">Confidence</span>
+                    <span>{Math.round(selectedEvidence.confidence * 100)}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.round(selectedEvidence.confidence * 100)}%` }} />
+                  </div>
+                </section>
+              )}
+
+              {(selectedEvidence.status === 'Present' || selectedEvidence.status === 'Partial') && selectedEvidence.quote && (
+                <section>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Evidence Quote</div>
+                  <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+                    "{selectedEvidence.quote}"
+                  </div>
+                  {selectedEvidence.field && (
+                    <div className="mt-2 text-xs text-slate-500">Source field: {selectedEvidence.field}</div>
+                  )}
+                </section>
+              )}
+
+              {selectedEvidence.status === 'Absent' && selectedEvidence.reason && (
+                <section>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Reason</div>
+                  <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
+                    {selectedEvidence.reason}
+                  </div>
+                </section>
+              )}
+
+              <div className="flex items-center justify-between border-t border-slate-200 pt-4">
+                {selectedEvidence.link ? (
+                  <a
+                    href={selectedEvidence.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    View patent
+                  </a>
+                ) : (
+                  <span />
+                )}
+                <Button variant="outline" onClick={() => setSelectedEvidence(null)} className="rounded-lg">
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   );
 }

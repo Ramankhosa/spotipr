@@ -166,14 +166,19 @@ export async function PATCH(
       const inventionType = Array.isArray(existingStage0.inventionType)
         ? existingStage0.inventionType
         : (existingStage0.inventionType ? [existingStage0.inventionType] : undefined);
+      const cpcCodes = Array.isArray(existingStage0.cpcCodes) ? existingStage0.cpcCodes : undefined;
+      const ipcCodes = Array.isArray(existingStage0.ipcCodes) ? existingStage0.ipcCodes : undefined;
 
       await prisma.noveltySearchRun.update({
         where: { id: searchId, userId: user.id },
         data: {
           stage0Results: {
+            ...existingStage0,
             searchQuery,
             inventionFeatures,
-            ...(inventionType ? { inventionType } : {})
+            ...(inventionType ? { inventionType } : {}),
+            ...(cpcCodes ? { cpcCodes } : {}),
+            ...(ipcCodes ? { ipcCodes } : {})
           }
         }
       });

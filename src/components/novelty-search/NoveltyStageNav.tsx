@@ -1,41 +1,23 @@
 'use client'
 
-/**
- * NoveltyStageNav - Intelligent Left-Rail Stage Navigation for Novelty Search
- * 
- * Features:
- * - Collapsible/expandable stages with visual progress
- * - Dynamic status tracking with animated indicators
- * - Dark/Light theme toggle
- * - Smooth transitions and AI-inspired design
- */
-
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { 
-  ChevronRight, 
-  Check, 
-  Circle, 
+import React, { useCallback, useMemo, useState } from 'react'
+import {
+  AlertCircle,
+  Check,
+  FileText,
   Loader2,
-  Sun,
-  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Play,
+  RotateCcw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Zap,
-  FileText,
-  AlertCircle,
-  RotateCcw,
-  Play,
-  XCircle
 } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
-
-// ============================================================================
-// Types
-// ============================================================================
 
 type StageTab = '0' | '1' | '1.5' | '3.5' | '3.5c' | '4' | '5'
 type StageStatus = 'completed' | 'in_progress' | 'pending' | 'failed' | 'blocked'
-type NavTheme = 'dark' | 'light'
 
 interface NoveltyStageNavProps {
   selectedStage: StageTab
@@ -47,6 +29,8 @@ interface NoveltyStageNavProps {
   searchId: string | null
   overallProgress: number
   formTitle: string
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
 }
 
 interface StageConfig {
@@ -57,100 +41,73 @@ interface StageConfig {
   stageNumber: string | null
 }
 
-// ============================================================================
-// Stage Configuration
-// ============================================================================
-
 const STAGE_CONFIGS: StageConfig[] = [
-  { 
-    key: '0', 
-    label: 'Idea Setup', 
-    description: 'Define invention title and description',
+  {
+    key: '0',
+    label: 'Idea Setup',
+    description: 'Search inputs and extracted features',
     icon: Sparkles,
-    stageNumber: null 
+    stageNumber: null,
   },
-  { 
-    key: '1', 
-    label: 'Patent Search', 
-    description: 'Search global patent database',
+  {
+    key: '1',
+    label: 'Patent Search',
+    description: 'Run provider search and collect references',
     icon: Search,
-    stageNumber: '1' 
+    stageNumber: '1',
   },
-  { 
-    key: '1.5', 
-    label: 'AI Relevance', 
-    description: 'Filter by AI relevance scoring',
+  {
+    key: '1.5',
+    label: 'AI Relevance',
+    description: 'Score and sort the closest references',
     icon: Zap,
-    stageNumber: '1.5' 
+    stageNumber: '1.5',
   },
-  { 
-    key: '3.5', 
-    label: 'Feature Analysis', 
-    description: 'Map features to prior art',
-    icon: FileText,
-    stageNumber: '3.5' 
+  {
+    key: '3.5',
+    label: 'Feature Analysis',
+    description: 'Compare invention features to prior art',
+    icon: SlidersHorizontal,
+    stageNumber: '3.5',
   },
-  { 
-    key: '3.5c', 
-    label: 'Patent Remarks', 
+  {
+    key: '3.5c',
+    label: 'Patent Remarks',
     description: 'Generate per-patent analysis',
     icon: FileText,
-    stageNumber: '3.5c' 
+    stageNumber: '3.5c',
   },
-  { 
-    key: '4', 
-    label: 'Final Report', 
-    description: 'Complete novelty assessment',
+  {
+    key: '4',
+    label: 'Final Report',
+    description: 'Create novelty assessment report',
     icon: FileText,
-    stageNumber: '4' 
+    stageNumber: '4',
   },
-  { 
-    key: '5', 
-    label: 'Download Report', 
-    description: 'View and download PDF report',
+  {
+    key: '5',
+    label: 'Download Report',
+    description: 'Open and share report output',
     icon: FileText,
-    stageNumber: null  // Display-only stage, no execution needed
-  }
+    stageNumber: null,
+  },
 ]
 
-// ============================================================================
-// Local Storage Keys
-// ============================================================================
-
-const STORAGE_KEYS = {
-  THEME: 'novelty_nav_theme',
-  EXPANDED: 'novelty_nav_expanded'
+function stageCircleClasses(status: StageStatus, isCurrent: boolean) {
+  if (status === 'completed') return 'border-emerald-500 bg-emerald-500 text-white'
+  if (status === 'in_progress') return 'border-indigo-500 bg-white text-indigo-600 ring-4 ring-indigo-100'
+  if (status === 'failed') return 'border-rose-500 bg-rose-500 text-white'
+  if (isCurrent) return 'border-indigo-500 bg-indigo-600 text-white'
+  if (status === 'blocked') return 'border-slate-200 bg-slate-100 text-slate-400'
+  return 'border-slate-300 bg-white text-slate-500'
 }
 
-// ============================================================================
-// Sub-Components
-// ============================================================================
-
-interface StatusIconProps {
-  status: StageStatus
-  size?: 'sm' | 'md'
+function StageGlyph({ status, icon: Icon }: { status: StageStatus; icon: React.ElementType }) {
+  if (status === 'completed') return <Check className="h-3.5 w-3.5" />
+  if (status === 'in_progress') return <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  if (status === 'failed') return <AlertCircle className="h-3.5 w-3.5" />
+  return <Icon className="h-3.5 w-3.5" />
 }
-
-function StatusIcon({ status, size = 'md' }: StatusIconProps) {
-  const sizeClass = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4'
-  
-  switch (status) {
-    case 'completed':
-      return <Check className={`${sizeClass} text-emerald-400`} />
-    case 'in_progress':
-      return <Loader2 className={`${sizeClass} text-cyan-400 animate-spin`} />
-    case 'failed':
-      return <XCircle className={`${sizeClass} text-rose-400`} />
-    case 'blocked':
-      return <Circle className={`${sizeClass} text-slate-500`} />
-    default:
-      return <Circle className={`${sizeClass} text-slate-600`} />
-  }
-}
-
-// ============================================================================
-// Main Component
-// ============================================================================
 
 export default function NoveltyStageNav({
   selectedStage,
@@ -161,382 +118,182 @@ export default function NoveltyStageNav({
   activeExecutionStage,
   searchId,
   overallProgress,
-  formTitle
+  formTitle,
+  collapsed = false,
+  onToggleCollapsed,
 }: NoveltyStageNavProps) {
-  // Theme state - default to light theme
-  const [theme, setTheme] = useState<NavTheme>('light')
-  const [isHovered, setIsHovered] = useState<string | null>(null)
+  const [hoveredStage, setHoveredStage] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
-  // ============================================================================
-  // Initialize from localStorage
-  // ============================================================================
+  const completedCount = useMemo(
+    () => STAGE_CONFIGS.filter(stage => isStageCompleted(stage.key)).length,
+    [isStageCompleted],
+  )
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem(STORAGE_KEYS.THEME) as NavTheme
-    if (savedTheme && (savedTheme === 'dark' || savedTheme === 'light')) {
-      setTheme(savedTheme)
-    }
-  }, [])
-
-  // ============================================================================
-  // Persist to localStorage
-  // ============================================================================
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.THEME, theme)
-  }, [theme])
-
-  // ============================================================================
-  // Event Handlers
-  // ============================================================================
-
-  const toggleTheme = useCallback(() => {
-    setTheme(prev => prev === 'dark' ? 'light' : 'dark')
-  }, [])
-
-  const handleStageClick = useCallback((stageKey: StageTab) => {
-    onStageSelect(stageKey)
-  }, [onStageSelect])
-
-  const handleRunClick = useCallback(async (e: React.MouseEvent, stageKey: StageTab) => {
-    e.stopPropagation()
+  const handleRunClick = useCallback(async (event: React.MouseEvent, stageKey: StageTab) => {
+    event.stopPropagation()
     if (isRunning || activeExecutionStage) return
+
     setIsRunning(true)
     try {
       await onRunStage(stageKey)
     } finally {
       setIsRunning(false)
     }
-  }, [isRunning, activeExecutionStage, onRunStage])
+  }, [activeExecutionStage, isRunning, onRunStage])
 
-  // ============================================================================
-  // Computed Values
-  // ============================================================================
-
-  const completedCount = useMemo(() => {
-    return STAGE_CONFIGS.filter(s => isStageCompleted(s.key)).length
-  }, [isStageCompleted])
-
-  // ============================================================================
-  // Theme Classes
-  // ============================================================================
-
-  const themeClasses = useMemo(() => ({
-    container: theme === 'dark'
-      ? 'bg-gradient-to-b from-slate-900/98 via-slate-800/98 to-slate-900/98 border-white/10'
-      : 'bg-white/95 border-slate-200 shadow-xl',
-    text: theme === 'dark' ? 'text-white' : 'text-slate-900',
-    textMuted: theme === 'dark' ? 'text-slate-400' : 'text-slate-600',
-    textSubtle: theme === 'dark' ? 'text-slate-500' : 'text-slate-400',
-    border: theme === 'dark' ? 'border-white/10' : 'border-slate-200',
-    hover: theme === 'dark' ? 'hover:bg-white/5' : 'hover:bg-slate-50',
-    activeStage: theme === 'dark'
-      ? 'bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border-cyan-400/40'
-      : 'bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-300',
-    activeText: theme === 'dark' ? 'text-cyan-400' : 'text-indigo-600',
-    completedText: theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600',
-    failedText: theme === 'dark' ? 'text-rose-400' : 'text-rose-600',
-    progressBg: theme === 'dark' ? 'bg-slate-700/50' : 'bg-slate-200',
-    progressFill: theme === 'dark'
-      ? 'bg-gradient-to-r from-cyan-500 to-purple-500'
-      : 'bg-gradient-to-r from-indigo-500 to-purple-500',
-    iconBg: theme === 'dark' ? 'bg-slate-700/50' : 'bg-slate-100',
-    currentIconBg: theme === 'dark'
-      ? 'bg-gradient-to-br from-cyan-400 to-purple-500'
-      : 'bg-gradient-to-br from-indigo-500 to-purple-500',
-    runButton: theme === 'dark'
-      ? 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border-cyan-500/30'
-      : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border-indigo-200',
-    rerunButton: theme === 'dark'
-      ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border-rose-500/30'
-      : 'bg-rose-50 text-rose-600 hover:bg-rose-100 border-rose-200'
-  }), [theme])
-
-  // ============================================================================
-  // Render
-  // ============================================================================
+  const currentIndex = STAGE_CONFIGS.findIndex(stage => stage.key === selectedStage)
+  const compactTitle = formTitle
+    ? formTitle.substring(0, 32) + (formTitle.length > 32 ? '...' : '')
+    : 'Patent novelty workflow'
 
   return (
-    <aside
-      className={`
-        h-full w-full flex flex-col
-        backdrop-blur-xl border-r transition-colors duration-300
-        ${themeClasses.container}
-        rounded-xl overflow-hidden
-      `}
-    >
-      {/* Header */}
-      <div className={`p-4 border-b ${themeClasses.border}`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <motion.div 
-              className={`
-                w-10 h-10 rounded-xl flex items-center justify-center
-                ${theme === 'dark' 
-                  ? 'bg-gradient-to-br from-cyan-400 to-purple-500' 
-                  : 'bg-gradient-to-br from-indigo-500 to-purple-500'
-                }
-                shadow-lg
-              `}
-              initial={{ scale: 0.8 }}
-              animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 200 }}
+    <aside className="flex h-full min-h-0 flex-col border-r border-slate-200 bg-white">
+      <div className="border-b border-slate-200 p-4">
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between gap-3'}`}>
+          <div className={`flex min-w-0 items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white">
+              <Search className="h-4 w-4" />
+            </div>
+            {!collapsed && (
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-900">Novelty Search</div>
+                <div className="truncate text-xs text-slate-500">{compactTitle}</div>
+              </div>
+            )}
+          </div>
+
+          {onToggleCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              className="hidden h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 xl:inline-flex"
+              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
-              <Search className="w-5 h-5 text-white" />
-            </motion.div>
-            <div>
-              <div className={`text-sm font-semibold ${themeClasses.text}`}>
-                Novelty Search
-              </div>
-              <div className={`text-xs ${themeClasses.textMuted}`}>
-                {formTitle ? formTitle.substring(0, 20) + (formTitle.length > 20 ? '...' : '') : 'AI-Powered Analysis'}
-              </div>
+              {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
+          )}
+        </div>
+
+        {!collapsed && (
+          <div className="mt-4">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Pipeline Progress
+              </span>
+              <span className="text-xs font-semibold text-slate-900">{overallProgress}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+              <div
+                className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+                style={{ width: `${overallProgress}%` }}
+              />
+            </div>
+            <div className="mt-1.5 text-[11px] text-slate-500">
+              {completedCount} of {STAGE_CONFIGS.length} stages complete
             </div>
           </div>
-          
-          {/* Theme Toggle */}
-          <motion.button
-            onClick={toggleTheme}
-            className={`
-              p-2 rounded-lg transition-colors
-              ${themeClasses.hover}
-            `}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            {theme === 'dark' 
-              ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
-              : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
-            }
-          </motion.button>
-        </div>
-
-        {/* Progress Bar */}
-        <div className="mt-4">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className={`text-[10px] font-medium uppercase tracking-wider ${themeClasses.textSubtle}`}>
-              Pipeline Progress
-            </span>
-            <span className={`text-xs font-semibold ${themeClasses.text}`}>
-              {overallProgress}%
-            </span>
-          </div>
-          <div className={`h-1.5 rounded-full ${themeClasses.progressBg} overflow-hidden`}>
-            <motion.div
-              className={`h-full rounded-full ${themeClasses.progressFill}`}
-              initial={{ width: 0 }}
-              animate={{ width: `${overallProgress}%` }}
-              transition={{ duration: 0.5, ease: 'easeOut' }}
-            />
-          </div>
-          <div className={`mt-1.5 text-[10px] ${themeClasses.textSubtle}`}>
-            {completedCount} of {STAGE_CONFIGS.length} stages complete
-          </div>
-        </div>
+        )}
       </div>
 
-      {/* Stage List */}
-      <nav className={`flex-1 overflow-y-auto py-3 px-3 ${theme === 'dark' ? 'dark-scrollbar' : 'light-scrollbar'}`}>
-        <div className="space-y-2">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-3 light-scrollbar">
+        <div className="space-y-1">
           {STAGE_CONFIGS.map((stage, stageIndex) => {
-            const StageIcon = stage.icon
             const status = getStageStatus(stage.key)
-            const isCurrent = stage.key === selectedStage
-            const isCompleted = status === 'completed'
+            const isCurrent = selectedStage === stage.key
             const isFailed = status === 'failed'
-            const isInProgress = status === 'in_progress'
             const isBlocked = status === 'blocked'
             const canRun = searchId && stage.stageNumber && !isBlocked && !activeExecutionStage
-
-            // Calculate completion percentage for progress ring
-            const progressPercentage = isCompleted ? 100 : isInProgress ? 50 : 0
+            const showRun = (hoveredStage === stage.key || isFailed) && canRun && !collapsed
 
             return (
-              <motion.div
+              <div
                 key={stage.key}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: stageIndex * 0.05 }}
-                onMouseEnter={() => setIsHovered(stage.key)}
-                onMouseLeave={() => setIsHovered(null)}
+                className="relative"
+                onMouseEnter={() => setHoveredStage(stage.key)}
+                onMouseLeave={() => setHoveredStage(null)}
               >
-                {/* Stage Header */}
-                <motion.button
+                {stageIndex < STAGE_CONFIGS.length - 1 && (
+                  <div
+                    className={`absolute top-9 h-5 w-px ${
+                      collapsed ? 'left-1/2 -translate-x-1/2' : 'left-[17px]'
+                    } ${status === 'completed' ? 'bg-emerald-300' : 'bg-slate-200'}`}
+                  />
+                )}
+
+                <button
                   type="button"
-                  onClick={() => handleStageClick(stage.key)}
-                  className={`
-                    w-full flex items-center gap-3 px-3 py-3 rounded-xl
-                    transition-all duration-200 text-left border
-                    ${isCurrent 
-                      ? themeClasses.activeStage 
-                      : `${themeClasses.hover} border-transparent`
-                    }
-                    ${isFailed ? 'ring-1 ring-rose-400/50' : ''}
-                  `}
-                  whileHover={{ x: 2 }}
-                  whileTap={{ scale: 0.98 }}
+                  onClick={() => onStageSelect(stage.key)}
+                  title={collapsed ? `${stage.label}: ${stage.description}` : undefined}
+                  className={`group relative flex w-full items-center rounded-lg border text-left transition-colors ${
+                    collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5'
+                  } ${
+                    isCurrent
+                      ? 'border-indigo-200 bg-indigo-50'
+                      : 'border-transparent hover:bg-slate-50'
+                  } ${isFailed ? 'ring-1 ring-rose-200' : ''}`}
                 >
-                  {/* Stage Icon with Progress Ring */}
-                  <div className="relative w-10 h-10 flex-shrink-0">
-                    <svg className="w-10 h-10 transform -rotate-90">
-                      <circle
-                        cx="20" cy="20" r="16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        className={themeClasses.progressBg}
-                      />
-                      <motion.circle
-                        cx="20" cy="20" r="16"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        initial={{ strokeDasharray: '0 100' }}
-                        animate={{ strokeDasharray: `${progressPercentage} 100` }}
-                        transition={{ duration: 0.5 }}
-                        className={`
-                          ${isCompleted ? 'text-emerald-400' : 
-                            isCurrent ? themeClasses.activeText : 
-                            isFailed ? 'text-rose-400' :
-                            themeClasses.textSubtle}
-                        `}
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <AnimatePresence mode="wait">
-                        {isInProgress ? (
-                          <motion.div
-                            key="loading"
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            exit={{ scale: 0 }}
-                          >
-                            <Loader2 className={`w-4 h-4 ${themeClasses.activeText} animate-spin`} />
-                          </motion.div>
-                        ) : isCompleted ? (
-                          <motion.div
-                            key="check"
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            exit={{ scale: 0 }}
-                          >
-                            <Check className="w-4 h-4 text-emerald-400" />
-                          </motion.div>
-                        ) : isFailed ? (
-                          <motion.div
-                            key="failed"
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            exit={{ scale: 0 }}
-                          >
-                            <AlertCircle className="w-4 h-4 text-rose-400" />
-                          </motion.div>
-                        ) : (
-                          <motion.div
-                            key="icon"
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            exit={{ scale: 0 }}
-                          >
-                            <StageIcon className={`w-4 h-4 ${isCurrent ? themeClasses.activeText : themeClasses.textMuted}`} />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
+                  <span
+                    className={`z-10 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border-2 ${stageCircleClasses(status, isCurrent)}`}
+                  >
+                    <StageGlyph status={status} icon={stage.icon} />
+                  </span>
 
-                  {/* Stage Label & Description */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className={`
-                        text-sm font-medium truncate
-                        ${isCompleted ? themeClasses.completedText : 
-                          isFailed ? themeClasses.failedText :
-                          isCurrent ? themeClasses.activeText : 
-                          themeClasses.textMuted}
-                      `}>
-                        {stage.label}
+                  {!collapsed && (
+                    <>
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={`block truncate text-sm font-medium ${
+                            isFailed
+                              ? 'text-rose-700'
+                              : isCurrent
+                                ? 'text-indigo-700'
+                                : status === 'completed'
+                                  ? 'text-slate-900'
+                                  : 'text-slate-700'
+                          }`}
+                        >
+                          {stage.label}
+                        </span>
+                        <span className="block truncate text-xs text-slate-500">{stage.description}</span>
                       </span>
-                      
-                      {/* Status Badge */}
-                      <span className={`
-                        text-[9px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-wide
-                        ${isCompleted ? 'bg-emerald-500/20 text-emerald-400' :
-                          isInProgress ? 'bg-cyan-500/20 text-cyan-400' :
-                          isFailed ? 'bg-rose-500/20 text-rose-400' :
-                          isBlocked ? 'bg-slate-500/20 text-slate-400' :
-                          'bg-slate-500/10 text-slate-500'}
-                      `}>
-                        {isInProgress ? 'Running' : status}
-                      </span>
-                    </div>
-                    
-                    <p className={`text-[11px] ${themeClasses.textSubtle} mt-0.5 truncate`}>
-                      {stage.description}
-                    </p>
-                  </div>
 
-                  {/* Run/Rerun Button (visible on hover) */}
-                  <AnimatePresence>
-                    {(isHovered === stage.key || isFailed) && canRun && (
-                      <motion.button
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
-                        onClick={(e) => handleRunClick(e, stage.key)}
-                        disabled={!!activeExecutionStage}
-                        className={`
-                          flex items-center justify-center
-                          w-8 h-8 rounded-lg border
-                          transition-colors flex-shrink-0
-                          ${isFailed ? themeClasses.rerunButton : themeClasses.runButton}
-                          ${activeExecutionStage ? 'opacity-50 cursor-not-allowed' : ''}
-                        `}
-                        title={isFailed ? 'Rerun stage' : 'Run stage'}
-                      >
-                        {isFailed ? (
-                          <RotateCcw className="w-3.5 h-3.5" />
-                        ) : (
-                          <Play className="w-3.5 h-3.5" />
-                        )}
-                      </motion.button>
-                    )}
-                  </AnimatePresence>
-                </motion.button>
-              </motion.div>
+                      {showRun && (
+                        <span
+                          onClick={(event) => handleRunClick(event, stage.key)}
+                          className={`inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border text-xs transition-colors ${
+                            isFailed
+                              ? 'border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100'
+                              : 'border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-50'
+                          }`}
+                          title={isFailed ? 'Retry stage' : 'Run stage'}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          {isFailed ? <RotateCcw className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              </div>
             )
           })}
         </div>
       </nav>
 
-      {/* Footer */}
-      <div className={`p-3 border-t ${themeClasses.border}`}>
-        <div className="flex items-center justify-between">
-          <span className={`text-[10px] ${themeClasses.textSubtle}`}>
-            Stage {STAGE_CONFIGS.findIndex(s => s.key === selectedStage) + 1} of {STAGE_CONFIGS.length}
-          </span>
-          <motion.button
-            onClick={() => handleStageClick(selectedStage)}
-            className={`
-              text-[10px] px-2.5 py-1 rounded-md font-medium
-              ${theme === 'dark' 
-                ? 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30' 
-                : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
-              }
-              transition-colors
-            `}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            Current Stage
-          </motion.button>
-        </div>
+      <div className="border-t border-slate-200 p-3">
+        {collapsed ? (
+          <div className="text-center text-[11px] font-medium text-slate-500">
+            {currentIndex + 1}/{STAGE_CONFIGS.length}
+          </div>
+        ) : (
+          <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <span>Stage {currentIndex + 1} of {STAGE_CONFIGS.length}</span>
+            <span className="font-medium text-slate-700">{STAGE_CONFIGS[currentIndex]?.label}</span>
+          </div>
+        )}
       </div>
     </aside>
   )
 }
-
-
