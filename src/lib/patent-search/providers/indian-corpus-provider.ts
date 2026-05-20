@@ -7,6 +7,9 @@ import {
 import type {
   NormalizedPatentResult,
   PatentProviderSearchRequest,
+  PatentRetrievalMatch,
+  PatentRetrievalQuery,
+  PatentRetrievalQueryType,
   PatentResultScores,
   PatentSearchCapabilities,
   PatentSearchFilters,
@@ -22,9 +25,12 @@ import {
   yearFromDate,
 } from '../utils'
 
-async function requestOpenAIEmbedding(text: string) {
+async function requestOpenAIEmbeddings(texts: string[]) {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY is not configured.')
+
+  const inputs = texts.map(text => normalizeWhitespace(text)).filter(Boolean)
+  if (!inputs.length) return []
 
   const response = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
@@ -34,7 +40,7 @@ async function requestOpenAIEmbedding(text: string) {
     },
     body: JSON.stringify({
       model: PATENT_CORPUS_EMBEDDING_MODEL,
-      input: text,
+      input: inputs,
       dimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
     }),
   })
@@ -45,11 +51,17 @@ async function requestOpenAIEmbedding(text: string) {
   }
 
   const json = await response.json()
-  const embedding = json?.data?.[0]?.embedding
-  if (!Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS) {
+  const rows = Array.isArray(json?.data) ? json.data : []
+  const embeddings = rows
+    .sort((a: any, b: any) => Number(a?.index || 0) - Number(b?.index || 0))
+    .map((row: any) => row?.embedding)
+  if (
+    embeddings.length !== inputs.length ||
+    embeddings.some((embedding: unknown) => !Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS)
+  ) {
     throw new Error('OpenAI embedding response did not contain the expected vector.')
   }
-  return embedding as number[]
+  return embeddings as number[][]
 }
 
 function validDate(value?: string) {
@@ -227,6 +239,138 @@ function whereSql(conditions: Prisma.Sql[]) {
   return conditions.length ? Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}` : Prisma.empty
 }
 
+type LocalRetrievalQuery = PatentRetrievalQuery & {
+  type: PatentRetrievalQueryType
+  text: string
+  weight: number
+}
+
+interface IndianRankAccumulator {
+  rrfScore: number
+  vectorRank?: number
+  textRank?: number
+  titleRank?: number
+  fieldRank?: number
+  conceptVectorScore?: number
+  bestFeatureVectorScore?: number
+  bestVectorScore?: number
+  textScore?: number
+  titleScore?: number
+  fieldScore?: number
+  classificationScore?: number
+  matchedFeatures: Set<string>
+  retrievalMatches: PatentRetrievalMatch[]
+}
+
+const FEATURE_VECTOR_MATCH_THRESHOLD = 0.42
+
+function clampScore(value: unknown) {
+  const score = Number(value)
+  if (!Number.isFinite(score)) return 0
+  return Math.max(0, Math.min(1, score))
+}
+
+function trimRetrievalText(value: unknown, maxWords = 36) {
+  return normalizeWhitespace(value).split(/\s+/).filter(Boolean).slice(0, maxWords).join(' ')
+}
+
+function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number) {
+  if (query.type === 'concept' || query.type === 'semantic') return Math.max(40, Math.min(80, safeLimit * 2))
+  if (query.type === 'feature_pair') return 30
+  return 25
+}
+
+function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['queryPlan'], title?: string): LocalRetrievalQuery[] {
+  const supplied = (queryPlan.retrievalQueries || [])
+    .map((query, index): LocalRetrievalQuery | null => {
+      const text = trimRetrievalText(query.text)
+      if (!text) return null
+      return {
+        ...query,
+        id: query.id || `retrieval-${index + 1}`,
+        type: query.type || 'semantic',
+        text,
+        weight: typeof query.weight === 'number' ? query.weight : 1,
+      }
+    })
+    .filter((query): query is LocalRetrievalQuery => Boolean(query))
+
+  if (supplied.length) return supplied.slice(0, 12)
+
+  const searchQuery = trimRetrievalText(queryPlan.searchQuery || queryPlan.normalizedQuery || title)
+  const semanticQuery = trimRetrievalText(queryPlan.semanticQuery || searchQuery)
+  const features = (queryPlan.inventionFeatures || []).map(feature => trimRetrievalText(feature, 18)).filter(Boolean).slice(0, 8)
+  const queries: LocalRetrievalQuery[] = []
+  const seen = new Set<string>()
+  const add = (query: LocalRetrievalQuery) => {
+    const text = trimRetrievalText(query.text)
+    const key = text.toLowerCase()
+    if (!text || seen.has(key)) return
+    seen.add(key)
+    queries.push({ ...query, text })
+  }
+
+  if (searchQuery) {
+    add({ id: 'concept', type: 'concept', text: searchQuery, weight: 1.25, label: 'Core concept' })
+  }
+  features.forEach((feature, index) => {
+    add({
+      id: `feature-${index + 1}`,
+      type: 'feature',
+      text: feature,
+      weight: 1.1,
+      featureIndex: index,
+      featureIndexes: [index],
+      label: feature,
+    })
+  })
+  for (let index = 0; index < Math.min(features.length - 1, 3); index += 1) {
+    add({
+      id: `feature-pair-${index + 1}`,
+      type: 'feature_pair',
+      text: `${features[index]} ${features[index + 1]}`,
+      weight: 1.15,
+      featureIndexes: [index, index + 1],
+      label: `${features[index]} + ${features[index + 1]}`,
+    })
+  }
+  if (!queries.length && semanticQuery) {
+    add({ id: 'semantic', type: 'semantic', text: semanticQuery, weight: 1, label: 'Semantic query' })
+  }
+  return queries
+}
+
+function featureLabelsFor(query: LocalRetrievalQuery, inventionFeatures: string[]) {
+  const indexes = query.featureIndexes || (typeof query.featureIndex === 'number' ? [query.featureIndex] : [])
+  return uniqueStrings(indexes.map(index => inventionFeatures[index] || query.label || '').filter(Boolean))
+}
+
+function classificationMatches(result: NormalizedPatentResult, queryPlan: PatentProviderSearchRequest['queryPlan']) {
+  const hints = uniqueStrings([
+    ...(queryPlan.classificationHints || []),
+    ...(queryPlan.cpcCodes || []),
+    ...(queryPlan.ipcCodes || []),
+  ]).map(compactPatentKey).filter(Boolean)
+  if (!hints.length) return []
+  return uniqueStrings((result.classifications || []).filter(classification => {
+    const compact = compactPatentKey(classification)
+    return compact && hints.some(hint => compact.includes(hint) || hint.includes(compact))
+  }))
+}
+
+function withExcludedTerms(filters: PatentSearchFilters, excludedTerms: string[]) {
+  const terms = uniqueStrings([...(filters.excludeTerms || []), ...excludedTerms])
+  return terms.length ? { ...filters, excludeTerms: terms } : filters
+}
+
+function hasPositiveFieldFilters(filters: PatentSearchFilters) {
+  return Object.entries(filters).some(([key, value]) => {
+    if (key === 'excludeTerms') return false
+    if (Array.isArray(value)) return value.length > 0
+    return value !== undefined && value !== null && value !== ''
+  })
+}
+
 function rowToResult(row: any): NormalizedPatentResult {
   const publicationNumber = String(row.publicationNumber || '')
   const publicationDate = row.publicationDate || null
@@ -296,20 +440,92 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const safeLimit = clampLimit(request.limit, 20, 100)
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
-    const filters = queryPlan.fieldFilters || {}
+    const filters = withExcludedTerms(queryPlan.fieldFilters || {}, queryPlan.excludedTerms || [])
     const filterConditions = buildWhereConditions(filters)
     const manualMode = request.searchMode === 'manual'
     const rows = new Map<string, NormalizedPatentResult>()
-    const ranks = new Map<string, { score: number; vectorRank?: number; textRank?: number }>()
+    const ranks = new Map<string, IndianRankAccumulator>()
 
-    const merge = (row: any, kind: 'vectorRank' | 'textRank' | 'fieldRank' | 'titleRank', rank: number, weight: number) => {
+    const merge = (
+      row: any,
+      kind: 'vectorRank' | 'textRank' | 'fieldRank' | 'titleRank',
+      rank: number,
+      weight: number,
+      retrievalQuery?: LocalRetrievalQuery
+    ) => {
       const result = rowToResult(row)
       const key = result.publicationNumber
-      rows.set(key, { ...(rows.get(key) || {}), ...result })
-      const current = ranks.get(key) || { score: 0 }
-      current.score += weight / (60 + rank)
-      if (kind === 'vectorRank') current.vectorRank = rank
-      if (kind === 'textRank') current.textRank = rank
+      const existing = rows.get(key)
+      const featureLabels = retrievalQuery ? featureLabelsFor(retrievalQuery, queryPlan.inventionFeatures || []) : []
+      const extraMatchedFields = retrievalQuery
+        ? [retrievalQuery.type === 'concept' || retrievalQuery.type === 'semantic' ? 'semantic' : '']
+        : []
+      const extraMatchReasons = retrievalQuery
+        ? (retrievalQuery.type === 'concept' || retrievalQuery.type === 'semantic'
+          ? [`Abstract embedding matched ${retrievalQuery.type.replace('_', ' ')} query: ${retrievalQuery.label || retrievalQuery.text}`]
+          : [])
+        : []
+      rows.set(key, {
+        ...(existing || {}),
+        ...result,
+        scores: {
+          ...(existing?.scores || {}),
+          ...(result.scores || {}),
+        },
+        matchedFields: uniqueStrings([
+          ...(existing?.matchedFields || []),
+          ...(result.matchedFields || []),
+          ...extraMatchedFields,
+        ]),
+        matchedFeatures: uniqueStrings([
+          ...(existing?.matchedFeatures || []),
+        ]),
+        matchReasons: uniqueStrings([
+          ...(existing?.matchReasons || []),
+          ...(result.matchReasons || []),
+          ...extraMatchReasons,
+        ]),
+      })
+      const current = ranks.get(key) || {
+        rrfScore: 0,
+        matchedFeatures: new Set<string>(),
+        retrievalMatches: [],
+      }
+      current.rrfScore += weight / (60 + rank)
+      if (kind === 'vectorRank') current.vectorRank = typeof current.vectorRank === 'number' ? Math.min(current.vectorRank, rank) : rank
+      if (kind === 'textRank') current.textRank = typeof current.textRank === 'number' ? Math.min(current.textRank, rank) : rank
+      if (kind === 'titleRank') current.titleRank = typeof current.titleRank === 'number' ? Math.min(current.titleRank, rank) : rank
+      if (kind === 'fieldRank') current.fieldRank = typeof current.fieldRank === 'number' ? Math.min(current.fieldRank, rank) : rank
+      if (kind === 'textRank') current.textScore = Math.max(current.textScore || 0, clampScore(row.textScore))
+      if (kind === 'titleRank') current.titleScore = Math.max(current.titleScore || 0, clampScore(row.titleScore))
+      if (kind === 'fieldRank') current.fieldScore = Math.max(current.fieldScore || 0, clampScore(row.fieldScore))
+      if (kind === 'vectorRank') {
+        const vectorScore = clampScore(row.vectorScore)
+        current.bestVectorScore = Math.max(current.bestVectorScore || 0, vectorScore)
+        if (retrievalQuery?.type === 'concept' || retrievalQuery?.type === 'semantic') {
+          current.conceptVectorScore = Math.max(current.conceptVectorScore || 0, vectorScore)
+        }
+        if (retrievalQuery?.type === 'feature' || retrievalQuery?.type === 'feature_pair') {
+          current.bestFeatureVectorScore = Math.max(current.bestFeatureVectorScore || 0, vectorScore)
+          if (vectorScore >= FEATURE_VECTOR_MATCH_THRESHOLD) {
+            featureLabels.forEach(feature => current.matchedFeatures.add(feature))
+          }
+        }
+        if (retrievalQuery && !current.retrievalMatches.some(match => match.queryId === retrievalQuery.id)) {
+          const attributedFeatureLabels = vectorScore >= FEATURE_VECTOR_MATCH_THRESHOLD ? featureLabels : []
+          current.retrievalMatches.push({
+            queryId: retrievalQuery.id,
+            queryType: retrievalQuery.type,
+            queryText: retrievalQuery.text,
+            rank,
+            score: vectorScore,
+            featureIndexes: attributedFeatureLabels.length
+              ? retrievalQuery.featureIndexes || (typeof retrievalQuery.featureIndex === 'number' ? [retrievalQuery.featureIndex] : undefined)
+              : undefined,
+            featureLabels: attributedFeatureLabels,
+          })
+        }
+      }
       ranks.set(key, current)
     }
 
@@ -356,26 +572,31 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }
     }
 
-    const semanticQuery = normalizeWhitespace(queryPlan.semanticQuery || textQuery)
-    if (semanticQuery && process.env.OPENAI_API_KEY && !manualMode) {
+    const retrievalQueries = buildFallbackRetrievalQueries(queryPlan, request.title)
+    if (retrievalQueries.length > 0 && process.env.OPENAI_API_KEY && !manualMode) {
       try {
-        const vector = await requestOpenAIEmbedding(semanticQuery)
-        const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
-        const vectorRows = await prisma.$queryRaw<any[]>`
-          SELECT ${commonSelectSql(Prisma.sql`,
-            1 - (e."embedding" <=> ${vectorLiteral}::vector) AS "vectorScore"`)}
-          FROM "local_patents" p
-          JOIN "local_patent_embeddings" e ON e."localPatentId" = p."id"
-          ${whereSql([
-            Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
-            Prisma.sql`e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}`,
-            Prisma.sql`e."embedding" IS NOT NULL`,
-            ...filterConditions,
-          ])}
-          ORDER BY e."embedding" <=> ${vectorLiteral}::vector
-          LIMIT ${candidateLimit}
-        `
-        vectorRows.forEach((row, index) => merge(row, 'vectorRank', index + 1, 1.25))
+        const vectors = await requestOpenAIEmbeddings(retrievalQueries.map(query => query.text))
+        for (let queryIndex = 0; queryIndex < retrievalQueries.length; queryIndex += 1) {
+          const retrievalQuery = retrievalQueries[queryIndex]
+          const vector = vectors[queryIndex]
+          if (!vector) continue
+          const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
+          const vectorRows = await prisma.$queryRaw<any[]>`
+            SELECT ${commonSelectSql(Prisma.sql`,
+              1 - (e."embedding" <=> ${vectorLiteral}::vector) AS "vectorScore"`)}
+            FROM "local_patents" p
+            JOIN "local_patent_embeddings" e ON e."localPatentId" = p."id"
+            ${whereSql([
+              Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
+              Prisma.sql`e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}`,
+              Prisma.sql`e."embedding" IS NOT NULL`,
+              ...filterConditions,
+            ])}
+            ORDER BY e."embedding" <=> ${vectorLiteral}::vector
+            LIMIT ${retrievalQueryLimit(retrievalQuery, safeLimit)}
+          `
+          vectorRows.forEach((row, index) => merge(row, 'vectorRank', index + 1, retrievalQuery.weight, retrievalQuery))
+        }
       } catch (error) {
         console.warn('[IndianCorpusProvider] Vector search skipped:', error)
       }
@@ -406,7 +627,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }
     }
 
-    if (filterConditions.length > 0) {
+    if (hasPositiveFieldFilters(filters)) {
       try {
         const fieldRows = await prisma.$queryRaw<any[]>`
           SELECT ${commonSelectSql(Prisma.sql`, 1.0 AS "fieldScore"`)}
@@ -421,14 +642,67 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }
     }
 
+    const featureCount = (queryPlan.inventionFeatures || []).length
     const sorted = Array.from(rows.values())
       .map(result => {
-        const rank = ranks.get(result.publicationNumber) || { score: 0 }
+        const rank = ranks.get(result.publicationNumber) || {
+          rrfScore: 0,
+          matchedFeatures: new Set<string>(),
+          retrievalMatches: [],
+        }
+        const classMatches = classificationMatches(result, queryPlan)
+        const matchedFeatures = uniqueStrings([
+          ...(result.matchedFeatures || []),
+          ...Array.from(rank.matchedFeatures),
+        ])
+        const featureCoverage = featureCount > 0
+          ? Math.min(1, matchedFeatures.length / Math.min(featureCount, 4))
+          : 0
+        const conceptSignal = rank.conceptVectorScore || rank.bestVectorScore || 0
+        const featureSignal = rank.bestFeatureVectorScore || 0
+        const classificationSignal = classMatches.length ? 1 : 0
+        const retrievalScore =
+          (0.3 * conceptSignal) +
+          (0.3 * featureSignal) +
+          (0.15 * featureCoverage) +
+          (0.1 * (rank.textScore || 0)) +
+          (0.1 * (rank.titleScore || 0)) +
+          (0.05 * classificationSignal) +
+          Math.min(0.05, rank.rrfScore)
+        const retrievalMatches = rank.retrievalMatches
+          .sort((a, b) => (b.score || 0) - (a.score || 0))
+          .slice(0, 8)
         return {
           ...result,
-          hybridScore: Number(rank.score.toFixed(6)),
+          hybridScore: Number(retrievalScore.toFixed(6)),
+          retrievalScore: Number(retrievalScore.toFixed(6)),
           vectorRank: rank.vectorRank,
           textRank: rank.textRank,
+          matchedFields: uniqueStrings([
+            ...(result.matchedFields || []),
+            matchedFeatures.length ? 'featureVector' : '',
+            classMatches.length ? 'classification' : '',
+          ]),
+          matchedFeatures,
+          retrievalMatches,
+          matchReasons: uniqueStrings([
+            ...(result.matchReasons || []),
+            matchedFeatures.length ? `Abstract embeddings matched ${matchedFeatures.length} invention feature(s)` : '',
+            classMatches.length ? `Classification matched ${classMatches.join(', ')}` : '',
+          ]),
+          scores: {
+            ...(result.scores || {}),
+            semantic: rank.bestVectorScore || result.scores?.semantic,
+            conceptVector: conceptSignal || undefined,
+            bestFeatureVector: featureSignal || undefined,
+            featureCoverage,
+            text: rank.textScore || result.scores?.text,
+            title: rank.titleScore || result.scores?.title,
+            field: rank.fieldScore || result.scores?.field,
+            classification: classificationSignal || result.scores?.classification,
+            retrieval: retrievalScore,
+            hybrid: retrievalScore,
+          },
         }
       })
       .sort((a, b) => (b.hybridScore || 0) - (a.hybridScore || 0))

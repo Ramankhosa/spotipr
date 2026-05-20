@@ -11,12 +11,12 @@ import {
   Play,
   RotateCcw,
   Search,
-  SlidersHorizontal,
+  ShieldCheck,
   Sparkles,
   Zap,
 } from 'lucide-react'
 
-type StageTab = '0' | '1' | '1.5' | '3.5' | '3.5c' | '4' | '5'
+type StageTab = '1' | '2' | '3' | '4' | '5'
 type StageStatus = 'completed' | 'in_progress' | 'pending' | 'failed' | 'blocked'
 
 interface NoveltyStageNavProps {
@@ -43,53 +43,39 @@ interface StageConfig {
 
 const STAGE_CONFIGS: StageConfig[] = [
   {
-    key: '0',
+    key: '1',
     label: 'Idea Setup',
     description: 'Search inputs and extracted features',
     icon: Sparkles,
     stageNumber: null,
   },
   {
-    key: '1',
-    label: 'Patent Search',
-    description: 'Run provider search and collect references',
+    key: '2',
+    label: 'Search Results',
+    description: 'Returned patents from search providers',
     icon: Search,
     stageNumber: '1',
   },
   {
-    key: '1.5',
-    label: 'AI Relevance',
-    description: 'Score and sort the closest references',
+    key: '3',
+    label: 'Relevance Analysis',
+    description: 'LLM gate over returned references',
     icon: Zap,
     stageNumber: '1.5',
   },
   {
-    key: '3.5',
-    label: 'Feature Analysis',
-    description: 'Compare invention features to prior art',
-    icon: SlidersHorizontal,
-    stageNumber: '3.5',
-  },
-  {
-    key: '3.5c',
-    label: 'Patent Remarks',
-    description: 'Generate per-patent analysis',
-    icon: FileText,
-    stageNumber: '3.5c',
-  },
-  {
     key: '4',
-    label: 'Final Report',
-    description: 'Create novelty assessment report',
-    icon: FileText,
-    stageNumber: '4',
+    label: 'Deep Analysis',
+    description: 'Map features and assess top threats',
+    icon: ShieldCheck,
+    stageNumber: '3',
   },
   {
     key: '5',
-    label: 'Download Report',
-    description: 'Open and share report output',
+    label: 'Consolidated Report',
+    description: 'Create and share novelty assessment',
     icon: FileText,
-    stageNumber: null,
+    stageNumber: '4',
   },
 ]
 

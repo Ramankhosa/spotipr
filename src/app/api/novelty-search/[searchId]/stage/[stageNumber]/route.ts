@@ -97,8 +97,14 @@ export async function POST(
     case '1':
       result = await noveltySearchService.executeStage1(searchId, userId, requestHeaders);
       break;
+    case '2':
+      result = await noveltySearchService.executeStage2(searchId, userId, requestHeaders);
+      break;
     case '1.5':
       result = await noveltySearchService.executeStage15(searchId, userId, requestHeaders);
+      break;
+    case '3':
+      result = await noveltySearchService.executeStage3(searchId, userId, requestHeaders);
       break;
     case '3.5':
       // Combined Stage 3.5 (3.5a + 3.5b)
@@ -124,9 +130,12 @@ export async function POST(
       case '4':
         result = await noveltySearchService.executeStage4(searchId, userId, requestHeaders);
         break;
+      case '5':
+        result = await noveltySearchService.executeStage4(searchId, userId, requestHeaders);
+        break;
       default:
         return NextResponse.json({
-          error: 'Invalid stage number. Valid stages: 1, 1.5, 3.5, 3.5a, 3.5b, 3.5c, 4'
+          error: 'Invalid stage number. Valid stages: 1, 2, 3, 4, 5. Legacy stages are also supported: 1.5, 3.5, 3.5a, 3.5b, 3.5c.'
         }, { status: 400 });
     }
 

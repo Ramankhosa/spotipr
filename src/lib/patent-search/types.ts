@@ -13,6 +13,28 @@ export type PatentSearchMode = 'intelligent' | 'manual'
 
 export type PatentSearchSort = 'relevance' | 'publicationDateDesc' | 'filingDateDesc'
 
+export type PatentRetrievalQueryType = 'concept' | 'feature' | 'feature_pair' | 'semantic'
+
+export interface PatentRetrievalQuery {
+  id: string
+  type: PatentRetrievalQueryType
+  text: string
+  weight?: number
+  featureIndex?: number
+  featureIndexes?: number[]
+  label?: string
+}
+
+export interface PatentRetrievalMatch {
+  queryId: string
+  queryType: PatentRetrievalQueryType
+  queryText: string
+  rank: number
+  score?: number
+  featureIndexes?: number[]
+  featureLabels?: string[]
+}
+
 export interface PatentSearchCapabilities {
   semantic: boolean
   fullText: boolean
@@ -63,6 +85,7 @@ export interface PatentSearchQueryPlan {
   fieldFilters: PatentSearchFilters
   explicitFilters: PatentSearchFilters
   searchVariants: string[]
+  retrievalQueries?: PatentRetrievalQuery[]
   llmExpanded: boolean
   confidence: number
   warnings: string[]
@@ -93,6 +116,10 @@ export interface PatentResultScores {
   field?: number
   provider?: number
   hybrid?: number
+  retrieval?: number
+  conceptVector?: number
+  bestFeatureVector?: number
+  featureCoverage?: number
 }
 
 export interface NormalizedPatentResult {
@@ -124,7 +151,10 @@ export interface NormalizedPatentResult {
   numberOfClaims?: number | null
   extractionConfidence?: number | null
   matchedFields?: string[]
+  matchedFeatures?: string[]
   matchReasons?: string[]
+  retrievalMatches?: PatentRetrievalMatch[]
+  retrievalScore?: number
   scores?: PatentResultScores
   relevanceScore?: number | null
   hybridScore?: number

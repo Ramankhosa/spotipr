@@ -48,7 +48,18 @@ function mergeProviderResults(providerResults: Array<{ providerId: PatentSearchP
         sourceProviders,
         sourceProvider: chosen.sourceProvider,
         matchedFields: uniqueStrings([...(current?.matchedFields || []), ...(result.matchedFields || [])]),
+        matchedFeatures: uniqueStrings([...(current?.matchedFeatures || []), ...(result.matchedFeatures || [])]),
         matchReasons: uniqueStrings([...(current?.matchReasons || []), ...(result.matchReasons || [])]),
+        retrievalMatches: [
+          ...(current?.retrievalMatches || []),
+          ...(result.retrievalMatches || []),
+        ].slice(0, 12),
+        retrievalScore: Math.max(current?.retrievalScore || 0, result.retrievalScore || 0) || undefined,
+        scores: {
+          ...(current?.scores || {}),
+          ...(result.scores || {}),
+          ...(chosen.scores || {}),
+        },
       })
       scores.set(key, currentScore + providerScore)
     })

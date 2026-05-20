@@ -1,12 +1,12 @@
 import { BasePatentService, LLMResult, User } from './base-patent-service';
 import { llmGateway } from './metering/gateway';
 import { prisma } from './prisma';
-import { TaskCode, NoveltySearchStatus, NoveltySearchStage } from '@prisma/client';
+import { TaskCode, NoveltySearchStatus, NoveltySearchStage, Prisma } from '@prisma/client';
 import { IdeaBankService } from './idea-bank-service';
 import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from './idea-bank-funnel';
 import { checkServiceQuota, trackServiceUsage } from './service-usage-tracker';
 import crypto from 'crypto';
-import { patentSearchOrchestrator, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
+import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
 
 // LLM Prompt Specification for Novelty Search (enhanced versions)
 export const NOVELTY_SEARCH_NORMALIZATION_PROMPT = `
@@ -110,6 +110,50 @@ FAIL-SAFES
 
 - If uncertain, prioritize the most distinctive mid-level mechanisms (integration, control loop, configuration, interaction) over lists of generic parts or high-level benefits.
 
+`;
+
+export const NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2 = `
+You are a patent novelty search strategist. Analyze the invention and return ONLY one valid JSON object.
+
+INVENTION TITLE: {title}
+
+INVENTION DESCRIPTION:
+{rawIdea}
+
+OUTPUT JSON SHAPE:
+{
+  "searchQuery": "plain-English patent search query, 12-35 words",
+  "invention_features": ["mechanism-level feature"],
+  "inventionType": ["MECHANICAL|SOFTWARE|CHEMICAL|ELECTRICAL|BIO|GENERAL"],
+  "cpcCodes": ["optional CPC class hint, or empty array"],
+  "ipcCodes": ["optional IPC class hint, or empty array"],
+  "novelty_focus": ["feature most likely to drive novelty"],
+  "search_exclusions": ["term that should not dominate search"],
+  "confidence": 0.0,
+  "warnings": ["coverage or ambiguity warning"]
+}
+
+RULES:
+- JSON only. No markdown, comments, citations, or text before/after JSON.
+- Use ASCII only.
+- Do not invent technical facts not present in the disclosure.
+- The search query is used as the single PQAI query and as the broad local-corpus concept query.
+- The search query must describe what the invention is and how it works, not its market benefit.
+- Keep searchQuery broad and self-contained; do not stuff it with every feature.
+- Prefer recall-oriented technical terms, but preserve the distinctive operating mechanism.
+- Return 3-8 invention_features unless the disclosure truly contains fewer.
+- Each feature must be a claim-relevant mechanism, structure, material relationship, control loop, process step, data flow, or algorithmic transformation.
+- Each invention_feature is independently embedded for local Indian abstract search; write it as a standalone 3-10 word technical phrase.
+- Do not make features depend on the title or searchQuery for meaning.
+- Do not repeat the full searchQuery or broad application field in every feature.
+- Do not use benefits as features, such as "improved efficiency", "real-time monitoring", or "secure access", unless paired with a concrete mechanism.
+- Do not list generic components as standalone features: processor, memory, sensor, controller, module, database, server, app, battery, housing, network, or API.
+- Include generic components only when their specific interaction is material to novelty.
+- novelty_focus must contain 1-4 features from invention_features that are most likely to distinguish over prior art.
+- cpcCodes and ipcCodes should be empty arrays unless the class is strongly inferable from the disclosure.
+- search_exclusions should contain terms that are incidental, business-oriented, or likely to pull irrelevant references.
+- confidence reflects disclosure sufficiency for novelty search, not patentability.
+- warnings should call out missing mechanism detail, vague terms, missing materials/steps, or weak search coverage risks.
 `;
 
 // Legacy prompts moved to bottom of file
@@ -233,6 +277,140 @@ RULES
 - Quotes must be verbatim and <= 18 words; absent reasons <= 8 words.
 - ASCII only; JSON only; no markdown, comments, or explanations.
 - Output must be valid JSON (double-quoted keys/values, comma-separated).`;
+
+export const PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3 = `You are a skeptical patent novelty analyst. Map invention FEATURES to prior-art PATENTS and return ONE valid JSON object only.
+
+INPUTS
+FEATURES: {invention_features} (array of strings; copy each feature verbatim)
+PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, optional Retrieval hints)
+
+TASK
+For each patent PN, classify EVERY feature EXACTLY ONCE:
+- Present: the same mechanism is concretely disclosed in Title/Abstract.
+- Partial: related mechanism is disclosed, but a required element, constraint, interaction, material, or step is missing.
+- Absent: the Title/Abstract gives no support for the feature.
+- Unknown: the text is too thin, generic, unclear, or unavailable to assess.
+
+NOVELTY EVIDENCE RULES
+- Use only the supplied Title/Abstract. Do not assume claims or missing details.
+- Retrieval hints are candidate-discovery signals only. They are not evidence.
+- Use Retrieval hints to focus review, but Present/Partial still require Title/Abstract support.
+- Treat synonyms and paraphrases as matches only when they implement the same mechanism.
+- Generic mentions of processor, sensor, controller, AI, module, app, server, or network do not satisfy a feature unless the full interaction is disclosed.
+- Present/Partial require a verbatim quote <= 18 words and a field of "title" or "abstract".
+- Absent requires a short reason.
+- Unknown must be used when evidence is weak; do not convert missing abstracts into positive novelty.
+
+OUTPUT JSON SHAPE:
+{
+  "feature_map": [
+    {
+      "pn": "string",
+      "link": "https://patents.google.com/patent/<pn>",
+      "coverage": {"present":0,"partial":0,"absent":0},
+      "present": [{"feature":"<copy from FEATURES>","quote":"verbatim quote","field":"title|abstract","confidence":0.0}],
+      "partial": [{"feature":"<copy from FEATURES>","quote":"verbatim quote","field":"title|abstract","confidence":0.0}],
+      "absent": [{"feature":"<copy from FEATURES>","reason":"short reason"}],
+      "unknown": [{"feature":"<copy from FEATURES>","reason":"weak or unavailable evidence"}]
+    }
+  ],
+  "quality_flags":{"low_evidence":false,"ambiguous_abstracts":false,"language_mismatch":false},
+  "stats":{"patents_analyzed":0,"features_considered":0}
+}
+
+RULES
+- Copy feature strings exactly.
+- Do not add features, patents, explanations, markdown, or comments.
+- Confidence: 0.9 explicit same mechanism; 0.7 clear paraphrase; 0.4 weak/indirect.
+- ASCII only. JSON only.`;
+
+export const CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT = `You are a skeptical patent novelty analyst. Analyze shortlisted prior-art candidates against invention features and return ONE valid JSON object only.
+
+INPUTS
+FEATURES: {invention_features}
+PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, Retrieval hints)
+
+TASK
+For each patent, do all of the following in one pass:
+1. Decide relevance: accept, borderline, or reject.
+2. Map every invention feature as Present, Partial, Absent, or Unknown.
+3. Provide per-patent novelty threat remarks.
+4. Summarize novelty signals across the candidate set.
+
+EVIDENCE RULES
+- Use only the supplied Title and Abstract as evidence.
+- Retrieval hints are candidate-discovery signals only. They are not evidence.
+- Use Retrieval hints to focus review, but Present/Partial still require Title/Abstract support.
+- Present/Partial require a short quote from title or abstract when available.
+- If an abstract is thin, vague, unavailable, or does not support the feature, use Absent or Unknown.
+- Do not treat missing evidence as novelty.
+- Generic words like system, module, sensor, controller, AI, battery, app, or server are not enough unless the full mechanism is disclosed.
+
+OUTPUT JSON SHAPE:
+{
+  "aiRelevance": {
+    "accepted": ["PN"],
+    "borderline": ["PN"],
+    "rejected": ["PN"],
+    "byPn": {
+      "PN": {
+        "pn": "PN",
+        "score": 0.0,
+        "decision": "accept|borderline|reject",
+        "matched_features": ["feature"],
+        "missing_features": ["feature"],
+        "reason": "short reason",
+        "evidence_quality": "high|medium|low"
+      }
+    }
+  },
+  "feature_map": [
+    {
+      "pn": "PN",
+      "title": "title",
+      "coverage": {"present":0,"partial":0,"absent":0,"coverage_score":0.0},
+      "present": [{"feature":"copy feature exactly","quote":"quote","field":"title|abstract","confidence":0.0}],
+      "partial": [{"feature":"copy feature exactly","quote":"quote","field":"title|abstract","confidence":0.0}],
+      "absent": [{"feature":"copy feature exactly","reason":"short reason"}],
+      "unknown": [{"feature":"copy feature exactly","reason":"weak evidence"}],
+      "remarks": "2-3 sentence technical assessment",
+      "decision": "novel|partial_novelty|obvious"
+    }
+  ],
+  "per_patent_remarks": [
+    {
+      "pn": "PN",
+      "title": "title",
+      "relevance": 0.0,
+      "novelty_threat": "anticipates|obvious|adjacent|remote",
+      "summary": "2-3 sentence threat summary",
+      "overlap_features": ["feature"],
+      "missing_features": ["feature"],
+      "novelty_points": ["feature or distinction"],
+      "confidence": 0.0,
+      "detailedAnalysis": {
+        "relevant_parts": ["specific overlap"],
+        "irrelevant_parts": ["specific differentiator"],
+        "novelty_comparison": "evidence-based comparison"
+      }
+    }
+  ],
+  "novelty_signals": {
+    "closest_blocking_references": ["PN"],
+    "features_fully_covered": ["feature"],
+    "features_still_unique": ["feature"],
+    "weak_evidence_areas": ["feature or data gap"],
+    "recommended_next_actions": ["action"]
+  },
+  "quality_flags": {"low_evidence":false,"ambiguous_abstracts":false,"language_mismatch":false},
+  "stats": {"patents_analyzed":0,"features_considered":0}
+}
+
+RULES
+- Copy feature strings exactly.
+- Return every patent PN supplied in feature_map and byPn.
+- Do not add markdown, comments, citations, or text outside JSON.
+- ASCII only.`;
 
 // Legacy prompts moved to bottom to avoid redeclaration
 
@@ -398,10 +576,9 @@ GUIDELINES:
 
 // V2: Compact Stage 4 prompt aligned to the Stage 4 UI.
 // Focuses on a small, JSON-only output without perâ€‘patent tables to reduce tokens.
-/* LEGACY: do not use, replaced by STAGE4_REPORT_PROMPT_V3 */
+/* LEGACY: live Stage 4 uses STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 */
 // Lightweight prompt: compile final report strictly from per-patent remarks
-/* LEGACY: do not use, replaced by STAGE4_REPORT_PROMPT_FROM_REMARKS_V2 */
-// New Stage 4 prompts (attorney-style, JSON-only)
+/* LEGACY: superseded by STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 */
 export const STAGE4_REPORT_PROMPT_V3 = `You are a senior patent attorney preparing the FINAL CONCLUDING REMARKS for the Novelty UI.
 
 IMPORTANT: Detailed per-patent analysis is already provided in Stage 3.5c. Your role is to provide FINAL STRATEGIC CONCLUSIONS.
@@ -549,6 +726,79 @@ Authoring guidance:
 - idea_bank_suggestions should help pivot or strengthen against identified weakness
 `;
 
+export const STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 = `You are a senior patent novelty analyst preparing the final novelty assessment from per-patent threat remarks.
+
+INPUTS PROVIDED BELOW:
+- invention_features: JSON array of mechanism-level features
+- per_patent_remarks: JSON array with pn, title, relevance, novelty_threat, overlap_features, missing_features, detailedAnalysis
+- search_metadata: JSON object with search and filtering counts
+- metrics: JSON object with deterministic novelty_score, decision, and confidence
+
+TASK
+Synthesize an honest, evidence-based novelty report. Do not re-run feature mapping. Do not treat missing abstracts or weak corpus coverage as novelty.
+
+DECISION POLICY
+- Not Novel: one patent covers most core features, or all critical features are present/obvious.
+- Partially Novel: important overlap exists, but some mechanism-level differentiators remain.
+- Novel: strong evidence shows closest references miss the core inventive mechanism.
+- Low Evidence: evidence is too thin, missing, ambiguous, or corpus coverage is weak.
+
+STRICT RULES
+- Return valid JSON only. No markdown or text outside JSON.
+- Be candid and skeptical; do not advocate for the invention.
+- Distinguish "not found in evidence" from "novel".
+- Name the closest blocking references by PN.
+- Include confidence drivers and weak evidence areas.
+- Keep executive summary under 220 words and bullets under 18 words.
+
+OUTPUT JSON SHAPE:
+{
+  "report_metadata": {
+    "title": "Novelty Assessment Report",
+    "search_id": "SEARCH_ID",
+    "date": "GENERATION_DATE",
+    "jurisdiction": "SEARCH_JURISDICTION",
+    "analyst": "PatentNest.ai - Stage 4"
+  },
+  "search_trail": {
+    "pqai_initial_count": "number | null",
+    "ai_relevance_accepted": "number | null",
+    "ai_relevance_borderline": "number | null",
+    "deeply_analyzed_count": "number | null"
+  },
+  "executive_summary": {
+    "summary": "Candid novelty outlook, closest threats, differentiators, and evidence limits.",
+    "visual_cards": {
+      "Novelty Score": "..%",
+      "Patents Analyzed": "N",
+      "Unique Features": "X of Y",
+      "Confidence": "High|Medium|Low"
+    }
+  },
+  "concluding_remarks": {
+    "overall_novelty_assessment": "Novel | Partially Novel | Not Novel | Low Evidence",
+    "honest_assessment": "2-3 sentence verdict based on closest threats and evidence quality",
+    "closest_blocking_references": ["PN"],
+    "confidence_drivers": ["searched/mapped counts, evidence quality, feature coverage"],
+    "weak_evidence_areas": ["feature or corpus gap"],
+    "key_strengths": ["defensible differentiator"],
+    "key_risks": ["specific prior-art threat"],
+    "strategic_recommendations": ["claim or technical focus"],
+    "course_corrections": ["technical pivot if needed"],
+    "filing_advice": "Proceed, strengthen, broaden search, or pivot with reasons",
+    "inventor_action_items": ["specific next step"]
+  },
+  "idea_bank_suggestions": [
+    {
+      "title": "Improvement idea",
+      "core_principle": "Technical enhancement increasing novelty",
+      "expected_advantage": "How this addresses prior-art gaps",
+      "tags": ["mechanism", "domain"],
+      "non_obvious_extension": "Concrete technical distinction"
+    }
+  ]
+}`;
+
 export interface NoveltySearchConfig {
   jurisdiction: string;
   filingType: string;
@@ -633,7 +883,77 @@ export interface NormalizedIdea {
   inventionType?: string[];
   cpcCodes?: string[];
   ipcCodes?: string[];
+  noveltyFocus?: string[];
+  searchExclusions?: string[];
+  confidence?: number;
+  warnings?: string[];
   queryPlan?: any;
+}
+
+function normalizeRetrievalText(value: unknown, maxWords = 36): string {
+  const words = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return words.slice(0, maxWords).join(' ');
+}
+
+function buildIndianCorpusRetrievalQueries(searchQuery: string, inventionFeatures: string[]): PatentRetrievalQuery[] {
+  const queries: PatentRetrievalQuery[] = [];
+  const seen = new Set<string>();
+  const addQuery = (query: PatentRetrievalQuery) => {
+    const text = normalizeRetrievalText(query.text);
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) return;
+    seen.add(key);
+    queries.push({ ...query, text });
+  };
+
+  if (searchQuery) {
+    addQuery({
+      id: 'concept',
+      type: 'concept',
+      text: searchQuery,
+      weight: 1.25,
+      label: 'Core concept',
+    });
+  }
+
+  const features = inventionFeatures.map(feature => normalizeRetrievalText(feature, 18)).filter(Boolean).slice(0, 8);
+  features.forEach((feature, index) => {
+    addQuery({
+      id: `feature-${index + 1}`,
+      type: 'feature',
+      text: feature,
+      weight: 1.1,
+      featureIndex: index,
+      featureIndexes: [index],
+      label: feature,
+    });
+  });
+
+  for (let index = 0; index < Math.min(features.length - 1, 3); index += 1) {
+    addQuery({
+      id: `feature-pair-${index + 1}`,
+      type: 'feature_pair',
+      text: `${features[index]} ${features[index + 1]}`,
+      weight: 1.15,
+      featureIndexes: [index, index + 1],
+      label: `${features[index]} + ${features[index + 1]}`,
+    });
+  }
+
+  return queries;
+}
+
+function withStage0Exclusions(filters: PatentSearchFilters, exclusions: string[]): PatentSearchFilters {
+  const cleanedExclusions = Array.from(new Set(exclusions.map(value => String(value || '').trim()).filter(Boolean)));
+  if (!cleanedExclusions.length) return filters;
+  return {
+    ...filters,
+    excludeTerms: Array.from(new Set([...(filters.excludeTerms || []), ...cleanedExclusions])),
+  };
 }
 
 export interface ScreeningResult {
@@ -1038,7 +1358,7 @@ export class NoveltySearchService extends BasePatentService {
   async executeStage1(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
       // Get search run
-      const searchRun = await prisma.noveltySearchRun.findFirst({
+      let searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
       });
 
@@ -1101,6 +1421,192 @@ export class NoveltySearchService extends BasePatentService {
   }
 
   /**
+   * Execute Stage 2: Patent Discovery
+   * Combines provider patent search and AI relevance gating into one user-facing step.
+   */
+  async executeStage2(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
+    try {
+      const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+      if (!searchRun) return { success: false, error: 'Novelty search not found' };
+
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
+      const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
+      if (!stage0Data?.searchQuery) {
+        return { success: false, error: 'Stage 1 Idea Setup must be completed before Patent Discovery.' };
+      }
+
+      let stage1Data = searchRun.stage1Results as unknown as any;
+      if (!stage1Data || !Array.isArray(stage1Data?.pqaiResults)) {
+        const stage1Result = await this.performStage1(searchRun, stage0Data, config, requestHeaders);
+        if (!stage1Result.success) {
+          await prisma.noveltySearchRun.update({ where: { id: searchId }, data: { status: NoveltySearchStatus.FAILED } });
+          return { success: false, error: stage1Result.error };
+        }
+        stage1Data = { ...(stage1Result.data || {}), stage0: stage0Data };
+      }
+
+      if (Array.isArray(stage1Data?.pqaiResults) && stage1Data.pqaiResults.length > 0) {
+        const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders);
+        if (!gate.success) return { success: false, error: gate.error || 'AI relevance gate failed' };
+        stage1Data = { ...(stage1Data || {}), aiRelevance: gate.data };
+      } else {
+        stage1Data = {
+          ...(stage1Data || {}),
+          aiRelevance: {
+            accepted: [],
+            borderline: [],
+            rejected: [],
+            byPn: {},
+            consideredCount: 0,
+            totalCandidates: 0,
+            boundedToTopCandidates: false
+          }
+        };
+      }
+
+      await prisma.noveltySearchRun.update({
+        where: { id: searchId },
+        data: {
+          currentStage: NoveltySearchStage.STAGE_3_5,
+          status: NoveltySearchStatus.STAGE_1_COMPLETED,
+          stage1CompletedAt: new Date(),
+          stage1Results: stage1Data as any,
+          stage35CompletedAt: null,
+          stage35Results: Prisma.JsonNull,
+          stage4CompletedAt: null,
+          stage4Results: Prisma.JsonNull,
+          reportUrl: null
+        }
+      });
+
+      return {
+        success: true,
+        searchId,
+        status: NoveltySearchStatus.STAGE_1_COMPLETED,
+        currentStage: NoveltySearchStage.STAGE_3_5,
+        results: stage1Data
+      };
+    } catch (error) {
+      console.error('Stage 2 execution error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Stage 2 execution failed' };
+    }
+  }
+
+  /**
+   * Execute Stage 3: Deep Analysis
+   * Combines feature mapping, deterministic aggregation, and top-threat remarks.
+   */
+  async executeStage3(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
+    try {
+      let searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+      if (!searchRun) return { success: false, error: 'Novelty search not found' };
+
+      const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
+      const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
+      if (!stage0Data?.searchQuery) {
+        return { success: false, error: 'Idea Setup must be completed before Deep Analysis.' };
+      }
+
+      let stage1Data = searchRun.stage1Results as unknown as any;
+      if (!stage1Data || !Array.isArray(stage1Data?.pqaiResults)) {
+        const discovery = await this.executeStage1(searchId, userId, requestHeaders);
+        if (!discovery.success) return discovery;
+        searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+        if (!searchRun) return { success: false, error: 'Novelty search not found after patent search' };
+        stage1Data = searchRun.stage1Results as unknown as any;
+      }
+
+      if (!stage1Data?.aiRelevance) {
+        const relevance = await this.executeStage15(searchId, userId, requestHeaders);
+        if (!relevance.success) return relevance;
+        searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+        if (!searchRun) return { success: false, error: 'Novelty search not found after relevance analysis' };
+        stage1Data = searchRun.stage1Results as unknown as any;
+      }
+
+      let stage35Data = searchRun.stage35Results as unknown as FeatureMapBatchResult | null;
+      let stage4Data = searchRun.stage4Results as unknown as any;
+
+      const hasExistingDeepAnalysis = !!(
+        stage35Data &&
+        Array.isArray(stage35Data.feature_map) &&
+        stage35Data.feature_map.length > 0 &&
+        stage4Data?.per_patent_coverage &&
+        this.hasDetailedStage35cRemarks(stage4Data)
+      );
+
+      if (!hasExistingDeepAnalysis) {
+        const consolidated = await this.performConsolidatedDeepAnalysis(searchId, stage0Data, stage1Data, config, requestHeaders);
+
+        if (consolidated.success && consolidated.data) {
+          stage35Data = consolidated.data.stage35Data;
+          stage4Data = consolidated.data.stage4Data;
+          const mergedStage1 = consolidated.data.aiRelevance
+            ? { ...(stage1Data || {}), aiRelevance: consolidated.data.aiRelevance }
+            : stage1Data;
+
+          await this.storeFeatureMapResults(searchId, stage35Data.feature_map);
+          await prisma.noveltySearchRun.update({
+            where: { id: searchId },
+            data: {
+              stage1Results: mergedStage1 as any,
+              stage35Results: stage35Data as any,
+              stage4Results: stage4Data as any,
+              reportUrl: null
+            }
+          });
+        } else {
+          console.warn('[Stage3] Consolidated deep analysis failed; falling back to legacy route:', consolidated.error);
+
+          const mapping = await this.executeStage35a(searchId, userId, requestHeaders);
+          if (!mapping.success) return mapping;
+          searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+          if (!searchRun) return { success: false, error: 'Novelty search not found after feature mapping' };
+          stage35Data = searchRun.stage35Results as unknown as FeatureMapBatchResult;
+
+          const aggregation = await this.executeStage35b(searchId, userId, requestHeaders);
+          if (!aggregation.success) return aggregation;
+          searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+          if (!searchRun) return { success: false, error: 'Novelty search not found after aggregation' };
+          stage4Data = searchRun.stage4Results as unknown as any;
+
+          if (!this.hasDetailedStage35cRemarks(stage4Data)) {
+            const remarks = await this.executeStage35c(searchId, userId, requestHeaders);
+            if (!remarks.success) return remarks;
+            searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+            if (!searchRun) return { success: false, error: 'Novelty search not found after remarks' };
+            stage4Data = searchRun.stage4Results as unknown as any;
+          }
+        }
+      }
+
+      await prisma.noveltySearchRun.update({
+        where: { id: searchId },
+        data: {
+          currentStage: NoveltySearchStage.STAGE_4,
+          status: NoveltySearchStatus.STAGE_3_5_COMPLETED,
+          stage35CompletedAt: new Date()
+        }
+      });
+
+      return {
+        success: true,
+        searchId,
+        status: NoveltySearchStatus.STAGE_3_5_COMPLETED,
+        currentStage: NoveltySearchStage.STAGE_4,
+        results: {
+          stage35: stage35Data,
+          stage4: stage4Data,
+          ...(stage4Data || {})
+        }
+      };
+    } catch (error) {
+      console.error('Stage 3 execution error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Stage 3 execution failed' };
+    }
+  }
+
+  /**
    * Execute Stage 3.5a: Feature Mapping Engine
    */
   async executeStage35a(
@@ -1111,7 +1617,7 @@ export class NoveltySearchService extends BasePatentService {
   ): Promise<NoveltySearchResponse> {
     try {
       // Get search run
-      const searchRun = await prisma.noveltySearchRun.findFirst({
+      let searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
       });
 
@@ -1195,7 +1701,9 @@ export class NoveltySearchService extends BasePatentService {
           status: NoveltySearchStatus.STAGE_3_5_COMPLETED, // Will be renamed to STAGE_3_5A_COMPLETED
           stage35CompletedAt: new Date(),
           stage35Results: stage35aResult.data as any,
-          stage4Results: undefined // Will be filled by stage 3.5b
+          stage4CompletedAt: null,
+          stage4Results: Prisma.JsonNull,
+          reportUrl: null
         }
       });
 
@@ -1649,7 +2157,10 @@ export class NoveltySearchService extends BasePatentService {
       // Merge remarks into stage4Results
       const mergedStage4: any = {
         ...(aggregationResult || {}),
-        per_patent_remarks: perPatentRemarks
+        per_patent_remarks: perPatentRemarks,
+        per_patent_remarks_source: 'stage35c',
+        stage35c_complete: true,
+        stage35c_completed_at: new Date().toISOString()
       };
 
       await prisma.noveltySearchRun.update({
@@ -1924,7 +2435,7 @@ export class NoveltySearchService extends BasePatentService {
   async executeStage4(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
       // Get search run with all results
-      const searchRun = await prisma.noveltySearchRun.findFirst({
+      let searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
       });
 
@@ -1938,6 +2449,26 @@ export class NoveltySearchService extends BasePatentService {
       // }
 
       const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
+
+      const stage35Data = searchRun.stage35Results as unknown as FeatureMapBatchResult | null;
+      const stage4Data = searchRun.stage4Results as unknown as any;
+      const hasFeatureMap = !!(stage35Data && Array.isArray(stage35Data.feature_map) && stage35Data.feature_map.length > 0);
+      const hasAggregation = !!(stage4Data?.per_patent_coverage || stage4Data?.per_feature_uniqueness || stage4Data?.feature_coverage_summary);
+      if (!hasFeatureMap || !hasAggregation || !this.hasDetailedStage35cRemarks(stage4Data)) {
+        const deepAnalysis = await this.executeStage3(searchId, userId, requestHeaders);
+        if (!deepAnalysis.success) {
+          return {
+            success: false,
+            error: deepAnalysis.error || 'Deep Analysis must complete before report generation'
+          };
+        }
+        searchRun = await prisma.noveltySearchRun.findFirst({
+          where: { id: searchId, userId }
+        });
+        if (!searchRun) {
+          return { success: false, error: 'Novelty search not found after Deep Analysis' };
+        }
+      }
 
       // Perform Stage 4 report generation
       const stage4Result = await this.performStage4(searchRun, config, requestHeaders);
@@ -1954,6 +2485,7 @@ export class NoveltySearchService extends BasePatentService {
       let finalStage4Data: any = stage4Result.data;
       try {
         const existing = (searchRun.stage4Results as any) || {};
+        finalStage4Data = { ...existing, ...finalStage4Data };
         if (Array.isArray(existing.per_patent_remarks) && existing.per_patent_remarks.length > 0) {
           finalStage4Data = { ...finalStage4Data, per_patent_remarks: existing.per_patent_remarks };
         }
@@ -2201,7 +2733,7 @@ RESPONSE:`;
       // Build prompt
       console.log('ðŸ“ Stage 0 Input - Title:', request.title, 'Description length:', request.inventionDescription?.length);
 
-      const prompt = config.stage0.customPrompt || NOVELTY_SEARCH_NORMALIZATION_PROMPT
+      const prompt = config.stage0.customPrompt || NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2
         .replace('{title}', request.title || 'Untitled Invention')
         .replace('{rawIdea}', request.inventionDescription || 'No description provided');
 
@@ -2236,7 +2768,11 @@ RESPONSE:`;
           ? normalizedData.inventionType 
           : (normalizedData?.inventionType ? [normalizedData.inventionType] : ['GENERAL']),
         cpcCodes: Array.isArray(normalizedData?.cpcCodes) ? normalizedData.cpcCodes.filter(Boolean) : [],
-        ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : []
+        ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : [],
+        noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
+        searchExclusions: Array.isArray(normalizedData?.search_exclusions) ? normalizedData.search_exclusions.filter(Boolean) : [],
+        confidence: typeof normalizedData?.confidence === 'number' ? normalizedData.confidence : undefined,
+        warnings: Array.isArray(normalizedData?.warnings) ? normalizedData.warnings.filter(Boolean) : []
       };
 
       if (!extractedFields.searchQuery) {
@@ -2285,6 +2821,8 @@ RESPONSE:`;
       const stage0Features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures.filter(Boolean) : [];
       const stage0CpcCodes = Array.isArray(stage0Data.cpcCodes) ? stage0Data.cpcCodes.filter(Boolean) : [];
       const stage0IpcCodes = Array.isArray(stage0Data.ipcCodes) ? stage0Data.ipcCodes.filter(Boolean) : [];
+      const stage0SearchExclusions = Array.isArray(stage0Data.searchExclusions) ? stage0Data.searchExclusions.filter(Boolean) : [];
+      const stage1Filters = withStage0Exclusions(config.searchSource?.filters || {}, stage0SearchExclusions);
       const stage0QueryPlan: Partial<PatentSearchQueryPlan> | undefined = searchMode === 'manual'
         ? undefined
         : {
@@ -2296,13 +2834,14 @@ RESPONSE:`;
           technicalKeywords: Array.from(new Set(stage0SearchQuery.split(/\s+/).filter(word => word.length > 3))).slice(0, 20),
           synonyms: [],
           mustHaveTerms: [],
-          excludedTerms: [],
+          excludedTerms: stage0SearchExclusions,
           cpcCodes: stage0CpcCodes,
           ipcCodes: stage0IpcCodes,
           classificationHints: Array.from(new Set([...stage0CpcCodes, ...stage0IpcCodes])),
-          fieldFilters: config.searchSource?.filters || {},
-          explicitFilters: config.searchSource?.filters || {},
+          fieldFilters: stage1Filters,
+          explicitFilters: stage1Filters,
           searchVariants: stage0SearchQuery ? [stage0SearchQuery] : [],
+          retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features),
           llmExpanded: false,
           confidence: 0.9,
           warnings: ['Using Stage 0 query plan; Stage 1 LLM query expansion disabled.'],
@@ -2313,7 +2852,7 @@ RESPONSE:`;
         query: searchMode === 'manual' ? '' : stage0SearchQuery,
         title: searchRun?.title || '',
         inventionText: searchRun?.inventionDescription || '',
-        filters: config.searchSource?.filters || {},
+        filters: stage1Filters,
         providerIds,
         jurisdictions: [jurisdiction],
         sourceMode,
@@ -2353,6 +2892,254 @@ RESPONSE:`;
     }
   }
 
+  private formatRetrievalHints(patent: any): string {
+    const matchedFeatures = Array.isArray(patent?.matchedFeatures)
+      ? patent.matchedFeatures.map((feature: any) => String(feature || '').trim()).filter(Boolean).slice(0, 6)
+      : [];
+    const retrievalScore = typeof patent?.retrievalScore === 'number'
+      ? patent.retrievalScore
+      : (typeof patent?.scores?.retrieval === 'number' ? patent.scores.retrieval : undefined);
+    const retrievalMatches = Array.isArray(patent?.retrievalMatches)
+      ? patent.retrievalMatches.slice(0, 4).map((match: any) => {
+        const queryType = String(match?.queryType || 'query');
+        const rank = typeof match?.rank === 'number' ? `rank ${match.rank}` : '';
+        const score = typeof match?.score === 'number' ? `score ${match.score.toFixed(3)}` : '';
+        const labels = Array.isArray(match?.featureLabels) && match.featureLabels.length
+          ? `features: ${match.featureLabels.join(', ')}`
+          : '';
+        return [queryType, rank, score, labels].filter(Boolean).join(' ');
+      }).filter(Boolean)
+      : [];
+
+    return [
+      typeof retrievalScore === 'number' ? `retrieval_score=${retrievalScore.toFixed(3)}` : '',
+      matchedFeatures.length ? `candidate_feature_hints=${matchedFeatures.join(' | ')}` : '',
+      retrievalMatches.length ? `top_embedding_matches=${retrievalMatches.join(' ; ')}` : '',
+    ].filter(Boolean).join('; ');
+  }
+
+  private canonicalPatentNumber(value: any): string {
+    return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '');
+  }
+
+  private selectRelevantPatentsForDeepAnalysis(stage1Data: any, maxCandidates = 20): any[] {
+    const results = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
+    if (results.length === 0) return [];
+
+    const gate = stage1Data?.aiRelevance;
+    const accepted = Array.isArray(gate?.accepted) ? gate.accepted : [];
+    const borderline = Array.isArray(gate?.borderline) ? gate.borderline : [];
+    const selected: any[] = [];
+    const seen = new Set<string>();
+
+    const addBySet = (values: any[]) => {
+      const exact = new Set(values.map(value => String(value || '').toUpperCase()));
+      const canonical = new Set(values.map(value => this.canonicalPatentNumber(value)).filter(Boolean));
+      for (const patent of results) {
+        if (selected.length >= maxCandidates) break;
+        const pn = patent.publicationNumber || patent.publication_number || patent.pn || patent.id || '';
+        const key = this.canonicalPatentNumber(pn) || String(pn).toUpperCase();
+        if (!key || seen.has(key)) continue;
+        if (exact.has(String(pn).toUpperCase()) || canonical.has(this.canonicalPatentNumber(pn))) {
+          selected.push(patent);
+          seen.add(key);
+        }
+      }
+    };
+
+    addBySet(accepted);
+    addBySet(borderline);
+
+    if (selected.length === 0) {
+      return results.slice(0, maxCandidates);
+    }
+
+    return selected;
+  }
+
+  private buildNoveltySignalsFromAnalysis(featureMaps: PatentFeatureMap[], remarks: PerPatentRemark[], inventionFeatures: string[]) {
+    const closest = [...remarks]
+      .sort((a: any, b: any) => Number(b?.relevance || 0) - Number(a?.relevance || 0))
+      .slice(0, 5)
+      .map((remark: any) => String(remark.pn || '').trim())
+      .filter(Boolean);
+
+    const covered = inventionFeatures.filter(feature => featureMaps.some(map =>
+      (map.feature_analysis || []).some(cell => cell.feature === feature && cell.status === 'Present')
+    ));
+    const unique = inventionFeatures.filter(feature => !featureMaps.some(map =>
+      (map.feature_analysis || []).some(cell => cell.feature === feature && (cell.status === 'Present' || cell.status === 'Partial'))
+    ));
+    const weak = inventionFeatures.filter(feature => featureMaps.some(map =>
+      (map.feature_analysis || []).some(cell => cell.feature === feature && cell.status === 'Unknown')
+    ));
+
+    return {
+      closest_blocking_references: closest,
+      features_fully_covered: covered,
+      features_still_unique: unique,
+      weak_evidence_areas: weak,
+      recommended_next_actions: [
+        closest.length ? 'Review closest blocking references in detail before drafting claims.' : 'Broaden the search corpus before relying on novelty.',
+        unique.length ? 'Emphasize features not found in abstract evidence.' : 'Identify additional technical differentiators before filing.'
+      ]
+    };
+  }
+
+  private async performConsolidatedDeepAnalysis(
+    searchId: string,
+    stage0Data: NormalizedIdea,
+    stage1Data: any,
+    config: NoveltySearchConfig,
+    requestHeaders?: Record<string, string>
+  ): Promise<{ success: boolean; data?: { stage35Data: FeatureMapBatchResult; stage4Data: AggregationResult & Record<string, any>; aiRelevance?: any }; error?: string }> {
+    const inventionFeatures = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    if (inventionFeatures.length === 0) return { success: false, error: 'No invention features available.' };
+
+    const configuredMax = Number((config as any).consolidatedAnalysis?.maxCandidates || 20);
+    const maxCandidates = Math.min(Math.max(Number.isFinite(configuredMax) ? configuredMax : 20, 1), 30);
+    const selected = this.selectRelevantPatentsForDeepAnalysis(stage1Data, maxCandidates);
+    if (selected.length === 0) return { success: false, error: 'No relevant candidates available for consolidated analysis.' };
+
+    const normalizedPatents = this.normalizePatentsForFeatureMappingV2(selected, selected.length);
+    const patentBatchText = normalizedPatents.map((patent, index) => {
+      const abstractWords = String(patent.abstract || '').split(/\s+/).filter(Boolean).slice(0, 180).join(' ');
+      return [
+        `Patent ${index + 1}:`,
+        `PN: ${patent.canonicalPn}`,
+        `Title: ${patent.title}`,
+        `Abstract: ${abstractWords || 'N/A'}`,
+        `Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}`,
+        '---'
+      ].join('\n');
+    }).join('\n');
+
+    const prompt = CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT
+      .replace('{invention_features}', JSON.stringify(inventionFeatures))
+      .replace('{patent_batch}', patentBatchText);
+
+    const llmResult = await llmGateway.executeLLMOperation(
+      { headers: requestHeaders || {} },
+      { taskCode: TaskCode.LLM5_NOVELTY_ASSESS, stageCode: 'NOVELTY_CONSOLIDATED_ANALYSIS', prompt }
+    );
+
+    if (!llmResult.success || !llmResult.response?.output) {
+      return { success: false, error: llmResult.error?.message || 'Consolidated analysis LLM call failed.' };
+    }
+
+    let parsed: any;
+    try {
+      parsed = this.parseLLMResponse(llmResult.response.output);
+    } catch (error) {
+      return { success: false, error: 'Consolidated analysis returned invalid JSON.' };
+    }
+
+    if (!parsed || !Array.isArray(parsed.feature_map) || parsed.feature_map.length === 0) {
+      return { success: false, error: 'Consolidated analysis did not return a feature map.' };
+    }
+    if (!Array.isArray(parsed.per_patent_remarks) || parsed.per_patent_remarks.length === 0) {
+      return { success: false, error: 'Consolidated analysis did not return per-patent remarks.' };
+    }
+
+    const featureMaps = this.validateAndRepairFeatureMaps(parsed.feature_map, normalizedPatents, inventionFeatures);
+    if (featureMaps.length === 0) {
+      return { success: false, error: 'Consolidated feature map did not match selected patents.' };
+    }
+
+    const remarkByPn = new Map<string, any>();
+    for (const remark of parsed.per_patent_remarks) {
+      const key = this.canonicalPatentNumber(remark?.pn);
+      if (key) remarkByPn.set(key, remark);
+    }
+    const remarks: PerPatentRemark[] = featureMaps.map((map: any) => {
+      const key = this.canonicalPatentNumber(map.pn);
+      const parsedRemark = remarkByPn.get(key);
+      if (parsedRemark) {
+        return {
+          pn: map.pn,
+          title: parsedRemark.title || map.title,
+          abstract: parsedRemark.abstract,
+          remarks: parsedRemark.remarks || parsedRemark.summary || '',
+          overlap_features: Array.isArray(parsedRemark.overlap_features) ? parsedRemark.overlap_features : [],
+          missing_features: Array.isArray(parsedRemark.missing_features) ? parsedRemark.missing_features : [],
+          novelty_points: Array.isArray(parsedRemark.novelty_points) ? parsedRemark.novelty_points : [],
+          confidence: typeof parsedRemark.confidence === 'number' ? parsedRemark.confidence : undefined,
+          relevance: typeof parsedRemark.relevance === 'number' ? parsedRemark.relevance : undefined,
+          novelty_threat: ['anticipates', 'obvious', 'adjacent', 'remote'].includes(parsedRemark.novelty_threat)
+            ? parsedRemark.novelty_threat
+            : undefined,
+          summary: parsedRemark.summary || parsedRemark.remarks || undefined,
+          detailedAnalysis: parsedRemark.detailedAnalysis,
+          decision: parsedRemark.decision
+        } as PerPatentRemark;
+      }
+      return this.buildDeterministicPerPatentRemarks(stage0Data, { feature_map: [map], quality_flags: { low_evidence: false, ambiguous_abstracts: false, language_mismatch: false }, stats: { patents_analyzed: 1, avg_abstract_length_words: 0 } }, 1)[0];
+    });
+
+    if (remarks.some(remark => !remark || !remark.pn || !(remark.summary || remark.remarks || remark.detailedAnalysis))) {
+      return { success: false, error: 'Consolidated remarks failed validation.' };
+    }
+
+    const qualityFlags = parsed.quality_flags && typeof parsed.quality_flags === 'object'
+      ? {
+        low_evidence: Boolean(parsed.quality_flags.low_evidence),
+        ambiguous_abstracts: Boolean(parsed.quality_flags.ambiguous_abstracts),
+        language_mismatch: Boolean(parsed.quality_flags.language_mismatch)
+      }
+      : this.calculateQualityFlags(featureMaps, normalizedPatents);
+    const stats = {
+      ...this.calculateFeatureMappingStats(featureMaps, normalizedPatents),
+      ...(parsed.stats && typeof parsed.stats === 'object' ? parsed.stats : {}),
+      patents_analyzed: featureMaps.length
+    };
+    const stage35Data: FeatureMapBatchResult = {
+      feature_map: featureMaps,
+      quality_flags: qualityFlags,
+      stats
+    };
+
+    const aggregation = await this.performStage35b(searchId, stage0Data, stage35Data, config, requestHeaders);
+    if (!aggregation.success || !aggregation.data) {
+      return { success: false, error: aggregation.error || 'Consolidated aggregation failed.' };
+    }
+
+    const noveltySignals = parsed.novelty_signals && typeof parsed.novelty_signals === 'object'
+      ? parsed.novelty_signals
+      : this.buildNoveltySignalsFromAnalysis(featureMaps, remarks, inventionFeatures);
+    const stage4Data = {
+      ...(aggregation.data as any),
+      per_patent_remarks: remarks,
+      novelty_signals: noveltySignals,
+      per_patent_remarks_source: 'consolidated_deep_analysis',
+      consolidated_deep_analysis_complete: true,
+      consolidated_deep_analysis_completed_at: new Date().toISOString(),
+      stage35c_complete: true
+    } as AggregationResult & Record<string, any>;
+
+    const parsedGate = parsed.aiRelevance && typeof parsed.aiRelevance === 'object' ? parsed.aiRelevance : undefined;
+
+    await prisma.noveltySearchLLMCall.create({
+      data: {
+        searchId,
+        stage: NoveltySearchStage.STAGE_3_5,
+        taskCode: TaskCode.LLM5_NOVELTY_ASSESS,
+        prompt,
+        response: parsed as any,
+        tokensUsed: llmResult.response.outputTokens,
+        modelClass: llmResult.response.modelClass,
+      },
+    });
+
+    return {
+      success: true,
+      data: {
+        stage35Data,
+        stage4Data,
+        aiRelevance: parsedGate
+      }
+    };
+  }
+
   /**
    * Stage 1.5: AI Relevance gate on PQAI results (Gemini 2.5 Flash-Lite)
    * Produces a compact accept/borderline/reject list and a byPn map of scores.
@@ -2386,11 +3173,33 @@ RESPONSE:`;
           const pn = it.publication_number || it.publicationNumber || it.pn || it.id || '';
           const title = norm(it.title || '');
           const abstract = norm(it.snippet || it.abstract || it.description || '');
-          return `Item ${idx + 1}:\nPN: ${pn}\nTitle: ${title}\nAbstract: ${abstract}`;
+          const retrievalHints = this.formatRetrievalHints(it);
+          return `Item ${idx + 1}\nPN: ${pn}\nTitle: ${title}\nAbstract: ${abstract}\nRetrieval hints: ${retrievalHints || 'none'}`;
         }).join("\n---\n");
 
-        // Keep schema tiny to save tokens; scoring semantics handled client-side with thresholds
-        return `You are a patent relevance screener.\nInvention features: ${feats}\n\nFor each patent below, output ONLY a JSON array where each element is {"pn":"<id>","score":0..1,"decision":"accept|borderline|reject"}. Follow the input order.\n\n${items}`;
+        return [
+          'You are a patent novelty relevance gate. Return ONLY a valid JSON array.',
+          `Invention features: ${feats}`,
+          '',
+          'For each patent, decide whether it should proceed to deep novelty mapping.',
+          'Decision policy:',
+          '- accept: concrete overlap with one or more core mechanisms.',
+          '- borderline: related field or partial mechanism overlap worth bounded review.',
+          '- reject: remote, generic keyword hit, or no concrete technical overlap.',
+          '',
+          'Each array element must be:',
+          '{"pn":"<id>","score":0..1,"decision":"accept|borderline|reject","matched_features":["feature"],"missing_features":["feature"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
+          '',
+          'Rules:',
+          '- Use title/abstract only.',
+          '- Retrieval hints are not evidence; use them only to focus review.',
+          '- Do not copy hinted matched features unless title/abstract supports them.',
+          '- Generic overlap such as sensor, AI, controller, module, app, or server is not enough.',
+          '- Prefer rejecting broad/remote references over inflating relevance.',
+          '- Follow input order.',
+          '',
+          items
+        ].join('\n');
       };
 
       // Process in small batches; tolerate failures and fall back to PQAI scores
@@ -2444,7 +3253,15 @@ RESPONSE:`;
             ? found.decision
             : (score >= thresholds.high ? 'accept' : score >= thresholds.medium ? 'borderline' : 'reject');
 
-          byPn[String(pnRaw)] = { pn: String(pnRaw), score, decision };
+          byPn[String(pnRaw)] = {
+            pn: String(pnRaw),
+            score,
+            decision,
+            matched_features: Array.isArray(found?.matched_features) ? found.matched_features : [],
+            missing_features: Array.isArray(found?.missing_features) ? found.missing_features : [],
+            reason: typeof found?.reason === 'string' ? found.reason : '',
+            evidence_quality: typeof found?.evidence_quality === 'string' ? found.evidence_quality : 'low'
+          };
           if (decision === 'accept') accept.push(String(pnRaw));
           else if (decision === 'borderline') borderline.push(String(pnRaw));
           else reject.push(String(pnRaw));
@@ -2774,7 +3591,7 @@ RESPONSE:`;
         return remark;
       });
 
-      const aggregationResult: AggregationResult = {
+      const aggregationResult = {
         idea_id: searchId,
         per_patent_coverage: perPatentCoverage,
         per_feature_uniqueness: perFeatureUniqueness,
@@ -2783,8 +3600,10 @@ RESPONSE:`;
         decision,
         confidence,
         risk_factors: riskFactors,
-        per_patent_remarks: perPatentRemarks
-      };
+        per_patent_remarks: perPatentRemarks,
+        per_patent_remarks_source: 'stage35b_deterministic',
+        stage35c_complete: false
+      } as AggregationResult;
 
       // Generate computational feature matrix
       console.log('ðŸ“Š Generating computational feature matrix...');
@@ -4054,7 +4873,25 @@ OUTPUT JSON:
         return { success: false, error: 'Aggregation data missing. Please re-run Stage 3.5a.' };
       }
 
-      const aggRes = aggregationResult as AggregationResult;
+      let aggRes = aggregationResult as AggregationResult;
+      if ((!Array.isArray((aggRes as any).per_patent_remarks) || (aggRes as any).per_patent_remarks.length === 0) && featureMapData) {
+        const fallbackRemarks = this.buildDeterministicPerPatentRemarks(
+          stage0Data,
+          featureMapData,
+          config.stage35c?.maxPatentsForRemarks || 8
+        );
+        aggRes = {
+          ...(aggRes as any),
+          per_patent_remarks: fallbackRemarks,
+          per_patent_remarks_source: 'stage4_deterministic_fallback',
+          stage35c_complete: false
+        } as AggregationResult;
+        aggregationResult = aggRes;
+        await prisma.noveltySearchRun.update({
+          where: { id: searchRun.id },
+          data: { stage4Results: aggRes as any }
+        });
+      }
 
       // Get feature map cells from database (including any overrides)
       const featureMapCells = await this.getFeatureMapCellsWithOverrides(searchRun.id);
@@ -4249,13 +5086,32 @@ OUTPUT JSON:
             decision: aggRes.decision,
             confidence: aggRes.confidence
           } as any;
-          basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V2
+          basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
             + "\ninvention_features=" + JSON.stringify(stage0Data.inventionFeatures || [])
             + "\nper_patent_remarks=" + JSON.stringify(perRemarks)
             + "\nsearch_metadata=" + JSON.stringify(enhancedReportInputs.search_metadata)
             + "\nmetrics=" + JSON.stringify(metrics);
         }
       } catch {}
+
+      const stage4RemarksForPrompt: any[] = Array.isArray((aggregationResult as any)?.per_patent_remarks)
+        ? (aggregationResult as any).per_patent_remarks
+        : [];
+      const reportMetrics = {
+        novelty_score: aggRes.novelty_score,
+        decision: aggRes.decision,
+        confidence: aggRes.confidence,
+        coverage_summary: (aggRes as any).feature_coverage_summary || null
+      };
+      basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
+        + "\ninvention_features=" + JSON.stringify(stage0Data.inventionFeatures || [])
+        + "\nper_patent_remarks=" + JSON.stringify(stage4RemarksForPrompt)
+        + "\nsearch_metadata=" + JSON.stringify(enhancedReportInputs.search_metadata)
+        + "\nmetrics=" + JSON.stringify(reportMetrics)
+        + "\nsupporting_patent_details=" + JSON.stringify(enhancedReportInputs.patent_details);
+      if (stage4RemarksForPrompt.length === 0) {
+        basePrompt += "\nNOTE_TO_MODEL: No per-patent remarks were available. Produce a Low Evidence report and explain that novelty cannot be inferred from missing analysis.";
+      }
 
       // Use admin-configured model via NOVELTY_REPORT_GENERATION stage
       console.log(` [Stage4] Attempting report generation with admin-configured model`);
@@ -4696,11 +5552,12 @@ Patent ${idx + 1}:
 PN: ${patent.canonicalPn}
 Title: ${patent.title}
 Abstract: ${patent.abstract}
+Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
 ---
       `).join('\n');
 
       // Build prompt
-      const prompt = PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V2
+      const prompt = PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3
         .replace('{invention_features}', JSON.stringify(inventionFeatures))
         .replace('{patent_batch}', patentBatchText);
 
@@ -5004,6 +5861,74 @@ Abstract: ${patent.abstract}
         decision: coverageScore >= 0.6 ? 'obvious' : coverageScore >= 0.35 ? 'partial_novelty' : 'novel'
       };
     });
+  }
+
+  private buildDeterministicPerPatentRemarks(
+    stage0Data: NormalizedIdea,
+    stage35aData: FeatureMapBatchResult,
+    limit = 8
+  ): PerPatentRemark[] {
+    const features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    const maps = Array.isArray(stage35aData?.feature_map) ? stage35aData.feature_map : [];
+    return [...maps]
+      .sort((a: any, b: any) => Number(b?.coverage?.coverage_score || 0) - Number(a?.coverage?.coverage_score || 0))
+      .slice(0, Math.max(0, limit))
+      .map((patent: any) => {
+        const cells = Array.isArray(patent.feature_analysis) ? patent.feature_analysis : [];
+        const present = cells.filter((cell: FeatureMapCell) => cell.status === 'Present').map((cell: FeatureMapCell) => cell.feature);
+        const partial = cells.filter((cell: FeatureMapCell) => cell.status === 'Partial').map((cell: FeatureMapCell) => cell.feature);
+        const unknown = cells.filter((cell: FeatureMapCell) => cell.status === 'Unknown').map((cell: FeatureMapCell) => cell.feature);
+        const missing = features.filter(feature => !present.includes(feature) && !partial.includes(feature));
+        const relevance = (present.length + partial.length * 0.5) / Math.max(1, features.length);
+        const noveltyThreat = relevance >= 0.7 ? 'anticipates' : relevance >= 0.5 ? 'obvious' : relevance >= 0.3 ? 'adjacent' : 'remote';
+        const evidenceNote = unknown.length > 0 ? ` ${unknown.length} feature(s) had weak evidence.` : '';
+
+        return {
+          pn: String(patent.pn || patent.publicationNumber || ''),
+          title: patent.title,
+          remarks: [
+            present.length ? `Overlaps on ${present.slice(0, 4).join(', ')}.` : 'No fully overlapping features were found.',
+            partial.length ? `Partial overlap on ${partial.slice(0, 3).join(', ')}.` : '',
+            missing.length ? `Differentiators include ${missing.slice(0, 4).join(', ')}.` : 'No clear differentiators were identified from mapped features.',
+            evidenceNote
+          ].filter(Boolean).join(' '),
+          overlap_features: [...present, ...partial],
+          missing_features: missing,
+          novelty_points: missing.slice(0, 4),
+          confidence: unknown.length > 0 ? 0.45 : 0.6,
+          relevance,
+          novelty_threat: noveltyThreat as 'anticipates' | 'obvious' | 'adjacent' | 'remote',
+          summary: relevance >= 0.5
+            ? 'Deterministic analysis identifies this reference as a material novelty threat.'
+            : 'Deterministic analysis identifies limited overlap with the invention.',
+          detailedAnalysis: {
+            relevant_parts: [...present, ...partial].map(feature => `Mapped overlap: ${feature}`),
+            irrelevant_parts: missing.map(feature => `Not mapped in this reference: ${feature}`),
+            novelty_comparison: unknown.length > 0
+              ? 'Evidence is incomplete; do not treat missing support as positive novelty without further claim review.'
+              : 'Comparison is based on deterministic feature mapping from available title/abstract evidence.'
+          },
+          decision: relevance >= 0.6 ? 'obvious' : relevance >= 0.35 ? 'partial_novelty' : 'novel'
+        };
+      });
+  }
+
+  private hasDetailedStage35cRemarks(stage4Data: any): boolean {
+    const remarks = Array.isArray(stage4Data?.per_patent_remarks) ? stage4Data.per_patent_remarks : [];
+    if (remarks.length === 0) return false;
+    if (stage4Data?.stage35c_complete === true || stage4Data?.per_patent_remarks_source === 'stage35c') return true;
+    if (
+      stage4Data?.per_patent_remarks_source === 'stage35b_deterministic' ||
+      stage4Data?.per_patent_remarks_source === 'stage4_deterministic_fallback'
+    ) {
+      return false;
+    }
+
+    return remarks.some((remark: any) => (
+      remark?.detailedAnalysis ||
+      typeof remark?.relevance === 'number' ||
+      typeof remark?.novelty_threat === 'string'
+    ));
   }
 
   private validateAndRepairFeatureMaps(featureMaps: PatentFeatureMap[], batch: any[], inventionFeatures: string[]): PatentFeatureMap[] {

@@ -23,7 +23,6 @@ import {
   FolderOpen, 
   Check, 
   Eye, 
-  AlertTriangle,
   Zap,
   ArrowRight,
   RefreshCw,
@@ -59,11 +58,11 @@ const NoveltySearchStage = {
 
 // Stage constants for UI display
 const STAGE_LABELS = {
-  PENDING: 'Start Search',
-  STAGE_0_COMPLETED: 'Query Generation',
-  STAGE_1_COMPLETED: 'Patent Search',
-  STAGE_3_5_COMPLETED: 'Feature Analysis',
-  COMPLETED: 'Report Complete'
+  PENDING: 'Idea Setup',
+  STAGE_0_COMPLETED: 'Idea Setup',
+  STAGE_1_COMPLETED: 'Relevance Analysis',
+  STAGE_3_5_COMPLETED: 'Deep Analysis',
+  COMPLETED: 'Consolidated Report'
 };
 
 const STAGE_PROGRESS = {
@@ -104,17 +103,23 @@ interface SearchState {
 }
 
 // Stage tab types
-const STAGE_TABS = ['0','1','1.5','3.5','3.5c','4','5'] as const;
+const STAGE_TABS = ['1','2','3','4','5'] as const;
 type StageTab = (typeof STAGE_TABS)[number];
 
 const STAGE_TAB_LABELS: Record<StageTab, string> = {
-  '0': 'Idea Setup',
-  '1': 'Patent Search',
-  '1.5': 'AI Relevance',
-  '3.5': 'Feature Analysis',
-  '3.5c': 'Patent Remarks',
-  '4': 'Final Report',
-  '5': 'Download Report'
+  '1': 'Idea Setup',
+  '2': 'Search Results',
+  '3': 'Relevance Analysis',
+  '4': 'Deep Analysis',
+  '5': 'Consolidated Report'
+};
+
+const STAGE_RUN_LABELS: Record<StageTab, string> = {
+  '1': 'Start Novelty Search',
+  '2': 'Search Patents',
+  '3': 'Run LLM Relevance',
+  '4': 'Run Deep Analysis',
+  '5': 'Generate Report'
 };
 
 type NoveltyPatentSearchMode = 'intelligent' | 'manual';
@@ -321,18 +326,17 @@ export default function NoveltySearchWorkflow({
   });
 
   const [completedStages, setCompletedStages] = useState<string[]>([]);
-  const [selectedStageTab, setSelectedStageTab] = useState<StageTab>('0');
+  const [selectedStageTab, setSelectedStageTab] = useState<StageTab>('1');
   const [activeExecutionStage, setActiveExecutionStage] = useState<string | null>(null);
+  const [deepAnalysisView, setDeepAnalysisView] = useState<'matrix' | 'remarks'>('matrix');
 
   // Map stage tab keys to execution stage numbers
   const stageNumberByKey: Record<StageTab, string | null> = {
-    '0': null,
-    '1': '1',
-    '1.5': '1.5',
-    '3.5': '3.5',
-    '3.5c': '3.5c',
-    '4': '4',
-    '5': null  // Stage 5 is just display, no execution needed
+    '1': null,
+    '2': '1',
+    '3': '1.5',
+    '4': '3',
+    '5': '4'
   };
 
   // Evidence panel state (Stage 3.5 matrix cell details)
@@ -382,15 +386,6 @@ export default function NoveltySearchWorkflow({
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   // Progress messages
-  const stage1Messages = [
-    'Scanning patent databases for matching references...',
-    'Applying semantic relevance analysis...',
-    'Ranking records by technical proximity...',
-    'Cross-referencing publication and classification data...',
-    'Filtering duplicate and low-signal results...',
-    'Preparing search results with available metadata...'
-  ];
-
   const stage35Messages = [
     'Comparing invention features with patent disclosures...',
     'Analyzing technical differences...',
@@ -596,87 +591,97 @@ export default function NoveltySearchWorkflow({
   }, [searchState.results]);
 
   const hasStage1Results = stage1Results.length > 0;
+  const hasStage2Results = hasStage1Results;
+  const hasStage3Results = hasStage15Results;
 
-  const hasStage35Results = useMemo(() => {
+  const hasStage35MappingResults = useMemo(() => {
     const root: any = searchState.results || {};
     const carrier = root.stage35 || root.stage3_5 || root;
-    const coverage = carrier?.per_patent_coverage || root.per_patent_coverage;
-    const uniqueness = carrier?.per_feature_uniqueness || root.per_feature_uniqueness;
-    const agg = carrier?.feature_coverage_summary || carrier?.stage3_5;
-    return !!(carrier?.stage35 || coverage || uniqueness || agg || root.stage4);
+    const featureMap = carrier?.feature_map || root.feature_map;
+    return Array.isArray(featureMap) && featureMap.length > 0;
+  }, [searchState.results]);
+
+  const hasStage35AggregationResults = useMemo(() => {
+    const root: any = searchState.results || {};
+    const container = root.stage4 || root;
+    return !!(container?.per_patent_coverage || container?.per_feature_uniqueness || container?.feature_coverage_summary);
   }, [searchState.results]);
 
   const hasStage35cResults = useMemo(() => {
     const root: any = searchState.results || {};
     const container = root.stage4 || root;
-    const remarks = container?.per_patent_remarks;
-    return Array.isArray(remarks) && remarks.length > 0;
+    const remarks = Array.isArray(container?.per_patent_remarks) ? container.per_patent_remarks : [];
+    if (remarks.length === 0) return false;
+    if (container?.stage35c_complete === true || container?.per_patent_remarks_source === 'stage35c') return true;
+    if (container?.per_patent_remarks_source === 'stage35b_deterministic' || container?.per_patent_remarks_source === 'stage4_deterministic_fallback') return false;
+    return remarks.some((remark: any) => (
+      remark?.detailedAnalysis ||
+      typeof remark?.relevance === 'number' ||
+      typeof remark?.novelty_threat === 'string'
+    ));
   }, [searchState.results]);
+
+  const hasStage35Results = hasStage35MappingResults && hasStage35AggregationResults && hasStage35cResults;
 
   const hasStage4Results = useMemo(() => {
     const root: any = searchState.results || {};
-    return !!root.stage4;
+    const report = root.stage4 || root;
+    return !!(report.executive_summary || report.concluding_remarks || report.final_assessment || report.report_metadata);
   }, [searchState.results]);
 
   // Auto-navigate to appropriate tab when status changes
   useEffect(() => {
     const s = searchState.status;
     if (!s) return;
-    if (s === NoveltySearchStatus.PENDING) { setSelectedStageTab('0'); return; }
-    // Don't auto-navigate to stage 1 after STAGE_0_COMPLETED - wait for user approval
+    if (s === NoveltySearchStatus.PENDING) { setSelectedStageTab('1'); return; }
+    if (s === NoveltySearchStatus.STAGE_0_COMPLETED) { setSelectedStageTab('1'); return; }
     if (s === NoveltySearchStatus.STAGE_1_COMPLETED) {
-      setSelectedStageTab(hasStage15() ? '1.5' : '1');
+      setSelectedStageTab(hasStage15Results ? '3' : '2');
       return;
     }
     if (s === NoveltySearchStatus.STAGE_3_5_COMPLETED) {
-      // Always show Feature Analysis (3.5) first to display the feature comparison matrix
-      // User should see the matrix before per-patent remarks, so don't skip to 3.5c
-      setSelectedStageTab('3.5');
+      setSelectedStageTab('4');
       return;
     }
-    if (s === NoveltySearchStatus.COMPLETED) { setSelectedStageTab('4'); return; }
-  }, [searchState.status, hasStage15]);
+    if (s === NoveltySearchStatus.COMPLETED) { setSelectedStageTab('5'); return; }
+  }, [hasStage15Results, searchState.status]);
 
   const runningStageKey = useMemo<StageTab | null>(() => {
     if (!activeExecutionStage) return null;
-    if (activeExecutionStage.startsWith('3.5')) return '3.5';
-    if (activeExecutionStage === '1.5') return '1.5';
-    if (activeExecutionStage === '1') return '1';
-    if (activeExecutionStage === '4') return '4';
+    if (activeExecutionStage === '1') return '2';
+    if (activeExecutionStage === '1.5' || activeExecutionStage === '2') return '3';
+    if (activeExecutionStage === '3' || activeExecutionStage.startsWith('3.5')) return '4';
+    if (activeExecutionStage === '4' || activeExecutionStage === '5') return '5';
     return null;
   }, [activeExecutionStage]);
 
   const failedStageKey = useMemo<StageTab | null>(() => {
     if (searchState.status !== NoveltySearchStatus.FAILED) return null;
     switch (searchState.currentStage) {
-      case NoveltySearchStage.STAGE_0: return '0';
-      case NoveltySearchStage.STAGE_1: return '1';
-      case NoveltySearchStage.STAGE_3_5: return '3.5';
-      case NoveltySearchStage.STAGE_4: return '4';
+      case NoveltySearchStage.STAGE_0: return '1';
+      case NoveltySearchStage.STAGE_1: return hasStage1Results ? '3' : '2';
+      case NoveltySearchStage.STAGE_3_5: return '4';
+      case NoveltySearchStage.STAGE_4: return '5';
       default: return selectedStageTab;
     }
-  }, [searchState.status, searchState.currentStage, selectedStageTab]);
+  }, [hasStage1Results, searchState.status, searchState.currentStage, selectedStageTab]);
 
   const isStageCompleted = useCallback((key: StageTab) => {
     switch (key) {
-      case '0':
-        return stage0Snapshot.hasQuery || stage0Snapshot.featuresCount > 0 || !!searchState.searchId;
       case '1':
-        return hasStage1Results || searchState.status === NoveltySearchStatus.STAGE_1_COMPLETED;
-      case '1.5':
-        return hasStage15Results;
-      case '3.5':
-        return hasStage35Results || searchState.status === NoveltySearchStatus.STAGE_3_5_COMPLETED;
-      case '3.5c':
-        return hasStage35cResults;
+        return stage0Snapshot.hasQuery || stage0Snapshot.featuresCount > 0 || !!searchState.searchId;
+      case '2':
+        return hasStage2Results;
+      case '3':
+        return hasStage3Results;
       case '4':
-        return hasStage4Results || searchState.status === NoveltySearchStatus.COMPLETED;
+        return hasStage35Results || searchState.status === NoveltySearchStatus.STAGE_3_5_COMPLETED;
       case '5':
-        return hasStage4Results; // Stage 5 is available once Stage 4 is complete
+        return hasStage4Results || searchState.status === NoveltySearchStatus.COMPLETED;
       default:
         return false;
     }
-  }, [hasStage1Results, hasStage15Results, hasStage35Results, hasStage35cResults, hasStage4Results, searchState.searchId, searchState.status, stage0Snapshot.featuresCount, stage0Snapshot.hasQuery]);
+  }, [hasStage2Results, hasStage3Results, hasStage35Results, hasStage4Results, searchState.searchId, searchState.status, stage0Snapshot.featuresCount, stage0Snapshot.hasQuery]);
 
   const getStageStatus = useCallback((key: StageTab): 'completed' | 'in_progress' | 'pending' | 'failed' | 'blocked' => {
     if (runningStageKey === key || (searchState.isLoading && selectedStageTab === key)) return 'in_progress';
@@ -689,19 +694,18 @@ export default function NoveltySearchWorkflow({
   }, [failedStageKey, isStageCompleted, runningStageKey, searchState.isLoading, selectedStageTab]);
 
   const stageGuard = useCallback((key: StageTab): string | null => {
-    if (key === '0') {
-      if (searchState.searchId) return 'Stage 0 already generated. Edit or proceed to the next stage.';
+    if (key === '1') {
+      if (searchState.searchId) return 'Idea setup already generated. Edit or proceed to Search Results.';
       if (!formData.title.trim() || !formData.inventionDescription.trim()) return 'Add title and invention description to start the search.';
       return null;
     }
     if (!searchState.searchId) return 'Start the novelty search from Idea Setup first.';
-    if (key === '1') return null;
-    if (key === '1.5') return hasStage1Results ? null : 'Run Patent Search before AI Relevance.';
-    if (key === '3.5') return (hasStage1Results || hasStage15Results) ? null : 'Run Patent Search before feature analysis.';
-    if (key === '3.5c') return hasStage35Results ? null : 'Run Feature Analysis before generating remarks.';
-    if (key === '4') return hasStage35Results ? null : 'Run Feature Analysis before generating the report.';
+    if (key === '2') return null;
+    if (key === '3') return hasStage2Results ? null : 'Run Patent Search before AI relevance analysis.';
+    if (key === '4') return hasStage3Results ? null : 'Run AI relevance analysis before Deep Analysis.';
+    if (key === '5') return hasStage35Results ? null : 'Run Deep Analysis before generating the report.';
     return null;
-  }, [formData.inventionDescription, formData.title, hasStage15Results, hasStage1Results, hasStage35Results, searchState.searchId]);
+  }, [formData.inventionDescription, formData.title, hasStage2Results, hasStage3Results, hasStage35Results, searchState.searchId]);
 
   // Fetch projects on mount
   useEffect(() => {
@@ -914,25 +918,44 @@ export default function NoveltySearchWorkflow({
     }
   };
 
-  const executeStage = async (stageNumber: string) => {
+  const executeStage = async (stageNumber: string, options?: { continueAutomatically?: boolean }) => {
     setActiveExecutionStage(stageNumber);
     if (!searchState.searchId) {
       setActiveExecutionStage(null);
-      return;
+      return false;
     }
 
     setSearchState(prev => ({ ...prev, isLoading: true, error: null }));
 
     if (stageNumber === '1') {
       setIsStage1Simulating(true);
-      for (let i = 0; i < stage1Messages.length; i++) {
-        setStage1Message(stage1Messages[i]);
-        await new Promise(resolve => setTimeout(resolve, 1800));
+      const searchMessages = [
+        'Searching selected patent sources...',
+        'Retrieving provider-ranked records...',
+        'Merging duplicate publications...',
+        'Preparing raw search results...'
+      ];
+      for (let i = 0; i < searchMessages.length; i++) {
+        setStage1Message(searchMessages[i]);
+        await new Promise(resolve => setTimeout(resolve, 1200));
       }
-      setStage1Message('Finalizing patent analysis and preparing results...');
-    } else if (stageNumber === '3.5') {
+      setStage1Message('Finalizing search results...');
+    } else if (stageNumber === '1.5' || stageNumber === '2') {
+      setIsStage1Simulating(true);
+      const relevanceMessages = [
+        'Reviewing top provider-ranked candidates...',
+        'Comparing candidates against the invention features...',
+        'Separating accepted, borderline, and rejected patents...',
+        'Preparing relevance analysis...'
+      ];
+      for (let i = 0; i < relevanceMessages.length; i++) {
+        setStage1Message(relevanceMessages[i]);
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      }
+      setStage1Message('Finalizing relevance analysis...');
+    } else if (stageNumber === '3' || stageNumber === '3.5') {
       setIsStage35Simulating(true);
-      setStage35Message(stage35Messages[0]);
+      setStage35Message(stageNumber === '3' ? 'Mapping features and generating patent remarks...' : stage35Messages[0]);
     } else if (stageNumber === '3.5a') {
       setIsStage35aSimulating(true);
       const stage35aMessages = [
@@ -983,11 +1006,22 @@ export default function NoveltySearchWorkflow({
         const items = Array.isArray(data?.results?.pqaiResults)
           ? data.results.pqaiResults
           : (Array.isArray(data?.results?.stage1?.pqaiResults) ? data.results.stage1.pqaiResults : []);
-        setStage1Message(`Analysis complete. Found ${items.length} relevant patent${items.length !== 1 ? 's' : ''}.`);
+        setStage1Message(`Search complete. Found ${items.length} patent${items.length !== 1 ? 's' : ''}.`);
+        await new Promise(resolve => setTimeout(resolve, 1800));
+      } else if (stageNumber === '1.5' || stageNumber === '2') {
+        const aiRel = data?.results?.aiRelevance || data?.results?.stage1?.aiRelevance || {};
+        const acc = Array.isArray(aiRel.accepted) ? aiRel.accepted.length : 0;
+        const bor = Array.isArray(aiRel.borderline) ? aiRel.borderline.length : 0;
+        const rej = Array.isArray(aiRel.rejected) ? aiRel.rejected.length : 0;
+        setStage1Message(`Relevance analysis complete. Accepted ${acc}, borderline ${bor}, rejected ${rej}.`);
         await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
-      const stageKey = (stageNumber === '3.5' || stageNumber === '3.5a' || stageNumber === '3.5b' ) ? 'stage3_5' : `stage${stageNumber}`;
+      const stageKey = (stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5a' || stageNumber === '3.5b' || stageNumber === '3.5c')
+        ? 'stage3_5'
+        : (stageNumber === '2' || stageNumber === '1' || stageNumber === '1.5')
+          ? 'stage1'
+          : `stage${stageNumber}`;
       setStageProgress(prev => ({ ...prev, [stageKey]: 100 }));
 
       // Refresh full aggregated results
@@ -1027,13 +1061,14 @@ export default function NoveltySearchWorkflow({
       }
 
       // Auto progression
-      if (autoMode) {
+      if (autoMode && options?.continueAutomatically === true) {
         const next = getStageNumberForStatus(effectiveStatus);
         if (next) {
           await executeStage(next);
         }
       }
 
+      return true;
     } catch (error) {
       console.error(`[Execution] Error executing stage ${stageNumber}:`, error);
       setSearchState(prev => ({
@@ -1041,10 +1076,11 @@ export default function NoveltySearchWorkflow({
         error: error instanceof Error ? error.message : `Failed to execute stage ${stageNumber}`,
         isLoading: false
       }));
+      return false;
     } finally {
-      if (stageNumber === '1') {
+      if (stageNumber === '1' || stageNumber === '1.5' || stageNumber === '2') {
         setIsStage1Simulating(false);
-      } else if (stageNumber === '3.5' || stageNumber === '3.5b' || stageNumber === '3.5c') {
+      } else if (stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5b' || stageNumber === '3.5c') {
         setIsStage35Simulating(false);
       } else if (stageNumber === '3.5a') {
         setIsStage35aSimulating(false);
@@ -1056,24 +1092,22 @@ export default function NoveltySearchWorkflow({
   const getStageNumberForStatus = (status: string): string | null => {
     switch (status) {
       case 'PENDING':
-        return '0'; // Start with stage 0 for new searches
+        return null;
       case NoveltySearchStatus.STAGE_0_COMPLETED:
-        // Only auto-progress to stage 1 if user has approved the search terms
-        return stage0Approved ? '1' : null;
+        if (!stage0Approved) return null;
+        if (!hasStage1Results) return '1';
+        if (!hasStage15Results) return '1.5';
+        return null;
       case NoveltySearchStatus.STAGE_1_COMPLETED:
-        // In auto mode, always progress through all stages
-        if (autoMode) {
-          if (!hasStage15Results) return '1.5';
-          if (!hasStage35Results) return '3.5';
-          if (!hasStage4Results) return '4';
-        }
-        return hasStage15Results ? '3.5' : '1.5';
+        if (!hasStage1Results) return '1';
+        if (!hasStage15Results) return '1.5';
+        if (!hasStage35Results) return '3';
+        if (!hasStage4Results) return '4';
+        return null;
       case NoveltySearchStatus.STAGE_3_5_COMPLETED:
-        // In auto mode, always progress through all stages
-        if (autoMode) {
-          if (!hasStage4Results) return '4';
-        }
-        return '4';
+        if (!hasStage35Results) return '3';
+        if (!hasStage4Results) return '4';
+        return null;
       case NoveltySearchStatus.COMPLETED:
         return null;
       default:
@@ -1084,20 +1118,22 @@ export default function NoveltySearchWorkflow({
   // Run all remaining stages automatically (for auto mode after approval)
   const runAllRemainingStages = useCallback(async () => {
     if (!searchState.searchId) return;
-    
-    const stages = ['1', '1.5', '3.5', '4'];
-    
-    for (const stageNum of stages) {
-      // Check if stage already completed
-      if (stageNum === '1' && hasStage1Results) continue;
-      if (stageNum === '1.5' && hasStage15Results) continue;
-      if (stageNum === '3.5' && hasStage35Results) continue;
-      if (stageNum === '3.5c' && hasStage35cResults) continue;
-      if (stageNum === '4' && hasStage4Results) continue;
+
+    const stages = [
+      { stageNum: '1', visibleTab: '2' as StageTab, shouldRun: !hasStage1Results },
+      { stageNum: '1.5', visibleTab: '3' as StageTab, shouldRun: !hasStage15Results },
+      { stageNum: '3', visibleTab: '4' as StageTab, shouldRun: !hasStage35Results },
+      { stageNum: '4', visibleTab: '5' as StageTab, shouldRun: !hasStage4Results },
+    ];
+
+    for (const { stageNum, visibleTab, shouldRun } of stages) {
+      if (!shouldRun) continue;
       
       try {
         console.log(`[Auto] Running stage ${stageNum}...`);
-        await executeStage(stageNum);
+        setSelectedStageTab(visibleTab);
+        const ok = await executeStage(stageNum, { continueAutomatically: false });
+        if (!ok) break;
         // Small delay between stages to let state update
         await new Promise(resolve => setTimeout(resolve, 500));
       } catch (err) {
@@ -1105,7 +1141,7 @@ export default function NoveltySearchWorkflow({
         break; // Stop on error
       }
     }
-  }, [searchState.searchId, hasStage1Results, hasStage15Results, hasStage35Results, hasStage35cResults, hasStage4Results, executeStage]);
+  }, [searchState.searchId, hasStage1Results, hasStage15Results, hasStage35Results, hasStage4Results, executeStage]);
 
   const runStageForKey = useCallback(async (stageKey: StageTab, advance?: boolean) => {
     const guardMsg = stageGuard(stageKey);
@@ -1115,9 +1151,9 @@ export default function NoveltySearchWorkflow({
       return;
     }
 
-    if (stageKey === '0') {
+    if (stageKey === '1') {
       await startNoveltySearch();
-      if (advance) setSelectedStageTab('1');
+      if (advance) setSelectedStageTab('2');
       return;
     }
 
@@ -1244,7 +1280,7 @@ export default function NoveltySearchWorkflow({
   const prevStage = idx > 0 ? STAGE_TABS[idx - 1] : null;
   const nextStage = idx >= 0 && idx < STAGE_TABS.length - 1 ? STAGE_TABS[idx + 1] : null;
   const currentGuard = stageGuard(selectedStageTab);
-  const canRunCurrent = (!currentGuard) && !searchState.isLoading && !activeExecutionStage && (selectedStageTab === '0' || !!stageNumberByKey[selectedStageTab]);
+  const canRunCurrent = (!currentGuard) && !searchState.isLoading && !activeExecutionStage && (selectedStageTab === '1' || !!stageNumberByKey[selectedStageTab]);
   const isFailedCurrent = failedStageKey === selectedStageTab;
 
   // Calculate overall progress
@@ -1904,7 +1940,7 @@ export default function NoveltySearchWorkflow({
                 )}
               </div>
               <div>
-                <div className="text-sm font-semibold text-slate-900">{currentStageInfo.label}</div>
+                <div className="text-sm font-semibold text-slate-900">{STAGE_TAB_LABELS[selectedStageTab]}</div>
                 <div className="text-xs text-slate-500">Search ID: {searchState.searchId?.slice(0, 12)}...</div>
               </div>
             </div>
@@ -1961,8 +1997,9 @@ export default function NoveltySearchWorkflow({
                   </div>
                   <div className="flex-1">
                     <div className="text-sm font-semibold text-slate-900 mb-1">
-                      {isStage1Simulating ? 'Advanced Patent Intelligence Analysis' : 
-                       isStage35aSimulating ? 'Feature Mapping' : 'Feature Analysis'}
+                      {activeExecutionStage === '1' ? 'Patent Search' :
+                       activeExecutionStage === '1.5' || activeExecutionStage === '2' ? 'LLM Relevance Analysis' :
+                       isStage35aSimulating ? 'Feature Mapping' : 'Deep Analysis'}
                     </div>
                     <div className="text-sm text-slate-700">
                       {stage1Message || stage35Message || stage35aMessage}
@@ -2006,20 +2043,16 @@ export default function NoveltySearchWorkflow({
   // ============================================================================
   const renderStageContent = () => {
     switch (selectedStageTab) {
-      case '0':
-        return renderStage0Content();
       case '1':
-        return renderStage1Content();
-      case '1.5':
+        return renderStage0Content();
+      case '2':
+        return renderStage2Content();
+      case '3':
         return renderStage15Content();
-      case '3.5':
-        return renderStage35Content();
-      case '3.5c':
-        return renderStage35cContent();
       case '4':
-        return renderStage4Content();
+        return renderStage3Content();
       case '5':
-        return renderStage5Content();
+        return renderStage4Content();
       default:
         return null;
     }
@@ -2166,12 +2199,12 @@ export default function NoveltySearchWorkflow({
                     setStage0Approved(true);
                     // Auto-progress through all stages if autoMode is enabled
                     if (autoMode) {
-                      setSelectedStageTab('1');
+                      setSelectedStageTab('2');
                       // Run all stages automatically
                       await runAllRemainingStages();
-                    } else if (selectedStageTab === '0') {
+                    } else if (selectedStageTab === '1') {
                       // Just move to next tab
-                      setSelectedStageTab('1');
+                      setSelectedStageTab('2');
                     }
                   }}
                 >
@@ -2186,7 +2219,36 @@ export default function NoveltySearchWorkflow({
     );
   };
 
-  // Stage 1 Content
+  // Stage 2 Content - raw provider search results
+  const renderStage2Content = () => {
+    if (!hasStage1Results) {
+      return (
+        <Card className="border border-slate-200 bg-white shadow-sm">
+          <CardContent className="py-16 text-center">
+            <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-slate-700 mb-2">Patent Search Not Started</h3>
+            <p className="text-sm text-slate-500 max-w-md mx-auto">
+              Search selected patent providers first. These returned records are shown separately before any LLM relevance analysis.
+            </p>
+            {canRunCurrent && selectedStageTab === '2' && (
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+                <Search className="w-4 h-4 mr-2" />
+                Search Patents
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        {renderStage1Content()}
+      </div>
+    );
+  };
+
+  // Legacy Stage 1 Content, now shown inside Stage 2
   const renderStage1Content = () => {
     const root: any = (searchState.results as any) || {};
     const pqaiResults = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults || [];
@@ -2201,10 +2263,10 @@ export default function NoveltySearchWorkflow({
             <p className="text-sm text-slate-500 max-w-md mx-auto">
               Execute the patent search to find relevant prior art from the selected search source.
             </p>
-            {canRunCurrent && selectedStageTab === '1' && (
+            {canRunCurrent && selectedStageTab === '2' && (
               <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
                 <Search className="w-4 h-4 mr-2" />
-                Run Patent Search
+                Search Patents
               </Button>
             )}
           </CardContent>
@@ -2228,8 +2290,8 @@ export default function NoveltySearchWorkflow({
                 <Search className="h-5 w-5 text-white" />
               </div>
               <div>
-                <CardTitle className="text-lg">Patent Search Results</CardTitle>
-                <CardDescription>Patent database search and relevance-based selection</CardDescription>
+                <CardTitle className="text-lg">Provider Search Results</CardTitle>
+                <CardDescription>Raw patent database matches before the AI relevance gate</CardDescription>
               </div>
             </div>
           </CardHeader>
@@ -2242,11 +2304,11 @@ export default function NoveltySearchWorkflow({
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{highRelevanceCount}</div>
-                <div className="text-xs font-medium text-slate-500">High Relevance</div>
+                <div className="text-xs font-medium text-slate-500">Strong Provider Matches</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-indigo-600">{avgRelevance.toFixed(0)}%</div>
-                <div className="text-xs font-medium text-slate-500">Avg Relevance</div>
+                <div className="text-xs font-medium text-slate-500">Avg Provider Score</div>
               </div>
             </div>
 
@@ -2404,6 +2466,12 @@ export default function NoveltySearchWorkflow({
             <p className="text-sm text-slate-500 max-w-md mx-auto">
               Run AI relevance filtering to categorize patents by their relevance to your invention.
             </p>
+            {canRunCurrent && selectedStageTab === '3' && (
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+                <Zap className="w-4 h-4 mr-2" />
+                Run LLM Relevance
+              </Button>
+            )}
           </CardContent>
         </Card>
       );
@@ -2488,7 +2556,56 @@ export default function NoveltySearchWorkflow({
     );
   };
 
-  // Stage 3.5 Content - Full Feature-Patent Matrix
+  // Stage 3 Content - Deep Analysis (feature matrix + patent remarks)
+  const renderStage3Content = () => {
+    if (!hasStage35MappingResults && !hasStage35AggregationResults && !hasStage35cResults) {
+      return (
+        <Card className="border border-slate-200 bg-white shadow-sm">
+          <CardContent className="py-16 text-center">
+            <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-slate-700 mb-2">Deep Analysis Not Started</h3>
+            <p className="text-sm text-slate-500 max-w-md mx-auto">
+              Run Deep Analysis to map features against prior art and generate per-patent threat remarks.
+            </p>
+            {canRunCurrent && selectedStageTab === '4' && (
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+                <FileText className="w-4 h-4 mr-2" />
+                Run Deep Analysis
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setDeepAnalysisView('matrix')}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              deepAnalysisView === 'matrix' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Feature Matrix
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeepAnalysisView('remarks')}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              deepAnalysisView === 'remarks' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Patent Remarks
+          </button>
+        </div>
+        {deepAnalysisView === 'matrix' ? renderStage35Content() : renderStage35cContent()}
+      </div>
+    );
+  };
+
+  // Legacy Stage 3.5 Content, now shown inside Stage 3
   const renderStage35Content = () => {
     const stage35Any: any = (searchState.results as any)?.stage35;
     const topFeatureMap = (searchState.results as any)?.feature_map;
@@ -3108,119 +3225,47 @@ export default function NoveltySearchWorkflow({
             <p className="text-sm text-slate-500 max-w-md mx-auto">
               Generate the final novelty assessment report with comprehensive analysis and recommendations.
             </p>
+            {canRunCurrent && selectedStageTab === '5' && (
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+                <FileText className="w-4 h-4 mr-2" />
+                Generate Report
+              </Button>
+            )}
           </CardContent>
         </Card>
       );
     }
 
     return (
-      <Stage4ResultsDisplay
-        stage4Results={r}
-        searchId={searchState.searchId as any}
-        onRerun={async () => {
-          await executeStage('4');
-        }}
-        hideIdeaBank={true}
-      />
-    );
-  };
+      <div className="space-y-4">
+        <Stage4ResultsDisplay
+          stage4Results={r}
+          searchId={searchState.searchId as any}
+          onRerun={async () => {
+            await executeStage('4');
+          }}
+          hideIdeaBank={true}
+          hidePerPatentRemarks={false}
+          hideConsolidatedButton={false}
+        />
 
-  // Stage 5 Content - Download Report
-  const renderStage5Content = () => {
-    if (!hasStage4Results) {
-      return (
         <Card className="border border-slate-200 bg-white shadow-sm">
-          <CardContent className="py-16 text-center">
-            <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-slate-700 mb-2">Report Not Ready</h3>
-            <p className="text-sm text-slate-500 max-w-md mx-auto">
-              Complete the Final Report stage first to generate the downloadable report.
-            </p>
-          </CardContent>
-        </Card>
-      );
-    }
-
-    return (
-      <Card className="border border-slate-200 bg-white shadow-sm">
-        <CardHeader className="pb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
-              <FileText className="w-5 h-5 text-white" />
-            </div>
+          <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle className="text-lg">Professional Report</CardTitle>
-              <CardDescription>Download your comprehensive novelty assessment</CardDescription>
+              <div className="text-sm font-semibold text-slate-900">Report actions</div>
+              <div className="text-xs text-slate-500">Open the consolidated report for sharing, printing, or saving as PDF.</div>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Report Preview */}
-          <div className="rounded-lg border border-slate-200 bg-white p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="font-semibold text-slate-900">{formData.title || 'Novelty Assessment Report'}</h3>
-                <p className="text-sm text-slate-500">Generated by PatentNest.ai</p>
-              </div>
-              <Badge className="bg-emerald-100 text-emerald-700">Ready</Badge>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div className="p-3 bg-slate-50 rounded-lg">
-                <div className="text-xs text-slate-500 uppercase tracking-wider">Patents Analyzed</div>
-                <div className="text-xl font-bold text-slate-900">{stage1Results.length}</div>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-lg">
-                <div className="text-xs text-slate-500 uppercase tracking-wider">Search ID</div>
-                <div className="text-sm font-mono text-slate-700">{searchState.searchId?.slice(0, 12)}...</div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {/* View Consolidated Report */}
-              <Link
-                href={`/novelty-search/${searchState.searchId}/consolidated`}
-                target="_blank"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-3 font-medium text-white transition-colors hover:bg-indigo-700"
-              >
-                <Eye className="w-4 h-4" />
-                View Full Report
-              </Link>
-              
-              {/* Download PDF Instructions */}
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <h4 className="text-sm font-medium text-amber-900 mb-1">Download as PDF</h4>
-                    <p className="text-xs text-amber-700">
-                      Click "View Full Report" above, then use <kbd className="px-1.5 py-0.5 bg-amber-100 rounded text-amber-800 font-mono">Ctrl+P</kbd> (or <kbd className="px-1.5 py-0.5 bg-amber-100 rounded text-amber-800 font-mono">Cmd+P</kbd> on Mac) to print/save as PDF with our PatentNest branding.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Share Options */}
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <h4 className="font-medium text-slate-900 mb-3 flex items-center gap-2">
-              <ExternalLink className="w-4 h-4" />
-              Share with Inventors
-            </h4>
-            <p className="text-sm text-slate-600 mb-3">
-              Generate a public link to share this report with inventors or colleagues.
-            </p>
             <Link
               href={`/novelty-search/${searchState.searchId}/consolidated`}
               target="_blank"
-              className="inline-flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
-              Open Consolidated Report
+              <Eye className="h-4 w-4" />
+              View Full Report
             </Link>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     );
   };
 
@@ -3310,7 +3355,7 @@ export default function NoveltySearchWorkflow({
                     onRunCurrent={canRunCurrent ? handleRunCurrent : null}
                     previousLabel={prevStage ? STAGE_TAB_LABELS[prevStage] : undefined}
                     nextLabel={nextStage ? STAGE_TAB_LABELS[nextStage] : undefined}
-                    currentStageLabel={`Run ${STAGE_TAB_LABELS[selectedStageTab]}`}
+                    currentStageLabel={STAGE_RUN_LABELS[selectedStageTab]}
                     isRunning={!!activeExecutionStage}
                     isFailed={isFailedCurrent}
                     disabled={searchState.isLoading}
