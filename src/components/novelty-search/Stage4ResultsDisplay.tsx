@@ -41,6 +41,7 @@ export default function Stage4ResultsDisplay({
   const aiAccepted = trail.ai_relevance_accepted ?? r?.search_metadata?.ai_relevance_accepted ?? undefined;
   const aiBorderline = trail.ai_relevance_borderline ?? r?.search_metadata?.ai_relevance_borderline ?? undefined;
   const deepAnalyzed = trail.deeply_analyzed_count ?? (Array.isArray(remarks) ? remarks.length : undefined);
+  const displayCardLabel = (key: string) => key === 'Unique Features' ? 'Potential Differentiators' : key;
 
   return (
     <div className="space-y-6">
@@ -90,7 +91,7 @@ export default function Stage4ResultsDisplay({
       {cards && Object.keys(cards).length > 0 && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {Object.entries(cards).map(([key, value]) => (
-            <KpiCard key={key} label={key} value={String(value)} />
+            <KpiCard key={key} label={displayCardLabel(key)} value={String(value)} />
           ))}
         </div>
       )}

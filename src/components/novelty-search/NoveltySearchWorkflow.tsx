@@ -38,6 +38,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog';
+import {
+  NOVELTY_AUTO_STOP_MESSAGES,
+  buildNoveltyAutoStageState,
+  getNextNoveltyAutoStage,
+} from '@/lib/novelty-auto-stage';
+import {
+  DEFAULT_STAGE1_RESULT_FILTERS,
+  STAGE1_PAGE_SIZE,
+  filterAndPaginateStage1Results,
+  getStage1FilterOptions,
+  getStage1MatchedItems,
+  getStage1PatentNumber,
+  getStage1Providers,
+  getStage1ScorePercent,
+  type Stage1ResultFilters,
+} from '@/lib/novelty-stage1-results';
 
 // Local string constants for UI mapping
 const NoveltySearchStatus = {
@@ -329,6 +345,8 @@ export default function NoveltySearchWorkflow({
   const [selectedStageTab, setSelectedStageTab] = useState<StageTab>('1');
   const [activeExecutionStage, setActiveExecutionStage] = useState<string | null>(null);
   const [deepAnalysisView, setDeepAnalysisView] = useState<'matrix' | 'remarks'>('matrix');
+  const [stage1Filters, setStage1Filters] = useState<Stage1ResultFilters>({ ...DEFAULT_STAGE1_RESULT_FILTERS });
+  const [stage1Page, setStage1Page] = useState(1);
 
   // Map stage tab keys to execution stage numbers
   const stageNumberByKey: Record<StageTab, string | null> = {
@@ -368,7 +386,12 @@ export default function NoveltySearchWorkflow({
   const [newFeatureText, setNewFeatureText] = useState('');
   const [autoMode, setAutoMode] = useState(false);
   const [stage0Approved, setStage0Approved] = useState(false);
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const latestSearchStateRef = useRef<SearchState | null>(null);
+  const autoStageStateRef = useRef<ReturnType<typeof buildNoveltyAutoStageState> | null>(null);
+  const stage0ApprovedRef = useRef(false);
+  const isAutoRunningRef = useRef(false);
   const [isFileProcessing, setIsFileProcessing] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [manualSearchFields, setManualSearchFields] = useState<ManualPatentSearchFields>(defaultManualPatentSearchFields);
@@ -407,6 +430,18 @@ export default function NoveltySearchWorkflow({
     mediaQuery.addEventListener('change', syncSidebar);
     return () => mediaQuery.removeEventListener('change', syncSidebar);
   }, []);
+
+  useEffect(() => {
+    latestSearchStateRef.current = searchState;
+  }, [searchState]);
+
+  useEffect(() => {
+    stage0ApprovedRef.current = stage0Approved;
+  }, [stage0Approved]);
+
+  useEffect(() => {
+    setStage1Page(1);
+  }, [searchState.results]);
 
   const manualSearchFilters = useMemo(() => ({
     anyTextContains: splitManualValues(manualSearchFields.anyText),
@@ -481,6 +516,16 @@ export default function NoveltySearchWorkflow({
     setManualSearchFields(prev => ({ ...prev, [field]: value }));
   };
 
+  const updateStage1Filter = useCallback((field: keyof Stage1ResultFilters, value: string) => {
+    setStage1Filters(prev => ({ ...prev, [field]: value } as Stage1ResultFilters));
+    setStage1Page(1);
+  }, []);
+
+  const clearStage1Filters = useCallback(() => {
+    setStage1Filters({ ...DEFAULT_STAGE1_RESULT_FILTERS });
+    setStage1Page(1);
+  }, []);
+
   // Load existing search if provided
   useEffect(() => {
     if (!initialSearchId) return;
@@ -513,13 +558,24 @@ export default function NoveltySearchWorkflow({
 
         if (response.ok && data.search) {
           const search = data.search;
-          setSearchState(prev => ({
-            ...prev,
+          const nextSearchState = {
+            ...(latestSearchStateRef.current || searchState),
             searchId: initialSearchId,
             status: search.status,
             currentStage: search.currentStage,
             results: search.results,
             isLoading: false
+          };
+          latestSearchStateRef.current = nextSearchState;
+          const nextAutoState = buildNoveltyAutoStageState(nextSearchState, stage0ApprovedRef.current);
+          autoStageStateRef.current = nextAutoState;
+          if (nextAutoState.stage0Approved) {
+            stage0ApprovedRef.current = true;
+            setStage0Approved(true);
+          }
+          setSearchState(prev => ({
+            ...prev,
+            ...nextSearchState
           }));
 
           const completed: string[] = [];
@@ -628,6 +684,27 @@ export default function NoveltySearchWorkflow({
     const report = root.stage4 || root;
     return !!(report.executive_summary || report.concluding_remarks || report.final_assessment || report.report_metadata);
   }, [searchState.results]);
+
+  const autoStageState = useMemo(() => buildNoveltyAutoStageState({
+    status: searchState.status,
+    currentStage: searchState.currentStage,
+    results: searchState.results,
+  }, stage0Approved), [searchState.currentStage, searchState.results, searchState.status, stage0Approved]);
+
+  useEffect(() => {
+    autoStageStateRef.current = autoStageState;
+    if (!stage0Approved && autoStageState.stage0Approved) {
+      stage0ApprovedRef.current = true;
+      setStage0Approved(true);
+    }
+  }, [autoStageState, stage0Approved]);
+
+  const stage0ApprovedForUi = autoStageState.stage0Approved;
+
+  const markStage0Approved = useCallback(() => {
+    stage0ApprovedRef.current = true;
+    setStage0Approved(true);
+  }, []);
 
   // Auto-navigate to appropriate tab when status changes
   useEffect(() => {
@@ -841,6 +918,13 @@ export default function NoveltySearchWorkflow({
 
       setStageProgress(prev => ({ ...prev, stage0: 100 }));
 
+      const nextSearchState = {
+        ...searchState,
+        ...initialSearchState,
+        isLoading: false
+      };
+      latestSearchStateRef.current = nextSearchState;
+      autoStageStateRef.current = buildNoveltyAutoStageState(nextSearchState, stage0ApprovedRef.current);
       setSearchState(prev => ({
         ...prev,
         ...initialSearchState,
@@ -918,9 +1002,10 @@ export default function NoveltySearchWorkflow({
     }
   };
 
-  const executeStage = async (stageNumber: string, options?: { continueAutomatically?: boolean }) => {
+  const executeStage = async (stageNumber: string) => {
     setActiveExecutionStage(stageNumber);
-    if (!searchState.searchId) {
+    const searchId = latestSearchStateRef.current?.searchId || searchState.searchId;
+    if (!searchId) {
       setActiveExecutionStage(null);
       return false;
     }
@@ -984,7 +1069,7 @@ export default function NoveltySearchWorkflow({
         headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
       };
 
-      const response = await fetch(`/api/novelty-search/${searchState.searchId}/stage/${stageNumber}`, fetchOptions);
+      const response = await fetch(`/api/novelty-search/${searchId}/stage/${stageNumber}`, fetchOptions);
 
       const rawBody = await response.text();
       let data: any = null;
@@ -1030,7 +1115,7 @@ export default function NoveltySearchWorkflow({
       let effectiveResults = data.results;
 
       try {
-        const fullRes = await fetch(`/api/novelty-search/${searchState.searchId}`, {
+        const fullRes = await fetch(`/api/novelty-search/${searchId}`, {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` },
           cache: 'no-store'
         });
@@ -1048,33 +1133,36 @@ export default function NoveltySearchWorkflow({
         }
       } catch {}
 
-      setSearchState(prev => ({
-        ...prev,
+      const nextSearchState = {
+        ...(latestSearchStateRef.current || searchState),
         status: effectiveStatus,
         currentStage: effectiveCurrentStage,
         results: effectiveResults,
         isLoading: false
+      };
+      latestSearchStateRef.current = nextSearchState;
+      autoStageStateRef.current = buildNoveltyAutoStageState(nextSearchState, stage0ApprovedRef.current);
+      setSearchState(prev => ({
+        ...prev,
+        ...nextSearchState
       }));
 
       if (effectiveStatus === NoveltySearchStatus.COMPLETED && onComplete) {
         onComplete(data.searchId);
       }
 
-      // Auto progression
-      if (autoMode && options?.continueAutomatically === true) {
-        const next = getStageNumberForStatus(effectiveStatus);
-        if (next) {
-          await executeStage(next);
-        }
-      }
-
       return true;
     } catch (error) {
       console.error(`[Execution] Error executing stage ${stageNumber}:`, error);
-      setSearchState(prev => ({
-        ...prev,
+      const nextSearchState = {
+        ...(latestSearchStateRef.current || searchState),
         error: error instanceof Error ? error.message : `Failed to execute stage ${stageNumber}`,
         isLoading: false
+      };
+      latestSearchStateRef.current = nextSearchState;
+      setSearchState(prev => ({
+        ...prev,
+        ...nextSearchState
       }));
       return false;
     } finally {
@@ -1089,61 +1177,60 @@ export default function NoveltySearchWorkflow({
     }
   };
 
-  const getStageNumberForStatus = (status: string): string | null => {
-    switch (status) {
-      case 'PENDING':
-        return null;
-      case NoveltySearchStatus.STAGE_0_COMPLETED:
-        if (!stage0Approved) return null;
-        if (!hasStage1Results) return '1';
-        if (!hasStage15Results) return '1.5';
-        return null;
-      case NoveltySearchStatus.STAGE_1_COMPLETED:
-        if (!hasStage1Results) return '1';
-        if (!hasStage15Results) return '1.5';
-        if (!hasStage35Results) return '3';
-        if (!hasStage4Results) return '4';
-        return null;
-      case NoveltySearchStatus.STAGE_3_5_COMPLETED:
-        if (!hasStage35Results) return '3';
-        if (!hasStage4Results) return '4';
-        return null;
-      case NoveltySearchStatus.COMPLETED:
-        return null;
-      default:
-        return null;
-    }
-  };
-  
   // Run all remaining stages automatically (for auto mode after approval)
   const runAllRemainingStages = useCallback(async () => {
-    if (!searchState.searchId) return;
+    const searchId = latestSearchStateRef.current?.searchId || searchState.searchId;
+    if (!searchId || isAutoRunningRef.current) return;
 
-    const stages = [
-      { stageNum: '1', visibleTab: '2' as StageTab, shouldRun: !hasStage1Results },
-      { stageNum: '1.5', visibleTab: '3' as StageTab, shouldRun: !hasStage15Results },
-      { stageNum: '3', visibleTab: '4' as StageTab, shouldRun: !hasStage35Results },
-      { stageNum: '4', visibleTab: '5' as StageTab, shouldRun: !hasStage4Results },
-    ];
+    isAutoRunningRef.current = true;
+    setIsAutoRunning(true);
+    latestSearchStateRef.current = {
+      ...(latestSearchStateRef.current || searchState),
+      error: null
+    };
+    setSearchState(prev => ({ ...prev, error: null }));
 
-    for (const { stageNum, visibleTab, shouldRun } of stages) {
-      if (!shouldRun) continue;
-      
-      try {
-        console.log(`[Auto] Running stage ${stageNum}...`);
-        setSelectedStageTab(visibleTab);
-        const ok = await executeStage(stageNum, { continueAutomatically: false });
-        if (!ok) break;
-        // Small delay between stages to let state update
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (err) {
-        console.error(`[Auto] Stage ${stageNum} failed:`, err);
-        break; // Stop on error
+    try {
+      for (let index = 0; index < 6; index += 1) {
+        const snapshot = autoStageStateRef.current || buildNoveltyAutoStageState(
+          latestSearchStateRef.current || searchState,
+          stage0ApprovedRef.current
+        );
+        const action = getNextNoveltyAutoStage(snapshot);
+        if (action.type === 'stop') {
+          if (action.reason === 'NO_PATENTS') {
+            latestSearchStateRef.current = {
+              ...(latestSearchStateRef.current || searchState),
+              error: NOVELTY_AUTO_STOP_MESSAGES.NO_PATENTS
+            };
+            setSearchState(prev => ({
+              ...prev,
+              error: NOVELTY_AUTO_STOP_MESSAGES.NO_PATENTS
+            }));
+          }
+          break;
+        }
+
+        try {
+          console.log(`[Auto] Running stage ${action.stageNumber}...`);
+          setSelectedStageTab(action.visibleTab);
+          const ok = await executeStage(action.stageNumber);
+          if (!ok) break;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (err) {
+          console.error(`[Auto] Stage ${action.stageNumber} failed:`, err);
+          break;
+        }
       }
+    } finally {
+      isAutoRunningRef.current = false;
+      setIsAutoRunning(false);
     }
-  }, [searchState.searchId, hasStage1Results, hasStage15Results, hasStage35Results, hasStage4Results, executeStage]);
+  }, [executeStage, searchState]);
 
   const runStageForKey = useCallback(async (stageKey: StageTab, advance?: boolean) => {
+    if (isAutoRunningRef.current) return;
+
     const guardMsg = stageGuard(stageKey);
     if (guardMsg) {
       setSearchState(prev => ({ ...prev, error: guardMsg }));
@@ -1228,22 +1315,35 @@ export default function NoveltySearchWorkflow({
         throw new Error(`Failed to save Stage 0 edits: ${response.status} ${errorText}`);
       }
 
-      setSearchState(prev => ({
-        ...prev,
-        results: {
-          ...prev.results,
-          stage0: {
-            ...prev.results?.stage0,
-            searchQuery: editedSearchQuery,
-            inventionFeatures: editedFeatures
-          },
+      const currentState = latestSearchStateRef.current || searchState;
+      const currentResults = currentState.results || {};
+      const nextResults = {
+        ...currentResults,
+        stage0: {
+          ...currentResults?.stage0,
           searchQuery: editedSearchQuery,
           inventionFeatures: editedFeatures
-        }
+        },
+        searchQuery: editedSearchQuery,
+        inventionFeatures: editedFeatures
+      };
+      const nextState = {
+        ...currentState,
+        results: nextResults
+      };
+      latestSearchStateRef.current = nextState;
+      autoStageStateRef.current = buildNoveltyAutoStageState(nextState, true);
+      setSearchState(prev => ({
+        ...prev,
+        results: nextResults
       }));
 
-      setStage0Approved(true);
+      markStage0Approved();
       setIsEditingStage0(false);
+      setSelectedStageTab('2');
+      if (autoMode) {
+        await runAllRemainingStages();
+      }
     } catch (error) {
       console.error('Save Stage 0 edits error:', error);
       setSearchState(prev => ({
@@ -1280,7 +1380,7 @@ export default function NoveltySearchWorkflow({
   const prevStage = idx > 0 ? STAGE_TABS[idx - 1] : null;
   const nextStage = idx >= 0 && idx < STAGE_TABS.length - 1 ? STAGE_TABS[idx + 1] : null;
   const currentGuard = stageGuard(selectedStageTab);
-  const canRunCurrent = (!currentGuard) && !searchState.isLoading && !activeExecutionStage && (selectedStageTab === '1' || !!stageNumberByKey[selectedStageTab]);
+  const canRunCurrent = (!currentGuard) && !searchState.isLoading && !activeExecutionStage && !isAutoRunning && (selectedStageTab === '1' || !!stageNumberByKey[selectedStageTab]);
   const isFailedCurrent = failedStageKey === selectedStageTab;
 
   // Calculate overall progress
@@ -1951,10 +2051,11 @@ export default function NoveltySearchWorkflow({
                 <span className="text-xs font-medium text-slate-500">Auto</span>
                 <button
                   type="button"
+                  disabled={isAutoRunning || searchState.isLoading || !!activeExecutionStage}
                   onClick={() => setAutoMode(prev => !prev)}
                   className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${
                     autoMode ? 'bg-indigo-500' : 'bg-slate-200'
-                  }`}
+                  } disabled:cursor-not-allowed disabled:opacity-60`}
                 >
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
                     autoMode ? 'translate-x-4' : 'translate-x-0.5'
@@ -2083,8 +2184,8 @@ export default function NoveltySearchWorkflow({
               </div>
               <div className="flex items-center gap-2">
                 {searchState.status === NoveltySearchStatus.STAGE_0_COMPLETED && (
-                  <Badge className={stage0Approved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}>
-                    {stage0Approved ? 'Approved' : 'Awaiting approval'}
+                  <Badge className={stage0ApprovedForUi ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}>
+                    {stage0ApprovedForUi ? 'Approved' : 'Awaiting approval'}
                   </Badge>
                 )}
                 {!isEditingStage0 && searchState.status === NoveltySearchStatus.STAGE_0_COMPLETED && (
@@ -2194,9 +2295,10 @@ export default function NoveltySearchWorkflow({
               <div className="mt-6 flex justify-end">
                 <Button
                   size="sm"
-                  className={`rounded-lg ${stage0Approved ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                  className={`rounded-lg ${stage0ApprovedForUi ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                  disabled={isAutoRunning}
                   onClick={async () => {
-                    setStage0Approved(true);
+                    markStage0Approved();
                     // Auto-progress through all stages if autoMode is enabled
                     if (autoMode) {
                       setSelectedStageTab('2');
@@ -2209,7 +2311,7 @@ export default function NoveltySearchWorkflow({
                   }}
                 >
                   <CheckCircle className="w-4 h-4 mr-2" />
-                  {stage0Approved ? 'Approved' : 'Approve Search Terms'}
+                  {stage0ApprovedForUi ? 'Approved' : 'Approve Search Terms'}
                 </Button>
               </div>
             )}
@@ -2251,8 +2353,9 @@ export default function NoveltySearchWorkflow({
   // Legacy Stage 1 Content, now shown inside Stage 2
   const renderStage1Content = () => {
     const root: any = (searchState.results as any) || {};
-    const pqaiResults = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults || [];
-    const hasStage1 = Array.isArray(pqaiResults) && pqaiResults.length > 0;
+    const rawPqaiResults = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults || [];
+    const pqaiResults = Array.isArray(rawPqaiResults) ? rawPqaiResults : [];
+    const hasStage1 = pqaiResults.length > 0;
 
     if (!hasStage1) {
       return (
@@ -2274,12 +2377,21 @@ export default function NoveltySearchWorkflow({
       );
     }
 
-    const highRelevanceCount = pqaiResults.filter((p: any) => p.relevanceScore && p.relevanceScore > 0.5).length;
-    const avgRelevance = pqaiResults.length > 0 ? (pqaiResults.reduce((avg: number, p: any) => avg + (p.relevanceScore || 0), 0) / pqaiResults.length * 100) : 0;
+    const highRelevanceCount = pqaiResults.filter((p: any) => getStage1ScorePercent(p) > 50).length;
+    const avgRelevance = pqaiResults.length > 0
+      ? pqaiResults.reduce((avg: number, p: any) => avg + getStage1ScorePercent(p), 0) / pqaiResults.length
+      : 0;
     const stage1Container: any = root.stage1 || root;
     const providerStats = Array.isArray(stage1Container.providerStats) ? stage1Container.providerStats : [];
     const searchWarnings = Array.isArray(stage1Container.searchWarnings) ? stage1Container.searchWarnings : [];
     const queryPlan = stage1Container.queryPlan || null;
+    const filterOptions = getStage1FilterOptions(pqaiResults);
+    const pagedResults = filterAndPaginateStage1Results(pqaiResults, stage1Filters, stage1Page, STAGE1_PAGE_SIZE);
+    const hasActiveStage1Filters = Object.entries(stage1Filters).some(([key, value]) => {
+      if (key === 'sort') return value !== DEFAULT_STAGE1_RESULT_FILTERS.sort;
+      return typeof value === 'string' && value.trim().length > 0;
+    });
+    const selectClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20';
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
@@ -2361,57 +2473,189 @@ export default function NoveltySearchWorkflow({
               </div>
             )}
 
+            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 text-slate-500" />
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">Filter returned patents</div>
+                    <div className="text-xs text-slate-500">
+                      {filterOptions.providers.length} provider{filterOptions.providers.length !== 1 ? 's' : ''} and {filterOptions.matchedItems.length} matched item{filterOptions.matchedItems.length !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-fit rounded-lg"
+                  onClick={clearStage1Filters}
+                  disabled={!hasActiveStage1Filters}
+                >
+                  Clear filters
+                </Button>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                <div className="xl:col-span-2">
+                  <Label htmlFor="stage1-keyword" className="text-xs font-medium text-slate-600">Keyword</Label>
+                  <Input
+                    id="stage1-keyword"
+                    value={stage1Filters.keyword}
+                    onChange={(event) => updateStage1Filter('keyword', event.target.value)}
+                    placeholder="Patent no., title, applicant..."
+                    className="mt-1 h-10 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="stage1-provider" className="text-xs font-medium text-slate-600">Provider</Label>
+                  <select
+                    id="stage1-provider"
+                    value={stage1Filters.provider}
+                    onChange={(event) => updateStage1Filter('provider', event.target.value)}
+                    className={`${selectClass} mt-1`}
+                  >
+                    <option value="">All providers</option>
+                    {filterOptions.providers.map(provider => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="xl:col-span-2">
+                  <Label htmlFor="stage1-matched-item" className="text-xs font-medium text-slate-600">Matched item</Label>
+                  <select
+                    id="stage1-matched-item"
+                    value={stage1Filters.matchedItem}
+                    onChange={(event) => updateStage1Filter('matchedItem', event.target.value)}
+                    className={`${selectClass} mt-1`}
+                  >
+                    <option value="">All matched items</option>
+                    {filterOptions.matchedItems.map(item => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="stage1-min-score" className="text-xs font-medium text-slate-600">Min score</Label>
+                  <select
+                    id="stage1-min-score"
+                    value={stage1Filters.minScore}
+                    onChange={(event) => updateStage1Filter('minScore', event.target.value)}
+                    className={`${selectClass} mt-1`}
+                  >
+                    <option value="">All scores</option>
+                    <option value="40">&gt;= 40%</option>
+                    <option value="60">&gt;= 60%</option>
+                    <option value="80">&gt;= 80%</option>
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="stage1-year-from" className="text-xs font-medium text-slate-600">Published from</Label>
+                  <Input
+                    id="stage1-year-from"
+                    type="number"
+                    value={stage1Filters.publicationYearFrom}
+                    onChange={(event) => updateStage1Filter('publicationYearFrom', event.target.value)}
+                    placeholder="YYYY"
+                    className="mt-1 h-10 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="stage1-year-to" className="text-xs font-medium text-slate-600">Published to</Label>
+                  <Input
+                    id="stage1-year-to"
+                    type="number"
+                    value={stage1Filters.publicationYearTo}
+                    onChange={(event) => updateStage1Filter('publicationYearTo', event.target.value)}
+                    placeholder="YYYY"
+                    className="mt-1 h-10 rounded-lg"
+                  />
+                </div>
+                <div className="md:col-span-2 xl:col-span-2">
+                  <Label htmlFor="stage1-sort" className="text-xs font-medium text-slate-600">Sort</Label>
+                  <select
+                    id="stage1-sort"
+                    value={stage1Filters.sort}
+                    onChange={(event) => updateStage1Filter('sort', event.target.value)}
+                    className={`${selectClass} mt-1`}
+                  >
+                    <option value="original">Original rank</option>
+                    <option value="score_desc">Score high to low</option>
+                    <option value="newest">Newest publication</option>
+                    <option value="oldest">Oldest publication</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-slate-600">
+                Showing {pagedResults.startIndex}-{pagedResults.endIndex} of {pagedResults.totalItems} filtered patents ({pqaiResults.length} total)
+              </div>
+              <div className="text-xs text-slate-500">
+                {STAGE1_PAGE_SIZE} patents per page
+              </div>
+            </div>
+
             {/* Patent List */}
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {pqaiResults.map((r: any, i: number) => {
-                const patentNumber = r.publicationNumber || r.pn || r.patent_number || 'N/A';
+            {pagedResults.totalItems === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
+                <Search className="mx-auto mb-3 h-9 w-9 text-slate-300" />
+                <div className="text-sm font-medium text-slate-800">No patents match the current filters</div>
+                {hasActiveStage1Filters && (
+                  <Button type="button" variant="outline" size="sm" className="mt-4 rounded-lg" onClick={clearStage1Filters}>
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+              {pagedResults.items.map(({ result: r, originalIndex }, pageIndex) => {
+                const patentNumber = getStage1PatentNumber(r);
                 const title = r.title || r.invention_title || patentNumber;
                 const abstract = r.abstract || r.snippet || '';
                 const pubDate = r.publicationDate || r.publication_date || r.year || '';
-                const relevanceScore = r.relevanceScore || r.score || 0;
-                const provider = r.sourceProvider || r.providerId || 'patent-search';
+                const relevanceScore = getStage1ScorePercent(r);
                 const href = r.link || r.sourceUrl || `https://patents.google.com/patent/${encodeURIComponent(patentNumber)}`;
                 const applicants = listPatentText(r.applicants, 6);
                 const inventors = listPatentText(r.inventors, 6);
                 const classifications = Array.isArray(r.classifications) ? r.classifications.join(', ') : '';
                 const sourcePdf = r.sourcePdfName ? `${r.sourcePdfName}${r.sourcePageNumber ? ` page ${r.sourcePageNumber}` : ''}` : '';
-                const matchedFields = Array.isArray(r.matchedFields) ? r.matchedFields : [];
-                const sourceProviders = Array.isArray(r.sourceProviders)
-                  ? r.sourceProviders
-                  : [r.sourceProvider || r.providerId].filter(Boolean);
+                const matchedItems = getStage1MatchedItems(r);
+                const sourceProviders = getStage1Providers(r);
 
                 return (
                   <motion.div
-                    key={i}
+                    key={`${patentNumber}-${originalIndex}`}
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.02 }}
+                    transition={{ delay: Math.min(pageIndex, 10) * 0.015 }}
                     className="rounded-lg border border-slate-200 bg-white p-4 transition-colors hover:bg-slate-50"
                   >
                     <div className="flex items-start gap-3">
                       <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-semibold flex-shrink-0">
-                        {i + 1}
+                        {originalIndex + 1}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
-                          <a className="font-medium text-indigo-700 hover:underline text-sm" target="_blank" href={href}>
+                          <a className="font-medium text-indigo-700 hover:underline text-sm" target="_blank" rel="noreferrer" href={href}>
                             {title}
                           </a>
                           <Badge variant="outline" className="text-xs bg-indigo-50 text-indigo-700 border-indigo-200 flex-shrink-0">
-                            {(relevanceScore * 100).toFixed(0)}%
+                            {Math.round(relevanceScore)}%
                           </Badge>
                         </div>
                         <div className="text-xs text-slate-500 mt-1">
                           {patentNumber} {pubDate && `- ${String(pubDate).slice(0, 10)}`}
                         </div>
                         <div className="text-xs text-slate-500 mt-1">
-                          Provider: {sourceProviders.join(', ') || provider}
+                          Provider: {sourceProviders.join(', ') || 'patent-search'}
                         </div>
-                        {matchedFields.length > 0 && (
+                        {matchedItems.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
-                            {matchedFields.slice(0, 6).map((field: string) => (
-                              <Badge key={field} variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">
-                                {field}
+                            {matchedItems.slice(0, 8).map((item: string) => (
+                              <Badge key={item} variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">
+                                {item}
                               </Badge>
                             ))}
                           </div>
@@ -2446,7 +2690,38 @@ export default function NoveltySearchWorkflow({
                   </motion.div>
                 );
               })}
-            </div>
+              </div>
+            )}
+
+            {pagedResults.totalItems > 0 && (
+              <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-slate-600">
+                  Page {pagedResults.currentPage} of {pagedResults.totalPages}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={() => setStage1Page(Math.max(1, pagedResults.currentPage - 1))}
+                    disabled={pagedResults.currentPage <= 1}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={() => setStage1Page(Math.min(pagedResults.totalPages, pagedResults.currentPage + 1))}
+                    disabled={pagedResults.currentPage >= pagedResults.totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </motion.div>
@@ -3283,7 +3558,7 @@ export default function NoveltySearchWorkflow({
               getStageStatus={getStageStatus}
               isStageCompleted={isStageCompleted}
               onRunStage={runStageForKey}
-              activeExecutionStage={activeExecutionStage}
+              activeExecutionStage={activeExecutionStage || (isAutoRunning ? 'auto' : null)}
               searchId={searchState.searchId}
               overallProgress={overallProgress}
               formTitle={formData.title}
@@ -3309,7 +3584,7 @@ export default function NoveltySearchWorkflow({
           </div>
           )}
 
-          <div className={`mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+          <div className={`mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-6xl' : selectedStageTab === '2' ? 'max-w-7xl' : 'max-w-5xl'}`}>
             {renderSearchPathTabs()}
             <motion.div
               initial={{ opacity: 0, y: -12 }}
@@ -3356,9 +3631,9 @@ export default function NoveltySearchWorkflow({
                     previousLabel={prevStage ? STAGE_TAB_LABELS[prevStage] : undefined}
                     nextLabel={nextStage ? STAGE_TAB_LABELS[nextStage] : undefined}
                     currentStageLabel={STAGE_RUN_LABELS[selectedStageTab]}
-                    isRunning={!!activeExecutionStage}
+                    isRunning={!!activeExecutionStage || isAutoRunning}
                     isFailed={isFailedCurrent}
-                    disabled={searchState.isLoading}
+                    disabled={searchState.isLoading || isAutoRunning}
                   />
                 </motion.div>
               )}
@@ -3404,7 +3679,7 @@ export default function NoveltySearchWorkflow({
                 getStageStatus={getStageStatus}
                 isStageCompleted={isStageCompleted}
                 onRunStage={runStageForKey}
-                activeExecutionStage={activeExecutionStage}
+                activeExecutionStage={activeExecutionStage || (isAutoRunning ? 'auto' : null)}
                 searchId={searchState.searchId}
                 overallProgress={overallProgress}
                 formTitle={formData.title}

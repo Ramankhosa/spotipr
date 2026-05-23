@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import crypto from 'crypto'
 import AdmZip from 'adm-zip'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   ExtractedPatentRecord,
@@ -188,6 +189,7 @@ function localPatentData(record: ExtractedPatentRecord, file: any) {
     numberOfClaims: record.numberOfClaims,
     sourcePdfName: file.originalName,
     sourceFileHash: file.fileHash,
+    sourceImportFileId: file.id,
     sourcePageNumber: record.sourcePageNumber,
     ragText: record.ragText,
     embeddingText: record.embeddingText,
@@ -201,11 +203,11 @@ function embeddingTextHash(text: string) {
   return sha256(text)
 }
 
-export async function queueEmbeddingForPatent(localPatentId: number, embeddingText: string) {
+export async function queueEmbeddingForPatent(localPatentId: number, embeddingText: string, db: any = prisma) {
   const textHash = embeddingTextHash(embeddingText)
   const model = PATENT_CORPUS_EMBEDDING_MODEL
 
-  const existing = await (prisma as any).localPatentEmbedding.findUnique({
+  const existing = await db.localPatentEmbedding.findUnique({
     where: {
       localPatentId_model_textHash: {
         localPatentId,
@@ -216,7 +218,7 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
   })
 
   if (!existing) {
-    await (prisma as any).localPatentEmbedding.create({
+    await db.localPatentEmbedding.create({
       data: {
         localPatentId,
         model,
@@ -226,7 +228,7 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
       },
     })
   } else if (existing.status !== 'COMPLETED') {
-    await (prisma as any).localPatentEmbedding.update({
+    await db.localPatentEmbedding.update({
       where: { id: existing.id },
       data: {
         errorMessage: null,
@@ -236,7 +238,7 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
     })
   }
 
-  await (prisma as any).localPatentEmbedding.deleteMany({
+  await db.localPatentEmbedding.deleteMany({
     where: {
       localPatentId,
       model,
@@ -245,21 +247,64 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
   })
 }
 
-async function upsertExtractedPatent(record: ExtractedPatentRecord, file: any) {
-  const existing = await (prisma as any).localPatent.findUnique({
+async function upsertExtractedPatent(record: ExtractedPatentRecord, file: any, db: any = prisma) {
+  const existing = await db.localPatent.findUnique({
     where: { publicationNumber: record.publicationNumber },
     select: { id: true },
   })
   const data = localPatentData(record, file)
   const patent = existing
-    ? await (prisma as any).localPatent.update({ where: { id: existing.id }, data })
-    : await (prisma as any).localPatent.create({ data })
+    ? await db.localPatent.update({ where: { id: existing.id }, data })
+    : await db.localPatent.create({ data })
 
   if (record.embeddingText) {
-    await queueEmbeddingForPatent(patent.id, record.embeddingText)
+    await queueEmbeddingForPatent(patent.id, record.embeddingText, db)
   }
 
   return { created: !existing, patent }
+}
+
+export function patentWhereForImportFile(file: { id: string; fileHash?: string | null; originalName?: string | null }) {
+  const fallback: any = {
+    sourceImportFileId: null,
+    sourceFileHash: file.fileHash || '__no_hash__',
+  }
+  if (file.originalName) fallback.sourcePdfName = file.originalName
+
+  return {
+    OR: [
+      { sourceImportFileId: file.id },
+      fallback,
+    ],
+  }
+}
+
+async function replaceExtractedPatentsForFile(file: any, records: ExtractedPatentRecord[]) {
+  return (prisma as any).$transaction(async (tx: any) => {
+    let patentsCreated = 0
+    let patentsUpdated = 0
+    const publicationNumbers = new Set<string>()
+
+    for (const record of records) {
+      publicationNumbers.add(record.publicationNumber)
+      const result = await upsertExtractedPatent(record, file, tx)
+      if (result.created) patentsCreated += 1
+      else patentsUpdated += 1
+    }
+
+    await tx.localPatent.deleteMany({
+      where: {
+        AND: [
+          patentWhereForImportFile(file),
+          publicationNumbers.size > 0
+            ? { publicationNumber: { notIn: Array.from(publicationNumbers) } }
+            : {},
+        ],
+      },
+    })
+
+    return { patentsCreated, patentsUpdated }
+  })
 }
 
 export async function refreshPatentImportBatchStatus(batchId: string) {
@@ -292,6 +337,7 @@ export async function refreshPatentImportBatchStatus(batchId: string) {
       lowConfidencePages: files.reduce((sum: number, file: any) => sum + file.lowConfidencePages, 0),
       warningCount: files.reduce((sum: number, file: any) => sum + file.warningCount, 0),
       ...(status === 'PROCESSING' ? { startedAt: new Date() } : {}),
+      ...(['QUEUED', 'PROCESSING'].includes(status) ? { completedAt: null } : {}),
       ...(['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED'].includes(status) ? { completedAt: new Date() } : {}),
     },
   })
@@ -374,14 +420,7 @@ export async function processPatentImportFileById(fileId: string, workerId = `pa
     }
 
     const extraction = await extractPatentRecordsFromPdf(buffer, file.fileHash)
-    let patentsCreated = 0
-    let patentsUpdated = 0
-
-    for (const record of extraction.records) {
-      const result = await upsertExtractedPatent(record, file)
-      if (result.created) patentsCreated += 1
-      else patentsUpdated += 1
-    }
+    const { patentsCreated, patentsUpdated } = await replaceExtractedPatentsForFile(file, extraction.records)
 
     const status = extraction.warningCount > 0 || extraction.lowConfidencePages > 0
       ? 'COMPLETED_WITH_WARNINGS'
@@ -398,6 +437,9 @@ export async function processPatentImportFileById(fileId: string, workerId = `pa
         ignoredPages: extraction.ignoredPages,
         lowConfidencePages: extraction.lowConfidencePages,
         warningCount: extraction.warningCount,
+        warningBreakdown: extraction.warningBreakdown,
+        ignoredPageBreakdown: extraction.ignoredPageBreakdown,
+        extractionVersion: PATENT_CORPUS_EXTRACTION_VERSION,
         errorMessage: null,
         lockedBy: null,
         lockedUntil: null,
@@ -448,9 +490,119 @@ export async function retryPatentImportBatch(batchId: string) {
       lockedUntil: null,
       nextAttemptAt: new Date(),
       completedAt: null,
+      warningBreakdown: {},
+      ignoredPageBreakdown: {},
     },
   })
   return refreshPatentImportBatchStatus(batchId)
+}
+
+export async function retryPatentImportFileExtraction(batchId: string, fileId: string) {
+  const file = await (prisma as any).patentImportFile.findFirst({
+    where: { id: fileId, batchId },
+  })
+  if (!file) throw new Error('Import file not found.')
+  if (file.status === 'PROCESSING') {
+    throw new Error('This PDF is currently processing and cannot be requeued.')
+  }
+
+  const updatedFile = await (prisma as any).patentImportFile.update({
+    where: { id: fileId },
+    data: {
+      status: 'QUEUED',
+      errorMessage: null,
+      lockedBy: null,
+      lockedUntil: null,
+      heartbeatAt: null,
+      nextAttemptAt: new Date(),
+      startedAt: null,
+      completedAt: null,
+      warningBreakdown: {},
+      ignoredPageBreakdown: {},
+    },
+  })
+  await refreshPatentImportBatchStatus(batchId)
+  return updatedFile
+}
+
+export async function requeuePatentImportFileEmbeddings(batchId: string, fileId: string) {
+  const file = await (prisma as any).patentImportFile.findFirst({
+    where: { id: fileId, batchId },
+  })
+  if (!file) throw new Error('Import file not found.')
+
+  const patents = await (prisma as any).localPatent.findMany({
+    where: patentWhereForImportFile(file),
+    select: {
+      id: true,
+      embeddingText: true,
+      ragText: true,
+      abstract: true,
+      title: true,
+    },
+  })
+
+  for (const patent of patents) {
+    const text = patent.embeddingText || patent.ragText || patent.abstract || patent.title
+    if (text) await queueEmbeddingForPatent(patent.id, text)
+  }
+
+  const patentIds = patents.map((patent: any) => patent.id)
+  let requeuedEmbeddings = 0
+  if (patentIds.length > 0) {
+    requeuedEmbeddings = await prisma.$executeRaw`
+      UPDATE "local_patent_embeddings" e
+      SET "status" = 'QUEUED'::"PatentEmbeddingStatus",
+          "errorMessage" = NULL,
+          "embedding" = NULL,
+          "lockedBy" = NULL,
+          "lockedUntil" = NULL,
+          "heartbeatAt" = NULL,
+          "nextAttemptAt" = now(),
+          "embeddedAt" = NULL,
+          "updatedAt" = now()
+      WHERE e."localPatentId" IN (${Prisma.join(patentIds)})
+    `
+  }
+
+  return {
+    file,
+    patentCount: patents.length,
+    requeuedEmbeddings,
+  }
+}
+
+export async function deletePatentImportFileExtractions(batchId: string, fileId: string) {
+  const file = await (prisma as any).patentImportFile.findFirst({
+    where: { id: fileId, batchId },
+  })
+  if (!file) throw new Error('Import file not found.')
+  if (file.status === 'PROCESSING') {
+    throw new Error('This PDF is currently processing and its extracted records cannot be deleted.')
+  }
+
+  const deleted = await (prisma as any).localPatent.deleteMany({
+    where: patentWhereForImportFile(file),
+  })
+
+  const updatedFile = await (prisma as any).patentImportFile.update({
+    where: { id: fileId },
+    data: {
+      patentPages: 0,
+      patentsCreated: 0,
+      patentsUpdated: 0,
+      errorMessage: null,
+      lockedBy: null,
+      lockedUntil: null,
+      heartbeatAt: null,
+    },
+  })
+  await refreshPatentImportBatchStatus(batchId)
+
+  return {
+    file: updatedFile,
+    deletedPatents: deleted.count,
+  }
 }
 
 async function requestOpenAIEmbedding(text: string) {

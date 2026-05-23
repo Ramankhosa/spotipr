@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import path from 'path'
 import { pathToFileURL } from 'url'
 
-export const PATENT_CORPUS_EXTRACTION_VERSION = 'indian-journal-layout-v2'
+export const PATENT_CORPUS_EXTRACTION_VERSION = 'indian-journal-layout-v3-universal'
 
 export type PdfTextSegment = {
   text: string
@@ -72,6 +72,8 @@ export type ExtractPdfResult = {
   ignoredPages: number
   lowConfidencePages: number
   warningCount: number
+  warningBreakdown: Record<string, number>
+  ignoredPageBreakdown: Partial<Record<PatentPageSection, number>>
 }
 
 type AnchorPosition = {
@@ -80,17 +82,36 @@ type AnchorPosition = {
   line: PdfLayoutLine
 }
 
+export type PatentPageSection =
+  | 'applicationPublication'
+  | 'frontMatter'
+  | 'weeklyFer'
+  | 'grantList'
+  | 'designPublication'
+  | 'corrigendum'
+  | 'continuedMarker'
+  | 'otherNotice'
+  | 'unknown'
+
+export type ApplicationLayout = {
+  columnMode: 'oldOneColumn' | 'twoColumnInterleaved' | 'modernTwoColumn' | 'compactLabel' | 'unknown'
+  classificationStyle: 'internationalClassification' | 'internationalColon' | 'internationalBare' | 'standaloneClassification' | 'missing'
+  compactLabels: boolean
+}
+
 const PATENT_ANCHOR_PATTERNS = [
-  /\(12\)\s*PATENT\s+APPLICATION\s+PUBLICATION/i,
-  /\(21\)\s*Application\s+No\.?/i,
-  /\(22\)\s*Date\s+of\s+filing/i,
-  /\(43\)\s*Publication\s+Date/i,
-  /\(54\)\s*Title\s+of\s+the\s+invention/i,
-  /\(51\)\s*International\s+classification/i,
-  /\(71\)\s*Name\s+of\s+Applicant/i,
-  /\(72\)\s*Name\s+of\s+Inventor/i,
+  /\(12\)\s*PATENT\s*APPLICATION\s*PUBLICATION/i,
+  /\(21\)\s*Application\s*No\.?/i,
+  /\(22\)\s*Date\s*of\s*filing/i,
+  /\(43\)\s*Publication\s*Date/i,
+  /\((?:54|5)\)\s*Title\s*of\s*the\s*invention/i,
+  /\(51\)(?:\s*International(?:\s*classification|\s*:)?|\s*)/i,
+  /\(71\)\s*Name\s*of(?:\s*Applicant)?/i,
+  /\(72\)\s*Name\s*of\s*Inventor/i,
   /\(57\)\s*Abstract/i,
 ]
+
+const APPLICATION_PUBLICATION_PATTERN = /\(12\)\s*PATENT\s*APPLICATION\s*PUBLICATION/i
 
 const FOOTER_PATTERNS = [
   /The Patent Office Journal No\./i,
@@ -114,9 +135,59 @@ export function normalizePatentText(value: string) {
 function normalizeForMatching(value: string) {
   return compactWhitespace(
     normalizePatentText(value)
-      .replace(/\((\d{2})\)\s*Name/g, '($1) Name')
-      .replace(/\((\d{2})\)\s*Title/g, '($1) Title')
+      .replace(/\(\s*(\d{2})\s*\)/g, '($1)')
+      .replace(/\((\d{2})\)\s*(Name|Title|Application|Date|Publication|International|Abstract|PATENT)/gi, '($1) $2')
+      .replace(/Application\s*No\b/gi, 'Application No')
+      .replace(/Title\s+of\s*the\s*invention/gi, 'Title of the invention')
+      .replace(/Date\s+of\s*filing/gi, 'Date of filing')
+      .replace(/Publication\s*Date/gi, 'Publication Date')
   )
+}
+
+function normalizedSectionText(pageOrText: PdfPageModel | string) {
+  const text = typeof pageOrText === 'string' ? pageOrText : pageOrText.rawText || linesToText(pageOrText.lines)
+  return normalizeForMatching(text)
+}
+
+export function classifyPageSection(pageOrText: PdfPageModel | string): PatentPageSection {
+  const text = normalizedSectionText(pageOrText)
+  if (APPLICATION_PUBLICATION_PATTERN.test(text)) return 'applicationPublication'
+  if (/corrigendum|correction\s+to\s+patent\s+application|errata/i.test(text)) return 'corrigendum'
+  if (/first\s+examination\s+report|\bFER\b|requests?\s+for\s+examination|public\s+notice\s+under\s+rule\s+24B/i.test(text)) return 'weeklyFer'
+  if (/patents?\s+granted|grant\s+of\s+patents?|u\/s\s*43|section\s+43|date\s+of\s+grant/i.test(text)) return 'grantList'
+  if (/designs?\s+publication|design\s+number|class\s+and\s+sub-class|date\s+of\s+registration|reciprocity\s+date/i.test(text)) return 'designPublication'
+  if (/continued\s+from\s+previous\s+page|contd\.?|continued\s+on\s+next\s+page/i.test(text)) return 'continuedMarker'
+  if (/contents|index|the\s+patent\s+office\s+journal|official\s+journal\s+of\s+the\s+patent\s+office/i.test(text)) return 'frontMatter'
+  if (/notice|notification|office\s+order|withdrawn|abandoned|restoration|post\s+grant|pre-grant/i.test(text)) return 'otherNotice'
+  return 'unknown'
+}
+
+export function detectApplicationLayout(linesOrText: PdfLayoutLine[] | string): ApplicationLayout {
+  const rawText = Array.isArray(linesOrText) ? linesToText(linesOrText) : linesOrText
+  const text = normalizeForMatching(rawText)
+  const hasCompactLabels = /\(\s*(21|54|71|72|51)\s*\)(Application|Title|Name|International)/i.test(rawText)
+    || /ApplicationNo\.?|Title\s+ofthe|Title\s+of\s+theinvention/i.test(rawText)
+
+  let classificationStyle: ApplicationLayout['classificationStyle'] = 'missing'
+  if (/\(51\)\s*International\s+classification/i.test(text)) classificationStyle = 'internationalClassification'
+  else if (/\(51\)\s*International\s*:/i.test(text)) classificationStyle = 'internationalColon'
+  else if (/\(51\)\s*International\b/i.test(text)) classificationStyle = 'internationalBare'
+  else if (/\bclassification\b/i.test(text)) classificationStyle = 'standaloneClassification'
+
+  const applicantIndex = text.search(/\(71\)\s*Name\s*of\s*Applicant/i)
+  const inventorIndex = text.search(/\(72\)\s*Name\s*of\s*Inventor/i)
+  const classificationIndex = text.search(/\(51\)\s*International|\bclassification\b/i)
+  let columnMode: ApplicationLayout['columnMode'] = 'unknown'
+  if (hasCompactLabels) columnMode = 'compactLabel'
+  else if (classificationIndex >= 0 && applicantIndex >= 0 && Math.abs(classificationIndex - applicantIndex) < 260) columnMode = 'twoColumnInterleaved'
+  else if (classificationIndex >= 0 && applicantIndex >= 0 && classificationIndex < applicantIndex) columnMode = 'modernTwoColumn'
+  else if (inventorIndex >= 0 && (classificationIndex < 0 || classificationIndex > inventorIndex)) columnMode = 'oldOneColumn'
+
+  return {
+    columnMode,
+    classificationStyle,
+    compactLabels: hasCompactLabels,
+  }
 }
 
 function median(values: number[]) {
@@ -259,7 +330,7 @@ function findAnchor(lines: PdfLayoutLine[], pattern: RegExp, minY = -Infinity, m
     if (pattern.test(normalizeForMatching(line.text))) {
       const code = pattern.source.match(/\\\((\d{2})\\\)/)?.[1]
       const segment = code
-        ? line.segments.find(item => new RegExp(`\\(${code}\\)`).test(item.text))
+        ? line.segments.find(item => new RegExp(`\\(\\s*${code}\\s*\\)`).test(item.text))
         : undefined
       return { y: line.y0, x: segment?.x0 ?? line.x0, line }
     }
@@ -274,7 +345,7 @@ function patentPageScore(lines: PdfLayoutLine[]) {
 
 function getPatentWindows(page: PdfPageModel) {
   const starts = page.lines
-    .filter(line => /\(12\)\s*PATENT\s+APPLICATION\s+PUBLICATION/i.test(normalizeForMatching(line.text)))
+    .filter(line => APPLICATION_PUBLICATION_PATTERN.test(normalizeForMatching(line.text)))
     .map(line => line.y0)
     .sort((a, b) => a - b)
 
@@ -353,12 +424,13 @@ export function parseApplicants(rawBlock: string | null): ParsedApplicant[] {
   if (!rawBlock) return []
   const cleaned = stripLabel(
     normalizePatentText(rawBlock)
-      .replace(/\(72\)\s*Name\s+of\s+Inventor\s*:?.*$/i, '')
-      .replace(/\(71\)\s*Name\s+of\s+Applicant\s*:?/i, ''),
+      .replace(/\(72\)\s*Name\s*of\s*Inventor\s*:?.*$/i, '')
+      .replace(/\(71\)\s*Name\s*of\s*(?:Applicant)?\s*:?/i, '')
+      .replace(/^Applicant\s*:?\s*/i, ''),
     /^/
   )
 
-  const addressMatch = cleaned.match(/Address\s+of\s+Applicant\s*:?\s*/i)
+  const addressMatch = cleaned.match(/Address\s*of\s*Applicant\s*:?\s*/i)
   if (!addressMatch || addressMatch.index == null) {
     return parseNumberedList(cleaned)
       .map(item => ({
@@ -397,9 +469,9 @@ export function parseApplicants(rawBlock: string | null): ParsedApplicant[] {
 function cleanPartyName(value: string) {
   return compactWhitespace(
     value
-      .replace(/\bAddress\s+of\s+(?:Applicant|Inventor)\s*:?.*$/i, '')
-      .replace(/\bName\s+of\s+Applicant\s*:?.*$/i, '')
-      .replace(/\bName\s+of\s+Inventor\s*:?.*$/i, '')
+      .replace(/\bAddress\s*of\s*(?:Applicant|Inventor)\s*:?.*$/i, '')
+      .replace(/\bName\s*of\s*Applicant\s*:?.*$/i, '')
+      .replace(/\bName\s*of\s*Inventor\s*:?.*$/i, '')
   )
 }
 
@@ -407,7 +479,7 @@ export function parseInventors(rawBlock: string | null) {
   if (!rawBlock) return []
   const cleaned = stripLabel(
     normalizePatentText(rawBlock)
-      .replace(/\(72\)\s*Name\s+of\s+Inventor\s*:?/i, '')
+      .replace(/\(72\)\s*Name\s*of\s*Inventor\s*:?/i, '')
       .replace(/\(57\)\s*Abstract\s*:?.*$/i, ''),
     /^/
   )
@@ -416,36 +488,83 @@ export function parseInventors(rawBlock: string | null) {
     .filter(Boolean)
 }
 
-export function normalizeClassifications(rawBlock: string | null) {
-  if (!rawBlock) return []
-  const withoutLabel = normalizePatentText(rawBlock)
-    .replace(/\(51\)\s*International\s+classification/i, '')
-    .replace(/\((31|32|33|86|87|61|62|57)\).*$/i, '')
-    .replace(/International\s+classification/i, '')
-    .replace(/\|/g, ' ')
-    .replace(/^[:\s,]+/, '')
+function normalizeIpcCode(section: string, classDigits: string, subclass: string, mainGroup: string, subgroup?: string) {
+  const prefix = `${section.toUpperCase()}${classDigits}${subclass.toUpperCase()}`
+  const main = mainGroup.replace(/\s+/g, '')
+  const sub = subgroup?.replace(/\s+/g, '')
+  if (sub) return `${prefix} ${main}/${sub}`
+  return main.length > 4 ? `${prefix}${main}` : `${prefix} ${main}`
+}
 
-  const normalized = compactWhitespace(withoutLabel)
-  if (!normalized || /^:?NA$/i.test(normalized)) return []
+export function harvestIpcClassifications(value: string | null) {
+  if (!value) return []
+  const text = compactWhitespace(
+    normalizePatentText(value)
+      .replace(/\|/g, ' ')
+      .replace(/\b([A-H])O(\d[A-Z])\b/g, (_match, section, rest) => `${section}0${rest}`)
+      .replace(/\bN\s*\/\s*A\b/gi, 'NA')
+  )
+  if (!text || /^:?NA$/i.test(text)) return []
 
-  const matches = normalized.match(/[A-H]\d{2}[A-Z]\s*\d+[A-Z0-9]*(?:\/\d+[A-Z0-9]*)?/g)
-  if (matches?.length) {
-    return Array.from(new Set(matches.map(item => compactWhitespace(item).replace(/\s+/, ' '))))
+  const matches: Array<{ index: number; code: string }> = []
+  const slashRegex = /\b([A-H])\s*(\d{2})\s*([A-Z])\s*([0-9]{1,5})\s*\/\s*([0-9]{1,8}[A-Z0-9]*)/gi
+  const compactRegex = /\b([A-H])\s*(\d{2})\s*([A-Z])\s*([0-9]{6,10})(?=\d+\)|\D|$)/gi
+  let match: RegExpExecArray | null
+  while ((match = slashRegex.exec(text)) !== null) {
+    matches.push({ index: match.index, code: normalizeIpcCode(match[1], match[2], match[3], match[4], match[5]) })
+  }
+  while ((match = compactRegex.exec(text)) !== null) {
+    matches.push({ index: match.index, code: normalizeIpcCode(match[1], match[2], match[3], match[4]) })
   }
 
+  const ordered = matches.sort((a, b) => a.index - b.index).map(item => item.code)
+  return Array.from(new Set(ordered))
+}
+
+function keepClassificationLineTokens(line: string) {
+  return line
+    .replace(/^(\s*\d{1,5}\s*\/\s*[0-9A-Z]{1,8})\s*,?\s*\d+\).*$/i, '$1')
+    .replace(/(\b[A-H]\s*\d{2}\s*[A-Z])\s+\d+\).*$/i, '$1')
+}
+
+function stripClassificationLabels(rawBlock: string) {
+  return normalizePatentText(rawBlock)
+    .replace(/\(51\)\s*International(?:\s*classification|\s*:)?/ig, ' ')
+    .replace(/\bInternational(?:\s*classification|\s*:)?/ig, ' ')
+    .replace(/\bclassification\s*:?\s*/ig, ' ')
+    .replace(/\((71|72)\)\s*Name\s*of\s*(Applicant|Inventor)\s*:?.*$/gim, ' ')
+    .replace(/\bAddress\s*of\s*(Applicant|Inventor)\s*:?.*$/gim, ' ')
+    .split('\n')
+    .map(keepClassificationLineTokens)
+    .join('\n')
+}
+
+function trimClassificationBlock(rawBlock: string) {
+  const text = stripClassificationLabels(rawBlock)
+    .replace(/\((31|32|33|43|57|61|62|71|72|86|87)\)[\s\S]*$/i, ' ')
+  return text.replace(/^[:\s,]+/, '')
+}
+
+export function normalizeClassifications(rawBlock: string | null) {
+  if (!rawBlock) return []
+  const harvested = harvestIpcClassifications(stripClassificationLabels(rawBlock))
+  if (harvested.length) return harvested
+
+  const fallback = compactWhitespace(trimClassificationBlock(rawBlock))
+  if (!fallback || /^:?NA$/i.test(fallback)) return []
   return Array.from(new Set(
-    normalized
+    fallback
       .split(/[,\n;]/)
       .map(item => compactWhitespace(item.replace(/^:/, '')))
-      .filter(item => item && !/^NA$/i.test(item))
+      .filter(item => item && /^[A-H]\s*\d{2}\s*[A-Z]/i.test(item) && !/^NA$/i.test(item) && !/\b(Name|Address)\s*of\s*(Applicant|Inventor)\b/i.test(item))
   ))
 }
 
-function parseApplicationNumber(text: string) {
-  const match = text.match(/\(21\)\s*Application\s+No\.?\s*:?\s*([A-Z]{0,3}\s*\d[\d/ -]{5,}\s*[A-Z]?)\b/i)
+export function parseApplicationNumber(text: string) {
+  const match = normalizePatentText(text).match(/\(21\)\s*Application\s*No\.?\s*:?\s*([A-Z/]{0,8}\s*\d[\dA-Z/ -]{2,}\s*[A-Z]?)\b/i)
   if (!match) return { raw: null, kind: null, publicationNumber: null }
   const raw = compactWhitespace(match[1])
-  const kindMatch = raw.match(/\b([A-Z])$/)
+  const kindMatch = raw.match(/([A-Z])$/)
   const digits = raw.replace(/[^0-9]/g, '')
   const kind = kindMatch?.[1] || null
   const publicationNumber = digits ? `IN${digits}${kind || ''}` : null
@@ -457,8 +576,8 @@ function makeSyntheticPublicationNumber(sourceFileHash: string, pageNumber: numb
   return `UNPARSED-${sourceFileHash.slice(0, 8).toUpperCase()}-P${pageNumber}-${digest}`
 }
 
-function parseCounts(text: string) {
-  const match = text.match(/No\.\s*of\s*Pages\s*:\s*(\d+)\s*No\.\s*of\s*Claims\s*:\s*(\d+)/i)
+export function parseCounts(text: string) {
+  const match = normalizePatentText(text).match(/No\.?\s*of\s*Pages?\s*:?\s*(\d+)\s*(?:[,;|]?\s*)?No\.?\s*of\s*Claims?\s*:?\s*(\d+)/i)
   return {
     numberOfPages: match ? Number(match[1]) : null,
     numberOfClaims: match ? Number(match[2]) : null,
@@ -498,26 +617,46 @@ function confidenceFor(record: Partial<ExtractedPatentRecord>, anchorScore: numb
   return Math.max(0, Math.min(1, Number(score.toFixed(3))))
 }
 
+function extractClassificationFallbackText(windowText: string) {
+  const text = normalizePatentText(windowText)
+  const classificationIndex = text.search(/\(51\)\s*International|\bclassification\b/i)
+  const abstractIndex = text.search(/\(57\)\s*Abstract/i)
+  if (classificationIndex >= 0) {
+    return text.slice(classificationIndex, abstractIndex >= 0 ? abstractIndex : undefined)
+  }
+
+  const titleIndex = text.search(/\(54\)\s*Title\s*of\s*the\s*invention/i)
+  return text.slice(titleIndex >= 0 ? titleIndex : 0, abstractIndex >= 0 ? abstractIndex : undefined)
+}
+
+function countBreakdown(values: string[]) {
+  return values.reduce<Record<string, number>>((breakdown, value) => {
+    breakdown[value] = (breakdown[value] || 0) + 1
+    return breakdown
+  }, {})
+}
+
 function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFileHash: string): ExtractedPatentRecord | null {
   const windowLines = linesInWindow(page, y0, y1)
   const anchorScore = patentPageScore(windowLines)
-  if (anchorScore < 5) return null
+  if (classifyPageSection(linesToText(windowLines)) !== 'applicationPublication' || anchorScore < 4) return null
 
   const warnings: string[] = []
   const windowText = linesToText(windowLines)
   const normalizedWindowText = normalizePatentText(windowText)
+  const layout = detectApplicationLayout(windowLines)
   const application = parseApplicationNumber(normalizedWindowText)
 
-  const titleAnchor = findAnchor(windowLines, /\(54\)\s*Title\s+of\s+the\s+invention/i)
-  const applicantAnchor = findAnchor(windowLines, /\(71\)\s*Name\s+of\s+Applicant/i)
-  const inventorAnchor = findAnchor(windowLines, /\(72\)\s*Name\s+of\s+Inventor/i)
+  const titleAnchor = findAnchor(windowLines, /\((?:54|5)\)\s*Title\s*of\s*the\s*invention/i)
+  const applicantAnchor = findAnchor(windowLines, /\(71\)\s*Name\s*of(?:\s*Applicant)?/i)
+  const inventorAnchor = findAnchor(windowLines, /\(72\)\s*Name\s*of\s*Inventor/i)
   const abstractAnchor = findAnchor(windowLines, /\(57\)\s*Abstract/i)
-  const classificationAnchor = findAnchor(windowLines, /\(51\)\s*International\s+classification/i)
+  const classificationAnchor = findAnchor(windowLines, /\(51\)(?:\s*International(?:\s*classification|\s*:)?|\s*)/i)
   const firstLeftAfterClassification = classificationAnchor
     ? windowLines.find(line =>
       line.y0 > classificationAnchor.y &&
       line.x0 < page.width * 0.5 &&
-      /\((31|32|33|86|87|61|62)\)/.test(normalizeForMatching(line.text))
+      /\((31|32|33|43|57|61|62|86|87)\)/.test(normalizeForMatching(line.text))
     )
     : null
 
@@ -533,7 +672,7 @@ function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFil
   const titleRaw = titleAnchor
     ? textInRegion(page, { y0: titleAnchor.y - 1, y1: titleEndY, x0: 0, x1: page.width })
     : ''
-  const title = stripLabel(titleRaw, /\(54\)\s*Title\s+of\s+the\s+invention\s*:?\s*/i)
+  const title = stripLabel(titleRaw, /\((?:54|5)\)\s*Title\s*of\s*the\s*invention\s*:?\s*/i)
 
   const rightX = applicantAnchor?.x ?? page.width * 0.52
   const abstractY = abstractAnchor?.y ?? y1
@@ -557,14 +696,20 @@ function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFil
   const classificationStartY = classificationAnchor
     ? Math.min(classificationAnchor.y, titleEndY)
     : titleEndY
-  const rawClassificationBlock = classificationAnchor
+  const classificationX1 = layout.columnMode === 'oldOneColumn' || layout.columnMode === 'compactLabel'
+    ? page.width
+    : Math.min(page.width, Math.max(rightX - 4, page.width * 0.48))
+  const regionClassificationBlock = classificationAnchor
     ? textInRegion(page, {
       x0: 0,
-      x1: Math.min(page.width, rightX - 4),
+      x1: classificationX1,
       y0: Math.max(y0, classificationStartY - 1),
       y1: firstLeftAfterClassification?.y0 ?? abstractY,
     })
     : null
+  const rawClassificationBlock = regionClassificationBlock && normalizeClassifications(regionClassificationBlock).length
+    ? regionClassificationBlock
+    : extractClassificationFallbackText(normalizedWindowText)
 
   const countLine = windowLines.find(line => /No\.\s*of\s*Pages/i.test(line.text))
   const abstractEndY = countLine?.y0 ?? Math.min(y1, page.height - 155)
@@ -587,13 +732,15 @@ function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFil
   if (!abstract) warnings.push('Missing abstract')
   if (!applicants.length) warnings.push('Missing applicants')
   if (!classifications.length) warnings.push('Missing classifications')
-  if (!counts.numberOfPages || !counts.numberOfClaims) warnings.push('Missing or malformed page/claim counts')
+  if (/No\.?\s*of\s*(?:Pages?|Claims?)/i.test(normalizedWindowText) && (!counts.numberOfPages || !counts.numberOfClaims)) {
+    warnings.push('Missing or malformed page/claim counts')
+  }
 
   const effectiveTitle = title || `[Unparsed patent page ${page.pageNumber}]`
   const publicationNumber = application.publicationNumber || makeSyntheticPublicationNumber(sourceFileHash, page.pageNumber, normalizedWindowText)
   const countryMatch = normalizedWindowText.match(/\(19\)\s*([A-Z][A-Z\s]+?)(?=\s+\(|\n|$)/i)
-  const filingDateMatch = normalizedWindowText.match(/\(22\)\s*Date\s+of\s+filing\s+of\s+Application\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i)
-  const publicationDateMatch = normalizedWindowText.match(/\(43\)\s*Publication\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i)
+  const filingDateMatch = normalizedWindowText.match(/\(22\)\s*Date\s*of\s*filing(?:\s*of\s*Application)?\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i)
+  const publicationDateMatch = normalizedWindowText.match(/\(43\)\s*Publication\s*Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})/i)
 
   const base = {
     title: effectiveTitle,
@@ -634,6 +781,7 @@ function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFil
 }
 
 export function extractPatentRecordsFromPage(page: PdfPageModel, sourceFileHash: string): ExtractedPatentRecord[] {
+  if (classifyPageSection(page) !== 'applicationPublication') return []
   const records: ExtractedPatentRecord[] = []
   for (const window of getPatentWindows(page)) {
     const record = parsePatentWindow(page, window.y0, window.y1, sourceFileHash)
@@ -648,11 +796,14 @@ export async function extractPatentRecordsFromPdf(buffer: Buffer, sourceFileHash
   const records: ExtractedPatentRecord[] = []
   let ignoredPages = 0
   let lowConfidencePages = 0
+  const ignoredPageBreakdown: Partial<Record<PatentPageSection, number>> = {}
 
   for (const page of pages) {
     const pageRecords = extractPatentRecordsFromPage(page, hash)
     if (!pageRecords.length) {
       ignoredPages += 1
+      const section = classifyPageSection(page)
+      ignoredPageBreakdown[section] = (ignoredPageBreakdown[section] || 0) + 1
       continue
     }
     for (const record of pageRecords) {
@@ -661,11 +812,14 @@ export async function extractPatentRecordsFromPdf(buffer: Buffer, sourceFileHash
     }
   }
 
+  const warnings = records.flatMap(record => record.extractionWarnings)
   return {
     totalPages: pages.length,
     records,
     ignoredPages,
     lowConfidencePages,
-    warningCount: records.reduce((sum, record) => sum + record.extractionWarnings.length, 0),
+    warningCount: warnings.length,
+    warningBreakdown: countBreakdown(warnings),
+    ignoredPageBreakdown,
   }
 }

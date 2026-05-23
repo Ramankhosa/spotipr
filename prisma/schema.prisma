@@ -1469,6 +1469,7 @@ model LocalPatent {
   numberOfClaims         Int?
   sourcePdfName          String?
   sourceFileHash         String?
+  sourceImportFileId     String?
   sourcePageNumber       Int?
   ragText                String?
   embeddingText          String?
@@ -1480,7 +1481,9 @@ model LocalPatent {
   updatedAt DateTime @updatedAt
 
   embeddings LocalPatentEmbedding[]
+  sourceImportFile PatentImportFile? @relation(fields: [sourceImportFileId], references: [id], onDelete: SetNull)
 
+  @@index([sourceImportFileId])
   @@map("local_patents")
 }
 
@@ -1513,34 +1516,37 @@ model PatentImportBatch {
 }
 
 model PatentImportFile {
-  id                 String             @id @default(cuid())
-  batchId            String
-  status             PatentImportStatus @default(QUEUED)
-  originalName       String
-  storedPath         String
-  mimeType           String?
-  fileHash           String
-  fileSizeBytes      Int
-  totalPages         Int                @default(0)
-  patentPages        Int                @default(0)
-  patentsCreated     Int                @default(0)
-  patentsUpdated     Int                @default(0)
-  ignoredPages       Int                @default(0)
-  lowConfidencePages Int                @default(0)
-  warningCount       Int                @default(0)
-  errorMessage       String?
-  extractionVersion  String?
-  lockedBy           String?
-  lockedUntil        DateTime?
-  heartbeatAt        DateTime?
-  attemptCount       Int                @default(0)
-  nextAttemptAt      DateTime           @default(now())
-  startedAt          DateTime?
-  completedAt        DateTime?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  id                   String             @id @default(cuid())
+  batchId              String
+  status               PatentImportStatus @default(QUEUED)
+  originalName         String
+  storedPath           String
+  mimeType             String?
+  fileHash             String
+  fileSizeBytes        Int
+  totalPages           Int                @default(0)
+  patentPages          Int                @default(0)
+  patentsCreated       Int                @default(0)
+  patentsUpdated       Int                @default(0)
+  ignoredPages         Int                @default(0)
+  lowConfidencePages   Int                @default(0)
+  warningCount         Int                @default(0)
+  warningBreakdown     Json               @default("{}")
+  ignoredPageBreakdown Json               @default("{}")
+  errorMessage         String?
+  extractionVersion    String?
+  lockedBy             String?
+  lockedUntil          DateTime?
+  heartbeatAt          DateTime?
+  attemptCount         Int                @default(0)
+  nextAttemptAt        DateTime           @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   batch PatentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  extractedPatents LocalPatent[]
 
   @@unique([batchId, fileHash])
   @@index([status, nextAttemptAt])

@@ -286,7 +286,7 @@ export default function SuperAdminDashboard() {
         { label: 'Country Profiles', icon: '🗺️', href: '/super-admin/countries' },
         { label: 'Section Prompts', icon: '📝', href: '/super-admin/section-prompts' },
         { label: 'Jurisdiction Styles', icon: '🎨', href: '/super-admin/jurisdiction-styles' },
-        { label: 'Patent Corpus', icon: '📄', href: '/super-admin/patent-corpus', badge: 'NEW' },
+        { label: 'Patent Journal Extractor', icon: '📄', href: '/super-admin/patent-corpus', badge: 'NEW' },
         { label: 'Superset Sections', icon: '📚', href: '/super-admin/superset-sections' }
       ]
     },
@@ -337,6 +337,17 @@ export default function SuperAdminDashboard() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
             {!sidebarCollapsed && <span>Create Tenant</span>}
+          </button>
+
+          <button
+            onClick={() => router.push('/super-admin/patent-corpus')}
+            className={`mt-2 w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700 border border-slate-700 transition-all ${sidebarCollapsed ? 'justify-center' : ''}`}
+            title="Patent Journal Extractor"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
+            </svg>
+            {!sidebarCollapsed && <span>Journal Extractor</span>}
           </button>
 
           <div className="pt-4 space-y-1">
@@ -455,6 +466,15 @@ export default function SuperAdminDashboard() {
             </div>
             <div className="flex items-center gap-3">
               <button
+                onClick={() => router.push('/super-admin/patent-corpus')}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-500 text-white hover:bg-violet-600 border border-violet-400/60 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
+                </svg>
+                <span className="text-sm">Patent Journal Extractor</span>
+              </button>
+              <button
                 onClick={checkExpiryNotifications}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition-colors"
               >
@@ -526,6 +546,33 @@ export default function SuperAdminDashboard() {
                 <div className="text-3xl font-bold text-white">{tenants.filter(t => t.status === 'ACTIVE').length}</div>
                 <div className="text-sm text-slate-400 mt-1">Currently active</div>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-800/50 border border-violet-500/30 overflow-hidden">
+            <div className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-violet-200">
+                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-white">Patent Journal Extractor and Embeddings</h3>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Upload patent journal PDFs, extract patent records, and start the embedding queue from one workspace.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => router.push('/super-admin/patent-corpus')}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-600 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 12h15" />
+                </svg>
+                Open Extractor
+              </button>
             </div>
           </div>
 

@@ -335,7 +335,7 @@ function NewPatentDraftPageContent() {
         })
         setAvailableCountries(countries)
         if (countries.length > 0) {
-          const defaultSel = countries.find(c => c.code === 'US')?.code || countries.find(c => c.code === 'PCT')?.code || countries[0].code
+          const defaultSel = countries.find(c => c.code === 'IN')?.code || countries.find(c => c.code === 'PCT')?.code || countries[0].code
           setSelectedCodes([defaultSel])
         }
       } catch (e) {

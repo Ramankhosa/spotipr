@@ -1,9 +1,12 @@
 import fs from 'fs'
 import { describe, expect, it } from 'vitest'
 import {
+  classifyPageSection,
   extractPatentRecordsFromPdf,
   normalizeClassifications,
+  parseApplicationNumber,
   parseApplicants,
+  parseCounts,
   parseInventors,
 } from '@/lib/patent-corpus-extractor'
 
@@ -14,6 +17,70 @@ describe('patent corpus field parsers', () => {
       'C07D 401/14',
       'E04H0009020000',
     ])
+  })
+
+  it('harvests IPC classifications from modern continuation styles', () => {
+    expect(normalizeClassifications(`
+      (51) International : G06Q0040080000, G06Q0020100000,
+      classification G06F0007020000, G06Q0020240000,
+      (71)Name of Applicant : Example Limited
+    `)).toEqual([
+      'G06Q0040080000',
+      'G06Q0020100000',
+      'G06F0007020000',
+      'G06Q0020240000',
+    ])
+  })
+
+  it('keeps compact IPC codes when applicant numbering is glued to the classification line', () => {
+    expect(normalizeClassifications(`
+      (51) (71)Name of Applicant :
+      International:D02J0013000000,D02J0001220000,A23G00015400001)RELIANCE INDUSTRIES LIMITED.
+      classification Address of Applicant : Example address
+    `)).toEqual([
+      'D02J0013000000',
+      'D02J0001220000',
+      'A23G0001540000',
+    ])
+  })
+
+  it('recombines old split IPC formats without applicant contamination', () => {
+    expect(normalizeClassifications(`
+      (51) International classification
+      G01R
+      37/28
+      H 04 L 12/00
+      (71) Name of Applicant : Controller General of Patents
+    `)).toEqual([
+      'G01R 37/28',
+      'H04L 12/00',
+    ])
+  })
+
+  it('parses compact and old application number labels', () => {
+    expect(parseApplicationNumber('(21) ApplicationNo.202311051949 A')).toMatchObject({
+      raw: '202311051949 A',
+      publicationNumber: 'IN202311051949A',
+    })
+    expect(parseApplicationNumber('(21) APPLICATION No: 0869/DEL/2005 A')).toMatchObject({
+      raw: '0869/DEL/2005 A',
+      publicationNumber: 'IN08692005A',
+    })
+  })
+
+  it('parses compact page and claim counts', () => {
+    expect(parseCounts('No. of Pages : 3No. of Claims : 10')).toEqual({
+      numberOfPages: 3,
+      numberOfClaims: 10,
+    })
+  })
+
+  it('classifies ignored patent journal sections', () => {
+    expect(classifyPageSection('(12) PATENT APPLICATIONPUBLICATION\n(21) Application No.202411077405 A')).toBe('applicationPublication')
+    expect(classifyPageSection('FIRST EXAMINATION REPORT ISSUED IN THE WEEK')).toBe('weeklyFer')
+    expect(classifyPageSection('PATENTS GRANTED U/S 43 DATE OF GRANT')).toBe('grantList')
+    expect(classifyPageSection('DESIGN NUMBER CLASS AND SUB-CLASS DATE OF REGISTRATION')).toBe('designPublication')
+    expect(classifyPageSection('CORRIGENDUM The Patent Office Journal')).toBe('corrigendum')
   })
 
   it('parses applicant lists with an address tied to the first applicant', () => {

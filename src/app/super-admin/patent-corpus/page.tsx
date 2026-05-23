@@ -1,12 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Database, Download, FileText, Play, RefreshCw, Search, Upload } from 'lucide-react'
+import { AlertTriangle, Database, Download, Eye, FileText, MoreVertical, Play, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+
+type BreakdownMap = Record<string, number>
 
 type ImportFile = {
   id: string
   originalName: string
+  fileHash?: string
   status: string
   totalPages: number
   patentPages: number
@@ -15,6 +18,9 @@ type ImportFile = {
   ignoredPages: number
   lowConfidencePages: number
   warningCount: number
+  warningBreakdown?: BreakdownMap | null
+  ignoredPageBreakdown?: BreakdownMap | null
+  embeddingCounts?: BreakdownMap | null
   errorMessage?: string | null
 }
 
@@ -38,16 +44,36 @@ type ImportBatch = {
   files?: ImportFile[]
 }
 
-type SearchResult = {
+type PatentEmbedding = {
+  id: string
+  model: string
+  status: string
+  errorMessage?: string | null
+  embeddedAt?: string | null
+}
+
+type ExtractedPatent = {
+  id: number
   publicationNumber: string
   applicationNumberRaw?: string | null
   title: string
   abstract?: string | null
-  sourcePdfName?: string | null
   sourcePageNumber?: number | null
-  hybridScore?: number
-  vectorRank?: number
-  textRank?: number
+  extractionConfidence?: number | null
+  extractionWarnings?: string[] | BreakdownMap | null
+  embeddings?: PatentEmbedding[]
+}
+
+type FileDetail = {
+  file: ImportFile
+  patents: ExtractedPatent[]
+  embeddingCounts: BreakdownMap
+  pagination: {
+    page: number
+    pageSize: number
+    total: number
+    totalPages: number
+  }
 }
 
 type RunnerState = {
@@ -71,6 +97,73 @@ const statusClass: Record<string, string> = {
   FAILED: 'bg-red-100 text-red-700',
 }
 
+const breakdownLabels: Record<string, string> = {
+  applicationPublication: 'Application pages',
+  frontMatter: 'Front matter',
+  weeklyFer: 'FER/notices',
+  grantList: 'Grant lists',
+  designPublication: 'Designs',
+  corrigendum: 'Corrigenda',
+  continuedMarker: 'Continuation pages',
+  otherNotice: 'Other notices',
+  unknown: 'Unknown',
+}
+
+function formatBreakdownKey(key: string) {
+  return breakdownLabels[key] || key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, value => value.toUpperCase())
+}
+
+function getBreakdownEntries(value?: BreakdownMap | null) {
+  return Object.entries(value || {})
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+}
+
+function BreakdownPreview({ breakdown, tone = 'slate' }: { breakdown?: BreakdownMap | null; tone?: 'slate' | 'amber' }) {
+  const entries = getBreakdownEntries(breakdown)
+  if (!entries.length) return null
+  const visible = entries.slice(0, 3)
+  const extra = entries.length - visible.length
+  const toneClass = tone === 'amber' ? 'text-amber-800' : 'text-slate-500'
+  return (
+    <div className={`mt-1 space-y-0.5 text-[11px] leading-4 ${toneClass}`}>
+      {visible.map(([key, count]) => (
+        <div key={key}>{formatBreakdownKey(key)}: {count}</div>
+      ))}
+      {extra > 0 && <div>+{extra} more</div>}
+    </div>
+  )
+}
+
+function EmbeddingCounts({ counts }: { counts?: BreakdownMap | null }) {
+  const total = Object.values(counts || {}).reduce((sum, count) => sum + Number(count || 0), 0)
+  if (!total) return <span className="text-xs text-slate-500">None</span>
+  const items = [
+    ['COMPLETED', 'Done'],
+    ['QUEUED', 'Queued'],
+    ['PROCESSING', 'Running'],
+    ['FAILED', 'Failed'],
+  ] as const
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map(([key, label]) => Number(counts?.[key] || 0) > 0 && (
+        <span key={key} className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass[key] || 'bg-slate-100 text-slate-700'}`}>
+          {label}: {counts?.[key]}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function warningText(value?: string[] | BreakdownMap | null) {
+  if (!value) return ''
+  if (Array.isArray(value)) return value.join(', ')
+  return Object.entries(value)
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => `${formatBreakdownKey(key)}: ${count}`)
+    .join(', ')
+}
+
 export default function PatentCorpusPage() {
   const { user } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -80,12 +173,12 @@ export default function PatentCorpusPage() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [searching, setSearching] = useState(false)
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [runner, setRunner] = useState<RunnerState | null>(null)
   const [maxPdfsPerBatch, setMaxPdfsPerBatch] = useState(100)
   const [downloading, setDownloading] = useState<string | null>(null)
+  const [selectedFileDetail, setSelectedFileDetail] = useState<FileDetail | null>(null)
+  const [loadingFileDetail, setLoadingFileDetail] = useState(false)
+  const [fileAction, setFileAction] = useState<string | null>(null)
 
   const isViewer = useMemo(() => {
     const roles = user?.roles || []
@@ -127,6 +220,27 @@ export default function PatentCorpusPage() {
     }
     const body = await response.json()
     setSelectedBatch(body.batch)
+    return body.batch as ImportBatch
+  }, [authHeaders])
+
+  const fetchFileDetail = useCallback(async (batchId: string, fileId: string, page = 1) => {
+    setLoadingFileDetail(true)
+    setError(null)
+    try {
+      const params = new URLSearchParams({ page: String(page), pageSize: '25' })
+      const response = await fetch(`/api/super-admin/patent-corpus/imports/${batchId}/files/${fileId}?${params.toString()}`, {
+        headers: authHeaders(),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'Failed to load PDF details')
+      }
+      const body = await response.json()
+      setSelectedFileDetail(body)
+      return body as FileDetail
+    } finally {
+      setLoadingFileDetail(false)
+    }
   }, [authHeaders])
 
   useEffect(() => {
@@ -147,9 +261,12 @@ export default function PatentCorpusPage() {
       if (selectedBatch?.id && ['QUEUED', 'PROCESSING'].includes(selectedBatch.status)) {
         fetchBatchDetail(selectedBatch.id).catch(() => undefined)
       }
+      if (selectedBatch?.id && selectedFileDetail?.file?.id && ['QUEUED', 'PROCESSING'].includes(selectedFileDetail.file.status)) {
+        fetchFileDetail(selectedBatch.id, selectedFileDetail.file.id, selectedFileDetail.pagination.page).catch(() => undefined)
+      }
     }, 5000)
     return () => window.clearInterval(interval)
-  }, [canAccess, fetchBatchDetail, fetchBatches, selectedBatch?.id, selectedBatch?.status, user])
+  }, [canAccess, fetchBatchDetail, fetchBatches, fetchFileDetail, selectedBatch?.id, selectedBatch?.status, selectedFileDetail?.file?.id, selectedFileDetail?.file?.status, selectedFileDetail?.pagination.page, user])
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files?.length || isViewer) return
@@ -179,6 +296,7 @@ export default function PatentCorpusPage() {
       if (body.runner) setRunner(body.runner)
       setSuccess('Import batch queued. Automatic processing has started.')
       setSelectedBatch(body.batch)
+      setSelectedFileDetail(null)
       await fetchBatches()
       if (fileInputRef.current) fileInputRef.current.value = ''
     } catch (err) {
@@ -223,13 +341,14 @@ export default function PatentCorpusPage() {
     await fetchBatches()
   }
 
-  const downloadExport = async (format: 'jsonl' | 'json' | 'csv', batchId?: string) => {
-    const key = `${batchId || 'all'}-${format}`
+  const downloadExport = async (format: 'jsonl' | 'json' | 'csv', batchId?: string, fileId?: string) => {
+    const key = `${fileId || batchId || 'all'}-${format}`
     setDownloading(key)
     setError(null)
     try {
       const params = new URLSearchParams({ format })
       if (batchId) params.set('batchId', batchId)
+      if (fileId) params.set('fileId', fileId)
       const response = await fetch(`/api/super-admin/patent-corpus/export?${params.toString()}`, {
         headers: authHeaders(),
       })
@@ -240,7 +359,7 @@ export default function PatentCorpusPage() {
       const blob = await response.blob()
       const disposition = response.headers.get('Content-Disposition') || ''
       const match = disposition.match(/filename="([^"]+)"/)
-      const fileName = match?.[1] || `patent-corpus-${batchId || 'all'}.${format}`
+      const fileName = match?.[1] || `patent-corpus-${fileId || batchId || 'all'}.${format}`
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
@@ -256,29 +375,80 @@ export default function PatentCorpusPage() {
     }
   }
 
-  const runSearch = async () => {
-    if (!query.trim()) return
-    setSearching(true)
+  const refreshSelectedBatchAndFile = async (file?: ImportFile | null) => {
+    if (!selectedBatch) return
+    await fetchBatches()
+    await fetchBatchDetail(selectedBatch.id)
+    if (file) {
+      await fetchFileDetail(selectedBatch.id, file.id, selectedFileDetail?.pagination.page || 1)
+    }
+  }
+
+  const retryFileExtraction = async (file: ImportFile) => {
+    if (!selectedBatch || isViewer) return
+    const key = `${file.id}-retry-extraction`
+    setFileAction(key)
     setError(null)
     try {
-      const response = await fetch('/api/patent-corpus/search', {
+      const response = await fetch(`/api/super-admin/patent-corpus/imports/${selectedBatch.id}/files/${file.id}/retry-extraction`, {
         method: 'POST',
-        headers: {
-          ...authHeaders(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query, limit: 10 }),
+        headers: authHeaders(),
       })
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || 'Search failed')
-      }
-      const body = await response.json()
-      setSearchResults(body.results || [])
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to retry PDF extraction')
+      if (body.runner) setRunner(body.runner)
+      setSuccess('PDF extraction queued again. Automatic processing has started.')
+      await refreshSelectedBatchAndFile(file)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Search failed')
+      setError(err instanceof Error ? err.message : 'Failed to retry PDF extraction')
     } finally {
-      setSearching(false)
+      setFileAction(null)
+    }
+  }
+
+  const retryFileEmbeddings = async (file: ImportFile) => {
+    if (!selectedBatch || isViewer) return
+    const key = `${file.id}-retry-embeddings`
+    setFileAction(key)
+    setError(null)
+    try {
+      const response = await fetch(`/api/super-admin/patent-corpus/imports/${selectedBatch.id}/files/${file.id}/retry-embeddings`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to retry PDF embeddings')
+      if (body.runner) setRunner(body.runner)
+      setSuccess(`Queued ${body.requeuedEmbeddings || 0} embedding job(s) for this PDF.`)
+      await refreshSelectedBatchAndFile(file)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to retry PDF embeddings')
+    } finally {
+      setFileAction(null)
+    }
+  }
+
+  const deleteFileExtractions = async (file: ImportFile) => {
+    if (!selectedBatch || isViewer) return
+    const confirmed = window.confirm(`Delete extracted patent records and embeddings for "${file.originalName}"? The uploaded PDF remains available for a later rerun.`)
+    if (!confirmed) return
+
+    const key = `${file.id}-delete-extractions`
+    setFileAction(key)
+    setError(null)
+    try {
+      const response = await fetch(`/api/super-admin/patent-corpus/imports/${selectedBatch.id}/files/${file.id}/extractions`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to delete PDF extractions')
+      setSuccess(`Deleted ${body.deletedPatents || 0} extracted patent record(s) and their embeddings.`)
+      await refreshSelectedBatchAndFile(file)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete PDF extractions')
+    } finally {
+      setFileAction(null)
     }
   }
 
@@ -299,6 +469,33 @@ export default function PatentCorpusPage() {
             <p className="mt-1 text-sm text-slate-600">Upload Indian patent journal PDFs, extract patent records, and queue RAG embeddings.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.zip,application/pdf,application/zip"
+              disabled={uploading || isViewer}
+              onChange={event => uploadFiles(event.target.files)}
+              className="hidden"
+            />
+            {!isViewer && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                title={`Upload up to ${maxPdfsPerBatch} PDFs per batch`}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                <Upload className="h-4 w-4" />
+                {uploading ? 'Uploading' : 'Upload'}
+              </button>
+            )}
+            <a
+              href="/super-admin/patent-corpus/search"
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              <Search className="h-4 w-4" />
+              Search
+            </a>
             <button
               onClick={() => downloadExport('jsonl')}
               disabled={downloading === 'all-jsonl'}
@@ -362,62 +559,7 @@ export default function PatentCorpusPage() {
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-          <aside className="space-y-6">
-            <section className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <Upload className="h-4 w-4 text-slate-500" />
-                <h2 className="text-sm font-semibold">Upload Batch</h2>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".pdf,.zip,application/pdf,application/zip"
-                disabled={uploading || isViewer}
-                onChange={event => uploadFiles(event.target.files)}
-                className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white disabled:opacity-50"
-              />
-              <p className="mt-3 text-xs leading-5 text-slate-500">
-                Upload up to {maxPdfsPerBatch} PDFs per batch. ZIP uploads are expanded server-side, deduplicated by file hash, and processed one PDF at a time automatically.
-              </p>
-              {isViewer && <p className="mt-2 text-xs text-amber-700">Viewer role cannot upload or retry imports.</p>}
-              {uploading && <p className="mt-2 text-sm text-blue-700">Uploading...</p>}
-            </section>
-
-            <section className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <Search className="h-4 w-4 text-slate-500" />
-                <h2 className="text-sm font-semibold">Corpus Search</h2>
-              </div>
-              <div className="flex gap-2">
-                <input
-                  value={query}
-                  onChange={event => setQuery(event.target.value)}
-                  placeholder="Search abstracts and titles"
-                  className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
-                />
-                <button
-                  onClick={runSearch}
-                  disabled={searching || !query.trim()}
-                  className="inline-flex items-center justify-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-                >
-                  <Search className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="mt-4 space-y-3">
-                {searchResults.map(result => (
-                  <div key={result.publicationNumber} className="border-t border-slate-100 pt-3">
-                    <div className="text-xs font-medium text-slate-500">{result.publicationNumber}</div>
-                    <div className="mt-1 text-sm font-medium leading-5">{result.title}</div>
-                    {result.abstract && <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-600">{result.abstract}</p>}
-                  </div>
-                ))}
-              </div>
-            </section>
-          </aside>
-
-          <main className="space-y-6">
+        <main className="space-y-6">
             <section className="rounded-lg border border-slate-200 bg-white">
               <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3">
                 <Database className="h-4 w-4 text-slate-500" />
@@ -451,7 +593,10 @@ export default function PatentCorpusPage() {
                         <td className="px-4 py-3">{new Date(batch.createdAt).toLocaleString()}</td>
                         <td className="px-4 py-3 text-right">
                           <button
-                            onClick={() => fetchBatchDetail(batch.id).catch(err => setError(err instanceof Error ? err.message : 'Failed to load batch'))}
+                            onClick={() => {
+                              setSelectedFileDetail(null)
+                              fetchBatchDetail(batch.id).catch(err => setError(err instanceof Error ? err.message : 'Failed to load batch'))
+                            }}
                             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           >
                             Details
@@ -520,6 +665,8 @@ export default function PatentCorpusPage() {
                         <th className="px-4 py-3">Patents</th>
                         <th className="px-4 py-3">Ignored</th>
                         <th className="px-4 py-3">Warnings</th>
+                        <th className="px-4 py-3">Embeddings</th>
+                        <th className="px-4 py-3"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -536,8 +683,99 @@ export default function PatentCorpusPage() {
                           </td>
                           <td className="px-4 py-3">{file.totalPages}</td>
                           <td className="px-4 py-3">{file.patentPages}</td>
-                          <td className="px-4 py-3">{file.ignoredPages}</td>
-                          <td className="px-4 py-3">{file.warningCount + file.lowConfidencePages}</td>
+                          <td className="px-4 py-3">
+                            <div>{file.ignoredPages}</div>
+                            <BreakdownPreview breakdown={file.ignoredPageBreakdown} />
+                          </td>
+                          <td className="px-4 py-3">
+                            <div>{file.warningCount + file.lowConfidencePages}</div>
+                            <BreakdownPreview breakdown={file.warningBreakdown} tone="amber" />
+                            {file.lowConfidencePages > 0 && (
+                              <div className="mt-1 text-[11px] leading-4 text-amber-800">Low confidence: {file.lowConfidencePages}</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <EmbeddingCounts counts={file.embeddingCounts} />
+                          </td>
+                          <td className="px-4 py-3">
+                            <details className="group relative ml-auto w-fit">
+                              <summary
+                                title="PDF actions"
+                                className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 [&::-webkit-details-marker]:hidden"
+                              >
+                                <MoreVertical className="h-4 w-4" />
+                              </summary>
+                              <div className="absolute right-0 z-30 mt-1 w-44 rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+                                <button
+                                  title="View extracted patent records"
+                                  onClick={() => selectedBatch && fetchFileDetail(selectedBatch.id, file.id).catch(err => setError(err instanceof Error ? err.message : 'Failed to load PDF details'))}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  View
+                                </button>
+                                <button
+                                  title="Download PDF-level CSV extraction"
+                                  onClick={() => downloadExport('csv', undefined, file.id)}
+                                  disabled={downloading === `${file.id}-csv`}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                  CSV
+                                </button>
+                                <button
+                                  title="Download PDF-level JSON extraction"
+                                  onClick={() => downloadExport('json', undefined, file.id)}
+                                  disabled={downloading === `${file.id}-json`}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                  JSON
+                                </button>
+                                <button
+                                  title="Download PDF-level JSONL extraction"
+                                  onClick={() => downloadExport('jsonl', undefined, file.id)}
+                                  disabled={downloading === `${file.id}-jsonl`}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                  JSONL
+                                </button>
+                                {!isViewer && (
+                                  <>
+                                    <div className="my-1 border-t border-slate-100" />
+                                    <button
+                                      title="Rerun extraction for this PDF"
+                                      onClick={() => retryFileExtraction(file)}
+                                      disabled={file.status === 'PROCESSING' || fileAction === `${file.id}-retry-extraction`}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                    >
+                                      <RefreshCw className="h-3.5 w-3.5" />
+                                      Extract
+                                    </button>
+                                    <button
+                                      title="Rerun embeddings for extracted records from this PDF"
+                                      onClick={() => retryFileEmbeddings(file)}
+                                      disabled={fileAction === `${file.id}-retry-embeddings` || file.patentPages === 0}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                    >
+                                      <Play className="h-3.5 w-3.5" />
+                                      Embed
+                                    </button>
+                                    <button
+                                      title="Delete extracted records and embeddings for this PDF"
+                                      onClick={() => deleteFileExtractions(file)}
+                                      disabled={file.status === 'PROCESSING' || fileAction === `${file.id}-delete-extractions` || file.patentPages === 0}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      Delete
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </details>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -545,8 +783,119 @@ export default function PatentCorpusPage() {
                 </div>
               </section>
             )}
-          </main>
-        </div>
+
+            {selectedFileDetail && (
+              <section className="rounded-lg border border-slate-200 bg-white">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-slate-500" />
+                      <h2 className="text-sm font-semibold">PDF Extractions</h2>
+                    </div>
+                    <div className="mt-1 max-w-3xl truncate text-xs text-slate-500">{selectedFileDetail.file.originalName}</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <EmbeddingCounts counts={selectedFileDetail.embeddingCounts} />
+                    <button
+                      onClick={() => selectedBatch && fetchFileDetail(selectedBatch.id, selectedFileDetail.file.id, selectedFileDetail.pagination.page).catch(err => setError(err instanceof Error ? err.message : 'Failed to refresh PDF details'))}
+                      disabled={loadingFileDetail}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+                <div className="grid gap-3 border-b border-slate-100 p-4 text-sm sm:grid-cols-4">
+                  <div><span className="text-slate-500">Records</span><div className="font-medium">{selectedFileDetail.pagination.total}</div></div>
+                  <div><span className="text-slate-500">Pages</span><div className="font-medium">{selectedFileDetail.file.totalPages}</div></div>
+                  <div><span className="text-slate-500">Status</span><div className="font-medium">{selectedFileDetail.file.status}</div></div>
+                  <div><span className="text-slate-500">File hash</span><div className="truncate font-mono text-xs">{selectedFileDetail.file.fileHash || 'n/a'}</div></div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                      <tr>
+                        <th className="px-4 py-3">Publication</th>
+                        <th className="px-4 py-3">Title</th>
+                        <th className="px-4 py-3">Page</th>
+                        <th className="px-4 py-3">Confidence</th>
+                        <th className="px-4 py-3">Warnings</th>
+                        <th className="px-4 py-3">Embeddings</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedFileDetail.patents.map(patent => {
+                        const warnings = warningText(patent.extractionWarnings)
+                        return (
+                          <tr key={patent.id} className="border-t border-slate-100 align-top">
+                            <td className="px-4 py-3">
+                              <div className="font-mono text-xs font-medium">{patent.publicationNumber}</div>
+                              {patent.applicationNumberRaw && <div className="mt-1 text-xs text-slate-500">{patent.applicationNumberRaw}</div>}
+                            </td>
+                            <td className="max-w-lg px-4 py-3">
+                              <div className="font-medium leading-5">{patent.title}</div>
+                              {patent.abstract && <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{patent.abstract}</p>}
+                            </td>
+                            <td className="px-4 py-3">{patent.sourcePageNumber || '-'}</td>
+                            <td className="px-4 py-3">
+                              {typeof patent.extractionConfidence === 'number' ? `${Math.round(patent.extractionConfidence * 100)}%` : '-'}
+                            </td>
+                            <td className="max-w-xs px-4 py-3 text-xs text-amber-800">{warnings || '-'}</td>
+                            <td className="px-4 py-3">
+                              {patent.embeddings?.length ? (
+                                <div className="space-y-1">
+                                  {patent.embeddings.map(embedding => (
+                                    <div key={embedding.id} className="flex flex-wrap items-center gap-1">
+                                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusClass[embedding.status] || 'bg-slate-100 text-slate-700'}`}>
+                                        {embedding.status}
+                                      </span>
+                                      <span className="text-[11px] text-slate-500">{embedding.model}</span>
+                                      {embedding.errorMessage && <span className="text-[11px] text-red-700">{embedding.errorMessage}</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-slate-500">None</span>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {!selectedFileDetail.patents.length && (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">
+                            No extracted patent records for this PDF.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {selectedFileDetail.pagination.totalPages > 1 && selectedBatch && (
+                  <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-600">
+                    <span>Page {selectedFileDetail.pagination.page} of {selectedFileDetail.pagination.totalPages}</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => fetchFileDetail(selectedBatch.id, selectedFileDetail.file.id, selectedFileDetail.pagination.page - 1).catch(err => setError(err instanceof Error ? err.message : 'Failed to load previous page'))}
+                        disabled={selectedFileDetail.pagination.page <= 1 || loadingFileDetail}
+                        className="rounded-md border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => fetchFileDetail(selectedBatch.id, selectedFileDetail.file.id, selectedFileDetail.pagination.page + 1).catch(err => setError(err instanceof Error ? err.message : 'Failed to load next page'))}
+                        disabled={selectedFileDetail.pagination.page >= selectedFileDetail.pagination.totalPages || loadingFileDetail}
+                        className="rounded-md border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+        </main>
       </div>
     </div>
   )

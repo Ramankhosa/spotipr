@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
+import { patentWhereForImportFile } from '@/lib/patent-corpus-service'
 
 export const runtime = 'nodejs'
 
@@ -26,6 +27,7 @@ const EXPORT_FIELDS = {
   numberOfClaims: true,
   sourcePdfName: true,
   sourceFileHash: true,
+  sourceImportFileId: true,
   sourcePageNumber: true,
   ragText: true,
   embeddingText: true,
@@ -85,6 +87,7 @@ function toCsv(rows: any[]) {
     'numberOfClaims',
     'sourcePdfName',
     'sourceFileHash',
+    'sourceImportFileId',
     'sourcePageNumber',
     'extractionConfidence',
     'extractionWarnings',
@@ -108,16 +111,33 @@ function toCsv(rows: any[]) {
   return lines.join('\n')
 }
 
-async function getBatchFileHashes(batchId: string) {
+function patentWhereForImportFiles(files: any[]) {
+  if (!files.length) return { id: -1 }
+
+  return {
+    OR: [
+      { sourceImportFileId: { in: files.map((file: any) => file.id) } },
+      ...files
+        .filter((file: any) => file.fileHash)
+        .map((file: any) => ({
+          sourceImportFileId: null,
+          sourceFileHash: file.fileHash,
+          ...(file.originalName ? { sourcePdfName: file.originalName } : {}),
+        })),
+    ],
+  }
+}
+
+async function getBatchFiles(batchId: string) {
   const batch = await (prisma as any).patentImportBatch.findUnique({
     where: { id: batchId },
     select: {
       id: true,
-      files: { select: { fileHash: true } },
+      files: { select: { id: true, fileHash: true, originalName: true } },
     },
   })
   if (!batch) return null
-  return Array.from(new Set((batch.files || []).map((file: any) => file.fileHash).filter(Boolean)))
+  return batch.files || []
 }
 
 export async function GET(request: NextRequest) {
@@ -127,18 +147,34 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const format = (searchParams.get('format') || 'jsonl').toLowerCase()
   const batchId = searchParams.get('batchId')
+  const fileId = searchParams.get('fileId')
 
   if (!['jsonl', 'json', 'csv'].includes(format)) {
     return NextResponse.json({ error: 'Export format must be jsonl, json, or csv.' }, { status: 400 })
   }
+  if (batchId && fileId) {
+    return NextResponse.json({ error: 'Export by either batchId or fileId, not both.' }, { status: 400 })
+  }
 
   const where: any = {}
+  let scope = 'all'
   if (batchId) {
-    const fileHashes = await getBatchFileHashes(batchId)
-    if (!fileHashes) {
+    const files = await getBatchFiles(batchId)
+    if (!files) {
       return NextResponse.json({ error: 'Import batch not found.' }, { status: 404 })
     }
-    where.sourceFileHash = { in: fileHashes.length ? fileHashes : ['__no_files__'] }
+    Object.assign(where, patentWhereForImportFiles(files))
+    scope = `batch-${batchId}`
+  } else if (fileId) {
+    const file = await (prisma as any).patentImportFile.findUnique({
+      where: { id: fileId },
+      select: { id: true, batchId: true, originalName: true, fileHash: true },
+    })
+    if (!file) {
+      return NextResponse.json({ error: 'Import file not found.' }, { status: 404 })
+    }
+    Object.assign(where, patentWhereForImportFile(file))
+    scope = `file-${fileId}`
   }
 
   const patents = await (prisma as any).localPatent.findMany({
@@ -152,7 +188,6 @@ export async function GET(request: NextRequest) {
   })
 
   const stamp = new Date().toISOString().slice(0, 10)
-  const scope = batchId ? `batch-${batchId}` : 'all'
   const baseName = `patent-corpus-${scope}-${stamp}`
   const headers = new Headers()
 
@@ -168,6 +203,7 @@ export async function GET(request: NextRequest) {
     return new NextResponse(JSON.stringify({
       exportedAt: new Date().toISOString(),
       batchId,
+      fileId,
       count: patents.length,
       patents,
     }, null, 2), { headers })

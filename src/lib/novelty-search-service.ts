@@ -138,20 +138,33 @@ RULES:
 - Use ASCII only.
 - Do not invent technical facts not present in the disclosure.
 - The search query is used as the single PQAI query and as the broad local-corpus concept query.
+SEARCH QUERY DISCIPLINE:
+- The searchQuery is for retrieving the closest prior art, not for proving novelty.
+- Build searchQuery around the broad technical object, core operation, and baseline mechanism that older patents are likely to describe.
+- If the invention contains both a known baseline workflow and a narrower improvement, put the baseline workflow in searchQuery and put the narrower improvement in novelty_focus.
+- Do not overload searchQuery with every differentiator, threshold, formula, species, cryptographic step, exact sensor type, data format, material ratio, performance limit, or special embodiment unless that detail is essential to identify the invention category.
+- A good searchQuery should still retrieve close prior art that lacks the invention's newest improvement.
+- Construct searchQuery using this pattern when possible: technical object/system/process + primary operation + core mechanism/transformation + target object/material/data/condition.
 - The search query must describe what the invention is and how it works, not its market benefit.
 - Keep searchQuery broad and self-contained; do not stuff it with every feature.
-- Prefer recall-oriented technical terms, but preserve the distinctive operating mechanism.
+- Prefer recall-oriented technical terms and preserve only the most central operating mechanism needed to find close prior art; avoid packing searchQuery with secondary refinements that belong in novelty_focus.
 - Return 3-8 invention_features unless the disclosure truly contains fewer.
 - Each feature must be a claim-relevant mechanism, structure, material relationship, control loop, process step, data flow, or algorithmic transformation.
 - Each invention_feature is independently embedded for local Indian abstract search; write it as a standalone 3-10 word technical phrase.
+- Order invention_features from broad core mechanisms to narrower differentiators.
+- The first 2-4 features should describe baseline mechanisms likely to retrieve close prior art.
+- Later features may capture narrower improvements or differentiators.
+- Do not extract only the newest or most specific improvements; include the baseline mechanism that makes the invention searchable.
 - Do not make features depend on the title or searchQuery for meaning.
 - Do not repeat the full searchQuery or broad application field in every feature.
 - Do not use benefits as features, such as "improved efficiency", "real-time monitoring", or "secure access", unless paired with a concrete mechanism.
 - Do not list generic components as standalone features: processor, memory, sensor, controller, module, database, server, app, battery, housing, network, or API.
 - Include generic components only when their specific interaction is material to novelty.
 - novelty_focus must contain 1-4 features from invention_features that are most likely to distinguish over prior art.
+- novelty_focus should hold differentiators that may be too narrow for the main searchQuery but important for later novelty assessment.
+- novelty_focus must not include ordinary field-common parts unless their specific interaction is the likely inventive contribution. Prefer features involving a control relationship, material relationship, formulation ratio, biological target interaction, structural geometry, process sequence, signal-processing transformation, or measurable technical effect.
 - cpcCodes and ipcCodes should be empty arrays unless the class is strongly inferable from the disclosure.
-- search_exclusions should contain terms that are incidental, business-oriented, or likely to pull irrelevant references.
+- search_exclusions should contain incidental, business-oriented, user-context, brand, marketing, or overly narrow embodiment terms that may pull irrelevant references or suppress close prior art.
 - confidence reflects disclosure sufficiency for novelty search, not patentability.
 - warnings should call out missing mechanism detail, vague terms, missing materials/steps, or weak search coverage risks.
 `;
@@ -300,6 +313,7 @@ NOVELTY EVIDENCE RULES
 - Present/Partial require a verbatim quote <= 18 words and a field of "title" or "abstract".
 - Absent requires a short reason.
 - Unknown must be used when evidence is weak; do not convert missing abstracts into positive novelty.
+- A feature marked Absent or Unknown in one patent is not automatically unique. It is only a potential differentiator if it is absent from the closest references and is not a generic field-common component.
 
 OUTPUT JSON SHAPE:
 {
@@ -344,6 +358,7 @@ EVIDENCE RULES
 - Present/Partial require a short quote from title or abstract when available.
 - If an abstract is thin, vague, unavailable, or does not support the feature, use Absent or Unknown.
 - Do not treat missing evidence as novelty.
+- A feature marked Absent or Unknown in one patent is not automatically unique. It is only a potential differentiator if it is absent from the closest references and is not a generic field-common component.
 - Generic words like system, module, sensor, controller, AI, battery, app, or server are not enough unless the full mechanism is disclosed.
 
 OUTPUT JSON SHAPE:
@@ -750,6 +765,9 @@ STRICT RULES
 - Name the closest blocking references by PN.
 - Include confidence drivers and weak evidence areas.
 - Keep executive summary under 220 words and bullets under 18 words.
+- If the closest reference discloses most broad structural/process/composition/data-flow elements, state that broad claims are weak even if a narrower differentiator remains.
+- Do not list as key_strengths any feature that is Present or Partial in the closest blocking reference.
+- key_risks must reflect any risk stated in the executive summary, novelty basis, or filing advice. Never output "No significant risks identified" if any anticipation, obviousness, majority-overlap, or weak-evidence risk is discussed elsewhere.
 
 OUTPUT JSON SHAPE:
 {
@@ -1203,6 +1221,173 @@ export class NoveltySearchService extends BasePatentService {
       stage35c: { ...this.defaultConfig.stage35c, ...(requestConfig.stage35c || {}) },
       stage4: { ...this.defaultConfig.stage4, ...(requestConfig.stage4 || {}) },
     } as NoveltySearchConfig;
+  }
+
+  private getFeatureStatus(patentMap: PatentFeatureMap | null | undefined, feature: string): FeatureMapCell['status'] | undefined {
+    if (!patentMap || !Array.isArray(patentMap.feature_analysis)) return undefined;
+    const exact = patentMap.feature_analysis.find(cell => cell.feature === feature);
+    if (exact) return exact.status;
+    const normalized = feature.toLowerCase();
+    return patentMap.feature_analysis.find(cell => String(cell.feature || '').toLowerCase() === normalized)?.status;
+  }
+
+  private isGenericNoveltyFeature(feature: string): boolean {
+    const normalized = String(feature || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return false;
+
+    const mechanismIndicators = [
+      'control relationship',
+      'controlled release',
+      'closed loop',
+      'closed-loop',
+      'feedback',
+      'material relationship',
+      'formulation ratio',
+      'biological target',
+      'target interaction',
+      'structural geometry',
+      'process sequence',
+      'signal-processing',
+      'signal processing',
+      'data transformation',
+      'technical effect',
+      'release profile',
+      'synthesis route',
+      'circuit topology',
+      'motion path',
+      'engagement relationship',
+      'enzyme trigger',
+      'ph trigger',
+      'sensor residual',
+      'anomaly classifier',
+      'synchronization',
+      'modulation',
+      'encoding',
+      'inference logic',
+    ];
+    if (mechanismIndicators.some(indicator => normalized.includes(indicator))) {
+      return false;
+    }
+
+    const genericTerms = new Set([
+      'system', 'method', 'device', 'apparatus', 'processor', 'memory', 'sensor',
+      'controller', 'control', 'module', 'server', 'database', 'api', 'housing',
+      'display', 'battery', 'network', 'ui', 'interface', 'excipient', 'carrier',
+      'clamp', 'circuit', 'element', 'step', 'process', 'algorithm', 'model',
+      'software', 'application', 'app', 'pipe', 'connector', 'joint', 'valve',
+      'pump', 'camera', 'transceiver', 'wireless', 'communication', 'data',
+      'storage', 'user', 'input', 'output', 'component', 'material', 'layer',
+      'member', 'unit', 'part', 'signal',
+    ]);
+    const stopWords = new Set(['a', 'an', 'and', 'or', 'the', 'of', 'to', 'for', 'with', 'using', 'based', 'configured']);
+    const words = normalized
+      .split(/\s+/)
+      .map(word => word.replace(/s$/, ''))
+      .filter(word => word && !stopWords.has(word));
+
+    if (words.length === 0 || words.length > 5) return false;
+    const genericHits = words.filter(word => genericTerms.has(word)).length;
+    return genericHits > 0 && genericHits >= Math.ceil(words.length * 0.6);
+  }
+
+  private findClosestFeatureMap(featureMaps: PatentFeatureMap[], inventionFeatures: string[]): PatentFeatureMap | null {
+    const total = Math.max(1, inventionFeatures.length);
+    let best: PatentFeatureMap | null = null;
+    let bestScore = -1;
+    let bestPresent = -1;
+
+    for (const patentMap of featureMaps || []) {
+      const cells = Array.isArray(patentMap?.feature_analysis) ? patentMap.feature_analysis : [];
+      const present = cells.filter(cell => cell.status === 'Present').length;
+      const partial = cells.filter(cell => cell.status === 'Partial').length;
+      const score = (present + partial * 0.5) / total;
+      if (score > bestScore || (score === bestScore && present > bestPresent)) {
+        best = patentMap;
+        bestScore = score;
+        bestPresent = present;
+      }
+    }
+
+    return best;
+  }
+
+  private isPotentialDifferentiator(
+    feature: string,
+    closestMap: PatentFeatureMap | null | undefined,
+    qualityFlags?: { low_evidence?: boolean }
+  ): boolean {
+    if (!closestMap || qualityFlags?.low_evidence || this.isGenericNoveltyFeature(feature)) return false;
+    const status = this.getFeatureStatus(closestMap, feature);
+    if (!status || status === 'Unknown' || status === 'Present' || status === 'Partial') return false;
+    return status === 'Absent';
+  }
+
+  private getPotentialDifferentiatorFeatures(
+    featureMaps: PatentFeatureMap[],
+    inventionFeatures: string[],
+    qualityFlags?: { low_evidence?: boolean }
+  ): string[] {
+    const closestMap = this.findClosestFeatureMap(featureMaps, inventionFeatures);
+    if (!closestMap) return [];
+    return inventionFeatures.filter(feature => this.isPotentialDifferentiator(feature, closestMap, qualityFlags));
+  }
+
+  private featureMapsFromFeatureMatrix(featureMatrix?: FeatureMatrix): PatentFeatureMap[] {
+    if (!featureMatrix || !Array.isArray(featureMatrix.patents) || !Array.isArray(featureMatrix.cells)) return [];
+    return featureMatrix.patents.map(pn => ({
+      pn,
+      title: featureMatrix.patentTitles?.[pn],
+      feature_analysis: featureMatrix.features.map(feature => {
+        const cell = featureMatrix.cells.find(entry => entry.patentNumber === pn && entry.feature === feature);
+        return {
+          feature,
+          status: (cell?.status || 'Absent') as FeatureMapCell['status'],
+          confidence: cell?.confidence,
+          evidence: cell?.evidence,
+          reason: cell?.reason
+        };
+      })
+    }));
+  }
+
+  private getPotentialDifferentiatorsFromAggregation(aggregationResult: AggregationResult): string[] {
+    const features = (aggregationResult.per_feature_uniqueness || []).map(entry => entry.feature).filter(Boolean);
+    const qualityFlags = { low_evidence: aggregationResult.decision === 'Low Evidence' };
+    const featureMaps = this.featureMapsFromFeatureMatrix(aggregationResult.feature_matrix);
+    if (featureMaps.length > 0) {
+      return this.getPotentialDifferentiatorFeatures(featureMaps, features, qualityFlags);
+    }
+
+    if (qualityFlags.low_evidence) return [];
+    return (aggregationResult.per_feature_uniqueness || [])
+      .filter(entry => entry.present_in === 0 && entry.partial_in === 0 && !this.isGenericNoveltyFeature(entry.feature))
+      .map(entry => entry.feature);
+  }
+
+  private isNoRiskBoilerplate(value: any): boolean {
+    const text = String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    return /^no (?:(?:significant|specific|material|additional)\s+)?risks? (identified|generated|found|noted)\.?$/.test(text);
+  }
+
+  private mergeRiskLists(...lists: Array<any[] | undefined>): string[] {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        const value = String(item || '').trim();
+        if (!value) continue;
+        const key = value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(value);
+      }
+    }
+    return merged;
   }
 
   /**
@@ -1900,6 +2085,7 @@ export class NoveltySearchService extends BasePatentService {
             '- adjacent: Related field but different approach/mechanism',
             '- remote: Minimal overlap, low threat to novelty',
             '',
+            'Relevance should reflect threat to the invention as a whole. A patent that only teaches a component, material, sensor, clamp, UI, generic algorithm, carrier, excipient, circuit element, or standard process step should be described as a component-level or background reference and should not receive high relevance unless it also shares the same core mechanism.',
             'Be HONEST and STRAIGHTFORWARD. If a patent is highly relevant, say so clearly.',
             'Focus on actionable insights the inventor can use to strengthen their claims.',
             'JSON only; follow input PN order.',
@@ -1991,7 +2177,7 @@ export class NoveltySearchService extends BasePatentService {
                 detailedAnalysis: {
                   relevant_parts: present.map((f: string) => `Patent covers: ${f}`),
                   irrelevant_parts: absent.map((f: string) => `Invention unique: ${f}`),
-                  novelty_comparison: `This patent ${present.length > 0 ? `overlaps on ${present.length} feature(s)` : 'has minimal overlap'} with the invention. ${absent.length > 0 ? `The invention remains differentiated by ${absent.length} unique feature(s).` : ''}`
+                  novelty_comparison: `This patent ${present.length > 0 ? `overlaps on ${present.length} feature(s)` : 'has minimal overlap'} with the invention. ${absent.length > 0 ? `The invention remains differentiated by ${absent.length} potential differentiator(s).` : ''}`
                 }
               };
             }
@@ -2052,6 +2238,7 @@ export class NoveltySearchService extends BasePatentService {
           '  "confidence": 0.0-1.0',
           '}',
           '',
+          'Relevance should reflect threat to the invention as a whole. A patent that only teaches a component, material, sensor, clamp, UI, generic algorithm, carrier, excipient, circuit element, or standard process step should be described as a component-level or background reference and should not receive high relevance unless it also shares the same core mechanism.',
           'Be HONEST. If patent is highly relevant, say so clearly.',
           '',
           `PN: ${pn}`,
@@ -2133,7 +2320,7 @@ export class NoveltySearchService extends BasePatentService {
             detailedAnalysis: {
               relevant_parts: present.map((f: string) => `Patent covers: ${f}`),
               irrelevant_parts: absent.map((f: string) => `Invention unique: ${f}`),
-              novelty_comparison: `This patent ${present.length > 0 ? `overlaps on ${present.length} feature(s)` : 'has minimal overlap'} with the invention. ${absent.length > 0 ? `The invention remains differentiated by ${absent.length} unique feature(s).` : ''}`
+              novelty_comparison: `This patent ${present.length > 0 ? `overlaps on ${present.length} feature(s)` : 'has minimal overlap'} with the invention. ${absent.length > 0 ? `The invention remains differentiated by ${absent.length} potential differentiator(s).` : ''}`
             }
           };
         }
@@ -2635,6 +2822,7 @@ Determine if this patent is RELEVANT to the invention by identifying overlap bet
 RELEVANCE CRITERIA:
 - Patent title/abstract indicates presence of at least one invention feature with technical proximity
 - If none of the features appear present, mark as not relevant
+- A patent is not relevant merely because it discloses one generic component. If only one generic feature overlaps, return is_relevant=false unless the same object, same operation, or same technical problem is also present.
 
 OUTPUT FORMAT:
 Respond with ONLY a JSON object:
@@ -3186,6 +3374,10 @@ RESPONSE:`;
           '- accept: concrete overlap with one or more core mechanisms.',
           '- borderline: related field or partial mechanism overlap worth bounded review.',
           '- reject: remote, generic keyword hit, or no concrete technical overlap.',
+          '- Score means invention-level relevance, not mere feature overlap.',
+          '- A patent may teach a useful component but should not receive a high score unless it shares the same technical purpose, same object/material/data target, or same operating mechanism.',
+          '- If overlap is only a generic component, keep score below 0.40.',
+          '- If overlap is one useful subsystem but not the same invention, normally keep score below 0.65.',
           '',
           'Each array element must be:',
           '{"pn":"<id>","score":0..1,"decision":"accept|borderline|reject","matched_features":["feature"],"missing_features":["feature"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
@@ -3535,7 +3727,9 @@ RESPONSE:`;
         featureMaps,
         perFeatureUniqueness,
         qualityFlags,
-        inventionFeatures
+        inventionFeatures,
+        integrationCheck,
+        decision
       );
 
       // Build per-patent remarks from Stage 3.5a maps so Stage 4 and the UI
@@ -3911,7 +4105,7 @@ RESPONSE:`;
         overall_novelty_assessment: aggregationResult.decision,
         key_strengths: [
           `Novelty score: ${score}%`,
-          `${uniqueFeatures} out of ${totalFeatures} features show high uniqueness`
+          `${uniqueFeatures} out of ${totalFeatures} features were flagged as differentiators in fallback mode`
         ],
         key_risks: [
           "Limited patent details in fallback mode",
@@ -3919,7 +4113,7 @@ RESPONSE:`;
         ],
         strategic_recommendations: aggregationResult.decision === 'Novel' ?
           ["Proceed with patent filing", "Consider broad claim scope"] :
-          ["Narrow claims to unique features", "Consider alternative IP protection"],
+          ["Narrow claims to potential differentiators", "Consider alternative IP protection"],
         filing_advice: aggregationResult.decision === 'Novel' ?
           "Strong patentability prospects - proceed with filing" :
           "Moderate patentability - review claims and consider amendments"
@@ -3937,14 +4131,12 @@ RESPONSE:`;
   ): any {
     // Build deterministic summary explaining why novelty exists
     const totalFeatures = aggregationResult.per_feature_uniqueness.length;
-    const highlyUnique = aggregationResult.per_feature_uniqueness
-      .filter(f => f.uniqueness > 0.8)
-      .sort((a, b) => b.uniqueness - a.uniqueness);
     const moderateUnique = aggregationResult.per_feature_uniqueness
       .filter(f => f.uniqueness > 0.5 && f.uniqueness <= 0.8);
     const lowUnique = aggregationResult.per_feature_uniqueness
       .filter(f => f.uniqueness <= 0.5);
-    const topUniqueNames = highlyUnique.slice(0, 3).map(f => f.feature);
+    const potentialDifferentiators = this.getPotentialDifferentiatorsFromAggregation(aggregationResult);
+    const topDifferentiatorNames = potentialDifferentiators.slice(0, 3);
     const integration = aggregationResult.integration_check;
     const score = aggregationResult.novelty_score;
     const decision = aggregationResult.decision;
@@ -3956,8 +4148,8 @@ RESPONSE:`;
 
     // Professional executive summary
     const deterministicSummary = this.buildProfessionalExecutiveSummary(
-      totalFeatures, highlyUnique.length, moderateUnique.length, lowUnique.length,
-      topUniqueNames, integrationLine, decision, score, aggregationResult.confidence
+      totalFeatures, potentialDifferentiators.length, moderateUnique.length, lowUnique.length,
+      topDifferentiatorNames, integrationLine, decision, score, aggregationResult.confidence
     );
 
     const existingExec = llmReport?.executive_summary || {};
@@ -3969,7 +4161,7 @@ RESPONSE:`;
       visual_cards: {
         "Novelty Score": (score * 100).toFixed(1) + "%",
         "Patents Analyzed": aggregationResult.per_patent_coverage.length.toString(),
-        "Unique Features": `${highlyUnique.length} of ${totalFeatures}`,
+        "Unique Features": `${potentialDifferentiators.length} of ${totalFeatures}`,
         "Confidence": aggregationResult.confidence
       }
     };
@@ -3977,7 +4169,7 @@ RESPONSE:`;
     // Enhanced professional concluding remarks
     const existingRemarks = llmReport?.concluding_remarks || {};
     const professionalRemarks = this.buildProfessionalConcludingRemarks(
-      existingRemarks, aggregationResult, topUniqueNames, highlyUnique, 
+      existingRemarks, aggregationResult, topDifferentiatorNames, potentialDifferentiators,
       moderateUnique, lowUnique, integrationLine, reportInputs
     );
 
@@ -4002,8 +4194,8 @@ RESPONSE:`;
    * Build professional executive summary suitable for inventor review
    */
   private buildProfessionalExecutiveSummary(
-    totalFeatures: number, highCount: number, modCount: number, lowCount: number,
-    topUniqueNames: string[], integrationLine: string, decision: string, 
+    totalFeatures: number, differentiatorCount: number, modCount: number, lowCount: number,
+    topDifferentiatorNames: string[], integrationLine: string, decision: string,
     score: number, confidence: string
   ): string {
     const scorePercent = (score * 100).toFixed(1);
@@ -4016,7 +4208,7 @@ RESPONSE:`;
       actionPhrase = 'Recommend proceeding with patent application preparation.';
     } else if (decision === 'Partially Novel') {
       verdictPhrase = 'The invention exhibits partial novelty with identifiable differentiation points';
-      actionPhrase = 'Recommend focusing claims on unique feature combinations and considering design-arounds for overlapping elements.';
+      actionPhrase = 'Recommend focusing claims on potential differentiators and considering design-arounds for overlapping elements.';
     } else if (decision === 'Not Novel') {
       verdictPhrase = 'Significant prior art overlap has been identified';
       actionPhrase = 'Recommend re-evaluating the invention scope or pivoting to unique aspects not covered by prior art.';
@@ -4026,10 +4218,10 @@ RESPONSE:`;
     }
 
     let featureAnalysis = `Feature-level analysis across ${totalFeatures} key invention features indicates: `;
-    if (highCount > 0) {
-      featureAnalysis += `${highCount} feature(s) demonstrate high uniqueness (>80%)`;
-      if (topUniqueNames.length > 0) {
-        featureAnalysis += `, notably ${topUniqueNames.slice(0, 2).join(' and ')}`;
+    if (differentiatorCount > 0) {
+      featureAnalysis += `${differentiatorCount} potential differentiator(s) remain after closest-reference and generic-component filters`;
+      if (topDifferentiatorNames.length > 0) {
+        featureAnalysis += `, notably ${topDifferentiatorNames.slice(0, 2).join(' and ')}`;
       }
       featureAnalysis += '. ';
     }
@@ -4049,8 +4241,8 @@ RESPONSE:`;
   private buildProfessionalConcludingRemarks(
     existingRemarks: any,
     aggregationResult: AggregationResult,
-    topUniqueNames: string[],
-    highlyUnique: any[],
+    topDifferentiatorNames: string[],
+    potentialDifferentiators: string[],
     moderateUnique: any[],
     lowUnique: any[],
     integrationLine: string,
@@ -4062,16 +4254,16 @@ RESPONSE:`;
 
     // Build professional key strengths based on analysis
     const keyStrengths: string[] = [];
-    if (highlyUnique.length > 0) {
-      keyStrengths.push(`${highlyUnique.length} core feature(s) demonstrate high uniqueness (>80%), providing strong claim support`);
-      if (topUniqueNames.length > 0) {
-        keyStrengths.push(`Primary differentiators identified: ${topUniqueNames.join(', ')}`);
+    if (potentialDifferentiators.length > 0) {
+      keyStrengths.push(`${potentialDifferentiators.length} potential differentiator(s) remain after closest-reference and generic-component filters`);
+      if (topDifferentiatorNames.length > 0) {
+        keyStrengths.push(`Primary differentiators identified: ${topDifferentiatorNames.join(', ')}`);
       }
     }
     if (aggregationResult.integration_check?.any_single_patent_covers_majority === false) {
       keyStrengths.push('No single prior art reference covers the majority of features, indicating system-level novelty');
     }
-    if (score >= 0.7) {
+    if (score >= 0.7 && potentialDifferentiators.length > 0) {
       keyStrengths.push('Overall novelty score exceeds 70%, suggesting favorable patentability prospects');
     }
     if (confidence === 'High') {
@@ -4096,15 +4288,20 @@ RESPONSE:`;
     if (aggregationResult.per_patent_coverage.some(p => p.coverage_ratio > 0.7)) {
       keyRisks.push('One or more references show high feature coverage (>70%) - review for potential anticipation');
     }
+    const deterministicRisks = this.mergeRiskLists(keyRisks, aggregationResult.risk_factors);
+    const existingRisks = Array.isArray(existingRemarks.key_risks)
+      ? existingRemarks.key_risks.filter((risk: any) => !(deterministicRisks.length > 0 && this.isNoRiskBoilerplate(risk)))
+      : [];
+    const finalRisks = this.mergeRiskLists(deterministicRisks, existingRisks);
 
     // Build strategic recommendations for inventors
     const recommendations: string[] = [];
     if (decision === 'Novel') {
-      recommendations.push('Proceed with drafting claims emphasizing the identified high-uniqueness features');
+      recommendations.push('Proceed with drafting claims emphasizing the identified potential differentiators');
       recommendations.push('Consider filing provisional application to establish priority date');
       recommendations.push('Conduct freedom-to-operate analysis for commercial implementation');
     } else if (decision === 'Partially Novel') {
-      recommendations.push('Focus independent claims on the combination of high-uniqueness features');
+      recommendations.push('Focus independent claims on the filtered potential differentiators');
       recommendations.push('Draft dependent claims to capture alternative embodiments');
       recommendations.push('Consider design-around opportunities for features with prior art overlap');
       recommendations.push('Document technical advantages of the specific combination');
@@ -4120,7 +4317,7 @@ RESPONSE:`;
     if (decision === 'Novel') {
       filingAdvice = 'Based on this analysis, the invention appears to meet the novelty and non-obviousness requirements under 35 U.S.C. §§ 102 and 103. Recommend proceeding with patent application preparation with focus on the identified differentiators.';
     } else if (decision === 'Partially Novel') {
-      filingAdvice = 'The invention shows patentable subject matter, but claim scope may need refinement. Recommend working with patent counsel to focus claims on the unique feature combinations while avoiding prior art overlap.';
+      filingAdvice = 'The invention shows patentable subject matter, but claim scope may need refinement. Recommend working with patent counsel to focus claims on the filtered potential differentiators while avoiding prior art overlap.';
     } else if (decision === 'Not Novel') {
       filingAdvice = 'Significant prior art overlap suggests challenges meeting novelty requirements. Recommend inventor consultation to identify any unconsidered aspects or technical improvements that may distinguish from prior art.';
     } else {
@@ -4128,11 +4325,11 @@ RESPONSE:`;
     }
 
     // Build "why novelty exists" explanation
-    const uniqueFeaturesText = topUniqueNames.length > 0 
-      ? topUniqueNames.slice(0, 3).join(', ') 
+    const uniqueFeaturesText = topDifferentiatorNames.length > 0
+      ? topDifferentiatorNames.slice(0, 3).join(', ')
       : 'key technical features';
-    const whyNovel = highlyUnique.length > 0 
-      ? `Novelty determination is primarily supported by ${highlyUnique.length} feature(s) showing high uniqueness: ${uniqueFeaturesText}. ${integrationLine} The inventive contribution lies in the specific configuration and technical integration of these elements.`
+    const whyNovel = potentialDifferentiators.length > 0
+      ? `Novelty determination is primarily supported by ${potentialDifferentiators.length} potential differentiator(s): ${uniqueFeaturesText}. ${integrationLine} The inventive contribution lies in the specific configuration and technical integration of these elements.`
       : `The novelty assessment is based on the overall feature mapping analysis. ${integrationLine}`;
 
     // Build inventor action items
@@ -4153,8 +4350,8 @@ RESPONSE:`;
       overall_novelty_assessment: existingRemarks.overall_novelty_assessment || decision,
       novelty_score_summary: `${(score * 100).toFixed(1)}% novelty score with ${confidence.toLowerCase()} confidence`,
       why_novelty_exists: existingRemarks.why_novelty_exists || whyNovel,
-      key_strengths: existingRemarks.key_strengths?.length > 0 ? existingRemarks.key_strengths : keyStrengths,
-      key_risks: existingRemarks.key_risks?.length > 0 ? existingRemarks.key_risks : keyRisks,
+      key_strengths: keyStrengths.length > 0 ? keyStrengths : (Array.isArray(existingRemarks.key_strengths) ? existingRemarks.key_strengths : []),
+      key_risks: finalRisks,
       strategic_recommendations: existingRemarks.strategic_recommendations?.length > 0 ? existingRemarks.strategic_recommendations : recommendations,
       filing_advice: existingRemarks.filing_advice || filingAdvice,
       inventor_action_items: inventorActions,
@@ -4615,27 +4812,25 @@ OUTPUT JSON:
     inventionFeatures: string[],
     criticalFeatures: string[]
   ): IntegrationCheck {
-    const majorityThreshold = Math.ceil(inventionFeatures.length * 0.8);
+    const majorityThreshold = Math.floor(inventionFeatures.length / 2) + 1;
 
     for (const patentMap of featureMaps) {
       const presentFeatures = patentMap.feature_analysis.filter(c => c.status === 'Present').length;
+      const partialFeatures = patentMap.feature_analysis.filter(c => c.status === 'Partial').length;
+      const coveredFeatures = presentFeatures + partialFeatures;
 
-      if (presentFeatures >= majorityThreshold) {
-        // Check if it mentions same use-case intent
-        const hasUseCaseLanguage = this.checkUseCaseIntent(patentMap, inventionFeatures);
-        if (hasUseCaseLanguage) {
-          return {
-            any_single_patent_covers_majority: true,
-            integration_pn: patentMap.pn,
-            explanation: `Patent ${patentMap.pn} covers ${presentFeatures}/${inventionFeatures.length} features with matching use-case language`
-          };
-        }
+      if (coveredFeatures >= majorityThreshold) {
+        return {
+          any_single_patent_covers_majority: true,
+          integration_pn: patentMap.pn,
+          explanation: `Patent ${patentMap.pn} maps to ${coveredFeatures}/${inventionFeatures.length} features (${presentFeatures} Present, ${partialFeatures} Partial), which is a majority of the extracted features`
+        };
       }
     }
 
     return {
       any_single_patent_covers_majority: false,
-      explanation: 'No single patent covers a majority of features with consistent use-case language'
+      explanation: 'No single patent maps to a majority of extracted features as Present or Partial'
     };
   }
 
@@ -4756,7 +4951,9 @@ OUTPUT JSON:
     featureMaps: PatentFeatureMap[],
     perFeatureUniqueness: PerFeatureUniqueness[],
     qualityFlags: any,
-    inventionFeatures: string[]
+    inventionFeatures: string[],
+    integrationCheck?: IntegrationCheck,
+    decision?: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence'
   ): string[] {
     const risks: string[] = [];
 
@@ -4777,14 +4974,37 @@ OUTPUT JSON:
       risks.push('Many references have ambiguous or short abstracts');
     }
 
+    if (qualityFlags.low_evidence || featureMaps.length < 5) {
+      risks.push('Low evidence coverage limits confidence in novelty conclusions');
+    }
+
     if (qualityFlags.language_mismatch) {
       risks.push('Multiple references appear to be in non-English languages');
+    }
+
+    if (integrationCheck?.any_single_patent_covers_majority && integrationCheck.integration_pn) {
+      risks.push(`Closest reference ${integrationCheck.integration_pn} maps to a majority of extracted features`);
+    }
+
+    const closestMap = this.findClosestFeatureMap(featureMaps, inventionFeatures);
+    if (closestMap) {
+      const total = Math.max(1, inventionFeatures.length);
+      const present = closestMap.feature_analysis.filter(cell => cell.status === 'Present').length;
+      const partial = closestMap.feature_analysis.filter(cell => cell.status === 'Partial').length;
+      const closestCoverage = (present + partial * 0.5) / total;
+      if (closestCoverage >= 0.7) {
+        risks.push(`Closest reference ${closestMap.pn} has high feature overlap (${present} Present, ${partial} Partial)`);
+      }
     }
 
     // Domain saturation
     const lowUniquenessFeatures = perFeatureUniqueness.filter(u => u.uniqueness < 0.2).length;
     if (lowUniquenessFeatures > inventionFeatures.length * 0.3) {
       risks.push('Domain appears saturated with similar technology');
+    }
+
+    if (risks.length === 0 && (decision === 'Partially Novel' || decision === 'Not Novel')) {
+      risks.push(`${decision} determination indicates material prior-art overlap requiring claim narrowing or technical differentiation`);
     }
 
     return risks;
@@ -5262,7 +5482,7 @@ OUTPUT JSON:
           searchId: searchRun.id,
           stage: NoveltySearchStage.STAGE_4,
           taskCode: TaskCode.LLM6_REPORT_GENERATION,
-          prompt: this.buildReportProsePrompt(searchRun, aggregationResult, reportData),
+          prompt: basePrompt,
           response: llmResult.response?.output,
           tokensUsed: llmResult.response?.outputTokens,
           modelClass: llmResult.response?.modelClass,

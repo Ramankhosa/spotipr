@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 
@@ -33,6 +34,27 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   if (!batch) {
     return NextResponse.json({ error: 'Import batch not found' }, { status: 404 })
   }
+
+  const fileIds = (batch.files || []).map((file: any) => file.id)
+  const embeddingRows = fileIds.length
+    ? await prisma.$queryRaw<any[]>`
+        SELECT p."sourceImportFileId" AS "fileId", e."status", COUNT(*)::int AS "count"
+        FROM "local_patents" p
+        JOIN "local_patent_embeddings" e ON e."localPatentId" = p."id"
+        WHERE p."sourceImportFileId" IN (${Prisma.join(fileIds)})
+        GROUP BY p."sourceImportFileId", e."status"
+      `
+    : []
+  const embeddingCountsByFile = new Map<string, Record<string, number>>()
+  for (const row of embeddingRows) {
+    const current = embeddingCountsByFile.get(row.fileId) || {}
+    current[row.status] = Number(row.count || 0)
+    embeddingCountsByFile.set(row.fileId, current)
+  }
+  batch.files = (batch.files || []).map((file: any) => ({
+    ...file,
+    embeddingCounts: embeddingCountsByFile.get(file.id) || {},
+  }))
 
   const embeddings = await (prisma as any).localPatentEmbedding.groupBy({
     by: ['status'],
