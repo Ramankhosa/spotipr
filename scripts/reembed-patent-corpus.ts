@@ -1,3 +1,4 @@
+import './load-env'
 import { PrismaClient } from '@prisma/client'
 import {
   buildEmbeddingText,

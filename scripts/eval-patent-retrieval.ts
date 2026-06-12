@@ -1,3 +1,4 @@
+import './load-env'
 import fs from 'fs/promises'
 import { IndianCorpusProvider } from '../src/lib/patent-search/providers/indian-corpus-provider'
 import type { PatentSearchQueryPlan } from '../src/lib/patent-search/types'
