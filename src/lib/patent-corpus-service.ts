@@ -21,6 +21,13 @@ export const PATENT_CORPUS_MAX_PDFS_PER_BATCH = Math.max(
 const STALE_LOCK_MINUTES = 20
 const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+const MAX_JOB_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_MAX_JOB_ATTEMPTS || '5') || 5)
+const OPENAI_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_MAX_ATTEMPTS || '3') || 3)
+const OPENAI_EMBEDDING_BATCH_SIZE = Math.max(1, Number(process.env.PATENT_CORPUS_EMBEDDING_API_BATCH || '32') || 32)
+const JOB_BACKOFF_BASE_MS = 2 * 60 * 1000
+const JOB_BACKOFF_MAX_MS = 60 * 60 * 1000
+const OPENAI_BACKOFF_BASE_MS = 750
+const OPENAI_BACKOFF_MAX_MS = 15_000
 
 type UploadInput = {
   fileName: string
@@ -36,8 +43,59 @@ type StoredPdf = {
   fileSizeBytes: number
 }
 
+type PatentEmbeddingJob = any & {
+  patent?: {
+    embeddingText?: string | null
+    ragText?: string | null
+    abstract?: string | null
+    title?: string | null
+  } | null
+}
+
+type PatentEmbeddingWorkItem = {
+  embedding: PatentEmbeddingJob
+  text: string
+}
+
 function sha256(input: Buffer | string) {
   return crypto.createHash('sha256').update(input).digest('hex')
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function jitter(ms: number) {
+  return Math.round(ms * (0.75 + Math.random() * 0.5))
+}
+
+function retryAfterMs(response: Response) {
+  const value = response.headers.get('retry-after')
+  if (!value) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const date = new Date(value)
+  if (!Number.isNaN(date.getTime())) return Math.max(0, date.getTime() - Date.now())
+  return null
+}
+
+function openAiBackoffMs(attemptIndex: number, response?: Response) {
+  const retryAfter = response ? retryAfterMs(response) : null
+  if (retryAfter !== null) return Math.min(retryAfter, OPENAI_BACKOFF_MAX_MS)
+  return jitter(Math.min(OPENAI_BACKOFF_MAX_MS, OPENAI_BACKOFF_BASE_MS * 2 ** attemptIndex))
+}
+
+function shouldRetryOpenAIEmbedding(status: number) {
+  return status === 429 || status === 408 || status >= 500
+}
+
+function jobBackoffMs(attemptCount: number) {
+  const exponent = Math.max(0, attemptCount - 1)
+  return jitter(Math.min(JOB_BACKOFF_MAX_MS, JOB_BACKOFF_BASE_MS * 2 ** exponent))
+}
+
+function nextJobAttemptAt(attemptCount: number) {
+  return new Date(Date.now() + jobBackoffMs(attemptCount))
 }
 
 function sanitizeFileName(fileName: string) {
@@ -199,6 +257,19 @@ function localPatentData(record: ExtractedPatentRecord, file: any) {
   }
 }
 
+export function mergeLocalPatentDataForImport(record: ExtractedPatentRecord, file: any, existing?: any) {
+  const data = localPatentData(record, file) as any
+  if (existing?.ipIndiaCapturedAt) {
+    data.claimsText = existing.claimsText
+    data.descriptionText = existing.descriptionText
+    data.ipIndiaDetails = existing.ipIndiaDetails
+    data.ipIndiaCapturedAt = existing.ipIndiaCapturedAt
+    data.ragText = existing.ragText || data.ragText
+    data.embeddingText = existing.embeddingText || data.embeddingText
+  }
+  return data
+}
+
 function embeddingTextHash(text: string) {
   return sha256(text)
 }
@@ -231,6 +302,7 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
     await db.localPatentEmbedding.update({
       where: { id: existing.id },
       data: {
+        attemptCount: 0,
         errorMessage: null,
         nextAttemptAt: new Date(),
         status: 'QUEUED',
@@ -243,6 +315,7 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
       localPatentId,
       model,
       textHash: { not: textHash },
+      status: { in: ['QUEUED', 'FAILED'] },
     },
   })
 }
@@ -250,15 +323,23 @@ export async function queueEmbeddingForPatent(localPatentId: number, embeddingTe
 async function upsertExtractedPatent(record: ExtractedPatentRecord, file: any, db: any = prisma) {
   const existing = await db.localPatent.findUnique({
     where: { publicationNumber: record.publicationNumber },
-    select: { id: true },
+    select: {
+      id: true,
+      claimsText: true,
+      descriptionText: true,
+      ipIndiaDetails: true,
+      ipIndiaCapturedAt: true,
+      ragText: true,
+      embeddingText: true,
+    },
   })
-  const data = localPatentData(record, file)
+  const data = mergeLocalPatentDataForImport(record, file, existing)
   const patent = existing
     ? await db.localPatent.update({ where: { id: existing.id }, data })
     : await db.localPatent.create({ data })
 
-  if (record.embeddingText) {
-    await queueEmbeddingForPatent(patent.id, record.embeddingText, db)
+  if (patent.embeddingText) {
+    await queueEmbeddingForPatent(patent.id, patent.embeddingText, db)
   }
 
   return { created: !existing, patent }
@@ -292,14 +373,30 @@ async function replaceExtractedPatentsForFile(file: any, records: ExtractedPaten
       else patentsUpdated += 1
     }
 
+    const staleWhere = {
+      AND: [
+        patentWhereForImportFile(file),
+        publicationNumbers.size > 0
+          ? { publicationNumber: { notIn: Array.from(publicationNumbers) } }
+          : {},
+      ],
+    }
+
+    await tx.localPatent.updateMany({
+      where: {
+        ...staleWhere,
+        ipIndiaCapturedAt: { not: null },
+      },
+      data: {
+        sourceImportFileId: null,
+        sourceFileHash: null,
+      },
+    })
+
     await tx.localPatent.deleteMany({
       where: {
-        AND: [
-          patentWhereForImportFile(file),
-          publicationNumbers.size > 0
-            ? { publicationNumber: { notIn: Array.from(publicationNumbers) } }
-            : {},
-        ],
+        ...staleWhere,
+        ipIndiaCapturedAt: null,
       },
     })
 
@@ -348,15 +445,16 @@ export async function claimNextPatentImportFile(workerId: string) {
   const staleBefore = new Date(now.getTime() - STALE_LOCK_MINUTES * 60 * 1000)
   const candidates = await (prisma as any).patentImportFile.findMany({
     where: {
-      status: 'QUEUED',
+      status: { in: ['QUEUED', 'FAILED'] },
       nextAttemptAt: { lte: now },
+      attemptCount: { lt: MAX_JOB_ATTEMPTS },
       OR: [
         { lockedUntil: null },
         { lockedUntil: { lt: now } },
         { heartbeatAt: { lt: staleBefore } },
       ],
     },
-    orderBy: [{ createdAt: 'asc' }],
+    orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
     take: 10,
   })
 
@@ -364,7 +462,9 @@ export async function claimNextPatentImportFile(workerId: string) {
     const updated = await (prisma as any).patentImportFile.updateMany({
       where: {
         id: candidate.id,
-        status: 'QUEUED',
+        status: { in: ['QUEUED', 'FAILED'] },
+        nextAttemptAt: { lte: now },
+        attemptCount: { lt: MAX_JOB_ATTEMPTS },
         OR: [
           { lockedUntil: null },
           { lockedUntil: { lt: now } },
@@ -457,6 +557,8 @@ export async function processPatentImportFileById(fileId: string, workerId = `pa
         errorMessage: message,
         lockedBy: null,
         lockedUntil: null,
+        heartbeatAt: null,
+        nextAttemptAt: nextJobAttemptAt(Math.max(1, file.attemptCount || 1)),
         completedAt: new Date(),
       },
     })
@@ -485,6 +587,7 @@ export async function retryPatentImportBatch(batchId: string) {
     },
     data: {
       status: 'QUEUED',
+      attemptCount: 0,
       errorMessage: null,
       lockedBy: null,
       lockedUntil: null,
@@ -505,11 +608,15 @@ export async function retryPatentImportFileExtraction(batchId: string, fileId: s
   if (file.status === 'PROCESSING') {
     throw new Error('This PDF is currently processing and cannot be requeued.')
   }
+  if (!(await patentImportFileStoredFileExists(file))) {
+    throw new Error('The uploaded PDF file has been deleted. Re-upload it before rerunning extraction.')
+  }
 
   const updatedFile = await (prisma as any).patentImportFile.update({
     where: { id: fileId },
     data: {
       status: 'QUEUED',
+      attemptCount: 0,
       errorMessage: null,
       lockedBy: null,
       lockedUntil: null,
@@ -547,28 +654,177 @@ export async function requeuePatentImportFileEmbeddings(batchId: string, fileId:
     if (text) await queueEmbeddingForPatent(patent.id, text)
   }
 
-  const patentIds = patents.map((patent: any) => patent.id)
   let requeuedEmbeddings = 0
-  if (patentIds.length > 0) {
-    requeuedEmbeddings = await prisma.$executeRaw`
-      UPDATE "local_patent_embeddings" e
-      SET "status" = 'QUEUED'::"PatentEmbeddingStatus",
-          "errorMessage" = NULL,
-          "embedding" = NULL,
-          "lockedBy" = NULL,
-          "lockedUntil" = NULL,
-          "heartbeatAt" = NULL,
-          "nextAttemptAt" = now(),
-          "embeddedAt" = NULL,
-          "updatedAt" = now()
-      WHERE e."localPatentId" IN (${Prisma.join(patentIds)})
-    `
+  for (const patent of patents) {
+    const text = patent.embeddingText || patent.ragText || patent.abstract || patent.title
+    if (!text) continue
+    const result = await (prisma as any).localPatentEmbedding.updateMany({
+      where: {
+        localPatentId: patent.id,
+        model: PATENT_CORPUS_EMBEDDING_MODEL,
+        textHash: embeddingTextHash(text),
+      },
+      data: {
+        status: 'QUEUED',
+        attemptCount: 0,
+        errorMessage: null,
+        lockedBy: null,
+        lockedUntil: null,
+        heartbeatAt: null,
+        nextAttemptAt: new Date(),
+        embeddedAt: null,
+      },
+    })
+    requeuedEmbeddings += result.count || 0
   }
 
   return {
     file,
     patentCount: patents.length,
     requeuedEmbeddings,
+  }
+}
+
+export async function getPatentCorpusCoverageStats() {
+  const [patentRows, embeddingRows, importRows] = await Promise.all([
+    prisma.$queryRaw<any[]>`
+      SELECT
+        COUNT(*)::int AS "totalPatents",
+        COUNT(*) FILTER (
+          WHERE p."abstract" IS NULL OR btrim(p."abstract") = ''
+        )::int AS "titleOnlyPatents",
+        COUNT(*) FILTER (
+          WHERE p."ipIndiaCapturedAt" IS NOT NULL
+        )::int AS "enrichedPatents",
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM "local_patent_embeddings" e
+            WHERE e."localPatentId" = p."id"
+              AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+              AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
+              AND e."embedding" IS NOT NULL
+          )
+        )::int AS "patentsWithCompletedEmbedding",
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM "local_patent_embeddings" e
+            WHERE e."localPatentId" = p."id"
+              AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+              AND e."status" = 'QUEUED'::"PatentEmbeddingStatus"
+          )
+        )::int AS "patentsWithQueuedEmbedding",
+        COUNT(*) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM "local_patent_embeddings" e
+            WHERE e."localPatentId" = p."id"
+              AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+              AND e."status" = 'FAILED'::"PatentEmbeddingStatus"
+          )
+        )::int AS "patentsWithFailedEmbedding"
+      FROM "local_patents" p
+    `,
+    (prisma as any).localPatentEmbedding.groupBy({
+      by: ['status'],
+      where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
+      _count: { id: true },
+    }).catch(() => []),
+    (prisma as any).patentImportFile.groupBy({
+      by: ['status'],
+      _count: { id: true },
+    }).catch(() => []),
+  ])
+
+  const patentStats = patentRows[0] || {}
+  const embeddingCounts = embeddingRows.reduce((acc: Record<string, number>, row: any) => {
+    acc[row.status] = row._count?.id || 0
+    return acc
+  }, {})
+  const importFileCounts = importRows.reduce((acc: Record<string, number>, row: any) => {
+    acc[row.status] = row._count?.id || 0
+    return acc
+  }, {})
+  const totalPatents = Number(patentStats.totalPatents || 0)
+  const patentsWithCompletedEmbedding = Number(patentStats.patentsWithCompletedEmbedding || 0)
+
+  return {
+    embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
+    totalPatents,
+    titleOnlyPatents: Number(patentStats.titleOnlyPatents || 0),
+    enrichedPatents: Number(patentStats.enrichedPatents || 0),
+    patentsWithCompletedEmbedding,
+    patentsWithoutCompletedEmbedding: Math.max(0, totalPatents - patentsWithCompletedEmbedding),
+    patentsWithQueuedEmbedding: Number(patentStats.patentsWithQueuedEmbedding || 0),
+    patentsWithFailedEmbedding: Number(patentStats.patentsWithFailedEmbedding || 0),
+    coveragePercent: totalPatents > 0
+      ? Number(((patentsWithCompletedEmbedding / totalPatents) * 100).toFixed(1))
+      : 0,
+    embeddingCounts,
+    importFileCounts,
+  }
+}
+
+export async function getNextPatentCorpusQueueAttemptAt() {
+  const now = new Date()
+  const [file, embedding] = await Promise.all([
+    (prisma as any).patentImportFile.findFirst({
+      where: {
+        status: { in: ['QUEUED', 'FAILED'] },
+        attemptCount: { lt: MAX_JOB_ATTEMPTS },
+        nextAttemptAt: { gt: now },
+      },
+      orderBy: { nextAttemptAt: 'asc' },
+      select: { nextAttemptAt: true },
+    }).catch(() => null),
+    (prisma as any).localPatentEmbedding.findFirst({
+      where: {
+        status: { in: ['QUEUED', 'FAILED'] },
+        attemptCount: { lt: MAX_JOB_ATTEMPTS },
+        nextAttemptAt: { gt: now },
+      },
+      orderBy: { nextAttemptAt: 'asc' },
+      select: { nextAttemptAt: true },
+    }).catch(() => null),
+  ])
+  const dates = [file?.nextAttemptAt, embedding?.nextAttemptAt]
+    .filter((value): value is Date => value instanceof Date)
+    .sort((a, b) => a.getTime() - b.getTime())
+  return dates[0] || null
+}
+
+export async function patentImportFileStoredFileExists(file: { storedPath?: string | null }) {
+  if (!file.storedPath) return false
+  try {
+    await fs.access(file.storedPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function deletePatentImportFileStoredPdf(batchId: string, fileId: string) {
+  const file = await (prisma as any).patentImportFile.findFirst({
+    where: { id: fileId, batchId },
+  })
+  if (!file) throw new Error('Import file not found.')
+  if (file.status === 'PROCESSING') {
+    throw new Error('This PDF is currently processing and its uploaded file cannot be deleted.')
+  }
+
+  const existed = await patentImportFileStoredFileExists(file)
+  if (existed && file.storedPath) {
+    try {
+      await fs.unlink(file.storedPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+
+  return {
+    file: {
+      ...file,
+      storedFileExists: false,
+    },
+    deletedStoredFile: existed,
   }
 }
 
@@ -605,58 +861,99 @@ export async function deletePatentImportFileExtractions(batchId: string, fileId:
   }
 }
 
-async function requestOpenAIEmbedding(text: string) {
+export async function requestOpenAIEmbeddings(texts: string[]) {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY is not configured.')
 
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: PATENT_CORPUS_EMBEDDING_MODEL,
-      input: text,
-      dimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
-    }),
-  })
+  const inputs = texts.map(text => String(text || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+  if (!inputs.length) return []
 
-  if (!response.ok) {
-    const body = await response.text()
-    throw new Error(`OpenAI embedding request failed: ${response.status} ${body}`)
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt < OPENAI_EMBEDDING_MAX_ATTEMPTS; attempt += 1) {
+    let response: Response | null = null
+    try {
+      response = await fetch('https://api.openai.com/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: PATENT_CORPUS_EMBEDDING_MODEL,
+          input: inputs,
+          dimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+        }),
+      })
+
+      if (!response.ok) {
+        const body = await response.text()
+        const message = `OpenAI embedding request failed: ${response.status} ${body}`
+        lastError = Object.assign(new Error(message), { retryable: shouldRetryOpenAIEmbedding(response.status) })
+        if (attempt < OPENAI_EMBEDDING_MAX_ATTEMPTS - 1 && shouldRetryOpenAIEmbedding(response.status)) {
+          await sleep(openAiBackoffMs(attempt, response))
+          continue
+        }
+        throw lastError
+      }
+
+      const json = await response.json()
+      const rows = Array.isArray(json?.data) ? json.data : []
+      const embeddings = rows
+        .sort((a: any, b: any) => Number(a?.index || 0) - Number(b?.index || 0))
+        .map((row: any) => row?.embedding)
+      if (
+        embeddings.length !== inputs.length ||
+        embeddings.some((embedding: unknown) => !Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS)
+      ) {
+        throw new Error('OpenAI embedding response did not contain the expected vectors.')
+      }
+      return embeddings as number[][]
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      if (attempt < OPENAI_EMBEDDING_MAX_ATTEMPTS - 1 && (lastError as any).retryable !== false) {
+        await sleep(openAiBackoffMs(attempt, response || undefined))
+        continue
+      }
+      throw lastError
+    }
   }
 
-  const json = await response.json()
-  const embedding = json?.data?.[0]?.embedding
-  if (!Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS) {
-    throw new Error('OpenAI embedding response did not contain the expected vector.')
-  }
-  return embedding as number[]
+  throw lastError || new Error('OpenAI embedding request failed.')
 }
 
-export async function claimNextPatentEmbedding(workerId: string) {
+export async function requestOpenAIEmbedding(text: string) {
+  const [embedding] = await requestOpenAIEmbeddings([text])
+  if (!embedding) throw new Error('OpenAI embedding response did not contain the expected vector.')
+  return embedding
+}
+
+export async function claimNextPatentEmbeddings(workerId: string, limit = 1) {
   const now = new Date()
   const staleBefore = new Date(now.getTime() - STALE_LOCK_MINUTES * 60 * 1000)
   const candidates = await (prisma as any).localPatentEmbedding.findMany({
     where: {
-      status: 'QUEUED',
+      status: { in: ['QUEUED', 'FAILED'] },
       nextAttemptAt: { lte: now },
+      attemptCount: { lt: MAX_JOB_ATTEMPTS },
       OR: [
         { lockedUntil: null },
         { lockedUntil: { lt: now } },
         { heartbeatAt: { lt: staleBefore } },
       ],
     },
-    orderBy: [{ createdAt: 'asc' }],
-    take: 10,
+    orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
+    take: Math.max(limit * 3, 10),
   })
 
+  const claimedIds: string[] = []
   for (const candidate of candidates) {
+    if (claimedIds.length >= limit) break
     const updated = await (prisma as any).localPatentEmbedding.updateMany({
       where: {
         id: candidate.id,
-        status: 'QUEUED',
+        status: { in: ['QUEUED', 'FAILED'] },
+        nextAttemptAt: { lte: now },
+        attemptCount: { lt: MAX_JOB_ATTEMPTS },
         OR: [
           { lockedUntil: null },
           { lockedUntil: { lt: now } },
@@ -672,19 +969,26 @@ export async function claimNextPatentEmbedding(workerId: string) {
       },
     })
     if (updated.count === 1) {
-      return (prisma as any).localPatentEmbedding.findUnique({
-        where: { id: candidate.id },
-        include: { patent: true },
-      })
+      claimedIds.push(candidate.id)
     }
   }
 
-  return null
+  if (!claimedIds.length) return []
+  return (prisma as any).localPatentEmbedding.findMany({
+    where: { id: { in: claimedIds } },
+    include: { patent: true },
+    orderBy: [{ updatedAt: 'asc' }],
+  })
 }
 
-async function setEmbeddingVector(embeddingId: string, vector: number[]) {
+export async function claimNextPatentEmbedding(workerId: string) {
+  const embeddings = await claimNextPatentEmbeddings(workerId, 1)
+  return embeddings[0] || null
+}
+
+export async function setEmbeddingVector(embeddingId: string, vector: number[]) {
   const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
-  await prisma.$executeRaw`
+  const updated = await prisma.$queryRaw<any[]>`
     UPDATE "local_patent_embeddings"
     SET "embedding" = ${vectorLiteral}::vector,
         "status" = 'COMPLETED'::"PatentEmbeddingStatus",
@@ -692,9 +996,41 @@ async function setEmbeddingVector(embeddingId: string, vector: number[]) {
         "errorMessage" = NULL,
         "lockedBy" = NULL,
         "lockedUntil" = NULL,
+        "heartbeatAt" = NULL,
         "updatedAt" = now()
     WHERE "id" = ${embeddingId}
+    RETURNING "localPatentId", "model", "textHash"
   `
+  const current = updated[0]
+  if (current?.localPatentId && current?.model && current?.textHash) {
+    await (prisma as any).localPatentEmbedding.deleteMany({
+      where: {
+        localPatentId: current.localPatentId,
+        model: current.model,
+        textHash: { not: current.textHash },
+        status: { in: ['QUEUED', 'FAILED', 'COMPLETED'] },
+      },
+    })
+  }
+}
+
+function patentTextForEmbedding(embedding: PatentEmbeddingJob) {
+  return embedding.patent?.embeddingText || embedding.patent?.ragText || embedding.patent?.abstract || embedding.patent?.title || ''
+}
+
+async function failPatentEmbedding(embedding: PatentEmbeddingJob, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return (prisma as any).localPatentEmbedding.update({
+    where: { id: embedding.id },
+    data: {
+      status: 'FAILED',
+      errorMessage: message,
+      lockedBy: null,
+      lockedUntil: null,
+      heartbeatAt: null,
+      nextAttemptAt: nextJobAttemptAt(Math.max(1, embedding.attemptCount || 1)),
+    },
+  })
 }
 
 export async function processPatentEmbeddingById(embeddingId: string, workerId = `patent-corpus-${process.pid}`) {
@@ -712,27 +1048,48 @@ export async function processPatentEmbeddingById(embeddingId: string, workerId =
     return (prisma as any).localPatentEmbedding.findUnique({ where: { id: embedding.id } })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return (prisma as any).localPatentEmbedding.update({
-      where: { id: embedding.id },
-      data: {
-        status: 'FAILED',
-        errorMessage: message,
-        lockedBy: null,
-        lockedUntil: null,
-        nextAttemptAt: new Date(Date.now() + 15 * 60 * 1000),
-      },
-    })
+    return failPatentEmbedding(embedding, message)
   }
 }
 
-export async function processPendingPatentEmbeddings(workerId = `patent-corpus-${process.pid}`, limit = 4) {
+export async function processPatentEmbeddingBatch(workerId = `patent-corpus-${process.pid}`, limit = 4) {
+  const claimed = await claimNextPatentEmbeddings(workerId, limit)
+  if (!claimed.length) return []
+
   const processed: any[] = []
-  for (let index = 0; index < limit; index += 1) {
-    const embedding = await claimNextPatentEmbedding(workerId)
-    if (!embedding) break
-    processed.push(await processPatentEmbeddingById(embedding.id, workerId))
+  const valid: PatentEmbeddingWorkItem[] = claimed
+    .map((embedding: PatentEmbeddingJob) => ({ embedding, text: patentTextForEmbedding(embedding) }))
+    .filter((item: PatentEmbeddingWorkItem) => {
+      if (item.text) return true
+      processed.push(failPatentEmbedding(item.embedding, new Error('Patent has no text available for embedding.')))
+      return false
+    })
+
+  for (let start = 0; start < valid.length; start += OPENAI_EMBEDDING_BATCH_SIZE) {
+    const chunk = valid.slice(start, start + OPENAI_EMBEDDING_BATCH_SIZE)
+    try {
+      const vectors = await requestOpenAIEmbeddings(chunk.map((item: PatentEmbeddingWorkItem) => item.text))
+      for (let index = 0; index < chunk.length; index += 1) {
+        const vector = vectors[index]
+        if (!vector) {
+          processed.push(await failPatentEmbedding(chunk[index].embedding, new Error('OpenAI embedding response did not contain the expected vector.')))
+          continue
+        }
+        await setEmbeddingVector(chunk[index].embedding.id, vector)
+        processed.push(await (prisma as any).localPatentEmbedding.findUnique({ where: { id: chunk[index].embedding.id } }))
+      }
+    } catch (error) {
+      for (const item of chunk) {
+        processed.push(await failPatentEmbedding(item.embedding, error))
+      }
+    }
   }
-  return processed
+
+  return Promise.all(processed)
+}
+
+export async function processPendingPatentEmbeddings(workerId = `patent-corpus-${process.pid}`, limit = 4) {
+  return processPatentEmbeddingBatch(workerId, limit)
 }
 
 export async function searchPatentCorpus(query: string, limit = 20) {

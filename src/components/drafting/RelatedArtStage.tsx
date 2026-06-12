@@ -50,6 +50,14 @@ type ResultItem = {
   assignees?: string[] | string
 }
 
+type AIAnalysisEntry = {
+  aiSummary?: string
+  noveltyThreat?: string
+  relevantParts?: string[]
+  irrelevantParts?: string[]
+  noveltyComparison?: string
+}
+
 type AnalysisProgressState = {
   processed: number
   total: number
@@ -57,6 +65,9 @@ type AnalysisProgressState = {
   totalBatches: number
   message: string
 }
+
+type PatentSearchSourceMode = 'INDIAN_ONLY' | 'PQAI_ONLY' | 'PQAI_PLUS_INDIAN'
+type ResultSourceFilter = 'all' | 'india' | 'international'
 
 const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, onComplete, onRefresh }: RelatedArtStageProps) {
   // DEBUG: Check if component is being remounted
@@ -74,13 +85,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<ResultItem[]>([])
   const [runId, setRunId] = useState<string | null>(null)
-  const [aiAnalysis, setAiAnalysis] = useState<Record<string, { aiSummary?: string; noveltyThreat?: string; relevantParts?: string[]; irrelevantParts?: string[]; noveltyComparison?: string }>>({})
+  const [aiAnalysis, setAiAnalysis] = useState<Record<string, AIAnalysisEntry>>({})
   const [hasLoadedSelections, setHasLoadedSelections] = useState(false)
   const [limit, setLimit] = useState(25)
   const [afterDate, setAfterDate] = useState('')
   const [customQuery, setCustomQuery] = useState('')
   const [showCustomQuery, setShowCustomQuery] = useState(false)
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
+  const [includeIndianPatents, setIncludeIndianPatents] = useState(true)
+  const [includeInternationalPatents, setIncludeInternationalPatents] = useState(true)
+  const [resultSourceFilter, setResultSourceFilter] = useState<ResultSourceFilter>('all')
 
   // AI review states
   const [reviewing, setReviewing] = useState(false)
@@ -172,7 +186,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   function canonicalizePatentNumber(value: any) {
     if (!value) return ''
     const normalized = String(value).toUpperCase().replace(/[^A-Z0-9]/g, '')
-    return normalized.replace(/[A-Z]\d*$/, '')
+    const kindSuffixMatch = normalized.match(/^(.*\d)[A-Z]\d?$/)
+    return kindSuffixMatch?.[1] || normalized
   }
 
   function getPatentNumber(item: any) {
@@ -188,6 +203,23 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       item?.id ||
       ''
     ).trim()
+  }
+
+  function getAnalysisForPatentNumber(patentNumber: any): AIAnalysisEntry | null {
+    const pn = String(patentNumber || '').trim()
+    if (!pn || pn === 'N/A') return null
+    if (aiAnalysis[pn]) return aiAnalysis[pn]
+
+    const canonical = canonicalizePatentNumber(pn)
+    if (!canonical) return null
+    if (aiAnalysis[canonical]) return aiAnalysis[canonical]
+
+    const matchedKey = Object.keys(aiAnalysis).find(key => canonicalizePatentNumber(key) === canonical)
+    return matchedKey ? aiAnalysis[matchedKey] : null
+  }
+
+  function getAnalysisForPatent(item: any): AIAnalysisEntry | null {
+    return getAnalysisForPatentNumber(getPatentNumber(item))
   }
 
   function firstText(...values: any[]) {
@@ -210,6 +242,41 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         .filter(Boolean)
     }
     return []
+  }
+
+  function getResultSourceTypes(item: any): Array<'india' | 'international'> {
+    const providerValues = [
+      ...(Array.isArray(item?.sourceProviders) ? item.sourceProviders : []),
+      item?.sourceProvider,
+      item?.providerId,
+      item?.provider
+    ].map(value => String(value || '').toLowerCase())
+    const pn = getPatentNumber(item).toUpperCase()
+    const sources: Array<'india' | 'international'> = []
+    const hasIndianProvider = providerValues.some(value => value === 'indian-corpus' || value === 'indian_corpus')
+    const hasPqaiProvider = providerValues.some(value => value === 'pqai')
+
+    if (hasIndianProvider) sources.push('india')
+    if (hasPqaiProvider) sources.push('international')
+    if (sources.length > 0) return sources
+
+    const jurisdiction = String(item?.jurisdiction || item?.country || '')
+      .toUpperCase()
+      .replace(/[^A-Z]/g, '')
+    const isIndianJurisdiction = jurisdiction === 'IN' || jurisdiction === 'IND' || jurisdiction === 'INDIA'
+    return isIndianJurisdiction || pn.startsWith('IN') ? ['india'] : ['international']
+  }
+
+  function resultMatchesSourceFilter(item: any, filter: ResultSourceFilter) {
+    if (filter === 'all') return true
+    return getResultSourceTypes(item).includes(filter)
+  }
+
+  function getResultSourceLabel(item: any) {
+    const sources = getResultSourceTypes(item)
+    if (sources.includes('india') && sources.includes('international')) return 'India + International'
+    if (sources.includes('india')) return 'India'
+    return 'International'
   }
 
   function findStoredPatentDetails(item: any) {
@@ -275,8 +342,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     const rawScore = item?.relevanceScore ?? item?.score ?? item?.relevance
     const score = typeof rawScore === 'number' ? (rawScore > 1 ? rawScore : rawScore * 100) : null
     const link = firstText(db.link, db.pdfLink, item?.link, item?.url, item?.patent_url, rawPn ? `https://patents.google.com/patent/${rawPn}` : '')
+    const sourceLabel = getResultSourceLabel(item)
 
-    return { pn, title, abstract, publicationDate, filingDate, priorityDate, applicationNumber, inventors, assignees, cpcCodes, ipcCodes, score, link }
+    return { pn, title, abstract, publicationDate, filingDate, priorityDate, applicationNumber, inventors, assignees, cpcCodes, ipcCodes, score, link, sourceLabel }
   }
 
   // DEBUG: Log renders
@@ -432,6 +500,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setUseManualPriorArtToggle(false)
       setRelevanceFilters([])
       setNoveltyThreatFilters([])
+      setResultSourceFilter('all')
+      setIncludeIndianPatents(true)
+      setIncludeInternationalPatents(true)
       setCurrentPage(1)
       setAutoSelectWarning(null)
       setStatusMessage(null)
@@ -685,12 +756,24 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   // Check if AI review has been done FOR CURRENT RESULTS
   const hasAIReview = useMemo(() => {
     if (results.length === 0) return false;
-    // Check if at least one result in the current list has been analyzed
-    return results.some(r => {
-      const pn = r.pn || (r as any).patent_number || (r as any).publication_number || (r as any).publication_id || (r as any).publicationId || (r as any).patentId || (r as any).patent_id || (r as any).id || 'N/A'
-      return !!aiAnalysis[pn];
-    });
+    return results.some(r => !!getAnalysisForPatent(r));
   }, [results, aiAnalysis]);
+
+  const missingAnalysisPatentNumbers = useMemo(() => {
+    const seen = new Set<string>()
+    const missing: string[] = []
+
+    results.forEach(result => {
+      const pn = getPatentNumber(result)
+      if (!pn || pn === 'N/A') return
+      const canonical = canonicalizePatentNumber(pn) || pn.toUpperCase()
+      if (seen.has(canonical)) return
+      seen.add(canonical)
+      if (!getAnalysisForPatentNumber(pn)) missing.push(pn)
+    })
+
+    return missing
+  }, [results, aiAnalysis])
 
   // Calculate AI analysis summary stats for Quick View panels
   const analysisSummary = useMemo(() => {
@@ -742,7 +825,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const handleAutoSelectAdjacent = () => {
     if (!hasAIReview) return
 
-    const candidates = results
+    const candidates = sourceFilteredResults
       .map((r, index) => {
         const pn =
           r.pn ||
@@ -754,7 +837,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           (r as any).patent_id ||
           (r as any).id ||
           'N/A'
-        const analysis = aiAnalysis[pn]
+        const analysis = getAnalysisForPatentNumber(pn)
         if (!pn || pn === 'N/A' || !analysis || analysis.noveltyThreat !== 'adjacent') return null
 
         const relevance =
@@ -810,11 +893,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         publication_date,
         inventors,
         assignees,
-        aiSummary: aiAnalysis[pn]?.aiSummary || existing.aiSummary,
-        noveltyThreat: aiAnalysis[pn]?.noveltyThreat || existing.noveltyThreat,
-        relevantParts: aiAnalysis[pn]?.relevantParts || existing.relevantParts || [],
-        irrelevantParts: aiAnalysis[pn]?.irrelevantParts || existing.irrelevantParts || [],
-        noveltyComparison: aiAnalysis[pn]?.noveltyComparison || existing.noveltyComparison,
+        aiSummary: getAnalysisForPatentNumber(pn)?.aiSummary || existing.aiSummary,
+        noveltyThreat: getAnalysisForPatentNumber(pn)?.noveltyThreat || existing.noveltyThreat,
+        relevantParts: getAnalysisForPatentNumber(pn)?.relevantParts || existing.relevantParts || [],
+        irrelevantParts: getAnalysisForPatentNumber(pn)?.irrelevantParts || existing.irrelevantParts || [],
+        noveltyComparison: getAnalysisForPatentNumber(pn)?.noveltyComparison || existing.noveltyComparison,
         tags: Array.from(new Set([...(existing.tags || []), 'AI_REVIEWED', 'AI_ADJACENT']))
       }
     })
@@ -828,9 +911,33 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   }
 
 
+  const selectedSearchSourceMode = useMemo<PatentSearchSourceMode>(() => {
+    if (includeIndianPatents && includeInternationalPatents) return 'PQAI_PLUS_INDIAN'
+    if (includeIndianPatents) return 'INDIAN_ONLY'
+    return 'PQAI_ONLY'
+  }, [includeIndianPatents, includeInternationalPatents])
+
+  const resultSourceCounts = useMemo(() => {
+    return results.reduce((acc, result) => {
+      const sources = getResultSourceTypes(result)
+      if (sources.includes('india')) acc.india += 1
+      if (sources.includes('international')) acc.international += 1
+      return acc
+    }, { all: results.length, india: 0, international: 0 })
+  }, [results])
+
+  const sourceFilteredResults = useMemo(() => {
+    return results.filter(result => resultMatchesSourceFilter(result, resultSourceFilter))
+  }, [results, resultSourceFilter])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [resultSourceFilter])
+
+
   // Calculate patent counts for each relevance range
   const relevanceRangeCounts = useMemo(() => {
-    return results.reduce((acc, r) => {
+    return sourceFilteredResults.reduce((acc, r) => {
       const score = (r.score || 0) * 100
       if (score >= 90 && score <= 100) acc['90-100'] = (acc['90-100'] || 0) + 1
       else if (score >= 80 && score < 90) acc['80-90'] = (acc['80-90'] || 0) + 1
@@ -840,12 +947,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       else if (score < 50) acc['<50'] = (acc['<50'] || 0) + 1
       return acc
     }, {} as Record<string, number>)
-  }, [results])
+  }, [sourceFilteredResults])
 
   // First, filter results by relevance only (not threat)
   const relevanceFilteredResults = useMemo(() => {
-    if (relevanceFilters.length === 0) return results
-    return results.filter(r => {
+    if (relevanceFilters.length === 0) return sourceFilteredResults
+    return sourceFilteredResults.filter(r => {
       const score = (r.score || 0) * 100
       return relevanceFilters.some(filter => {
         if (filter === '90-100') return score >= 90 && score <= 100
@@ -857,13 +964,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         return false
       })
     })
-  }, [results, relevanceFilters])
+  }, [sourceFilteredResults, relevanceFilters])
 
   // Calculate patent counts for each novelty threat level (based on relevance-filtered results)
   const noveltyThreatCounts = useMemo(() => {
     return relevanceFilteredResults.reduce((acc, r) => {
-      const pn = r.pn || (r as any).patent_number || (r as any).publication_number || (r as any).publication_id || (r as any).publicationId || (r as any).patentId || (r as any).patent_id || (r as any).id || 'N/A'
-      const threat = aiAnalysis[pn]?.noveltyThreat || 'unknown'
+      const threat = getAnalysisForPatent(r)?.noveltyThreat || 'unknown'
       acc[threat] = (acc[threat] || 0) + 1
       return acc
     }, {} as Record<string, number>)
@@ -873,8 +979,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const filteredResults = useMemo(() => {
     if (noveltyThreatFilters.length === 0) return relevanceFilteredResults
     return relevanceFilteredResults.filter(r => {
-      const pn = r.pn || (r as any).patent_number || (r as any).publication_number || (r as any).publication_id || (r as any).publicationId || (r as any).patentId || (r as any).patent_id || (r as any).id || 'N/A'
-      const threat = aiAnalysis[pn]?.noveltyThreat || 'unknown'
+      const threat = getAnalysisForPatent(r)?.noveltyThreat || 'unknown'
       return noveltyThreatFilters.includes(threat)
     })
   }, [relevanceFilteredResults, noveltyThreatFilters, aiAnalysis])
@@ -974,6 +1079,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setError(null)
 
       const searchQuery = customQuery.trim() || q
+      if (!includeIndianPatents && !includeInternationalPatents) {
+        setError('Select Indian patents, International patents, or both before searching.')
+        return
+      }
 
       // Debug logging
       console.log('🔍 Search Query Debug:')
@@ -982,6 +1091,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       console.log('  - Default Query (q):', q)
       console.log('  - Final Search Query:', searchQuery)
       console.log('  - Using custom query?', customQuery.trim().length > 0)
+      console.log('  - Source mode:', selectedSearchSourceMode)
 
       // Sophisticated search progress simulation
       const progressSteps = [
@@ -1003,7 +1113,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
       // Execute actual search
       setSearchProgress('💡 Finalizing patent analysis and generating comprehensive report...')
-      const resp = await onComplete({ action: 'related_art_search', sessionId: session?.id, limit, queryOverride: searchQuery, afterDate: afterDate || undefined })
+      const resp = await onComplete({
+        action: 'related_art_search',
+        sessionId: session?.id,
+        limit,
+        queryOverride: searchQuery,
+        afterDate: afterDate || undefined,
+        sourceMode: selectedSearchSourceMode
+      })
 
       const items = Array.isArray(resp?.results) ? resp.results : []
 
@@ -1030,6 +1147,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
       setResults(items)
       setRunId(resp?.runId || null)
+      setResultSourceFilter('all')
 
     } catch (e) {
       console.log('Search error:', e)
@@ -1049,7 +1167,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     }
   }
 
-  const applyAIReviewResponse = async (resp: any) => {
+  const applyAIReviewResponse = async (resp: any, options?: { mergeExisting?: boolean }) => {
     console.log('=== AI REVIEW RESPONSE DEBUG ===')
     console.log('AI Review Response received:', !!resp)
     console.log('Response type:', typeof resp)
@@ -1086,13 +1204,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     console.log('Ideas length:', ideas.length)
     console.log('=== END AI REVIEW RESPONSE DEBUG ===')
 
-    setIdeaBank([...ideas])
-    setIdeaBankVersion(prev => prev + 1)
+    if (!options?.mergeExisting || ideas.length > 0) {
+      setIdeaBank([...ideas])
+      setIdeaBankVersion(prev => prev + 1)
+    }
 
     const byPn: Record<string, { relevance: number; novelty_threat: string; summary: string; title: string; relevant_parts?: string[]; irrelevant_parts?: string[]; novelty_comparison?: string }> = {}
+    const byCanonicalPn: Record<string, { relevance: number; novelty_threat: string; summary: string; title: string; relevant_parts?: string[]; irrelevant_parts?: string[]; novelty_comparison?: string }> = {}
     for (const d of decisions) {
       if (!d?.pn) continue
-      byPn[d.pn] = {
+      const decision = {
         relevance: typeof d.relevance === 'number' ? d.relevance : 0,
         novelty_threat: String((d as any).novelty_threat || 'remote'),
         summary: String(d.summary || '').slice(0, 260),
@@ -1101,13 +1222,15 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         irrelevant_parts: (d as any).detailedAnalysis?.irrelevant_parts || [],
         novelty_comparison: (d as any).detailedAnalysis?.novelty_comparison || ''
       }
+      byPn[d.pn] = decision
+      byCanonicalPn[canonicalizePatentNumber(d.pn)] = decision
     }
 
     const newAiAnalysis: Record<string, any> = {}
     results.forEach((r) => {
       const pn = getPatentNumber(r) || 'N/A'
       if (!pn || pn === 'N/A') return
-      const dec = byPn[pn]
+      const dec = byPn[pn] || byCanonicalPn[canonicalizePatentNumber(pn)]
       if (!dec) return
 
       newAiAnalysis[pn] = {
@@ -1119,10 +1242,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       }
     })
 
-    setAiAnalysis(newAiAnalysis)
+    const mergedAiAnalysis = options?.mergeExisting
+      ? { ...aiAnalysis, ...newAiAnalysis }
+      : newAiAnalysis
+
+    setAiAnalysis(mergedAiAnalysis)
 
     try {
-      await onComplete({ action: 'save_ai_analysis', sessionId: session?.id, aiAnalysisData: newAiAnalysis })
+      await onComplete({ action: 'save_ai_analysis', sessionId: session?.id, aiAnalysisData: mergedAiAnalysis })
       console.log('AI analysis data saved to database')
     } catch (e) {
       console.error('Failed to save AI analysis data:', e)
@@ -1131,7 +1258,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     setSelected(prev => {
       const next = { ...prev }
       Object.keys(next).forEach(key => {
-        const dec = byPn[key]
+        const dec = byPn[key] || byCanonicalPn[canonicalizePatentNumber(key)]
         if (dec) {
           next[key] = {
             ...next[key],
@@ -1161,17 +1288,37 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     return true
   }
 
-  const runAIReview = async () => {
+  const runAIReview = async (options?: { missingOnly?: boolean }) => {
     if (!runId) { setError('Run a search first.'); return }
     if (results.length === 0) { setError('No results to review.'); return }
+    if (reviewing) return
+
+    const missingOnly = options?.missingOnly === true
+    const candidatePatentNumbers = missingOnly ? missingAnalysisPatentNumbers : []
+    const targetCount = missingOnly ? candidatePatentNumbers.length : results.length
+
+    if (missingOnly && targetCount === 0) {
+      setMainTab('analyze')
+      setError(null)
+      setStatusMessage({
+        type: 'success',
+        text: 'All current patent results already have AI relevance analysis.'
+      })
+      setReviewInfo('All current patent results already have AI relevance analysis.')
+      setAnalysisProgress(prev => prev ? {
+        ...prev,
+        message: 'No missing AI relevance analysis found.'
+      } : null)
+      return
+    }
 
     try {
       setError(null)
       setReviewing(true)
-      setReviewInfo(`Preparing AI analysis for ${results.length} patents...`)
+      setReviewInfo(`Preparing AI analysis for ${targetCount} patent${targetCount !== 1 ? 's' : ''}...`)
       setAnalysisProgress({
         processed: 0,
-        total: results.length,
+        total: targetCount,
         currentBatch: 0,
         totalBatches: 0,
         message: 'Preparing patent batches...'
@@ -1189,7 +1336,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       } : null
 
       const updateProgress = (event: any) => {
-        const total = typeof event.total === 'number' && event.total > 0 ? event.total : results.length
+        const total = typeof event.total === 'number' && event.total > 0 ? event.total : targetCount
         const processed = typeof event.processed === 'number' ? Math.min(event.processed, total) : 0
         const currentBatch = typeof event.batch === 'number' ? event.batch : 0
         const totalBatches = typeof event.totalBatches === 'number' ? event.totalBatches : 0
@@ -1226,7 +1373,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             action: 'related_art_llm_review_stream',
             sessionId: session?.id,
             runId,
-            claimsContext
+            claimsContext,
+            candidatePatentNumbers: missingOnly ? candidatePatentNumbers : undefined
           })
         })
 
@@ -1272,11 +1420,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           action: 'related_art_llm_review',
           sessionId: session?.id,
           runId,
-          claimsContext
+          claimsContext,
+          candidatePatentNumbers: missingOnly ? candidatePatentNumbers : undefined
         })
       }
 
-      await applyAIReviewResponse(finalResponse)
+      await applyAIReviewResponse(finalResponse, { mergeExisting: missingOnly })
     } catch (e) {
       console.error('AI review failed:', e)
       setError(e instanceof Error ? e.message : 'AI review failed. Please try again.')
@@ -1608,8 +1757,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
             {/* Step 2: Analyze */}
             <button
-              onClick={() => canAccessAnalyze && setMainTab('analyze')}
-              disabled={!canAccessAnalyze}
+              onClick={() => {
+                if (!canAccessAnalyze || reviewing) return
+                setMainTab('analyze')
+                if (hasAIReview) {
+                  void runAIReview({ missingOnly: true })
+                }
+              }}
+              disabled={!canAccessAnalyze || reviewing}
               className={`flex items-center gap-3 px-5 py-3 rounded-xl font-medium transition-all ${
                 mainTab === 'analyze'
                   ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'
@@ -1624,9 +1779,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 {hasAIReview ? '✓' : '2'}
               </div>
               <div className="text-left">
-                <div className="font-semibold">Analyze</div>
+                <div className="font-semibold">{hasAIReview ? 'Re-Analyze' : 'Analyze'}</div>
                 <div className={`text-xs ${mainTab === 'analyze' ? 'text-emerald-200' : canAccessAnalyze ? 'text-gray-400' : 'text-gray-300'}`}>
-                  AI review
+                  {hasAIReview ? `${missingAnalysisPatentNumbers.length} missing` : 'AI review'}
                 </div>
               </div>
             </button>
@@ -1715,6 +1870,46 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   <label className="block text-sm font-medium text-gray-700 mb-2">AI-Optimized Search Query</label>
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                     <code className="text-sm text-gray-700 break-all">{searchQuery || 'No search query available'}</code>
+                  </div>
+                </div>
+
+                <div className="border border-gray-200 rounded-xl p-4 bg-white">
+                  <label className="block text-sm font-medium text-gray-700 mb-3">Patent Sources</label>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                      includeIndianPatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={includeIndianPatents}
+                        onChange={(event) => {
+                          if (!event.target.checked && !includeInternationalPatents) return
+                          setIncludeIndianPatents(event.target.checked)
+                        }}
+                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900">Indian patents</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">Search imported Indian patents using local RAG embeddings.</span>
+                      </span>
+                    </label>
+                    <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                      includeInternationalPatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={includeInternationalPatents}
+                        onChange={(event) => {
+                          if (!event.target.checked && !includeIndianPatents) return
+                          setIncludeInternationalPatents(event.target.checked)
+                        }}
+                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900">International patents</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">Search global patents through PQAI.</span>
+                      </span>
+                    </label>
                   </div>
                 </div>
 
@@ -1842,6 +2037,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     </h3>
                     <p className="text-sm text-gray-500 mt-1">
                       Found {results.length} potentially relevant patents
+                      {sourceFilteredResults.length !== results.length ? ` - showing ${sourceFilteredResults.length}` : ''}
                       {detailsLoading ? ' - loading Patent Search Service metadata' : ''}
                     </p>
                   </div>
@@ -1850,8 +2046,38 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   </span>
                 </div>
 
+                <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-gray-600 mr-1">Filter:</span>
+                  {[
+                    { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
+                    { key: 'india' as const, label: 'India', count: resultSourceCounts.india },
+                    { key: 'international' as const, label: 'International', count: resultSourceCounts.international }
+                  ].map(option => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setResultSourceFilter(option.key)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                        resultSourceFilter === option.key
+                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                          : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300'
+                      }`}
+                    >
+                      {option.label}
+                      <span className={resultSourceFilter === option.key ? 'ml-1 text-indigo-100' : 'ml-1 text-gray-400'}>
+                        {option.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
                 <div className="divide-y divide-gray-100 max-h-[650px] overflow-y-auto">
-                  {results.map((r, i) => {
+                  {sourceFilteredResults.length === 0 && (
+                    <div className="p-6 text-sm text-gray-500">
+                      No patents match the selected source filter.
+                    </div>
+                  )}
+                  {sourceFilteredResults.map((r, i) => {
                     const details = getPatentDisplayData(r, i)
                     const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
                     return (
@@ -1860,7 +2086,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           <div className="text-sm text-gray-400 w-6">{i + 1}</div>
                           <div className="flex-1 min-w-0">
                             <div className="font-medium text-gray-900">{details.title}</div>
-                            <div className="text-xs text-gray-500 mt-1">{details.pn}</div>
+                            <div className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+                              <span>{details.pn}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{details.sourceLabel}</span>
+                            </div>
                             <div className="mt-3 text-sm text-gray-700 leading-relaxed">
                               {details.abstract || 'No abstract or snippet was returned for this patent.'}
                             </div>
@@ -2090,7 +2319,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       extract relevant disclosures, and provide actionable insights.
                     </p>
                     <button
-                      onClick={runAIReview}
+                      onClick={() => void runAIReview()}
                       disabled={reviewing || !runId}
                       className="px-8 py-3 bg-white text-emerald-700 rounded-xl font-semibold hover:bg-emerald-50 transition-colors shadow-lg disabled:opacity-50"
                     >
@@ -2146,6 +2375,57 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             {/* Analysis Complete - Summary */}
             {hasAIReview && (
               <>
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h3 className="font-semibold text-gray-900">AI Analysis Complete</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {missingAnalysisPatentNumbers.length > 0
+                        ? `${missingAnalysisPatentNumbers.length} current patent${missingAnalysisPatentNumbers.length !== 1 ? 's are' : ' is'} missing AI relevance analysis.`
+                        : 'All current search results have AI relevance analysis.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void runAIReview({ missingOnly: true })}
+                    disabled={reviewing || !runId}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {reviewing ? (reviewInfo || 'Re-analyzing...') : 'Re-Analyze'}
+                  </button>
+                  {analysisProgress && (reviewing || analysisProgress.message) && (
+                    <div className="w-full bg-emerald-50 rounded-xl p-4 border border-emerald-100">
+                      <div className="flex items-center justify-between gap-4 text-sm font-medium text-emerald-800">
+                        <span>
+                          Processed {analysisProgress.processed} of {analysisProgress.total} patents
+                        </span>
+                        <span>
+                          {analysisProgress.total > 0
+                            ? `${Math.round((analysisProgress.processed / analysisProgress.total) * 100)}%`
+                            : '0%'}
+                        </span>
+                      </div>
+                      <div className="mt-3 h-2 rounded-full bg-emerald-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-600 transition-all duration-500"
+                          style={{
+                            width: `${analysisProgress.total > 0
+                              ? Math.min(100, Math.round((analysisProgress.processed / analysisProgress.total) * 100))
+                              : 0}%`
+                          }}
+                        />
+                      </div>
+                      <div className="mt-2 text-sm text-emerald-700">
+                        {analysisProgress.message}
+                        {analysisProgress.totalBatches > 0 && (
+                          <span className="ml-2">
+                            Batch {Math.max(analysisProgress.currentBatch, 1)} of {analysisProgress.totalBatches}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Threat Level Summary Cards */}
                 <div className="grid grid-cols-4 gap-4">
                   <div className="bg-red-50 rounded-2xl p-6 border border-red-100">
@@ -2172,6 +2452,26 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
                 {/* Filter Bar */}
                 <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center gap-3">
+                  <span className="text-sm text-gray-500">Source:</span>
+                  {[
+                    { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
+                    { key: 'india' as const, label: 'India', count: resultSourceCounts.india },
+                    { key: 'international' as const, label: 'International', count: resultSourceCounts.international }
+                  ].map(option => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setResultSourceFilter(option.key)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
+                        resultSourceFilter === option.key
+                          ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
+                          : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                      }`}
+                    >
+                      {option.label}
+                      <span className="ml-1 opacity-70">({option.count})</span>
+                    </button>
+                  ))}
                   <span className="text-sm text-gray-500">Filter by threat level:</span>
                   {['anticipates', 'obvious', 'adjacent', 'remote'].map(threat => (
                     <button
@@ -2210,11 +2510,17 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   </div>
 
                   <div className="divide-y divide-gray-100 max-h-[600px] overflow-y-auto">
+                    {filteredResults.length === 0 && (
+                      <div className="p-6 text-sm text-gray-500">
+                        No analyzed patents match the selected filters.
+                      </div>
+                    )}
                     {filteredResults.slice(0, 20).map((r, i) => {
                       const pn = getPatentKey(r, i)
-                      const analysis = aiAnalysis[pn]
+                      const analysis = getAnalysisForPatentNumber(pn)
                       const isExpanded = expandedPatentDetails.has(`analyze-${pn}`)
                       const patentAbstract = (r as any).abstract || (r as any).snippet || ''
+                      const sourceLabel = getResultSourceLabel(r)
 
                       return (
                         <div key={pn} className="border-b border-gray-100 last:border-b-0">
@@ -2241,7 +2547,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               </span>
                               <div className="flex-1 min-w-0">
                                 <div className="font-medium text-gray-900 truncate">{r.title}</div>
-                                <div className="text-xs text-gray-500 mt-0.5">{pn}</div>
+                                <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap items-center gap-2">
+                                  <span>{pn}</span>
+                                  <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{sourceLabel}</span>
+                                </div>
                               </div>
                               <svg className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -2369,6 +2678,33 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               </p>
             </div>
 
+            {results.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-gray-600 mr-1">Source:</span>
+                {[
+                  { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
+                  { key: 'india' as const, label: 'India', count: resultSourceCounts.india },
+                  { key: 'international' as const, label: 'International', count: resultSourceCounts.international }
+                ].map(option => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setResultSourceFilter(option.key)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                      resultSourceFilter === option.key
+                        ? 'bg-purple-600 border-purple-600 text-white'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-purple-300'
+                    }`}
+                  >
+                    {option.label}
+                    <span className={resultSourceFilter === option.key ? 'ml-1 text-purple-100' : 'ml-1 text-gray-400'}>
+                      {option.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Selection Workflow Tabs */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               {/* Sub-Tab Navigation */}
@@ -2435,8 +2771,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           { level: 'remote', label: 'Remote', icon: '⚪' }
                         ].map(({ level, label, icon }) => {
                           const count = level === null 
-                            ? results.length 
-                            : results.filter(r => aiAnalysis[getPatentKey(r)]?.noveltyThreat === level).length
+                            ? sourceFilteredResults.length 
+                            : sourceFilteredResults.filter(r => getAnalysisForPatent(r)?.noveltyThreat === level).length
                           const isActive = priorArtThreatFilter === level
                           
                           return (
@@ -2538,9 +2874,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         {/* Patent list with expandable details */}
                         <div className="border border-gray-200 rounded-xl overflow-hidden">
                           <div className="max-h-[600px] overflow-y-auto divide-y divide-gray-100">
-                            {results.filter(r => {
+                            {sourceFilteredResults.filter(r => {
                               const pn = getPatentKey(r)
-                              const threat = aiAnalysis[pn]?.noveltyThreat
+                              const threat = getAnalysisForPatentNumber(pn)?.noveltyThreat
                               // Apply threat filter if set, otherwise show all patents
                               if (priorArtThreatFilter !== null) {
                                 return threat === priorArtThreatFilter
@@ -2549,10 +2885,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               return true
                             }).map((r, i) => {
                               const pn = getPatentKey(r, i)
-                              const analysis = aiAnalysis[pn]
+                              const analysis = getAnalysisForPatentNumber(pn)
                               const isSelected = !!priorArtSelected[pn]
                               const isExpanded = expandedPatentDetails.has(`priorArt-select-${pn}`)
                               const patentAbstract = (r as any).abstract || (r as any).snippet || ''
+                              const sourceLabel = getResultSourceLabel(r)
                               
                               return (
                                 <div key={pn} className={`${isSelected ? 'bg-indigo-50/50' : ''}`}>
@@ -2594,6 +2931,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                       </div>
                                       <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
                                         <span className="font-mono">{pn}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{sourceLabel}</span>
                                         <span>•</span>
                                         <button
                                           onClick={(e) => {
@@ -2747,8 +3085,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               { level: 'remote', label: 'Remote', icon: '⚪' }
                             ].map(({ level, label, icon }) => {
                               const count = level === null 
-                                ? results.length 
-                                : results.filter(r => aiAnalysis[getPatentKey(r)]?.noveltyThreat === level).length
+                                ? sourceFilteredResults.length 
+                                : sourceFilteredResults.filter(r => getAnalysisForPatent(r)?.noveltyThreat === level).length
                               const isActive = claimRefThreatFilter === level
                               
                               return (
@@ -2835,9 +3173,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                 <button
                                   onClick={() => {
                                     const autoSelected: Record<string, any> = {}
-                                    results.forEach((r) => {
+                                    sourceFilteredResults.forEach((r) => {
                                       const pn = getPatentKey(r)
-                                      const analysis = aiAnalysis[pn]
+                                      const analysis = getAnalysisForPatentNumber(pn)
                                       const threat = analysis?.noveltyThreat
                                       if (threat === 'anticipates' || threat === 'obvious') {
                                         autoSelected[pn] = { 
@@ -2872,9 +3210,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                             {/* Patent list with expandable details */}
                             <div className="border border-gray-200 rounded-xl overflow-hidden">
                               <div className="max-h-[600px] overflow-y-auto divide-y divide-gray-100">
-                                {results.filter(r => {
+                                {sourceFilteredResults.filter(r => {
                                   const pn = getPatentKey(r)
-                                  const threat = aiAnalysis[pn]?.noveltyThreat
+                                  const threat = getAnalysisForPatentNumber(pn)?.noveltyThreat
                                   // Apply threat filter if set, otherwise show all patents
                                   if (claimRefThreatFilter !== null) {
                                     return threat === claimRefThreatFilter
@@ -2883,10 +3221,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                   return true
                                 }).map((r, i) => {
                                   const pn = getPatentKey(r, i)
-                                  const analysis = aiAnalysis[pn]
+                                  const analysis = getAnalysisForPatentNumber(pn)
                                   const isSelected = !!claimRefSelected[pn]
                                   const isExpanded = expandedPatentDetails.has(`claimRef-select-${pn}`)
                                   const patentAbstract = (r as any).abstract || (r as any).snippet || ''
+                                  const sourceLabel = getResultSourceLabel(r)
                                   
                                   return (
                                     <div key={pn} className={`${isSelected ? 'bg-amber-50/50' : ''}`}>
@@ -2928,6 +3267,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                           </div>
                                           <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
                                             <span className="font-mono">{pn}</span>
+                                            <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{sourceLabel}</span>
                                             <span>•</span>
                                             <button
                                               onClick={(e) => {

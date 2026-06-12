@@ -1,6 +1,8 @@
 import fs from 'fs'
 import { describe, expect, it } from 'vitest'
 import {
+  buildEmbeddingText,
+  buildRagText,
   classifyPageSection,
   extractPatentRecordsFromPdf,
   normalizeClassifications,
@@ -11,6 +13,36 @@ import {
 } from '@/lib/patent-corpus-extractor'
 
 describe('patent corpus field parsers', () => {
+  it('builds rag text with searchable basic metadata', () => {
+    const text = buildRagText({
+      title: 'Smart irrigation controller',
+      abstract: 'A moisture sensor controls water delivery.',
+      classifications: ['A01G 25/16'],
+      applicants: [{ sequence: 1, name: 'LPU Research', raw: '1)LPU Research' }],
+      inventors: ['Anita Kumar'],
+    })
+
+    expect(text).toContain('Applicants: LPU Research')
+    expect(text).toContain('Inventors: Anita Kumar')
+    expect(text).toContain('Classifications: A01G 25/16')
+  })
+
+  it('keeps embedding text semantic without raw IPC strings', () => {
+    const text = buildEmbeddingText({
+      title: 'Smart irrigation controller',
+      abstract: 'A moisture sensor controls water delivery.',
+      classifications: ['A01G 25/16', 'G06F0007020000'],
+    })
+
+    expect(text).toContain('Title: Smart irrigation controller')
+    expect(text).toContain('Abstract: A moisture sensor controls water delivery.')
+    expect(text).toContain('Classification areas:')
+    expect(text).toContain('horticulture')
+    expect(text).toContain('electric digital data processing')
+    expect(text).not.toContain('A01G 25/16')
+    expect(text).not.toContain('G06F0007020000')
+  })
+
   it('normalizes split and compact classifications', () => {
     expect(normalizeClassifications(':C07D | 471/04,\nC07D | 401/14,\nE04H0009020000')).toEqual([
       'C07D 471/04',

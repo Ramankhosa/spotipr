@@ -1,4 +1,5 @@
 import {
+  getNextPatentCorpusQueueAttemptAt,
   processPendingPatentEmbeddings,
   processPendingPatentImportFiles,
 } from '@/lib/patent-corpus-service'
@@ -18,8 +19,17 @@ type PatentCorpusRunnerState = {
 
 const STATE_KEY = '__patentCorpusAutoRunner'
 const AUTO_RUNNER_ENABLED = process.env.PATENT_CORPUS_AUTO_WORKER !== 'false'
-const EMBEDDINGS_PER_TICK = Math.max(1, Number(process.env.PATENT_CORPUS_AUTO_EMBEDDING_BATCH || '4') || 4)
 const ERROR_BACKOFF_MS = 10_000
+const MAX_WAKE_DELAY_MS = 60 * 60 * 1000
+
+function envNumber(name: string, fallback: number) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+const EMBEDDINGS_PER_TICK = Math.max(0, envNumber('PATENT_CORPUS_AUTO_EMBEDDING_BATCH', 4))
 
 function getMutableState(): PatentCorpusRunnerState {
   const globalStore = globalThis as any
@@ -55,7 +65,7 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
       state.processedFiles += fileCount
 
       let embeddingCount = 0
-      if (fileCount === 0 && process.env.OPENAI_API_KEY) {
+      if (fileCount === 0 && EMBEDDINGS_PER_TICK > 0 && process.env.OPENAI_API_KEY) {
         const processedEmbeddings = await processPendingPatentEmbeddings(workerId, EMBEDDINGS_PER_TICK)
         embeddingCount = processedEmbeddings.filter(Boolean).length
         state.processedEmbeddings += embeddingCount
@@ -65,6 +75,15 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
       state.lastError = null
 
       if (fileCount === 0 && embeddingCount === 0) {
+        const nextAttemptAt = await getNextPatentCorpusQueueAttemptAt()
+        if (nextAttemptAt) {
+          const delay = Math.min(MAX_WAKE_DELAY_MS, Math.max(1000, nextAttemptAt.getTime() - Date.now()))
+          setTimeout(() => {
+            if (!getMutableState().active && AUTO_RUNNER_ENABLED) {
+              kickPatentCorpusRunner('scheduled-retry')
+            }
+          }, delay).unref?.()
+        }
         state.active = false
         state.lastStoppedAt = new Date().toISOString()
         state.workerId = null

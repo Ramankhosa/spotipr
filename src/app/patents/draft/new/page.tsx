@@ -334,10 +334,6 @@ function NewPatentDraftPageContent() {
           return a.label.localeCompare(b.label)
         })
         setAvailableCountries(countries)
-        if (countries.length > 0) {
-          const defaultSel = countries.find(c => c.code === 'IN')?.code || countries.find(c => c.code === 'PCT')?.code || countries[0].code
-          setSelectedCodes([defaultSel])
-        }
       } catch (e) {
         console.error('Failed to load country profiles:', e)
         setError('Failed to load country profiles. Please try again.')

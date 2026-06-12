@@ -1465,6 +1465,8 @@ model LocalPatent {
   rawInventorBlock       String?
   rawClassificationBlock String?
   rawText                String?
+  claimsText             String?   @db.Text
+  descriptionText        String?   @db.Text
   numberOfPages          Int?
   numberOfClaims         Int?
   sourcePdfName          String?
@@ -1476,6 +1478,8 @@ model LocalPatent {
   extractionVersion      String?
   extractionConfidence   Float?
   extractionWarnings     Json?
+  ipIndiaDetails         Json?
+  ipIndiaCapturedAt      DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

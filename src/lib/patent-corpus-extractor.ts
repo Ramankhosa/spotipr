@@ -584,25 +584,68 @@ export function parseCounts(text: string) {
   }
 }
 
-function buildRagText(record: {
+const IPC_SECTION_LABELS: Record<string, string> = {
+  A: 'human necessities',
+  B: 'performing operations and transporting',
+  C: 'chemistry and metallurgy',
+  D: 'textiles and paper',
+  E: 'fixed constructions',
+  F: 'mechanical engineering, lighting, heating, weapons, blasting',
+  G: 'physics',
+  H: 'electricity',
+}
+
+const IPC_SUBCLASS_LABELS: Record<string, string> = {
+  A01G: 'horticulture, cultivation, forestry, watering',
+  A61K: 'medical, dental, or toilet preparations',
+  B01D: 'separation processes',
+  C07D: 'heterocyclic compounds',
+  E04H: 'buildings or structures for special purposes',
+  G01N: 'investigating or analyzing materials',
+  G06F: 'electric digital data processing',
+  G06Q: 'administrative, commercial, financial, or managerial data processing',
+  H04L: 'transmission of digital information',
+}
+
+function applicantNames(applicants: ParsedApplicant[]) {
+  return applicants.map(applicant => applicant.name).filter(Boolean)
+}
+
+function classificationSemanticLabels(classifications: string[]) {
+  const labels = new Set<string>()
+  for (const classification of classifications) {
+    const compact = classification.toUpperCase().replace(/[^A-Z0-9]/g, '')
+    const subclass = compact.match(/^[A-H]\d{2}[A-Z]/)?.[0]
+    if (subclass && IPC_SUBCLASS_LABELS[subclass]) labels.add(IPC_SUBCLASS_LABELS[subclass])
+    const section = compact[0]
+    if (section && IPC_SECTION_LABELS[section]) labels.add(IPC_SECTION_LABELS[section])
+  }
+  return Array.from(labels)
+}
+
+export function buildRagText(record: {
   title: string
   abstract: string | null
   classifications: string[]
   applicants: ParsedApplicant[]
   inventors: string[]
 }) {
+  const applicants = applicantNames(record.applicants)
   return [
     `Title: ${record.title}`,
     record.abstract ? `Abstract: ${record.abstract}` : '',
     record.classifications.length ? `Classifications: ${record.classifications.join(', ')}` : '',
+    applicants.length ? `Applicants: ${applicants.join(', ')}` : '',
+    record.inventors.length ? `Inventors: ${record.inventors.join(', ')}` : '',
   ].filter(Boolean).join('\n')
 }
 
-function buildEmbeddingText(record: { title: string; abstract: string | null; classifications: string[] }) {
+export function buildEmbeddingText(record: { title: string; abstract: string | null; classifications: string[] }) {
+  const classificationLabels = classificationSemanticLabels(record.classifications)
   return [
     `Title: ${record.title}`,
     record.abstract ? `Abstract: ${record.abstract}` : '',
-    record.classifications.length ? `Classifications: ${record.classifications.join(', ')}` : '',
+    classificationLabels.length ? `Classification areas: ${classificationLabels.join('; ')}` : '',
   ].filter(Boolean).join('\n')
 }
 
@@ -730,6 +773,7 @@ function parsePatentWindow(page: PdfPageModel, y0: number, y1: number, sourceFil
   if (!application.raw) warnings.push('Missing application number')
   if (!title) warnings.push('Missing title')
   if (!abstract) warnings.push('Missing abstract')
+  if (!abstract) warnings.push('Title-only embedding')
   if (!applicants.length) warnings.push('Missing applicants')
   if (!classifications.length) warnings.push('Missing classifications')
   if (/No\.?\s*of\s*(?:Pages?|Claims?)/i.test(normalizedWindowText) && (!counts.numberOfPages || !counts.numberOfClaims)) {

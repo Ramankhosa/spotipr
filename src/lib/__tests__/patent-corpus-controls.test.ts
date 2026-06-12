@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import fs from 'fs/promises'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import {
   deletePatentImportFileExtractions,
+  deletePatentImportFileStoredPdf,
   patentWhereForImportFile,
   requeuePatentImportFileEmbeddings,
   retryPatentImportFileExtraction,
@@ -39,11 +41,22 @@ vi.mock('@/lib/prisma', () => ({
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       deleteMany: vi.fn(),
       groupBy: vi.fn(),
     },
     $executeRaw: vi.fn(),
     $queryRaw: vi.fn(),
+  },
+}))
+
+vi.mock('fs/promises', () => ({
+  default: {
+    access: vi.fn(),
+    unlink: vi.fn(),
+    mkdir: vi.fn(),
+    writeFile: vi.fn(),
+    readFile: vi.fn(),
   },
 }))
 
@@ -53,6 +66,7 @@ vi.mock('@/lib/patent-corpus-runner', () => ({
 
 const mockedAuthenticateUser = vi.mocked(authenticateUser)
 const mockPrisma = vi.mocked(prisma as any)
+const mockFs = vi.mocked(fs as any)
 
 function resetPrismaMocks() {
   for (const model of Object.values(mockPrisma)) {
@@ -73,6 +87,10 @@ describe('patent corpus PDF-level controls', () => {
   beforeEach(() => {
     resetPrismaMocks()
     mockedAuthenticateUser.mockReset()
+    mockFs.access.mockReset()
+    mockFs.unlink.mockReset()
+    mockFs.access.mockResolvedValue(undefined)
+    mockFs.unlink.mockResolvedValue(undefined)
     mockPrisma.patentImportFile.findMany.mockResolvedValue([])
     mockPrisma.patentImportBatch.update.mockResolvedValue({ id: 'batch-1' })
   })
@@ -99,6 +117,7 @@ describe('patent corpus PDF-level controls', () => {
       id: 'file-1',
       batchId: 'batch-1',
       status: 'COMPLETED',
+      storedPath: 'uploads/patent-corpus/batch-1/file.pdf',
     })
     mockPrisma.patentImportFile.update.mockResolvedValueOnce({ id: 'file-1', status: 'QUEUED' })
 
@@ -121,6 +140,16 @@ describe('patent corpus PDF-level controls', () => {
     })
 
     await expect(retryPatentImportFileExtraction('batch-1', 'file-1')).rejects.toThrow(/currently processing/)
+
+    mockPrisma.patentImportFile.findFirst.mockResolvedValueOnce({
+      id: 'file-1',
+      batchId: 'batch-1',
+      status: 'COMPLETED',
+      storedPath: 'uploads/patent-corpus/batch-1/deleted.pdf',
+    })
+    mockFs.access.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+
+    await expect(retryPatentImportFileExtraction('batch-1', 'file-1')).rejects.toThrow(/uploaded PDF file has been deleted/i)
   })
 
   it('deletes one PDF extraction output and relies on cascading embedding deletion', async () => {
@@ -150,6 +179,25 @@ describe('patent corpus PDF-level controls', () => {
     }))
   })
 
+  it('deletes only the stored PDF file while keeping extraction metadata', async () => {
+    const file = {
+      id: 'file-1',
+      batchId: 'batch-1',
+      status: 'COMPLETED',
+      storedPath: 'uploads/patent-corpus/batch-1/file.pdf',
+      fileHash: 'hash-1',
+      originalName: 'journal.pdf',
+    }
+    mockPrisma.patentImportFile.findFirst.mockResolvedValue(file)
+
+    const result = await deletePatentImportFileStoredPdf('batch-1', 'file-1')
+
+    expect(result).toMatchObject({ deletedStoredFile: true })
+    expect(mockFs.unlink).toHaveBeenCalledWith(file.storedPath)
+    expect(mockPrisma.localPatent.deleteMany).not.toHaveBeenCalled()
+    expect(mockPrisma.patentImportFile.update).not.toHaveBeenCalled()
+  })
+
   it('force-requeues embeddings for patents extracted from one PDF', async () => {
     mockPrisma.patentImportFile.findFirst.mockResolvedValue({
       id: 'file-1',
@@ -165,13 +213,14 @@ describe('patent corpus PDF-level controls', () => {
     mockPrisma.localPatentEmbedding.findUnique.mockResolvedValue(null)
     mockPrisma.localPatentEmbedding.create.mockResolvedValue({})
     mockPrisma.localPatentEmbedding.deleteMany.mockResolvedValue({ count: 0 })
-    mockPrisma.$executeRaw.mockResolvedValue(2)
+    mockPrisma.localPatentEmbedding.updateMany.mockResolvedValue({ count: 1 })
 
     const result = await requeuePatentImportFileEmbeddings('batch-1', 'file-1')
 
     expect(result).toMatchObject({ patentCount: 2, requeuedEmbeddings: 2 })
     expect(mockPrisma.localPatentEmbedding.create).toHaveBeenCalledTimes(2)
-    expect(mockPrisma.$executeRaw).toHaveBeenCalled()
+    expect(mockPrisma.localPatentEmbedding.updateMany).toHaveBeenCalledTimes(2)
+    expect(mockPrisma.$executeRaw).not.toHaveBeenCalled()
   })
 
   it('exports only records from a requested PDF file', async () => {

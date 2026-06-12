@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
+import { patentImportFileStoredFileExists } from '@/lib/patent-corpus-service'
 
 export const runtime = 'nodejs'
 
@@ -51,10 +52,11 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     current[row.status] = Number(row.count || 0)
     embeddingCountsByFile.set(row.fileId, current)
   }
-  batch.files = (batch.files || []).map((file: any) => ({
+  batch.files = await Promise.all((batch.files || []).map(async (file: any) => ({
     ...file,
     embeddingCounts: embeddingCountsByFile.get(file.id) || {},
-  }))
+    storedFileExists: await patentImportFileStoredFileExists(file),
+  })))
 
   const embeddings = await (prisma as any).localPatentEmbedding.groupBy({
     by: ['status'],

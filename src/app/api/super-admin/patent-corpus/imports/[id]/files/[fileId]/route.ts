@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
-import { patentWhereForImportFile } from '@/lib/patent-corpus-service'
+import { patentImportFileStoredFileExists, patentWhereForImportFile } from '@/lib/patent-corpus-service'
 
 export const runtime = 'nodejs'
 
@@ -89,7 +89,10 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }, {})
 
   return NextResponse.json({
-    file,
+    file: {
+      ...file,
+      storedFileExists: await patentImportFileStoredFileExists(file),
+    },
     patents,
     embeddingCounts,
     pagination: {

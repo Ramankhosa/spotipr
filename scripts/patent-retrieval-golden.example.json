@@ -1,0 +1,14 @@
+[
+  {
+    "id": "smart-irrigation",
+    "query": "moisture sensor controller regulates irrigation water delivery",
+    "features": [
+      "moisture sensor",
+      "controller for water delivery",
+      "irrigation control"
+    ],
+    "expected": [
+      "IN202411077405A"
+    ]
+  }
+]

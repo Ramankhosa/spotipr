@@ -54,6 +54,10 @@ import {
   getStage1ScorePercent,
   type Stage1ResultFilters,
 } from '@/lib/novelty-stage1-results';
+import {
+  buildIpIndiaSearchUrl,
+  normalizeIpIndiaApplicationNumbers,
+} from '@/lib/ipindia-assistant';
 
 // Local string constants for UI mapping
 const NoveltySearchStatus = {
@@ -649,6 +653,41 @@ export default function NoveltySearchWorkflow({
   const hasStage1Results = stage1Results.length > 0;
   const hasStage2Results = hasStage1Results;
   const hasStage3Results = hasStage15Results;
+
+  const aiRelevantPatentNumbers = useMemo(() => {
+    const root: any = searchState.results || {};
+    const aiRel = root?.aiRelevance || root?.stage1?.aiRelevance || {};
+    return normalizeIpIndiaApplicationNumbers([
+      ...(Array.isArray(aiRel.accepted) ? aiRel.accepted : []),
+      ...(Array.isArray(aiRel.borderline) ? aiRel.borderline : []),
+    ]);
+  }, [searchState.results]);
+
+  const openIpIndiaForPatentNumbers = useCallback(async (patentNumbers: string[]) => {
+    const searchUrl = buildIpIndiaSearchUrl(patentNumbers);
+    if (!searchUrl) {
+      window.alert('No valid Indian patent application numbers are available for IP India search.');
+      return;
+    }
+
+    const applicationNumbers = normalizeIpIndiaApplicationNumbers(patentNumbers);
+    try {
+      await navigator.clipboard?.writeText(applicationNumbers.join('\n'));
+    } catch {
+      // Clipboard access is best-effort; the extension payload is still enough.
+    }
+
+    const authToken = localStorage.getItem('auth_token');
+    if (authToken) {
+      window.postMessage({
+        type: 'PATENTNEST_IPINDIA_SESSION',
+        token: authToken,
+        appOrigin: window.location.origin,
+      }, window.location.origin);
+    }
+
+    window.open(searchUrl, '_blank', 'noopener,noreferrer');
+  }, []);
 
   const hasStage35MappingResults = useMemo(() => {
     const root: any = searchState.results || {};
@@ -2387,6 +2426,9 @@ export default function NoveltySearchWorkflow({
     const queryPlan = stage1Container.queryPlan || null;
     const filterOptions = getStage1FilterOptions(pqaiResults);
     const pagedResults = filterAndPaginateStage1Results(pqaiResults, stage1Filters, stage1Page, STAGE1_PAGE_SIZE);
+    const filteredIpIndiaNumbers = normalizeIpIndiaApplicationNumbers(
+      pagedResults.allItems.map(({ result }) => getStage1PatentNumber(result))
+    );
     const hasActiveStage1Filters = Object.entries(stage1Filters).some(([key, value]) => {
       if (key === 'sort') return value !== DEFAULT_STAGE1_RESULT_FILTERS.sort;
       return typeof value === 'string' && value.trim().length > 0;
@@ -2484,16 +2526,30 @@ export default function NoveltySearchWorkflow({
                     </div>
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="w-fit rounded-lg"
-                  onClick={clearStage1Filters}
-                  disabled={!hasActiveStage1Filters}
-                >
-                  Clear filters
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-fit rounded-lg"
+                    onClick={() => openIpIndiaForPatentNumbers(filteredIpIndiaNumbers)}
+                    disabled={filteredIpIndiaNumbers.length === 0}
+                    title="Open IP India Public Search and preload filtered Indian application numbers"
+                  >
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    IP India Search
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-fit rounded-lg"
+                    onClick={clearStage1Filters}
+                    disabled={!hasActiveStage1Filters}
+                  >
+                    Clear filters
+                  </Button>
+                </div>
               </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -2776,8 +2832,22 @@ export default function NoveltySearchWorkflow({
                   </CardDescription>
                 </div>
               </div>
-              <div className="text-xs text-slate-500">
-                Thresholds: High {(aiRel.thresholds?.high ?? 0.6)}, Medium {(aiRel.thresholds?.medium ?? 0.4)}
+              <div className="flex flex-col items-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  onClick={() => openIpIndiaForPatentNumbers(aiRelevantPatentNumbers)}
+                  disabled={aiRelevantPatentNumbers.length === 0}
+                  title="Open IP India Public Search and preload accepted/borderline application numbers"
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  IP India Search
+                </Button>
+                <div className="text-xs text-slate-500">
+                  Thresholds: High {(aiRel.thresholds?.high ?? 0.6)}, Medium {(aiRel.thresholds?.medium ?? 0.4)}
+                </div>
               </div>
             </div>
           </CardHeader>

@@ -1,8 +1,8 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
-  PATENT_CORPUS_EMBEDDING_DIMENSIONS,
   PATENT_CORPUS_EMBEDDING_MODEL,
+  requestOpenAIEmbeddings,
 } from '@/lib/patent-corpus-service'
 import type {
   NormalizedPatentResult,
@@ -24,45 +24,6 @@ import {
   uniqueStrings,
   yearFromDate,
 } from '../utils'
-
-async function requestOpenAIEmbeddings(texts: string[]) {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) throw new Error('OPENAI_API_KEY is not configured.')
-
-  const inputs = texts.map(text => normalizeWhitespace(text)).filter(Boolean)
-  if (!inputs.length) return []
-
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: PATENT_CORPUS_EMBEDDING_MODEL,
-      input: inputs,
-      dimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
-    }),
-  })
-
-  if (!response.ok) {
-    const body = await response.text()
-    throw new Error(`OpenAI embedding request failed: ${response.status} ${body}`)
-  }
-
-  const json = await response.json()
-  const rows = Array.isArray(json?.data) ? json.data : []
-  const embeddings = rows
-    .sort((a: any, b: any) => Number(a?.index || 0) - Number(b?.index || 0))
-    .map((row: any) => row?.embedding)
-  if (
-    embeddings.length !== inputs.length ||
-    embeddings.some((embedding: unknown) => !Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS)
-  ) {
-    throw new Error('OpenAI embedding response did not contain the expected vector.')
-  }
-  return embeddings as number[][]
-}
 
 function validDate(value?: string) {
   if (!value) return null
@@ -158,6 +119,8 @@ function patentTextExpression() {
     coalesce(p."title", '') || ' ' ||
     coalesce(p."abstract", '') || ' ' ||
     coalesce(p."abstractOriginal", '') || ' ' ||
+    coalesce(p."claimsText", '') || ' ' ||
+    coalesce(p."descriptionText", '') || ' ' ||
     coalesce(p."ragText", '') || ' ' ||
     coalesce(p."rawText", '') || ' ' ||
     array_to_string(p."classifications", ' ')

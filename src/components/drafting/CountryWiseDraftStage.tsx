@@ -78,21 +78,16 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
 
         setAvailableCountries([...countries, supersetOption])
 
-        // Default selection - use saved selections or prefer IN (India) as default
+        // Use saved selections only. New sessions should not preselect a jurisdiction.
         const preset = Array.isArray(session?.draftingJurisdictions) && session.draftingJurisdictions.length > 0
           ? session.draftingJurisdictions.map((c: string) => (c || '').toUpperCase())
           : []
         const fallback = session?.activeJurisdiction
           ? [String(session.activeJurisdiction).toUpperCase()]
           : []
-        // Default to IN (India) if no selections exist
         const defaultSelection = preset.length > 0
           ? preset
-          : (fallback.length > 0 
-              ? fallback 
-              : (countries.find(c => c.code === 'IN')?.code 
-                  ? ['IN'] 
-                  : (countries[0]?.code ? [countries[0].code] : [])))
+          : fallback
 
         if (defaultSelection.length > 0) {
           setSelectedCodes(defaultSelection)
@@ -144,8 +139,9 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
     if (!session?.id) return
     const normalized = selectedCodes.map(c => c.toUpperCase())
     const finalSelection = mode === 'single' ? (normalized.slice(0, 1)) : normalized
-    if (finalSelection.length === 0 && availableCountries[0]?.code) {
-      finalSelection.push(availableCountries[0].code.toUpperCase())
+    if (finalSelection.length === 0) {
+      setError('Please select at least one jurisdiction')
+      return
     }
     const languageByJurisdiction: Record<string, string> = {}
     for (const code of finalSelection) {
@@ -162,6 +158,7 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
     
     try {
       setSaving(true)
+      setError(null)
       await onComplete({
         action: 'set_stage',
         sessionId: session.id,

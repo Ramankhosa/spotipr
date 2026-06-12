@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
-import { createPatentImportBatch, PATENT_CORPUS_MAX_PDFS_PER_BATCH } from '@/lib/patent-corpus-service'
+import { createPatentImportBatch, getPatentCorpusCoverageStats, PATENT_CORPUS_MAX_PDFS_PER_BATCH } from '@/lib/patent-corpus-service'
 import { getPatentCorpusRunnerState, kickPatentCorpusRunner } from '@/lib/patent-corpus-runner'
 
 export const runtime = 'nodejs'
@@ -32,20 +32,24 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const take = Math.min(Math.max(Number(searchParams.get('take') || '25'), 1), 100)
 
-  const batches = await (prisma as any).patentImportBatch.findMany({
-    orderBy: { createdAt: 'desc' },
-    take,
-    include: {
-      uploader: { select: { id: true, email: true, name: true } },
-      files: {
-        orderBy: { createdAt: 'asc' },
-        take: 5,
+  const [batches, coverage] = await Promise.all([
+    (prisma as any).patentImportBatch.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+      include: {
+        uploader: { select: { id: true, email: true, name: true } },
+        files: {
+          orderBy: { createdAt: 'asc' },
+          take: 5,
+        },
       },
-    },
-  })
+    }),
+    getPatentCorpusCoverageStats(),
+  ])
 
   return NextResponse.json({
     batches,
+    coverage,
     runner: getPatentCorpusRunnerState(),
     limits: { maxPdfsPerBatch: PATENT_CORPUS_MAX_PDFS_PER_BATCH },
   })

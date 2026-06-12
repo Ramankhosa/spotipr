@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "PatentNest IP India Assistant",
+  "version": "0.1.0",
+  "description": "User-controlled helper for filling IP India patent searches and saving visible patent details to PatentNest.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost/*",
+    "https://iprsearch.ipindia.gov.in/*",
+    "https://*.patentnest.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "https://*.patentnest.ai/*",
+        "https://iprsearch.ipindia.gov.in/PublicSearch/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

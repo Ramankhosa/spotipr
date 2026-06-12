@@ -116,7 +116,7 @@ export class PqaiProvider implements PatentSearchProvider {
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
-    const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || '90b423ac4fd243c790c068e3a9309cd7'
+    const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || ''
     if (!token) throw new Error('No PQAI API token configured. Set PQAI_API_TOKEN.')
 
     const maxResults = clampLimit(request.limit, 50, 50)

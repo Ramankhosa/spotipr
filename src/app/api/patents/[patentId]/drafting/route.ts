@@ -11,6 +11,14 @@ import { migrateNormalizedData, type SourceInputMeta } from '@/lib/normalized-da
 import { IdeaBankService } from '@/lib/idea-bank-service';
 import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type PriorArtAnalysisItem } from '@/lib/idea-bank-funnel';
 import { llmGateway } from '@/lib/metering/gateway';
+import {
+  patentSearchOrchestrator,
+  type NormalizedPatentResult,
+  type PatentRetrievalQuery,
+  type PatentSearchFilters,
+  type PatentSearchQueryPlan,
+  type PatentSearchSourceMode
+} from '@/lib/patent-search';
 // NOTE: Old document-based style learning (getGatedStyleInstructions) has been removed
 // The new Writing Personas system uses writing samples directly in DraftingService
 import { getDocumentTypeConfig, getSupportedCountryCodes, getCountryProfile, getDraftingPrompts, getSectionRules, getBaseStyle } from '@/lib/country-profile-service';
@@ -902,7 +910,7 @@ export async function POST(
 
       // Stage 3.5: Related Art search & selection
       case 'related_art_search':
-        return await handleRelatedArtSearch(authResult.user, patentId, data, requestHeaders);
+        return await handleRelatedArtSearchFromProviders(authResult.user, patentId, data, requestHeaders);
       case 'test_pqai_key':
         return await handleTestPQAIKey();
       case 'mock_related_art_search':
@@ -1381,6 +1389,298 @@ async function emitRelatedArtReviewProgress(onProgress: RelatedArtReviewProgress
   }
 }
 
+function relatedArtStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(item => relatedArtStringArray(item))
+  }
+  if (typeof value === 'string') {
+    return value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean)
+  }
+  if (value === undefined || value === null) return []
+  return [String(value).trim()].filter(Boolean)
+}
+
+function uniqueRelatedArtStrings(values: unknown[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  values.flatMap(value => relatedArtStringArray(value)).forEach(value => {
+    const clean = value.replace(/\s+/g, ' ').trim()
+    if (!clean) return
+    const key = clean.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(clean)
+  })
+  return out
+}
+
+function normalizeRelatedArtSearchText(value: unknown, maxWords?: number): string {
+  const text = String(value || '')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!maxWords) return text
+  return text.split(/\s+/).filter(Boolean).slice(0, maxWords).join(' ')
+}
+
+function buildRelatedArtRetrievalQueries(searchQuery: string, inventionFeatures: string[]): PatentRetrievalQuery[] {
+  const queries: PatentRetrievalQuery[] = []
+  const seen = new Set<string>()
+  const addQuery = (query: PatentRetrievalQuery) => {
+    const text = normalizeRelatedArtSearchText(query.text, query.type === 'feature' ? 18 : 36)
+    const key = text.toLowerCase()
+    if (!text || seen.has(key)) return
+    seen.add(key)
+    queries.push({ ...query, text })
+  }
+
+  if (searchQuery) {
+    addQuery({
+      id: 'concept',
+      type: 'concept',
+      text: searchQuery,
+      weight: 1.25,
+      label: 'Core concept',
+    })
+  }
+
+  const features = inventionFeatures
+    .map(feature => normalizeRelatedArtSearchText(feature, 18))
+    .filter(Boolean)
+    .slice(0, 8)
+
+  features.forEach((feature, index) => {
+    addQuery({
+      id: `feature-${index + 1}`,
+      type: 'feature',
+      text: feature,
+      weight: 1.1,
+      featureIndex: index,
+      featureIndexes: [index],
+      label: feature,
+    })
+  })
+
+  for (let index = 0; index < Math.min(features.length - 1, 3); index += 1) {
+    addQuery({
+      id: `feature-pair-${index + 1}`,
+      type: 'feature_pair',
+      text: `${features[index]} ${features[index + 1]}`,
+      weight: 1.15,
+      featureIndexes: [index, index + 1],
+      label: `${features[index]} + ${features[index + 1]}`,
+    })
+  }
+
+  return queries
+}
+
+function normalizeRelatedArtSourceMode(value: unknown): PatentSearchSourceMode {
+  return value === 'INDIAN_ONLY' || value === 'PQAI_ONLY' || value === 'PQAI_PLUS_INDIAN'
+    ? value
+    : 'PQAI_PLUS_INDIAN'
+}
+
+function normalizeRelatedArtDateText(value: unknown): string | undefined {
+  if (!value) return undefined
+  if (typeof value === 'number' && value >= 1000 && value <= 9999) return `${Math.trunc(value)}-01-01`
+  const text = String(value).trim()
+  if (!text) return undefined
+  if (/^\d{4}$/.test(text)) return `${text}-01-01`
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+  const date = value instanceof Date ? value : new Date(text)
+  if (Number.isNaN(date.getTime())) return undefined
+  return date.toISOString().slice(0, 10)
+}
+
+function getRelatedArtPublicationDate(result: any): string | undefined {
+  return normalizeRelatedArtDateText(result?.publicationDate || result?.publication_date || result?.pub_date || result?.date || result?.year)
+}
+
+function matchesRelatedArtAfterDate(result: any, afterDate?: string): boolean {
+  if (!afterDate) return true
+  const publicationDate = getRelatedArtPublicationDate(result)
+  if (!publicationDate) return false
+  return publicationDate >= afterDate
+}
+
+function firstRelatedArtScore(values: unknown[]): number | undefined {
+  for (const value of values) {
+    const score = typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : NaN
+    if (Number.isFinite(score)) return Math.max(0, Math.min(1, score > 1 ? score / 100 : score))
+  }
+  return undefined
+}
+
+function jsonSafeRelatedArtResult<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function toDraftingRelatedArtResult(result: NormalizedPatentResult): any {
+  const publicationNumber = result.publicationNumber || result.publication_number || result.pn || 'Unknown'
+  const publicationDate = normalizeRelatedArtDateText(result.publicationDate)
+  const filingDate = normalizeRelatedArtDateText(result.filingDate)
+  const score = firstRelatedArtScore([
+    result.relevanceScore,
+    result.retrievalScore,
+    result.hybridScore,
+    (result as any).score,
+    (result as any).relevance,
+  ])
+  const classifications = Array.isArray(result.classifications) ? result.classifications : []
+  const cpcCodes = Array.isArray(result.cpcCodes) && result.cpcCodes.length ? result.cpcCodes : classifications
+  const ipcCodes = Array.isArray(result.ipcCodes) && result.ipcCodes.length ? result.ipcCodes : classifications
+
+  return jsonSafeRelatedArtResult({
+    ...result,
+    publicationNumber,
+    publication_number: result.publication_number || publicationNumber,
+    patent_number: (result as any).patent_number || publicationNumber,
+    pn: result.pn || publicationNumber,
+    title: result.title || 'Untitled Patent',
+    abstract: result.abstract || result.snippet || '',
+    snippet: result.snippet || result.abstract || '',
+    publicationDate,
+    publication_date: publicationDate,
+    filingDate,
+    filing_date: filingDate,
+    score,
+    relevance: score,
+    cpc_codes: cpcCodes,
+    ipc_codes: ipcCodes,
+    assignees: (result as any).assignees || result.applicants || [],
+    provider: result.sourceProvider,
+  })
+}
+
+function buildDraftingRelatedArtSearchPlan(idea: any, searchQuery: string, filters: PatentSearchFilters): Partial<PatentSearchQueryPlan> {
+  const normalizedData = migrateNormalizedData(idea?.normalizedData || {})
+  const components = Array.isArray(normalizedData.components) ? normalizedData.components : []
+  const componentFeatures = components.flatMap(component => [
+    component?.name,
+    component?.description,
+    component?.inputs,
+    component?.outputs,
+  ])
+  const inventionFeatures = uniqueRelatedArtStrings([
+    normalizedData.coreInventiveConcept,
+    normalizedData.claimableFeatures,
+    normalizedData.fallbackLimitations,
+    componentFeatures,
+  ]).slice(0, 12)
+  const cpcCodes = uniqueRelatedArtStrings([normalizedData.cpcCodes, idea?.cpcCodes])
+  const ipcCodes = uniqueRelatedArtStrings([normalizedData.ipcCodes, idea?.ipcCodes])
+  const classificationHints = uniqueRelatedArtStrings([cpcCodes, ipcCodes])
+  const abstract = normalizeRelatedArtSearchText(idea?.abstract || normalizedData.abstract || '', 160)
+  const inventionText = normalizeRelatedArtSearchText([
+    idea?.title,
+    abstract,
+    normalizedData.problem,
+    normalizedData.objectives,
+    normalizedData.logic,
+    inventionFeatures.join(' '),
+  ].filter(Boolean).join(' '), 500)
+  const keywords = uniqueRelatedArtStrings(searchQuery.split(/\s+/).filter(word => word.length > 3)).slice(0, 20)
+
+  return {
+    originalQuery: searchQuery,
+    normalizedQuery: searchQuery,
+    searchQuery,
+    semanticQuery: normalizeRelatedArtSearchText([searchQuery, abstract, inventionFeatures.join(' '), classificationHints.join(' ')].join(' '), 220),
+    inventionFeatures,
+    technicalKeywords: keywords,
+    synonyms: [],
+    mustHaveTerms: [],
+    excludedTerms: [],
+    cpcCodes,
+    ipcCodes,
+    classificationHints,
+    fieldFilters: filters,
+    explicitFilters: filters,
+    searchVariants: searchQuery ? [searchQuery] : [],
+    retrievalQueries: buildRelatedArtRetrievalQueries(searchQuery, inventionFeatures),
+    llmExpanded: false,
+    confidence: 0.85,
+    warnings: ['Using drafting idea record query plan; LLM query expansion disabled.'],
+    inventionText,
+  } as Partial<PatentSearchQueryPlan> & { inventionText: string }
+}
+
+function getRelatedArtCandidatePatentNumber(result: any): string {
+  return String(
+    result?.pn ||
+    result?.patent_number ||
+    result?.publication_number ||
+    result?.publicationNumber ||
+    result?.publication_id ||
+    result?.publicationId ||
+    result?.patentId ||
+    result?.patent_id ||
+    result?.applicationNumber ||
+    result?.applicationNumberRaw ||
+    result?.id ||
+    ''
+  ).trim()
+}
+
+function compactRelatedArtCandidateNumber(value: unknown): string {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+}
+
+function getRelatedArtCandidateTitle(result: any): string {
+  return normalizeRelatedArtSearchText(
+    result?.title ||
+    result?.invention_title ||
+    result?.inventionTitle ||
+    result?.raw?.title ||
+    getRelatedArtCandidatePatentNumber(result) ||
+    'Untitled patent',
+    32
+  )
+}
+
+function getRelatedArtCandidateAbstract(result: any): string {
+  return normalizeRelatedArtSearchText(
+    result?.abstract ||
+    result?.snippet ||
+    result?.summary ||
+    result?.description ||
+    result?.abstractOriginal ||
+    result?.raw?.abstract ||
+    result?.raw?.abstractOriginal ||
+    result?.raw?.ragText ||
+    result?.raw?.claimsText ||
+    result?.matchReasons ||
+    result?.retrievalMatches?.map((match: any) => match?.queryText).filter(Boolean).join('; ') ||
+    '',
+    220
+  )
+}
+
+function getRelatedArtCandidateSource(result: any): string {
+  const providers = [
+    ...(Array.isArray(result?.sourceProviders) ? result.sourceProviders : []),
+    result?.sourceProvider,
+    result?.providerId,
+    result?.provider,
+  ].map(value => String(value || '').toLowerCase())
+  if (providers.includes('indian-corpus')) return 'Indian Patent Corpus'
+  if (providers.includes('pqai')) return 'PQAI International'
+  const jurisdiction = String(result?.jurisdiction || result?.country || '')
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '')
+  if (jurisdiction === 'IN' || jurisdiction === 'IND' || jurisdiction === 'INDIA' || getRelatedArtCandidatePatentNumber(result).toUpperCase().startsWith('IN')) {
+    return 'Indian Patent Corpus'
+  }
+  return 'International Patent Search'
+}
+
 function handleRelatedArtLLMReviewStream(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const encoder = new TextEncoder()
 
@@ -1451,6 +1751,31 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   const results: any[] = Array.isArray(run.resultsJson) ? run.resultsJson : []
   if (results.length === 0) return NextResponse.json({ error: 'No results to review' }, { status: 400 })
 
+  const requestedPatentNumbers = Array.isArray(data?.candidatePatentNumbers)
+    ? data.candidatePatentNumbers
+    : Array.isArray(data?.reviewPatentNumbers)
+      ? data.reviewPatentNumbers
+      : []
+  const requestedPatentNumberSet = new Set(
+    requestedPatentNumbers
+      .map((value: unknown) => compactRelatedArtCandidateNumber(value))
+      .filter(Boolean)
+  )
+  const reviewResults = requestedPatentNumberSet.size > 0
+    ? results.filter((result: any) => requestedPatentNumberSet.has(compactRelatedArtCandidateNumber(getRelatedArtCandidatePatentNumber(result))))
+    : results
+
+  if (requestedPatentNumberSet.size > 0 && reviewResults.length === 0) {
+    return NextResponse.json({
+      reviewed: 0,
+      decisions: [],
+      autoSelect: [],
+      runId: useRunId,
+      batches: 0,
+      message: 'No matching patent candidates were found for re-analysis.'
+    })
+  }
+
   const title = session?.ideaRecord?.title || ''
   const query = (session?.ideaRecord as any)?.searchQuery || ''
   
@@ -1489,11 +1814,26 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
     }
   }
 
-  const candidates = results.map((r: any) => ({
-    pn: r.pn || r.patent_number || r.publication_number || r.publication_id || r.publicationId || r.patentId || r.patent_id || r.id || '',
-    title: r.title || r.invention_title || '',
-    abstract: r.snippet || r.abstract || r.summary || r.description || ''
-  })).filter(x => x.title && (x.pn || x.abstract))
+  const candidates = reviewResults.map((r: any) => {
+    const pn = getRelatedArtCandidatePatentNumber(r)
+    return {
+      pn,
+      title: getRelatedArtCandidateTitle(r),
+      abstract: getRelatedArtCandidateAbstract(r),
+      source: getRelatedArtCandidateSource(r),
+    }
+  }).filter(x => x.pn && x.title)
+
+  if (candidates.length === 0) {
+    return NextResponse.json({ error: 'No reviewable patent candidates found in this related art run.' }, { status: 400 })
+  }
+
+  console.log('Related art AI review candidate sources:', {
+    total: candidates.length,
+    indian: candidates.filter(candidate => candidate.source === 'Indian Patent Corpus').length,
+    international: candidates.filter(candidate => candidate.source !== 'Indian Patent Corpus').length,
+    sample: candidates.slice(0, 5).map(candidate => ({ pn: candidate.pn, source: candidate.source })),
+  })
 
   // Process all candidates at once instead of in batches
   const request = { headers: requestHeaders || {} }
@@ -1516,7 +1856,7 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   }> = []
 
   // Create candidate text for all patents
-  const candidatesText = candidates.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nTitle: ${b.title}\nAbstract: ${b.abstract}`).join('\n\n')
+  const candidatesText = candidates.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nSource: ${b.source}\nTitle: ${b.title}\nAbstract: ${b.abstract || 'Not available'}`).join('\n\n')
 
   // STEP 1: Relevance Analysis (in batches to avoid token limits)
   console.log('Starting relevance analysis with Gemini 2.5 Flash-Lite...')
@@ -1535,7 +1875,7 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   for (let i = 0; i < candidates.length; i += effectiveBatchSize) {
     const batch = candidates.slice(i, i + effectiveBatchSize)
     const batchNumber = Math.floor(i / effectiveBatchSize) + 1
-    const batchText = batch.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nTitle: ${b.title}\nAbstract: ${b.abstract}`).join('\n\n')
+    const batchText = batch.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nSource: ${b.source}\nTitle: ${b.title}\nAbstract: ${b.abstract || 'Not available'}`).join('\n\n')
 
     await emitRelatedArtReviewProgress(onProgress, {
       type: 'batch_started',
@@ -1550,7 +1890,7 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
 
 INVENTION: ${title} | SEARCH: ${query}${claimsSection}${manualPriorArtSection}
 
-For each patent, provide:
+For each patent candidate listed below, including Indian Patent Corpus candidates, provide exactly one result using the exact PN value shown:
 - relevance: 0.0-1.0 score
 - novelty_threat: "anticipates" | "obvious" | "adjacent" | "remote"
   * "anticipates" = This prior art discloses ALL elements of at least one of our claims
@@ -1608,8 +1948,25 @@ ${batchText}`
 
         const parsed = JSON.parse(json)
         const batchResults = Array.isArray(parsed?.relevance_results) ? parsed.relevance_results : []
-        relevanceData.push(...batchResults)
-        console.log(`Batch ${batchNumber} successful:`, batchResults.length, 'patents analyzed')
+        const returnedPns = new Set(
+          batchResults
+            .map((item: any) => compactRelatedArtCandidateNumber(item?.pn || item?.patent_number || item?.publicationNumber || item?.publication_number))
+            .filter(Boolean)
+        )
+        const missingResults = batch
+          .filter(candidate => !returnedPns.has(compactRelatedArtCandidateNumber(candidate.pn)))
+          .map(candidate => ({
+            pn: candidate.pn,
+            title: candidate.title,
+            relevance: 0.5,
+            novelty_threat: 'adjacent',
+            summary: `The AI relevance response did not include a separate result for this ${candidate.source} candidate; it is retained for user review because it was returned by the patent search stage.`,
+            relevant_parts: [],
+            irrelevant_parts: [],
+            novelty_comparison: 'No candidate-specific AI comparison was returned for this reference.'
+          }))
+        relevanceData.push(...batchResults, ...missingResults)
+        console.log(`Batch ${batchNumber} successful:`, batchResults.length, 'patents analyzed', missingResults.length ? `(${missingResults.length} retained from missing LLM output)` : '')
       } catch (e) {
         console.log(`Batch ${batchNumber} JSON parse failed:`, e instanceof Error ? e.message : String(e))
         // Fallback for this batch
@@ -1656,7 +2013,7 @@ ${batchText}`
   // Process relevance results
   for (const r of relevanceData) {
     if (!r || typeof r !== 'object') continue
-    const pn = String(r.pn || '').trim()
+    const pn = getRelatedArtCandidatePatentNumber(r)
     const t = String(r.title || '').trim()
     const rel = typeof r.relevance === 'number' ? Math.max(0, Math.min(1, r.relevance)) : 0
     const noveltyThreat = (String(r.novelty_threat||'').toLowerCase() as any) || 'remote'
@@ -4682,17 +5039,12 @@ async function handleStartSession(user: any, patentId: string, data: any) {
     });
   }
 
-  // Default to IN (India) as the initial jurisdiction for new sessions
-  const defaultJurisdiction = 'IN';
-
-  // Create new drafting session with default jurisdiction
+  // Create new drafting session without preselecting a jurisdiction.
   const session = await prisma.draftingSession.create({
     data: {
       patentId,
       userId: user.id,
-      tenantId: user.tenantId,
-      draftingJurisdictions: [defaultJurisdiction],
-      activeJurisdiction: defaultJurisdiction
+      tenantId: user.tenantId
     }
   });
 
@@ -6517,26 +6869,19 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
     return NextResponse.json({ error: 'Stage transition not allowed for this flow' }, { status: 400 })
   }
 
-  // Default jurisdiction fallback (IN for India)
-  const defaultJurisdiction = 'IN';
-
   // Normalize and persist jurisdiction choices (Stage 3.7a)
   try {
     const statusMap: Record<string, any> = { ...(session!.jurisdictionDraftStatus as any) || {} }
     const languagePrefs: Record<string, string> = {}
+    const hasJurisdictionPayload = Array.isArray(draftingJurisdictions)
     let normalizedJurisdictions: string[] | undefined
-    if (Array.isArray(draftingJurisdictions)) {
+    if (hasJurisdictionPayload) {
       normalizedJurisdictions = Array.from(new Set(
         draftingJurisdictions
           .map((c: string) => (c || '').toUpperCase())
           .filter(Boolean)
       ))
-    }
-
-    if (normalizedJurisdictions && normalizedJurisdictions.length > 0) {
       updateData.draftingJurisdictions = normalizedJurisdictions
-    } else if (!session.draftingJurisdictions || session.draftingJurisdictions.length === 0) {
-      updateData.draftingJurisdictions = [defaultJurisdiction] // use default jurisdiction
     }
 
     const requestedActive = (activeJurisdiction || '').toUpperCase()
@@ -6572,15 +6917,22 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
 
     // Resolve active jurisdiction - allow REFERENCE to stay active
     const validRequestedActive = (requestedActive === 'REFERENCE' || chosenListAll.includes(requestedActive)) ? requestedActive : null
+    const savedActive = session.activeJurisdiction ? session.activeJurisdiction.toUpperCase() : null
+    const validSavedActive = savedActive && (chosenListAll.length === 0 || savedActive === 'REFERENCE' || chosenListAll.includes(savedActive))
+      ? savedActive
+      : null
     const resolvedActive = validRequestedActive 
       || chosenListAll[0] 
-      || (session.activeJurisdiction ? session.activeJurisdiction.toUpperCase() : null)
-      || defaultJurisdiction
+      || (hasJurisdictionPayload ? null : validSavedActive)
 
-    updateData.activeJurisdiction = resolvedActive
+    if (resolvedActive) {
+      updateData.activeJurisdiction = resolvedActive
+    } else if (hasJurisdictionPayload) {
+      updateData.activeJurisdiction = null
+    }
     
     // Log for debugging
-    console.log(`[handleSetStage] Jurisdictions: ${chosenListAll.join(', ')}, Active: ${resolvedActive}, MultiJurisdiction: ${updateData.isMultiJurisdiction ?? session.isMultiJurisdiction}`)
+    console.log(`[handleSetStage] Jurisdictions: ${chosenListAll.join(', ') || 'none'}, Active: ${resolvedActive || 'none'}, MultiJurisdiction: ${updateData.isMultiJurisdiction ?? session.isMultiJurisdiction}`)
 
     // Resolve preferred languages per jurisdiction (if provided)
     for (const code of chosenListAll) {
@@ -6619,8 +6971,6 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
       const orderedActual = [resolvedSource, ...actualJurisdictions.filter(c => c !== resolvedSource)]
       const referenceEntries = chosenListAll.filter(c => c === 'REFERENCE')
       updateData.draftingJurisdictions = [...orderedActual, ...referenceEntries.filter(c => !orderedActual.includes(c))]
-    } else if (!updateData.draftingJurisdictions || updateData.draftingJurisdictions.length === 0) {
-      updateData.draftingJurisdictions = [defaultJurisdiction]
     }
 
     // =========================================================================
@@ -6849,9 +7199,6 @@ async function handleSetStage(user: any, patentId: string, data: any, requestHea
 }
 
 async function handleResume(user: any, patentId: string) {
-  // Default to IN (India) for new/legacy sessions
-  const defaultJurisdiction = 'IN';
-
   // Try to find most recent session for this patent
   const existing = await prisma.draftingSession.findFirst({
     where: { patentId, userId: user.id },
@@ -6869,28 +7216,15 @@ async function handleResume(user: any, patentId: string) {
       return NextResponse.json({ session: normalized })
     }
 
-    // Backfill jurisdiction defaults for legacy sessions
-    if (!existing.draftingJurisdictions || existing.draftingJurisdictions.length === 0 || !existing.activeJurisdiction) {
-      const updated = await prisma.draftingSession.update({
-        where: { id: existing.id },
-        data: {
-          draftingJurisdictions: existing.draftingJurisdictions?.length ? existing.draftingJurisdictions : [defaultJurisdiction],
-          activeJurisdiction: existing.activeJurisdiction || existing.draftingJurisdictions?.[0] || defaultJurisdiction
-        }
-      })
-      return NextResponse.json({ session: updated })
-    }
     return NextResponse.json({ session: existing })
   }
 
-  // Create new session with default jurisdiction
+  // Create new session without preselecting a jurisdiction.
   const session = await prisma.draftingSession.create({
     data: {
       patentId,
       userId: user.id,
-      tenantId: user.tenantId,
-      draftingJurisdictions: [defaultJurisdiction],
-      activeJurisdiction: defaultJurisdiction
+      tenantId: user.tenantId
     }
   })
 
@@ -7689,6 +8023,123 @@ async function handleMockRelatedArtSearch() {
   console.log('Returning mock related art search results for UI testing')
 
   return NextResponse.json({ runId: mockRunId, results: mockResults })
+}
+
+async function handleRelatedArtSearchFromProviders(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
+  const { sessionId, limit = 15, queryOverride, afterDate } = data
+  if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: { ideaRecord: true },
+  })
+  if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+
+  const idea = session.ideaRecord as any
+  const searchQueryFromDB = (idea?.searchQuery || '').toString().trim()
+  const baseQuery = (queryOverride && String(queryOverride).trim().length > 0)
+    ? String(queryOverride).trim()
+    : searchQueryFromDB
+
+  if (!baseQuery) {
+    return NextResponse.json({
+      error: 'No search query available. Please complete Stage 1 first to generate a search query.',
+      showMockOption: true,
+    }, { status: 400 })
+  }
+
+  const safeQuery = normalizeRelatedArtSearchText(baseQuery)
+  const safeLimit = Math.min(Math.max(10, Number(limit) || 15), 100)
+  const sourceMode = normalizeRelatedArtSourceMode((data as any)?.sourceMode)
+  const publicationDateFrom = normalizeRelatedArtDateText(afterDate)
+  const filters: PatentSearchFilters = publicationDateFrom ? { publicationDateFrom } : {}
+  const searchContext = buildDraftingRelatedArtSearchPlan(idea, safeQuery, filters) as Partial<PatentSearchQueryPlan> & { inventionText?: string }
+  const { inventionText, ...queryPlan } = searchContext
+  const jurisdiction = String((session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'IN').toUpperCase()
+
+  console.log('Drafting related art provider search:', {
+    sourceMode,
+    queryPreview: safeQuery.substring(0, 120),
+    limit: safeLimit,
+    after: publicationDateFrom,
+    jurisdiction,
+    featureQueries: Array.isArray(queryPlan.retrievalQueries) ? queryPlan.retrievalQueries.length : 0,
+  })
+
+  let searchResponse
+  try {
+    searchResponse = await patentSearchOrchestrator.search({
+      searchMode: 'intelligent',
+      query: safeQuery,
+      title: idea?.title || '',
+      inventionText: inventionText || idea?.rawInput || idea?.abstract || '',
+      filters,
+      jurisdictions: [jurisdiction],
+      sourceMode,
+      llmExpansion: false,
+      queryPlan,
+      limit: safeLimit,
+      requestHeaders,
+    })
+  } catch (error) {
+    console.error('Drafting related art provider search failed:', error)
+    return NextResponse.json({
+      error: 'Patent search failed. Please retry the search later.',
+      details: error instanceof Error ? error.message : String(error),
+      showMockOption: true,
+    }, { status: 502 })
+  }
+
+  const results = searchResponse.results
+    .map(toDraftingRelatedArtResult)
+    .filter(result => matchesRelatedArtAfterDate(result, publicationDateFrom))
+    .slice(0, safeLimit)
+
+  const patentNumbers = results
+    .map((r: any) => r.publication_number || r.patent_number || r.pn || r.publicationNumber || r.id || 'N/A')
+    .filter((pn: any) => pn !== 'N/A')
+  const uniquePatentNumbers = Array.from(new Set(patentNumbers))
+
+  console.log('Drafting related art provider search completed:', {
+    resultCount: results.length,
+    uniquePatentNumbers: uniquePatentNumbers.length,
+    providerStats: searchResponse.providerStats,
+    warnings: searchResponse.warnings,
+  })
+
+  const paramsJson = {
+    endpoint: 'patent-search-orchestrator',
+    sourceMode,
+    providerIds: searchResponse.providerStats.map(stat => stat.providerId),
+    providerStats: searchResponse.providerStats,
+    warnings: searchResponse.warnings,
+    limit: safeLimit,
+    after: publicationDateFrom,
+    queryPlan: searchResponse.queryPlan,
+  }
+
+  const run = await (prisma as any).relatedArtRun.create({
+    data: {
+      sessionId,
+      queryText: safeQuery,
+      paramsJson,
+      resultsJson: results,
+      ranBy: user.id,
+    },
+  })
+
+  return NextResponse.json({
+    runId: run.id,
+    results,
+    providerStats: searchResponse.providerStats,
+    searchWarnings: searchResponse.warnings,
+    queryPlan: searchResponse.queryPlan,
+    searchSource: {
+      mode: sourceMode,
+      providerIds: searchResponse.providerStats.map(stat => stat.providerId),
+      searchMode: 'intelligent',
+    },
+  })
 }
 
 async function handleRelatedArtSearch(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {

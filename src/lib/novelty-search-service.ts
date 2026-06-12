@@ -1164,7 +1164,7 @@ export class NoveltySearchService extends BasePatentService {
       modelPreference: 'gemini-2.5-flash-lite',
       thresholds: { high: 0.6, medium: 0.4 },
       borderlineQuota: 5,
-      maxCandidates: 40,  // Reduced from 80 to 40 to prevent timeouts
+      maxCandidates: 60,  // Match default Stage 1 retrieval count
       batchSize: 12        // Increased from 8 to 12 to reduce number of LLM calls
     },
     stage0: {},
@@ -6255,7 +6255,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
 
   private async searchPQAI(query: string, maxResults: number = 50): Promise<any[]> {
     // EXACT COPY from drafting stage 3.5 implementation
-    const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || '90b423ac4fd243c790c068e3a9309cd7'
+    const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || ''
     if (!token) throw new Error('No PQAI API token configured. Set PQAI_API_TOKEN.')
 
     // PQAI endpoint: GET /search/102 with query parameters
