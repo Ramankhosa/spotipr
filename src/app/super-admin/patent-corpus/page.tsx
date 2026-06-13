@@ -104,6 +104,25 @@ type CorpusCoverage = {
   importFileCounts?: BreakdownMap
 }
 
+type UploadProgressState = {
+  phase: 'uploading' | 'finalizing'
+  chunkIndex: number
+  chunkCount: number
+  currentChunkFileCount: number
+  fileCount: number
+  uploadedBytes: number
+  totalBytes: number
+  percent: number
+}
+
+type PatentCorpusUploadResponse = {
+  batch?: ImportBatch
+  runner?: RunnerState
+  limits?: { maxPdfsPerBatch?: number }
+}
+
+type UploadRequestError = Error & { status?: number }
+
 const statusClass: Record<string, string> = {
   QUEUED: 'bg-slate-100 text-slate-700',
   PROCESSING: 'bg-blue-100 text-blue-700',
@@ -124,8 +143,15 @@ const breakdownLabels: Record<string, string> = {
   unknown: 'Unknown',
 }
 
-const PATENT_CORPUS_UPLOAD_REQUEST_MB = 50
-const PATENT_CORPUS_UPLOAD_REQUEST_BYTES = PATENT_CORPUS_UPLOAD_REQUEST_MB * 1024 * 1024
+const BYTES_PER_MB = 1024 * 1024
+const PATENT_CORPUS_MAX_FILE_MB = 50
+const PATENT_CORPUS_SAFE_REQUEST_MB = 45
+const PATENT_CORPUS_MAX_FILE_BYTES = PATENT_CORPUS_MAX_FILE_MB * BYTES_PER_MB
+const PATENT_CORPUS_SAFE_REQUEST_BYTES = PATENT_CORPUS_SAFE_REQUEST_MB * BYTES_PER_MB
+
+function formatFileSize(bytes: number) {
+  return `${(Math.max(0, bytes) / BYTES_PER_MB).toFixed(1)}MB`
+}
 
 function createUploadChunks(files: File[]) {
   const chunks: File[][] = []
@@ -141,7 +167,7 @@ function createUploadChunks(files: File[]) {
 
   for (const file of files) {
     const size = Math.max(0, file.size || 0)
-    if (current.length && currentBytes + size > PATENT_CORPUS_UPLOAD_REQUEST_BYTES) {
+    if (current.length && currentBytes + size > PATENT_CORPUS_SAFE_REQUEST_BYTES) {
       flush()
     }
     current.push(file)
@@ -150,6 +176,23 @@ function createUploadChunks(files: File[]) {
   flush()
 
   return chunks
+}
+
+function getTotalFileBytes(files: File[]) {
+  return files.reduce((sum, file) => sum + Math.max(0, file.size || 0), 0)
+}
+
+function percentFromBytes(uploadedBytes: number, totalBytes: number) {
+  if (totalBytes <= 0) return 100
+  return Math.min(100, Math.max(0, Math.round((uploadedBytes / totalBytes) * 100)))
+}
+
+function parseUploadResponse(xhr: XMLHttpRequest) {
+  try {
+    return JSON.parse(xhr.responseText || '{}') as PatentCorpusUploadResponse & { error?: string }
+  } catch {
+    return {} as PatentCorpusUploadResponse & { error?: string }
+  }
 }
 
 function isCancelledBatchMessage(message?: string | null) {
@@ -227,6 +270,7 @@ export default function PatentCorpusPage() {
   const [selectedFileDetail, setSelectedFileDetail] = useState<FileDetail | null>(null)
   const [loadingFileDetail, setLoadingFileDetail] = useState(false)
   const [fileAction, setFileAction] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null)
 
   const isViewer = useMemo(() => {
     const roles = user?.roles || []
@@ -242,9 +286,44 @@ export default function PatentCorpusPage() {
     Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
   }), [])
 
+  const uploadFormData = useCallback((url: string, formData: FormData, onProgress: (loadedBytes: number, totalBytes: number) => void) => {
+    return new Promise<PatentCorpusUploadResponse>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', url)
+      xhr.responseType = 'text'
+
+      Object.entries(authHeaders()).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, value)
+      })
+
+      xhr.upload.onprogress = event => {
+        if (!event.lengthComputable) return
+        onProgress(event.loaded, event.total)
+      }
+
+      xhr.onload = () => {
+        const body = parseUploadResponse(xhr)
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(body)
+          return
+        }
+
+        const message = xhr.status === 413
+          ? `Upload request was rejected as too large. The app allows ${PATENT_CORPUS_MAX_FILE_MB}MB files and chunks batch uploads around ${PATENT_CORPUS_SAFE_REQUEST_MB}MB, so production proxy/server body size must be above ${PATENT_CORPUS_MAX_FILE_MB}MB.`
+          : body.error || `Upload failed with status ${xhr.status}`
+        const error = new Error(message) as UploadRequestError
+        error.status = xhr.status
+        reject(error)
+      }
+
+      xhr.onerror = () => reject(new Error('Upload failed. Check the network connection and production proxy logs.'))
+      xhr.onabort = () => reject(new Error('Upload was cancelled.'))
+      xhr.send(formData)
+    })
+  }, [authHeaders])
+
   const fetchBatches = useCallback(async () => {
     if (!user || !canAccess) return
-    setError(null)
     const response = await fetch('/api/super-admin/patent-corpus/imports', {
       headers: authHeaders(),
     })
@@ -274,7 +353,6 @@ export default function PatentCorpusPage() {
 
   const fetchFileDetail = useCallback(async (batchId: string, fileId: string, page = 1) => {
     setLoadingFileDetail(true)
-    setError(null)
     try {
       const params = new URLSearchParams({ page: String(page), pageSize: '25' })
       const response = await fetch(`/api/super-admin/patent-corpus/imports/${batchId}/files/${fileId}?${params.toString()}`, {
@@ -326,52 +404,81 @@ export default function PatentCorpusPage() {
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
-    const oversizedFiles = selectedFiles.filter(file => file.size > PATENT_CORPUS_UPLOAD_REQUEST_BYTES)
+    const oversizedFiles = selectedFiles.filter(file => file.size > PATENT_CORPUS_MAX_FILE_BYTES)
     if (oversizedFiles.length) {
-      const visibleNames = oversizedFiles.slice(0, 3).map(file => file.name).join(', ')
+      const visibleNames = oversizedFiles
+        .slice(0, 3)
+        .map(file => `${file.name} (${formatFileSize(file.size)})`)
+        .join(', ')
       const extraCount = oversizedFiles.length - 3
-      setError(`Each selected PDF or ZIP must be ${PATENT_CORPUS_UPLOAD_REQUEST_MB}MB or less. ${visibleNames}${extraCount > 0 ? ` and ${extraCount} more` : ''} exceed the limit.`)
+      setError(`Each selected PDF or ZIP must be ${PATENT_CORPUS_MAX_FILE_MB}MB or less. ${visibleNames}${extraCount > 0 ? ` and ${extraCount} more` : ''} exceed the limit.`)
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
     setUploading(true)
     setError(null)
     setSuccess(null)
+    setUploadProgress(null)
     try {
       const chunks = createUploadChunks(selectedFiles)
+      const totalUploadBytes = getTotalFileBytes(selectedFiles)
+      let uploadedBeforeCurrentChunk = 0
       let batch: ImportBatch | null = null
 
       for (let index = 0; index < chunks.length; index += 1) {
         const chunk = chunks[index]
+        const chunkBytes = getTotalFileBytes(chunk)
+        setUploadProgress({
+          phase: 'uploading',
+          chunkIndex: index + 1,
+          chunkCount: chunks.length,
+          currentChunkFileCount: chunk.length,
+          fileCount: selectedFiles.length,
+          uploadedBytes: uploadedBeforeCurrentChunk,
+          totalBytes: totalUploadBytes,
+          percent: percentFromBytes(uploadedBeforeCurrentChunk, totalUploadBytes),
+        })
+
         const formData = new FormData()
         chunk.forEach((file: File) => formData.append('files', file))
-        const response: Response = await fetch(
+        const body = await uploadFormData(
           index === 0
             ? '/api/super-admin/patent-corpus/imports?deferProcessing=1'
             : `/api/super-admin/patent-corpus/imports/${batch?.id}/files?deferProcessing=1`,
-          {
-            method: 'POST',
-            headers: authHeaders(),
-            body: formData,
+          formData,
+          (loadedBytes, requestBytes) => {
+            const loadedRatio = loadedBytes > 0 && requestBytes > 0
+              ? Math.min(1, loadedBytes / requestBytes)
+              : 0
+            const uploadedBytes = uploadedBeforeCurrentChunk + Math.round(chunkBytes * loadedRatio)
+            setUploadProgress({
+              phase: 'uploading',
+              chunkIndex: index + 1,
+              chunkCount: chunks.length,
+              currentChunkFileCount: chunk.length,
+              fileCount: selectedFiles.length,
+              uploadedBytes: Math.min(totalUploadBytes, uploadedBytes),
+              totalBytes: totalUploadBytes,
+              percent: percentFromBytes(uploadedBytes, totalUploadBytes),
+            })
           }
         )
-        if (!response.ok) {
-          if (response.status === 413) {
-            throw new Error(`Upload request exceeded ${PATENT_CORPUS_UPLOAD_REQUEST_MB}MB. Select smaller PDFs or fewer files.`)
-          }
-          const body = await response.json().catch(() => ({}))
-          throw new Error(body.error || 'Upload failed')
-        }
-        const body = (await response.json()) as {
-          batch?: ImportBatch
-          runner?: RunnerState
-          limits?: { maxPdfsPerBatch?: number }
-        }
         if (body.limits?.maxPdfsPerBatch) setMaxPdfsPerBatch(body.limits.maxPdfsPerBatch)
         if (body.batch) batch = body.batch
+        uploadedBeforeCurrentChunk += chunkBytes
       }
 
       if (!batch) throw new Error('Upload failed')
+      setUploadProgress({
+        phase: 'finalizing',
+        chunkIndex: chunks.length,
+        chunkCount: chunks.length,
+        currentChunkFileCount: chunks[chunks.length - 1]?.length || 0,
+        fileCount: selectedFiles.length,
+        uploadedBytes: totalUploadBytes,
+        totalBytes: totalUploadBytes,
+        percent: 100,
+      })
 
       const finalizeResponse = await fetch(`/api/super-admin/patent-corpus/imports/${batch.id}/finalize`, {
         method: 'POST',
@@ -398,6 +505,7 @@ export default function PatentCorpusPage() {
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
+      setUploadProgress(null)
     }
   }
 
@@ -637,11 +745,11 @@ export default function PatentCorpusPage() {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
-                title={`Upload up to ${maxPdfsPerBatch} PDFs per batch, ${PATENT_CORPUS_UPLOAD_REQUEST_MB}MB each`}
+                title={`Upload up to ${maxPdfsPerBatch} PDFs per batch, ${PATENT_CORPUS_MAX_FILE_MB}MB each`}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 <Upload className="h-4 w-4" />
-                {uploading ? 'Uploading' : 'Upload'}
+                {uploadProgress ? `Uploading ${uploadProgress.percent}%` : uploading ? 'Uploading' : 'Upload'}
               </button>
             )}
             <a
@@ -689,6 +797,35 @@ export default function PatentCorpusPage() {
         {success && (
           <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
             {success}
+          </div>
+        )}
+
+        {uploadProgress && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-white p-4 text-sm">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-medium text-slate-900">
+                  {uploadProgress.phase === 'finalizing' ? 'Finalizing upload' : `Uploading ${uploadProgress.fileCount} file${uploadProgress.fileCount === 1 ? '' : 's'}`}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {uploadProgress.phase === 'finalizing'
+                    ? 'Creating the batch and starting queue processing'
+                    : `Chunk ${uploadProgress.chunkIndex} of ${uploadProgress.chunkCount} (${uploadProgress.currentChunkFileCount} file${uploadProgress.currentChunkFileCount === 1 ? '' : 's'})`}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="font-semibold text-blue-700">{uploadProgress.percent}%</div>
+                <div className="text-xs text-slate-500">
+                  {formatFileSize(uploadProgress.uploadedBytes)} / {formatFileSize(uploadProgress.totalBytes)}
+                </div>
+              </div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all duration-150"
+                style={{ width: `${uploadProgress.percent}%` }}
+              />
+            </div>
           </div>
         )}
 
