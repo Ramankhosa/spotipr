@@ -21,6 +21,9 @@ export const PATENT_CORPUS_MAX_PDFS_PER_BATCH = Math.max(
 const STALE_LOCK_MINUTES = 20
 const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+const DEFERRED_UPLOAD_DELAY_MS = 60 * 60 * 1000
+const PATENT_CORPUS_CANCELLED_PREFIX = 'Cancelled by user'
+const IMPORT_SAVE_CANCEL_CHECK_INTERVAL = 25
 const MAX_JOB_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_MAX_JOB_ATTEMPTS || '5') || 5)
 const OPENAI_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_MAX_ATTEMPTS || '3') || 3)
 const OPENAI_EMBEDDING_BATCH_SIZE = Math.max(1, Number(process.env.PATENT_CORPUS_EMBEDDING_API_BATCH || '32') || 32)
@@ -41,6 +44,17 @@ type StoredPdf = {
   mimeType?: string
   fileHash: string
   fileSizeBytes: number
+}
+
+type QueueOptions = {
+  deferProcessing?: boolean
+}
+
+class PatentCorpusCancelledError extends Error {
+  constructor(message = `${PATENT_CORPUS_CANCELLED_PREFIX}.`) {
+    super(message)
+    this.name = 'PatentCorpusCancelledError'
+  }
 }
 
 type PatentEmbeddingJob = any & {
@@ -96,6 +110,30 @@ function jobBackoffMs(attemptCount: number) {
 
 function nextJobAttemptAt(attemptCount: number) {
   return new Date(Date.now() + jobBackoffMs(attemptCount))
+}
+
+function cancelledMessage() {
+  return `${PATENT_CORPUS_CANCELLED_PREFIX} at ${new Date().toISOString()}.`
+}
+
+function isCancellationError(error: unknown) {
+  return error instanceof PatentCorpusCancelledError
+}
+
+function isCancelledMessage(message?: string | null) {
+  return Boolean(message && message.startsWith(PATENT_CORPUS_CANCELLED_PREFIX))
+}
+
+function isCancelledBatch(batch?: { errorMessage?: string | null } | null) {
+  return isCancelledMessage(batch?.errorMessage)
+}
+
+async function ensureBatchIsNotCancelled(batchId: string) {
+  const batch = await (prisma as any).patentImportBatch.findUnique({
+    where: { id: batchId },
+    select: { errorMessage: true },
+  })
+  if (isCancelledBatch(batch)) throw new PatentCorpusCancelledError()
 }
 
 function sanitizeFileName(fileName: string) {
@@ -158,9 +196,58 @@ async function expandUploadToPdfs(input: UploadInput, targetDir: string): Promis
   }]
 }
 
+function nextAttemptAtForUpload(options?: QueueOptions) {
+  return options?.deferProcessing ? new Date(Date.now() + DEFERRED_UPLOAD_DELAY_MS) : new Date()
+}
+
+async function collectUniqueStoredPdfs(params: {
+  uploads: UploadInput[]
+  targetDir: string
+  existingHashes?: Set<string>
+  existingCount?: number
+  onLimitExceeded?: () => Promise<void>
+}) {
+  const byHash = new Map<string, StoredPdf>()
+  const existingHashes = params.existingHashes || new Set<string>()
+  const existingCount = params.existingCount || 0
+
+  for (const upload of params.uploads) {
+    const pdfs = await expandUploadToPdfs(upload, params.targetDir)
+    for (const pdf of pdfs) {
+      if (existingHashes.has(pdf.fileHash) || byHash.has(pdf.fileHash)) continue
+      byHash.set(pdf.fileHash, pdf)
+      if (existingCount + byHash.size > PATENT_CORPUS_MAX_PDFS_PER_BATCH) {
+        await params.onLimitExceeded?.()
+        throw new Error(`A single patent corpus batch can contain at most ${PATENT_CORPUS_MAX_PDFS_PER_BATCH} PDFs. Split this upload into smaller batches.`)
+      }
+    }
+  }
+
+  return Array.from(byHash.values())
+}
+
+async function createPatentImportFileRecords(batchId: string, pdfs: StoredPdf[], options?: QueueOptions) {
+  const nextAttemptAt = nextAttemptAtForUpload(options)
+  for (const pdf of pdfs) {
+    await (prisma as any).patentImportFile.create({
+      data: {
+        batchId,
+        originalName: pdf.originalName,
+        storedPath: pdf.storedPath,
+        mimeType: pdf.mimeType,
+        fileHash: pdf.fileHash,
+        fileSizeBytes: pdf.fileSizeBytes,
+        extractionVersion: PATENT_CORPUS_EXTRACTION_VERSION,
+        nextAttemptAt,
+      },
+    })
+  }
+}
+
 export async function createPatentImportBatch(params: {
   uploadedBy: string
   uploads: UploadInput[]
+  deferProcessing?: boolean
 }) {
   const batch = await (prisma as any).patentImportBatch.create({
     data: {
@@ -173,26 +260,22 @@ export async function createPatentImportBatch(params: {
   const targetDir = path.join(PATENT_CORPUS_UPLOAD_ROOT, batch.id)
   await ensureDir(targetDir)
 
-  const byHash = new Map<string, StoredPdf>()
-  for (const upload of params.uploads) {
-    const pdfs = await expandUploadToPdfs(upload, targetDir)
-    for (const pdf of pdfs) {
-      if (!byHash.has(pdf.fileHash)) byHash.set(pdf.fileHash, pdf)
-      if (byHash.size > PATENT_CORPUS_MAX_PDFS_PER_BATCH) {
-        await (prisma as any).patentImportBatch.update({
-          where: { id: batch.id },
-          data: {
-            status: 'FAILED',
-            errorMessage: `A single patent corpus batch can contain at most ${PATENT_CORPUS_MAX_PDFS_PER_BATCH} PDFs. Split this upload into smaller batches.`,
-            completedAt: new Date(),
-          },
-        })
-        throw new Error(`A single patent corpus batch can contain at most ${PATENT_CORPUS_MAX_PDFS_PER_BATCH} PDFs. Split this upload into smaller batches.`)
-      }
-    }
-  }
+  const pdfs = await collectUniqueStoredPdfs({
+    uploads: params.uploads,
+    targetDir,
+    onLimitExceeded: async () => {
+      await (prisma as any).patentImportBatch.update({
+        where: { id: batch.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: `A single patent corpus batch can contain at most ${PATENT_CORPUS_MAX_PDFS_PER_BATCH} PDFs. Split this upload into smaller batches.`,
+          completedAt: new Date(),
+        },
+      })
+    },
+  })
 
-  if (byHash.size === 0) {
+  if (pdfs.length === 0) {
     await (prisma as any).patentImportBatch.update({
       where: { id: batch.id },
       data: {
@@ -204,25 +287,155 @@ export async function createPatentImportBatch(params: {
     throw new Error('No PDF files were found in the upload.')
   }
 
-  for (const pdf of Array.from(byHash.values())) {
-    await (prisma as any).patentImportFile.create({
-      data: {
-        batchId: batch.id,
-        originalName: pdf.originalName,
-        storedPath: pdf.storedPath,
-        mimeType: pdf.mimeType,
-        fileHash: pdf.fileHash,
-        fileSizeBytes: pdf.fileSizeBytes,
-        extractionVersion: PATENT_CORPUS_EXTRACTION_VERSION,
-      },
-    })
-  }
+  await createPatentImportFileRecords(batch.id, pdfs, { deferProcessing: params.deferProcessing })
 
   return (prisma as any).patentImportBatch.update({
     where: { id: batch.id },
-    data: { totalFiles: byHash.size },
+    data: { totalFiles: pdfs.length },
     include: { files: true },
   })
+}
+
+export async function appendPatentImportBatchFiles(params: {
+  batchId: string
+  uploads: UploadInput[]
+  deferProcessing?: boolean
+}) {
+  const batch = await (prisma as any).patentImportBatch.findUnique({
+    where: { id: params.batchId },
+    include: {
+      files: {
+        select: { fileHash: true },
+      },
+    },
+  })
+  if (!batch) throw new Error('Import batch not found.')
+  if (isCancelledBatch(batch)) {
+    throw new Error('This import batch has been cancelled. Retry it before adding more PDFs.')
+  }
+  if (batch.status === 'PROCESSING') {
+    throw new Error('This import batch is currently processing and cannot accept more PDFs.')
+  }
+
+  const existingFiles = batch.files || []
+  const existingHashes = new Set<string>(
+    existingFiles
+      .map((file: any) => String(file.fileHash || ''))
+      .filter((hash: string) => Boolean(hash))
+  )
+  const targetDir = path.join(PATENT_CORPUS_UPLOAD_ROOT, batch.id)
+  await ensureDir(targetDir)
+
+  const pdfs = await collectUniqueStoredPdfs({
+    uploads: params.uploads,
+    targetDir,
+    existingHashes,
+    existingCount: existingFiles.length,
+  })
+  if (!pdfs.length) {
+    throw new Error('No new PDF files were found in the upload.')
+  }
+
+  await createPatentImportFileRecords(batch.id, pdfs, { deferProcessing: params.deferProcessing })
+  await (prisma as any).patentImportBatch.update({
+    where: { id: batch.id },
+    data: {
+      originalFileCount: { increment: params.uploads.length },
+      status: 'QUEUED',
+      completedAt: null,
+      errorMessage: null,
+    },
+  })
+
+  return refreshPatentImportBatchStatus(batch.id)
+}
+
+export async function releasePatentImportBatchFiles(batchId: string) {
+  const batch = await (prisma as any).patentImportBatch.findUnique({ where: { id: batchId } })
+  if (!batch) throw new Error('Import batch not found.')
+
+  await (prisma as any).patentImportFile.updateMany({
+    where: {
+      batchId,
+      status: 'QUEUED',
+    },
+    data: {
+      nextAttemptAt: new Date(),
+      lockedBy: null,
+      lockedUntil: null,
+      heartbeatAt: null,
+    },
+  })
+
+  return refreshPatentImportBatchStatus(batchId)
+}
+
+export async function cancelPatentImportBatch(batchId: string) {
+  const batch = await (prisma as any).patentImportBatch.findUnique({ where: { id: batchId } })
+  if (!batch) throw new Error('Import batch not found.')
+
+  const message = cancelledMessage()
+  const now = new Date()
+  const files = await (prisma as any).patentImportFile.findMany({
+    where: { batchId },
+    select: { id: true, status: true },
+  })
+  const fileIds = files.map((file: any) => file.id).filter(Boolean)
+  const hasProcessing = files.some((file: any) => file.status === 'PROCESSING')
+
+  const cancelledFiles = await (prisma as any).patentImportFile.updateMany({
+    where: {
+      batchId,
+      status: { in: ['QUEUED', 'FAILED'] },
+    },
+    data: {
+      status: 'FAILED',
+      errorMessage: message,
+      attemptCount: MAX_JOB_ATTEMPTS,
+      lockedBy: null,
+      lockedUntil: null,
+      heartbeatAt: null,
+      nextAttemptAt: now,
+      completedAt: now,
+    },
+  })
+
+  const cancelledEmbeddings = fileIds.length
+    ? await (prisma as any).localPatentEmbedding.updateMany({
+        where: {
+          status: { in: ['QUEUED', 'FAILED'] },
+          patent: {
+            sourceImportFileId: { in: fileIds },
+          },
+        },
+        data: {
+          status: 'FAILED',
+          errorMessage: message,
+          attemptCount: MAX_JOB_ATTEMPTS,
+          lockedBy: null,
+          lockedUntil: null,
+          heartbeatAt: null,
+          nextAttemptAt: now,
+        },
+      })
+    : { count: 0 }
+
+  await (prisma as any).patentImportBatch.update({
+    where: { id: batchId },
+    data: {
+      status: hasProcessing ? 'PROCESSING' : 'FAILED',
+      errorMessage: message,
+      completedAt: hasProcessing ? null : now,
+    },
+  })
+
+  const updatedBatch = await refreshPatentImportBatchStatus(batchId)
+  return {
+    batch: updatedBatch,
+    cancelledFiles: cancelledFiles.count || 0,
+    cancelledEmbeddings: cancelledEmbeddings.count || 0,
+    message,
+  }
 }
 
 function localPatentData(record: ExtractedPatentRecord, file: any) {
@@ -361,47 +574,51 @@ export function patentWhereForImportFile(file: { id: string; fileHash?: string |
 }
 
 async function replaceExtractedPatentsForFile(file: any, records: ExtractedPatentRecord[]) {
-  return (prisma as any).$transaction(async (tx: any) => {
-    let patentsCreated = 0
-    let patentsUpdated = 0
-    const publicationNumbers = new Set<string>()
+  let patentsCreated = 0
+  let patentsUpdated = 0
+  const publicationNumbers = new Set<string>()
 
-    for (const record of records) {
-      publicationNumbers.add(record.publicationNumber)
-      const result = await upsertExtractedPatent(record, file, tx)
-      if (result.created) patentsCreated += 1
-      else patentsUpdated += 1
+  for (let index = 0; index < records.length; index += 1) {
+    if (index % IMPORT_SAVE_CANCEL_CHECK_INTERVAL === 0) {
+      await ensureBatchIsNotCancelled(file.batchId)
     }
+    const record = records[index]
+    publicationNumbers.add(record.publicationNumber)
+    const result = await upsertExtractedPatent(record, file)
+    if (result.created) patentsCreated += 1
+    else patentsUpdated += 1
+  }
 
-    const staleWhere = {
-      AND: [
-        patentWhereForImportFile(file),
-        publicationNumbers.size > 0
-          ? { publicationNumber: { notIn: Array.from(publicationNumbers) } }
-          : {},
-      ],
-    }
+  await ensureBatchIsNotCancelled(file.batchId)
 
-    await tx.localPatent.updateMany({
-      where: {
-        ...staleWhere,
-        ipIndiaCapturedAt: { not: null },
-      },
-      data: {
-        sourceImportFileId: null,
-        sourceFileHash: null,
-      },
-    })
+  const staleWhere = {
+    AND: [
+      patentWhereForImportFile(file),
+      publicationNumbers.size > 0
+        ? { publicationNumber: { notIn: Array.from(publicationNumbers) } }
+        : {},
+    ],
+  }
 
-    await tx.localPatent.deleteMany({
-      where: {
-        ...staleWhere,
-        ipIndiaCapturedAt: null,
-      },
-    })
-
-    return { patentsCreated, patentsUpdated }
+  await (prisma as any).localPatent.updateMany({
+    where: {
+      ...staleWhere,
+      ipIndiaCapturedAt: { not: null },
+    },
+    data: {
+      sourceImportFileId: null,
+      sourceFileHash: null,
+    },
   })
+
+  await (prisma as any).localPatent.deleteMany({
+    where: {
+      ...staleWhere,
+      ipIndiaCapturedAt: null,
+    },
+  })
+
+  return { patentsCreated, patentsUpdated }
 }
 
 export async function refreshPatentImportBatchStatus(batchId: string) {
@@ -456,9 +673,32 @@ export async function claimNextPatentImportFile(workerId: string) {
     },
     orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
     take: 10,
+    include: {
+      batch: { select: { errorMessage: true } },
+    },
   })
 
   for (const candidate of candidates) {
+    if (isCancelledBatch(candidate.batch)) {
+      await (prisma as any).patentImportFile.updateMany({
+        where: {
+          id: candidate.id,
+          status: { in: ['QUEUED', 'FAILED'] },
+        },
+        data: {
+          status: 'FAILED',
+          errorMessage: candidate.batch?.errorMessage || `${PATENT_CORPUS_CANCELLED_PREFIX}.`,
+          attemptCount: MAX_JOB_ATTEMPTS,
+          lockedBy: null,
+          lockedUntil: null,
+          heartbeatAt: null,
+          completedAt: new Date(),
+        },
+      })
+      await refreshPatentImportBatchStatus(candidate.batchId)
+      continue
+    }
+
     const updated = await (prisma as any).patentImportFile.updateMany({
       where: {
         id: candidate.id,
@@ -500,11 +740,16 @@ async function heartbeatImportFile(fileId: string, workerId: string) {
 }
 
 export async function processPatentImportFileById(fileId: string, workerId = `patent-corpus-${process.pid}`) {
-  const file = await (prisma as any).patentImportFile.findUnique({ where: { id: fileId } })
+  const file = await (prisma as any).patentImportFile.findUnique({
+    where: { id: fileId },
+    include: { batch: { select: { errorMessage: true } } },
+  })
   if (!file) return null
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
   try {
+    if (isCancelledBatch(file.batch)) throw new PatentCorpusCancelledError(file.batch?.errorMessage || undefined)
+
     await heartbeatImportFile(fileId, workerId)
     heartbeatTimer = setInterval(() => {
       heartbeatImportFile(fileId, workerId).catch(error => {
@@ -520,7 +765,9 @@ export async function processPatentImportFileById(fileId: string, workerId = `pa
     }
 
     const extraction = await extractPatentRecordsFromPdf(buffer, file.fileHash)
+    await ensureBatchIsNotCancelled(file.batchId)
     const { patentsCreated, patentsUpdated } = await replaceExtractedPatentsForFile(file, extraction.records)
+    await ensureBatchIsNotCancelled(file.batchId)
 
     const status = extraction.warningCount > 0 || extraction.lowConfidencePages > 0
       ? 'COMPLETED_WITH_WARNINGS'
@@ -550,6 +797,26 @@ export async function processPatentImportFileById(fileId: string, workerId = `pa
     return updatedFile
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    const cancelled = isCancellationError(error) || isCancelledMessage(message)
+    if (cancelled) {
+      await (prisma as any).localPatentEmbedding.updateMany({
+        where: {
+          status: { in: ['QUEUED', 'FAILED'] },
+          patent: {
+            sourceImportFileId: file.id,
+          },
+        },
+        data: {
+          status: 'FAILED',
+          errorMessage: message,
+          attemptCount: MAX_JOB_ATTEMPTS,
+          lockedBy: null,
+          lockedUntil: null,
+          heartbeatAt: null,
+          nextAttemptAt: new Date(),
+        },
+      })
+    }
     const failedFile = await (prisma as any).patentImportFile.update({
       where: { id: fileId },
       data: {
@@ -558,7 +825,8 @@ export async function processPatentImportFileById(fileId: string, workerId = `pa
         lockedBy: null,
         lockedUntil: null,
         heartbeatAt: null,
-        nextAttemptAt: nextJobAttemptAt(Math.max(1, file.attemptCount || 1)),
+        attemptCount: cancelled ? MAX_JOB_ATTEMPTS : undefined,
+        nextAttemptAt: cancelled ? new Date() : nextJobAttemptAt(Math.max(1, file.attemptCount || 1)),
         completedAt: new Date(),
       },
     })
@@ -580,6 +848,19 @@ export async function processPendingPatentImportFiles(workerId = `patent-corpus-
 }
 
 export async function retryPatentImportBatch(batchId: string) {
+  const files = await (prisma as any).patentImportFile.findMany({
+    where: { batchId },
+    select: { id: true },
+  })
+  const fileIds = files.map((file: any) => file.id).filter(Boolean)
+
+  await (prisma as any).patentImportBatch.update({
+    where: { id: batchId },
+    data: {
+      errorMessage: null,
+      completedAt: null,
+    },
+  })
   await (prisma as any).patentImportFile.updateMany({
     where: {
       batchId,
@@ -597,6 +878,27 @@ export async function retryPatentImportBatch(batchId: string) {
       ignoredPageBreakdown: {},
     },
   })
+  if (fileIds.length) {
+    await (prisma as any).localPatentEmbedding.updateMany({
+      where: {
+        status: 'FAILED',
+        errorMessage: { startsWith: PATENT_CORPUS_CANCELLED_PREFIX },
+        patent: {
+          sourceImportFileId: { in: fileIds },
+        },
+      },
+      data: {
+        status: 'QUEUED',
+        attemptCount: 0,
+        errorMessage: null,
+        lockedBy: null,
+        lockedUntil: null,
+        heartbeatAt: null,
+        nextAttemptAt: new Date(),
+        embeddedAt: null,
+      },
+    })
+  }
   return refreshPatentImportBatchStatus(batchId)
 }
 
@@ -943,11 +1245,41 @@ export async function claimNextPatentEmbeddings(workerId: string, limit = 1) {
     },
     orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
     take: Math.max(limit * 3, 10),
+    include: {
+      patent: {
+        include: {
+          sourceImportFile: {
+            include: {
+              batch: { select: { errorMessage: true } },
+            },
+          },
+        },
+      },
+    },
   })
 
   const claimedIds: string[] = []
   for (const candidate of candidates) {
     if (claimedIds.length >= limit) break
+    const batch = candidate.patent?.sourceImportFile?.batch
+    if (isCancelledBatch(batch)) {
+      await (prisma as any).localPatentEmbedding.updateMany({
+        where: {
+          id: candidate.id,
+          status: { in: ['QUEUED', 'FAILED'] },
+        },
+        data: {
+          status: 'FAILED',
+          errorMessage: batch?.errorMessage || `${PATENT_CORPUS_CANCELLED_PREFIX}.`,
+          attemptCount: MAX_JOB_ATTEMPTS,
+          lockedBy: null,
+          lockedUntil: null,
+          heartbeatAt: null,
+          nextAttemptAt: new Date(),
+        },
+      })
+      continue
+    }
     const updated = await (prisma as any).localPatentEmbedding.updateMany({
       where: {
         id: candidate.id,
@@ -976,7 +1308,17 @@ export async function claimNextPatentEmbeddings(workerId: string, limit = 1) {
   if (!claimedIds.length) return []
   return (prisma as any).localPatentEmbedding.findMany({
     where: { id: { in: claimedIds } },
-    include: { patent: true },
+    include: {
+      patent: {
+        include: {
+          sourceImportFile: {
+            include: {
+              batch: { select: { errorMessage: true } },
+            },
+          },
+        },
+      },
+    },
     orderBy: [{ updatedAt: 'asc' }],
   })
 }
@@ -1020,6 +1362,7 @@ function patentTextForEmbedding(embedding: PatentEmbeddingJob) {
 
 async function failPatentEmbedding(embedding: PatentEmbeddingJob, error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
+  const cancelled = isCancellationError(error) || isCancelledMessage(message)
   return (prisma as any).localPatentEmbedding.update({
     where: { id: embedding.id },
     data: {
@@ -1028,7 +1371,8 @@ async function failPatentEmbedding(embedding: PatentEmbeddingJob, error: unknown
       lockedBy: null,
       lockedUntil: null,
       heartbeatAt: null,
-      nextAttemptAt: nextJobAttemptAt(Math.max(1, embedding.attemptCount || 1)),
+      attemptCount: cancelled ? MAX_JOB_ATTEMPTS : undefined,
+      nextAttemptAt: cancelled ? new Date() : nextJobAttemptAt(Math.max(1, embedding.attemptCount || 1)),
     },
   })
 }
@@ -1036,11 +1380,23 @@ async function failPatentEmbedding(embedding: PatentEmbeddingJob, error: unknown
 export async function processPatentEmbeddingById(embeddingId: string, workerId = `patent-corpus-${process.pid}`) {
   const embedding = await (prisma as any).localPatentEmbedding.findUnique({
     where: { id: embeddingId },
-    include: { patent: true },
+    include: {
+      patent: {
+        include: {
+          sourceImportFile: {
+            include: {
+              batch: { select: { errorMessage: true } },
+            },
+          },
+        },
+      },
+    },
   })
   if (!embedding) return null
 
   try {
+    const batch = embedding.patent?.sourceImportFile?.batch
+    if (isCancelledBatch(batch)) throw new PatentCorpusCancelledError(batch?.errorMessage || undefined)
     const text = embedding.patent?.embeddingText || embedding.patent?.ragText || embedding.patent?.abstract || embedding.patent?.title
     if (!text) throw new Error('Patent has no text available for embedding.')
     const vector = await requestOpenAIEmbedding(text)
@@ -1060,6 +1416,11 @@ export async function processPatentEmbeddingBatch(workerId = `patent-corpus-${pr
   const valid: PatentEmbeddingWorkItem[] = claimed
     .map((embedding: PatentEmbeddingJob) => ({ embedding, text: patentTextForEmbedding(embedding) }))
     .filter((item: PatentEmbeddingWorkItem) => {
+      const batch = item.embedding.patent?.sourceImportFile?.batch
+      if (isCancelledBatch(batch)) {
+        processed.push(failPatentEmbedding(item.embedding, new PatentCorpusCancelledError(batch?.errorMessage || undefined)))
+        return false
+      }
       if (item.text) return true
       processed.push(failPatentEmbedding(item.embedding, new Error('Patent has no text available for embedding.')))
       return false

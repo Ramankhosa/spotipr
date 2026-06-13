@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await verifySuperAdmin(request, true)
     if ('error' in auth) return auth.error
+    const deferProcessing = request.nextUrl.searchParams.get('deferProcessing') === '1'
 
     const formData = await request.formData()
     const fileValues = [
@@ -84,8 +85,9 @@ export async function POST(request: NextRequest) {
     const batch = await createPatentImportBatch({
       uploadedBy: auth.user.id,
       uploads,
+      deferProcessing,
     })
-    const runner = kickPatentCorpusRunner('upload')
+    const runner = deferProcessing ? getPatentCorpusRunnerState() : kickPatentCorpusRunner('upload')
 
     return NextResponse.json({
       batch,

@@ -8,7 +8,11 @@ import { Badge } from '@/components/ui/badge'
 import Stage0PatentIntelligenceOverlay, {
   type Stage0PatentIntelligenceStatus
 } from '@/components/ui/stage0-patent-intelligence-overlay'
-import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
+import {
+  MAX_DRAFTING_INPUT_CHARS,
+  MAX_DRAFTING_UPLOAD_BYTES,
+  MAX_DRAFTING_UPLOAD_MB
+} from '@/lib/drafting-constants'
 
 const DRAFTING_INPUT_WARNING_CHARS = Math.floor(MAX_DRAFTING_INPUT_CHARS * 0.9)
 
@@ -361,8 +365,8 @@ function NewPatentDraftPageContent() {
       return
     }
 
-    if (file.size > 5 * 1024 * 1024) { // 5MB limit
-      setError('File size must be less than 5MB')
+    if (file.size > MAX_DRAFTING_UPLOAD_BYTES) {
+      setError(`File size must be less than ${MAX_DRAFTING_UPLOAD_MB}MB`)
       setUploadedFileName(null)
       setSourceInputMeta(null)
       input.value = ''
@@ -1031,7 +1035,7 @@ function NewPatentDraftPageContent() {
                 className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
               />
               <p className="mt-1 text-sm text-gray-500">
-                Supported formats: .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, and text-based .pdf files (max 5MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
+                Supported formats: .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, and text-based .pdf files (max {MAX_DRAFTING_UPLOAD_MB}MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
               </p>
               {isFileProcessing && (
                 <p className="mt-1 text-xs text-indigo-600">

@@ -124,6 +124,38 @@ const breakdownLabels: Record<string, string> = {
   unknown: 'Unknown',
 }
 
+const PATENT_CORPUS_UPLOAD_REQUEST_MB = 50
+const PATENT_CORPUS_UPLOAD_REQUEST_BYTES = PATENT_CORPUS_UPLOAD_REQUEST_MB * 1024 * 1024
+
+function createUploadChunks(files: File[]) {
+  const chunks: File[][] = []
+  let current: File[] = []
+  let currentBytes = 0
+
+  const flush = () => {
+    if (!current.length) return
+    chunks.push(current)
+    current = []
+    currentBytes = 0
+  }
+
+  for (const file of files) {
+    const size = Math.max(0, file.size || 0)
+    if (current.length && currentBytes + size > PATENT_CORPUS_UPLOAD_REQUEST_BYTES) {
+      flush()
+    }
+    current.push(file)
+    currentBytes += size
+  }
+  flush()
+
+  return chunks
+}
+
+function isCancelledBatchMessage(message?: string | null) {
+  return Boolean(message && message.startsWith('Cancelled by user'))
+}
+
 function formatBreakdownKey(key: string) {
   return breakdownLabels[key] || key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, value => value.toUpperCase())
 }
@@ -294,25 +326,71 @@ export default function PatentCorpusPage() {
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
+    const oversizedFiles = selectedFiles.filter(file => file.size > PATENT_CORPUS_UPLOAD_REQUEST_BYTES)
+    if (oversizedFiles.length) {
+      const visibleNames = oversizedFiles.slice(0, 3).map(file => file.name).join(', ')
+      const extraCount = oversizedFiles.length - 3
+      setError(`Each selected PDF or ZIP must be ${PATENT_CORPUS_UPLOAD_REQUEST_MB}MB or less. ${visibleNames}${extraCount > 0 ? ` and ${extraCount} more` : ''} exceed the limit.`)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
     setUploading(true)
     setError(null)
     setSuccess(null)
     try {
-      const formData = new FormData()
-      selectedFiles.forEach(file => formData.append('files', file))
-      const response = await fetch('/api/super-admin/patent-corpus/imports', {
+      const chunks = createUploadChunks(selectedFiles)
+      let batch: ImportBatch | null = null
+
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index]
+        const formData = new FormData()
+        chunk.forEach((file: File) => formData.append('files', file))
+        const response: Response = await fetch(
+          index === 0
+            ? '/api/super-admin/patent-corpus/imports?deferProcessing=1'
+            : `/api/super-admin/patent-corpus/imports/${batch?.id}/files?deferProcessing=1`,
+          {
+            method: 'POST',
+            headers: authHeaders(),
+            body: formData,
+          }
+        )
+        if (!response.ok) {
+          if (response.status === 413) {
+            throw new Error(`Upload request exceeded ${PATENT_CORPUS_UPLOAD_REQUEST_MB}MB. Select smaller PDFs or fewer files.`)
+          }
+          const body = await response.json().catch(() => ({}))
+          throw new Error(body.error || 'Upload failed')
+        }
+        const body = (await response.json()) as {
+          batch?: ImportBatch
+          runner?: RunnerState
+          limits?: { maxPdfsPerBatch?: number }
+        }
+        if (body.limits?.maxPdfsPerBatch) setMaxPdfsPerBatch(body.limits.maxPdfsPerBatch)
+        if (body.batch) batch = body.batch
+      }
+
+      if (!batch) throw new Error('Upload failed')
+
+      const finalizeResponse = await fetch(`/api/super-admin/patent-corpus/imports/${batch.id}/finalize`, {
         method: 'POST',
         headers: authHeaders(),
-        body: formData,
       })
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || 'Upload failed')
+      if (!finalizeResponse.ok) {
+        const body = await finalizeResponse.json().catch(() => ({}))
+        throw new Error(body.error || 'Upload finalization failed')
       }
-      const body = await response.json()
-      if (body.runner) setRunner(body.runner)
-      setSuccess('Import batch queued. Automatic processing has started.')
-      setSelectedBatch(body.batch)
+      const finalBody = (await finalizeResponse.json()) as {
+        batch?: ImportBatch
+        runner?: RunnerState
+        limits?: { maxPdfsPerBatch?: number }
+      }
+      if (finalBody.runner) setRunner(finalBody.runner)
+      if (finalBody.limits?.maxPdfsPerBatch) setMaxPdfsPerBatch(finalBody.limits.maxPdfsPerBatch)
+      const queuedBatch = finalBody.batch || batch
+      setSuccess(`Import batch queued with ${queuedBatch.totalFiles || selectedPdfCount || selectedFiles.length} PDF(s). Automatic processing has started.`)
+      setSelectedBatch(queuedBatch)
       setSelectedFileDetail(null)
       await fetchBatches()
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -339,6 +417,30 @@ export default function PatentCorpusPage() {
     setSuccess('Batch queued again. Automatic processing has started.')
     await fetchBatches()
     await fetchBatchDetail(batchId)
+  }
+
+  const cancelBatch = async (batchId: string) => {
+    if (isViewer) return
+    const confirmed = window.confirm('Stop extraction and embedding creation for this batch? Queued work will be cancelled. A PDF already processing may finish its current step before stopping.')
+    if (!confirmed) return
+
+    setError(null)
+    const response = await fetch(`/api/super-admin/patent-corpus/imports/${batchId}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      setError(body.error || 'Cancel failed')
+      return
+    }
+    if (body.runner) setRunner(body.runner)
+    setSuccess(`Batch cancelled. Stopped ${body.cancelledFiles || 0} queued file(s) and ${body.cancelledEmbeddings || 0} embedding job(s).`)
+    await fetchBatches()
+    await fetchBatchDetail(batchId)
+    if (selectedBatch?.id === batchId && selectedFileDetail?.file?.id) {
+      await fetchFileDetail(batchId, selectedFileDetail.file.id, selectedFileDetail.pagination.page)
+    }
   }
 
   const startWorker = async () => {
@@ -501,6 +603,18 @@ export default function PatentCorpusPage() {
     return <div className="min-h-screen bg-slate-50 p-8 text-red-700">Access denied.</div>
   }
 
+  const selectedBatchCancelled = isCancelledBatchMessage(selectedBatch?.errorMessage)
+  const selectedBatchHasQueuedEmbeddings = (selectedBatch?.files || []).some(file => {
+    const counts = file.embeddingCounts || {}
+    return Number(counts.QUEUED || 0) > 0 || Number(counts.PROCESSING || 0) > 0
+  })
+  const canCancelSelectedBatch = Boolean(
+    !isViewer &&
+    selectedBatch &&
+    !selectedBatchCancelled &&
+    (['QUEUED', 'PROCESSING'].includes(selectedBatch.status) || selectedBatchHasQueuedEmbeddings)
+  )
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto max-w-7xl px-6 py-8">
@@ -523,7 +637,7 @@ export default function PatentCorpusPage() {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
-                title={`Upload up to ${maxPdfsPerBatch} PDFs per batch`}
+                title={`Upload up to ${maxPdfsPerBatch} PDFs per batch, ${PATENT_CORPUS_UPLOAD_REQUEST_MB}MB each`}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 <Upload className="h-4 w-4" />
@@ -712,6 +826,15 @@ export default function PatentCorpusPage() {
                         Retry
                       </button>
                     )}
+                    {canCancelSelectedBatch && (
+                      <button
+                        onClick={() => cancelBatch(selectedBatch.id)}
+                        className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Cancel
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="grid gap-3 border-b border-slate-100 p-4 text-sm sm:grid-cols-4">
@@ -720,6 +843,12 @@ export default function PatentCorpusPage() {
                   <div><span className="text-slate-500">Created</span><div className="font-medium">{selectedBatch.patentsCreated}</div></div>
                   <div><span className="text-slate-500">Updated</span><div className="font-medium">{selectedBatch.patentsUpdated}</div></div>
                 </div>
+                {selectedBatch.errorMessage && (
+                  <div className="flex items-start gap-2 border-b border-slate-100 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    <AlertTriangle className="mt-0.5 h-4 w-4" />
+                    <span>{selectedBatch.errorMessage}</span>
+                  </div>
+                )}
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">

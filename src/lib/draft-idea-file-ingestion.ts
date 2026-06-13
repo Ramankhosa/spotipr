@@ -3,11 +3,11 @@ import AdmZip from 'adm-zip'
 import * as XLSX from 'xlsx'
 import { createRequire } from 'module'
 import crypto from 'crypto'
-import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
+import { MAX_DRAFTING_INPUT_CHARS, MAX_DRAFTING_UPLOAD_BYTES } from '@/lib/drafting-constants'
 
 const require = createRequire(import.meta.url)
 
-export const DRAFT_IDEA_FILE_MAX_BYTES = 5 * 1024 * 1024
+export const DRAFT_IDEA_FILE_MAX_BYTES = MAX_DRAFTING_UPLOAD_BYTES
 
 export type DraftIdeaFileFormat = 'txt' | 'md' | 'csv' | 'tsv' | 'xlsx' | 'doc' | 'docx' | 'pdf'
 

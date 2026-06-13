@@ -5,6 +5,7 @@ import {
   DraftIdeaFileIngestionError,
   extractDraftIdeaTextFromBuffer,
 } from '@/lib/draft-idea-file-ingestion'
+import { MAX_DRAFTING_UPLOAD_MB } from '@/lib/drafting-constants'
 
 export const runtime = 'nodejs'
 
@@ -22,7 +23,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (file.size > DRAFT_IDEA_FILE_MAX_BYTES) {
-      return NextResponse.json({ error: 'File size must be less than 5MB' }, { status: 400 })
+      return NextResponse.json({ error: `File size must be less than ${MAX_DRAFTING_UPLOAD_MB}MB` }, { status: 400 })
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())

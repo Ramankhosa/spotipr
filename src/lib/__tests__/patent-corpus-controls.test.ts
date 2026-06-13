@@ -3,6 +3,7 @@ import fs from 'fs/promises'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import {
+  cancelPatentImportBatch,
   deletePatentImportFileExtractions,
   deletePatentImportFileStoredPdf,
   patentWhereForImportFile,
@@ -10,6 +11,7 @@ import {
   retryPatentImportFileExtraction,
 } from '@/lib/patent-corpus-service'
 import { GET as exportGET } from '@/app/api/super-admin/patent-corpus/export/route'
+import { POST as cancelBatchPOST } from '@/app/api/super-admin/patent-corpus/imports/[id]/cancel/route'
 import { POST as retryExtractionPOST } from '@/app/api/super-admin/patent-corpus/imports/[id]/files/[fileId]/retry-extraction/route'
 
 vi.mock('@/lib/auth-middleware', () => ({
@@ -223,6 +225,62 @@ describe('patent corpus PDF-level controls', () => {
     expect(mockPrisma.$executeRaw).not.toHaveBeenCalled()
   })
 
+  it('cancels queued extraction and embedding jobs for a batch', async () => {
+    mockPrisma.patentImportBatch.findUnique.mockResolvedValue({ id: 'batch-1', status: 'PROCESSING' })
+    mockPrisma.patentImportFile.findMany
+      .mockResolvedValueOnce([
+        { id: 'file-1', status: 'QUEUED' },
+        { id: 'file-2', status: 'COMPLETED' },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'file-1',
+          status: 'FAILED',
+          totalPages: 0,
+          patentPages: 0,
+          patentsCreated: 0,
+          patentsUpdated: 0,
+          lowConfidencePages: 0,
+          warningCount: 0,
+        },
+        {
+          id: 'file-2',
+          status: 'COMPLETED',
+          totalPages: 10,
+          patentPages: 8,
+          patentsCreated: 8,
+          patentsUpdated: 0,
+          lowConfidencePages: 0,
+          warningCount: 0,
+        },
+      ])
+    mockPrisma.patentImportFile.updateMany.mockResolvedValue({ count: 1 })
+    mockPrisma.localPatentEmbedding.updateMany.mockResolvedValue({ count: 2 })
+    mockPrisma.patentImportBatch.update.mockResolvedValue({ id: 'batch-1', status: 'COMPLETED_WITH_WARNINGS' })
+
+    const result = await cancelPatentImportBatch('batch-1')
+
+    expect(result).toMatchObject({ cancelledFiles: 1, cancelledEmbeddings: 2 })
+    expect(mockPrisma.patentImportFile.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ batchId: 'batch-1', status: { in: ['QUEUED', 'FAILED'] } }),
+      data: expect.objectContaining({
+        status: 'FAILED',
+        attemptCount: expect.any(Number),
+        errorMessage: expect.stringMatching(/^Cancelled by user/),
+      }),
+    }))
+    expect(mockPrisma.localPatentEmbedding.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: { in: ['QUEUED', 'FAILED'] },
+        patent: { sourceImportFileId: { in: ['file-1', 'file-2'] } },
+      }),
+      data: expect.objectContaining({
+        status: 'FAILED',
+        errorMessage: expect.stringMatching(/^Cancelled by user/),
+      }),
+    }))
+  })
+
   it('exports only records from a requested PDF file', async () => {
     mockedAuthenticateUser.mockResolvedValue({
       user: { roles: ['SUPER_ADMIN_VIEWER'] },
@@ -261,5 +319,19 @@ describe('patent corpus PDF-level controls', () => {
 
     expect(response.status).toBe(403)
     expect(mockPrisma.patentImportFile.findFirst).not.toHaveBeenCalled()
+  })
+
+  it('blocks viewer users from cancelling an import batch', async () => {
+    mockedAuthenticateUser.mockResolvedValue({
+      user: { roles: ['SUPER_ADMIN_VIEWER'] },
+    } as any)
+
+    const response = await cancelBatchPOST!(
+      new Request('http://test.local/api/super-admin/patent-corpus/imports/batch-1/cancel') as any,
+      { params: { id: 'batch-1' } }
+    ) as Response
+
+    expect(response.status).toBe(403)
+    expect(mockPrisma.patentImportBatch.findUnique).not.toHaveBeenCalled()
   })
 })

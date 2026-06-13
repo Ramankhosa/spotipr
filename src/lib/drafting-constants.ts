@@ -1,5 +1,9 @@
 export const MAX_DRAFTING_INPUT_CHARS = 25000
 
+export const MAX_DRAFTING_UPLOAD_MB = 50
+
+export const MAX_DRAFTING_UPLOAD_BYTES = MAX_DRAFTING_UPLOAD_MB * 1024 * 1024
+
 export const EMAIL_DRAFTING_PROJECT_NAME = 'Email Drafting Requests'
 
 export const EMAIL_DRAFTING_INBOUND_ADDRESS = 'noreply@patentnest.ai'
