@@ -193,16 +193,16 @@ export default function IpIndiaPatentArchivePage() {
     Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`,
   }), [])
 
-  const queryParams = useCallback((nextSkip = skip) => {
+  const queryParams = useCallback((nextSkip: number) => {
     const params = new URLSearchParams({ take: String(take), skip: String(nextSkip) })
     if (since) params.set('since', since)
     if (until) params.set('until', until)
     if (status !== 'ALL') params.set('status', status)
     if (part !== 'ALL') params.set('part', part)
     return params
-  }, [part, since, skip, status, until])
+  }, [part, since, status, until])
 
-  const fetchArchive = useCallback(async (nextSkip = skip) => {
+  const fetchArchive = useCallback(async (nextSkip: number) => {
     if (!user || !canAccess) return
     const response = await fetch(`/api/super-admin/patent-corpus/ipindia-archive?${queryParams(nextSkip).toString()}`, {
       headers: authHeaders(),
@@ -214,8 +214,8 @@ export default function IpIndiaPatentArchivePage() {
     setControl(body.control || null)
     setSettings(body.settings || null)
     setTotal(body.pagination?.total || 0)
-    setSkip(body.pagination?.skip || nextSkip)
-  }, [authHeaders, canAccess, queryParams, skip, user])
+    setSkip(body.pagination?.skip ?? nextSkip)
+  }, [authHeaders, canAccess, queryParams, user])
 
   useEffect(() => {
     if (!user) return
