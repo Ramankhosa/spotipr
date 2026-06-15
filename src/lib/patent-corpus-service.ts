@@ -26,7 +26,7 @@ const PATENT_CORPUS_CANCELLED_PREFIX = 'Cancelled by user'
 const IMPORT_SAVE_CANCEL_CHECK_INTERVAL = 25
 const MAX_JOB_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_MAX_JOB_ATTEMPTS || '5') || 5)
 const OPENAI_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_MAX_ATTEMPTS || '3') || 3)
-const OPENAI_EMBEDDING_BATCH_SIZE = Math.max(1, Number(process.env.PATENT_CORPUS_EMBEDDING_API_BATCH || '32') || 32)
+export const PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE = Math.max(1, Number(process.env.PATENT_CORPUS_EMBEDDING_API_BATCH || '32') || 32)
 const JOB_BACKOFF_BASE_MS = 2 * 60 * 1000
 const JOB_BACKOFF_MAX_MS = 60 * 60 * 1000
 const OPENAI_BACKOFF_BASE_MS = 750
@@ -45,6 +45,8 @@ type StoredPdf = {
   fileHash: string
   fileSizeBytes: number
 }
+
+export type StoredPatentCorpusPdf = StoredPdf
 
 type QueueOptions = {
   deferProcessing?: boolean
@@ -73,6 +75,17 @@ type PatentEmbeddingWorkItem = {
 
 function sha256(input: Buffer | string) {
   return crypto.createHash('sha256').update(input).digest('hex')
+}
+
+function sanitizePostgresText<T>(value: T): T {
+  if (typeof value === 'string') return value.replace(/\u0000/g, '') as T
+  if (Array.isArray(value)) return value.map(item => sanitizePostgresText(item)) as T
+  if (value && typeof value === 'object' && !(value instanceof Date) && !Buffer.isBuffer(value)) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, sanitizePostgresText(item)])
+    ) as T
+  }
+  return value
 }
 
 function sleep(ms: number) {
@@ -226,6 +239,30 @@ async function collectUniqueStoredPdfs(params: {
   return Array.from(byHash.values())
 }
 
+function collectUniqueStoredPdfRecords(params: {
+  pdfs: StoredPdf[]
+  existingHashes?: Set<string>
+  existingCount?: number
+}) {
+  const byHash = new Map<string, StoredPdf>()
+  const existingHashes = params.existingHashes || new Set<string>()
+  const existingCount = params.existingCount || 0
+
+  for (const pdf of params.pdfs) {
+    if (!pdf.storedPath || !pdf.fileHash || pdf.fileSizeBytes < 1) continue
+    if (existingHashes.has(pdf.fileHash) || byHash.has(pdf.fileHash)) continue
+    byHash.set(pdf.fileHash, {
+      ...pdf,
+      mimeType: pdf.mimeType || 'application/pdf',
+    })
+    if (existingCount + byHash.size > PATENT_CORPUS_MAX_PDFS_PER_BATCH) {
+      throw new Error(`A single patent corpus batch can contain at most ${PATENT_CORPUS_MAX_PDFS_PER_BATCH} PDFs. Start another batch for the remaining files.`)
+    }
+  }
+
+  return Array.from(byHash.values())
+}
+
 async function createPatentImportFileRecords(batchId: string, pdfs: StoredPdf[], options?: QueueOptions) {
   const nextAttemptAt = nextAttemptAtForUpload(options)
   for (const pdf of pdfs) {
@@ -296,6 +333,44 @@ export async function createPatentImportBatch(params: {
   })
 }
 
+export async function createPatentImportBatchFromStoredPdfs(params: {
+  uploadedBy: string
+  pdfs: StoredPatentCorpusPdf[]
+  deferProcessing?: boolean
+}) {
+  const batch = await (prisma as any).patentImportBatch.create({
+    data: {
+      uploadedBy: params.uploadedBy,
+      originalFileCount: params.pdfs.length,
+      status: 'QUEUED',
+    },
+  })
+
+  try {
+    const pdfs = collectUniqueStoredPdfRecords({ pdfs: params.pdfs })
+    if (pdfs.length === 0) {
+      throw new Error('No stored PDF files were supplied.')
+    }
+
+    await createPatentImportFileRecords(batch.id, pdfs, { deferProcessing: params.deferProcessing })
+    return (prisma as any).patentImportBatch.update({
+      where: { id: batch.id },
+      data: { totalFiles: pdfs.length },
+      include: { files: true },
+    })
+  } catch (error) {
+    await (prisma as any).patentImportBatch.update({
+      where: { id: batch.id },
+      data: {
+        status: 'FAILED',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        completedAt: new Date(),
+      },
+    }).catch(() => undefined)
+    throw error
+  }
+}
+
 export async function appendPatentImportBatchFiles(params: {
   batchId: string
   uploads: UploadInput[]
@@ -341,6 +416,57 @@ export async function appendPatentImportBatchFiles(params: {
     where: { id: batch.id },
     data: {
       originalFileCount: { increment: params.uploads.length },
+      status: 'QUEUED',
+      completedAt: null,
+      errorMessage: null,
+    },
+  })
+
+  return refreshPatentImportBatchStatus(batch.id)
+}
+
+export async function appendStoredPdfsToPatentImportBatch(params: {
+  batchId: string
+  pdfs: StoredPatentCorpusPdf[]
+  deferProcessing?: boolean
+  allowProcessing?: boolean
+}) {
+  const batch = await (prisma as any).patentImportBatch.findUnique({
+    where: { id: params.batchId },
+    include: {
+      files: {
+        select: { fileHash: true },
+      },
+    },
+  })
+  if (!batch) throw new Error('Import batch not found.')
+  if (isCancelledBatch(batch)) {
+    throw new Error('This import batch has been cancelled. Retry it before adding more PDFs.')
+  }
+  if (batch.status === 'PROCESSING' && !params.allowProcessing) {
+    throw new Error('This import batch is currently processing and cannot accept more PDFs.')
+  }
+
+  const existingFiles = batch.files || []
+  const existingHashes = new Set<string>(
+    existingFiles
+      .map((file: any) => String(file.fileHash || ''))
+      .filter((hash: string) => Boolean(hash))
+  )
+  const pdfs = collectUniqueStoredPdfRecords({
+    pdfs: params.pdfs,
+    existingHashes,
+    existingCount: existingFiles.length,
+  })
+  if (!pdfs.length) {
+    return refreshPatentImportBatchStatus(batch.id)
+  }
+
+  await createPatentImportFileRecords(batch.id, pdfs, { deferProcessing: params.deferProcessing })
+  await (prisma as any).patentImportBatch.update({
+    where: { id: batch.id },
+    data: {
+      originalFileCount: { increment: pdfs.length },
       status: 'QUEUED',
       completedAt: null,
       errorMessage: null,
@@ -439,7 +565,7 @@ export async function cancelPatentImportBatch(batchId: string) {
 }
 
 function localPatentData(record: ExtractedPatentRecord, file: any) {
-  return {
+  return sanitizePostgresText({
     publicationNumber: record.publicationNumber,
     applicationNumberRaw: record.applicationNumberRaw,
     kind: record.kind,
@@ -467,7 +593,7 @@ function localPatentData(record: ExtractedPatentRecord, file: any) {
     extractionVersion: record.extractionVersion,
     extractionConfidence: record.extractionConfidence,
     extractionWarnings: record.extractionWarnings as any,
-  }
+  })
 }
 
 export function mergeLocalPatentDataForImport(record: ExtractedPatentRecord, file: any, existing?: any) {
@@ -480,7 +606,7 @@ export function mergeLocalPatentDataForImport(record: ExtractedPatentRecord, fil
     data.ragText = existing.ragText || data.ragText
     data.embeddingText = existing.embeddingText || data.embeddingText
   }
-  return data
+  return sanitizePostgresText(data)
 }
 
 function embeddingTextHash(text: string) {
@@ -1426,8 +1552,8 @@ export async function processPatentEmbeddingBatch(workerId = `patent-corpus-${pr
       return false
     })
 
-  for (let start = 0; start < valid.length; start += OPENAI_EMBEDDING_BATCH_SIZE) {
-    const chunk = valid.slice(start, start + OPENAI_EMBEDDING_BATCH_SIZE)
+  for (let start = 0; start < valid.length; start += PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE) {
+    const chunk = valid.slice(start, start + PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE)
     try {
       const vectors = await requestOpenAIEmbeddings(chunk.map((item: PatentEmbeddingWorkItem) => item.text))
       for (let index = 0; index < chunk.length; index += 1) {

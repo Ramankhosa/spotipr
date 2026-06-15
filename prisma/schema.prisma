@@ -1447,6 +1447,18 @@ enum PatentEmbeddingStatus {
   FAILED
 }
 
+enum IpIndiaJournalFileStatus {
+  DISCOVERED
+  QUEUED
+  DOWNLOADING
+  DOWNLOADED
+  IMPORTED
+  EXTRACTED
+  EMBEDDED
+  SKIPPED
+  FAILED
+}
+
 model LocalPatent {
   id                     Int       @id @default(autoincrement())
   publicationNumber      String    @unique
@@ -1513,6 +1525,7 @@ model PatentImportBatch {
 
   uploader User               @relation(fields: [uploadedBy], references: [id])
   files    PatentImportFile[]
+  ipIndiaJournalFiles IpIndiaJournalFile[]
 
   @@index([status, createdAt])
   @@index([uploadedBy, createdAt])
@@ -1551,6 +1564,7 @@ model PatentImportFile {
 
   batch PatentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   extractedPatents LocalPatent[]
+  ipIndiaJournalFile IpIndiaJournalFile?
 
   @@unique([batchId, fileHash])
   @@index([status, nextAttemptAt])
@@ -1582,6 +1596,66 @@ model LocalPatentEmbedding {
   @@index([status, nextAttemptAt])
   @@index([localPatentId])
   @@map("local_patent_embeddings")
+}
+
+model IpIndiaJournalFile {
+  id                  String                   @id @default(cuid())
+  journalKey          String                   @unique
+  portalFileName      String                   @unique
+  journalNo           String
+  publicationDateRaw  String?
+  availabilityDateRaw String?
+  publicationDate     DateTime?
+  availabilityDate    DateTime?
+  part                Int
+  label               String?
+  fileName            String
+  outputFile          String?
+  storedPath          String?
+  fileHash            String?
+  fileSizeBytes       Int?
+  downloadedBytes     Int?
+  expectedBytes       Int?
+  status              IpIndiaJournalFileStatus @default(DISCOVERED)
+  errorMessage        String?
+  attemptCount        Int                      @default(0)
+  nextAttemptAt       DateTime                 @default(now())
+  lockedBy            String?
+  lockedUntil         DateTime?
+  heartbeatAt         DateTime?
+  lastDiscoveredAt    DateTime?
+  downloadStartedAt   DateTime?
+  downloadedAt        DateTime?
+  importedAt          DateTime?
+  extractedAt         DateTime?
+  embeddedAt          DateTime?
+  patentImportBatchId String?
+  patentImportFileId  String?                  @unique
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+
+  patentImportBatch PatentImportBatch? @relation(fields: [patentImportBatchId], references: [id], onDelete: SetNull)
+  patentImportFile  PatentImportFile?  @relation(fields: [patentImportFileId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([availabilityDate, part])
+  @@index([journalNo])
+  @@index([fileHash])
+  @@index([patentImportBatchId])
+  @@map("ipindia_journal_files")
+}
+
+model IpIndiaJournalArchiveControl {
+  id              String   @id
+  downloadsPaused Boolean  @default(false)
+  pausedAt        DateTime?
+  pausedBy        String?
+  resumedAt       DateTime?
+  resumedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("ipindia_journal_archive_control")
 }
 
 // === NOVELTY ASSESSMENT MODELS ===

@@ -86,6 +86,7 @@ type RunnerState = {
   lastRunAt?: string | null
   lastStoppedAt?: string | null
   lastError?: string | null
+  processedJournalFiles?: number
   processedFiles: number
   processedEmbeddings: number
 }
@@ -121,6 +122,50 @@ type PatentCorpusUploadResponse = {
   limits?: { maxPdfsPerBatch?: number }
 }
 
+type IpIndiaJournalImportItem = {
+  id: string
+  fileName: string
+  status: string
+  journalNo: string
+  publicationDate: string
+  availabilityDate: string
+  part: number
+  label: string
+  sizeBytes?: number
+  downloadedBytes?: number
+  expectedBytes?: number
+  sha256?: string
+  importFileId?: string
+  existingBatchId?: string
+  error?: string
+}
+
+type IpIndiaJournalImportJob = {
+  id: string
+  status: string
+  createdAt: string
+  updatedAt: string
+  completedAt?: string | null
+  error?: string | null
+  batchId?: string | null
+  runner?: RunnerState
+  parsedRows: number
+  selectedRows: number
+  totalPdfCount: number
+  downloadedCount?: number
+  importedCount?: number
+  skippedExistingCount?: number
+  failedCount?: number
+  items: IpIndiaJournalImportItem[]
+}
+
+type IpIndiaJournalImportResponse = {
+  job?: IpIndiaJournalImportJob
+  jobs?: IpIndiaJournalImportJob[]
+  limits?: { maxPdfsPerBatch?: number }
+  error?: string
+}
+
 type UploadRequestError = Error & { status?: number }
 
 const statusClass: Record<string, string> = {
@@ -129,6 +174,13 @@ const statusClass: Record<string, string> = {
   COMPLETED: 'bg-emerald-100 text-emerald-700',
   COMPLETED_WITH_WARNINGS: 'bg-amber-100 text-amber-800',
   FAILED: 'bg-red-100 text-red-700',
+  FETCHING_LIST: 'bg-blue-100 text-blue-700',
+  DOWNLOADING: 'bg-blue-100 text-blue-700',
+  IMPORTING: 'bg-violet-100 text-violet-700',
+  PLANNED: 'bg-slate-100 text-slate-700',
+  DOWNLOADED: 'bg-cyan-100 text-cyan-800',
+  SKIPPED_EXISTING: 'bg-amber-100 text-amber-800',
+  IMPORTED: 'bg-emerald-100 text-emerald-700',
 }
 
 const breakdownLabels: Record<string, string> = {
@@ -185,6 +237,21 @@ function getTotalFileBytes(files: File[]) {
 function percentFromBytes(uploadedBytes: number, totalBytes: number) {
   if (totalBytes <= 0) return 100
   return Math.min(100, Math.max(0, Math.round((uploadedBytes / totalBytes) * 100)))
+}
+
+function isActiveJournalJob(job?: IpIndiaJournalImportJob | null) {
+  return Boolean(job && ['QUEUED', 'FETCHING_LIST', 'DOWNLOADING', 'IMPORTING'].includes(job.status))
+}
+
+function journalJobProgress(job: IpIndiaJournalImportJob) {
+  if (job.status === 'COMPLETED') return 100
+  if (job.status === 'FAILED') return job.totalPdfCount > 0 ? Math.round(((job.downloadedCount || 0) / job.totalPdfCount) * 100) : 100
+  if (job.status === 'FETCHING_LIST') return 10
+  if (job.status === 'IMPORTING') return 90
+  if (job.totalPdfCount <= 0) return 5
+  const finished = (job.importedCount || 0) + (job.skippedExistingCount || 0) + (job.failedCount || 0)
+  const downloaded = job.downloadedCount || 0
+  return Math.min(89, Math.max(10, Math.round(((downloaded + finished) / (job.totalPdfCount * 2)) * 80) + 10))
 }
 
 function parseUploadResponse(xhr: XMLHttpRequest) {
@@ -271,6 +338,9 @@ export default function PatentCorpusPage() {
   const [loadingFileDetail, setLoadingFileDetail] = useState(false)
   const [fileAction, setFileAction] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null)
+  const [journalDownloading, setJournalDownloading] = useState(false)
+  const [journalJobs, setJournalJobs] = useState<IpIndiaJournalImportJob[]>([])
+  const [activeJournalJobId, setActiveJournalJobId] = useState<string | null>(null)
 
   const isViewer = useMemo(() => {
     const roles = user?.roles || []
@@ -338,6 +408,10 @@ export default function PatentCorpusPage() {
     if (body.limits?.maxPdfsPerBatch) setMaxPdfsPerBatch(body.limits.maxPdfsPerBatch)
   }, [authHeaders, canAccess, user])
 
+  const fetchJournalJobs = useCallback(async (_jobId?: string | null): Promise<IpIndiaJournalImportJob[]> => {
+    return []
+  }, [])
+
   const fetchBatchDetail = useCallback(async (batchId: string) => {
     const response = await fetch(`/api/super-admin/patent-corpus/imports/${batchId}`, {
       headers: authHeaders(),
@@ -394,6 +468,42 @@ export default function PatentCorpusPage() {
     }, 5000)
     return () => window.clearInterval(interval)
   }, [canAccess, fetchBatchDetail, fetchBatches, fetchFileDetail, selectedBatch?.id, selectedBatch?.status, selectedFileDetail?.file?.id, selectedFileDetail?.file?.status, selectedFileDetail?.pagination.page, user])
+
+  useEffect(() => {
+    if (!user || !canAccess) return
+    const activeJob = journalJobs.find(job => job.id === activeJournalJobId) || journalJobs.find(isActiveJournalJob)
+    if (!activeJob) return
+
+    const refresh = async () => {
+      try {
+        const [job] = await fetchJournalJobs(activeJob.id)
+        if (!job) return
+        if (!isActiveJournalJob(job)) {
+          setJournalDownloading(false)
+          setActiveJournalJobId(null)
+          if (job.status === 'COMPLETED') {
+            if (job.batchId) {
+              await fetchBatches()
+              await fetchBatchDetail(job.batchId).catch(() => undefined)
+            }
+            setSuccess(
+              job.importedCount && job.importedCount > 0
+                ? `IPO journal download finished. Queued ${job.importedCount} PDF(s) for extraction and embeddings.`
+                : `IPO journal download finished. ${job.skippedExistingCount || 0} PDF(s) were already imported.`
+            )
+          } else if (job.status === 'FAILED') {
+            setError(job.error || 'IPO journal download failed.')
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to refresh IPO journal download status')
+      }
+    }
+
+    refresh()
+    const interval = window.setInterval(refresh, 2000)
+    return () => window.clearInterval(interval)
+  }, [activeJournalJobId, canAccess, fetchBatchDetail, fetchBatches, fetchJournalJobs, journalJobs, user])
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files?.length || isViewer) return
@@ -568,6 +678,11 @@ export default function PatentCorpusPage() {
     await fetchBatches()
   }
 
+  const downloadLatestIpIndiaJournal = async () => {
+    if (isViewer) return
+    window.location.href = '/super-admin/patent-corpus/ipindia'
+  }
+
   const downloadExport = async (format: 'jsonl' | 'json' | 'csv', batchId?: string, fileId?: string) => {
     const key = `${fileId || batchId || 'all'}-${format}`
     setDownloading(key)
@@ -597,6 +712,37 @@ export default function PatentCorpusPage() {
       URL.revokeObjectURL(url)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setDownloading(null)
+    }
+  }
+
+  const downloadStoredPdf = async (batchId: string, fileId: string, fallbackName = 'patent-journal.pdf') => {
+    const key = `${fileId}-pdf`
+    setDownloading(key)
+    setError(null)
+    try {
+      const response = await fetch(`/api/super-admin/patent-corpus/imports/${batchId}/files/${fileId}/stored-file`, {
+        headers: authHeaders(),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'PDF download failed')
+      }
+      const blob = await response.blob()
+      const disposition = response.headers.get('Content-Disposition') || ''
+      const match = disposition.match(/filename="([^"]+)"/)
+      const fileName = match?.[1] || fallbackName
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'PDF download failed')
     } finally {
       setDownloading(null)
     }
@@ -722,6 +868,9 @@ export default function PatentCorpusPage() {
     !selectedBatchCancelled &&
     (['QUEUED', 'PROCESSING'].includes(selectedBatch.status) || selectedBatchHasQueuedEmbeddings)
   )
+  const activeJournalJob = journalJobs.find(job => job.id === activeJournalJobId) || journalJobs.find(isActiveJournalJob)
+  const visibleJournalJob = activeJournalJob || journalJobs[0]
+  const hasActiveJournalJob = journalDownloading || Boolean(activeJournalJob)
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -744,13 +893,23 @@ export default function PatentCorpusPage() {
             {!isViewer && (
               <button
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
+                disabled={uploading || hasActiveJournalJob}
                 title={`Upload up to ${maxPdfsPerBatch} PDFs per batch, ${PATENT_CORPUS_MAX_FILE_MB}MB each`}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 <Upload className="h-4 w-4" />
                 {uploadProgress ? `Uploading ${uploadProgress.percent}%` : uploading ? 'Uploading' : 'Upload'}
               </button>
+            )}
+            {!isViewer && (
+              <a
+                href="/super-admin/patent-corpus/ipindia"
+                title="Open persistent IP India Patent Journal archive"
+                className="inline-flex items-center gap-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+              >
+                <Download className="h-4 w-4" />
+                IP India Archive
+              </a>
             )}
             <a
               href="/super-admin/patent-corpus/search"
@@ -829,11 +988,141 @@ export default function PatentCorpusPage() {
           </div>
         )}
 
+        {visibleJournalJob && (
+          <section className="mb-4 rounded-lg border border-blue-200 bg-white text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 px-4 py-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-semibold text-slate-900">IPO Journal Downloads</h2>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass[visibleJournalJob.status] || 'bg-slate-100 text-slate-700'}`}>
+                    {visibleJournalJob.status}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Job {visibleJournalJob.id.slice(0, 8)} · started {new Date(visibleJournalJob.createdAt).toLocaleString()}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {visibleJournalJob.batchId && (
+                  <button
+                    onClick={() => fetchBatchDetail(visibleJournalJob.batchId!).catch(err => setError(err instanceof Error ? err.message : 'Failed to load IPO journal batch'))}
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    View batch
+                  </button>
+                )}
+                <button
+                  onClick={() => fetchJournalJobs(visibleJournalJob.id).catch(err => setError(err instanceof Error ? err.message : 'Failed to refresh IPO journal download'))}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Refresh
+                </button>
+              </div>
+            </div>
+            <div className="border-b border-blue-100 p-4">
+              <div className="mb-2 flex items-center justify-between text-xs text-slate-600">
+                <span>
+                  {visibleJournalJob.status === 'FETCHING_LIST'
+                    ? 'Fetching journal list'
+                    : visibleJournalJob.status === 'IMPORTING'
+                      ? 'Passing PDFs to extractor'
+                      : `${visibleJournalJob.downloadedCount || 0} of ${visibleJournalJob.totalPdfCount || 0} PDF(s) downloaded`}
+                </span>
+                <span className="font-medium text-blue-700">{journalJobProgress(visibleJournalJob)}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-all duration-300"
+                  style={{ width: `${journalJobProgress(visibleJournalJob)}%` }}
+                />
+              </div>
+              <div className="mt-3 grid gap-3 text-xs sm:grid-cols-5">
+                <div><span className="text-slate-500">Rows parsed</span><div className="font-medium">{visibleJournalJob.parsedRows}</div></div>
+                <div><span className="text-slate-500">PDFs</span><div className="font-medium">{visibleJournalJob.totalPdfCount}</div></div>
+                <div><span className="text-slate-500">Imported</span><div className="font-medium">{visibleJournalJob.importedCount || 0}</div></div>
+                <div><span className="text-slate-500">Already present</span><div className="font-medium">{visibleJournalJob.skippedExistingCount || 0}</div></div>
+                <div><span className="text-slate-500">Failed</span><div className="font-medium">{visibleJournalJob.failedCount || 0}</div></div>
+              </div>
+              {visibleJournalJob.error && (
+                <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">{visibleJournalJob.error}</div>
+              )}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-2">PDF</th>
+                    <th className="px-4 py-2">Journal</th>
+                    <th className="px-4 py-2">Part</th>
+                    <th className="px-4 py-2">Size</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleJournalJob.items.map(item => {
+                    const itemBatchId = item.existingBatchId || (item.status === 'IMPORTED' ? visibleJournalJob.batchId || undefined : undefined)
+                    return (
+                      <tr key={item.id} className="border-t border-slate-100 align-top">
+                        <td className="max-w-lg px-4 py-2">
+                          <div className="truncate font-medium text-slate-800">{item.fileName}</div>
+                          {item.sha256 && <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500">{item.sha256}</div>}
+                          {item.error && <div className="mt-1 text-[11px] text-red-700">{item.error}</div>}
+                        </td>
+                        <td className="px-4 py-2">{item.journalNo}<div className="text-[11px] text-slate-500">{item.availabilityDate}</div></td>
+                        <td className="px-4 py-2">{item.part}</td>
+                        <td className="px-4 py-2">
+                          {item.sizeBytes
+                            ? formatFileSize(item.sizeBytes)
+                            : item.downloadedBytes
+                              ? `${formatFileSize(item.downloadedBytes)}${item.expectedBytes ? ` / ${formatFileSize(item.expectedBytes)}` : ''}`
+                              : '-'}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className={`rounded-full px-2 py-0.5 font-medium ${statusClass[item.status] || 'bg-slate-100 text-slate-700'}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          {item.importFileId && itemBatchId ? (
+                            <button
+                              onClick={() => downloadStoredPdf(itemBatchId, item.importFileId!, item.fileName)}
+                              disabled={downloading === `${item.importFileId}-pdf`}
+                              className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              PDF
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {!visibleJournalJob.items.length && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-6 text-center text-slate-500">
+                        Waiting for the journal list from IP India.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {runner && (
-          <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm sm:grid-cols-4">
+          <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm sm:grid-cols-5">
             <div>
               <span className="text-slate-500">Queue runner</span>
               <div className="font-medium">{runner.enabled ? (runner.active ? 'Running' : 'Idle') : 'Disabled'}</div>
+            </div>
+            <div>
+              <span className="text-slate-500">Journal PDFs</span>
+              <div className="font-medium">{runner.processedJournalFiles || 0}</div>
             </div>
             <div>
               <span className="text-slate-500">Files processed</span>
@@ -1047,6 +1336,15 @@ export default function PatentCorpusPage() {
                                 >
                                   <Eye className="h-3.5 w-3.5" />
                                   View
+                                </button>
+                                <button
+                                  title="Download stored PDF file"
+                                  onClick={() => selectedBatch && downloadStoredPdf(selectedBatch.id, file.id, file.originalName)}
+                                  disabled={file.storedFileExists === false || downloading === `${file.id}-pdf`}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                  PDF
                                 </button>
                                 <button
                                   title="Download PDF-level CSV extraction"

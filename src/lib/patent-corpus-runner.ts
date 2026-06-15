@@ -3,6 +3,10 @@ import {
   processPendingPatentEmbeddings,
   processPendingPatentImportFiles,
 } from '@/lib/patent-corpus-service'
+import {
+  getNextIpIndiaJournalQueueAttemptAt,
+  processPendingIpIndiaJournalArchive,
+} from '@/lib/ipindia-journal-archive-service'
 
 type PatentCorpusRunnerState = {
   enabled: boolean
@@ -13,6 +17,7 @@ type PatentCorpusRunnerState = {
   lastRunAt: string | null
   lastStoppedAt: string | null
   lastError: string | null
+  processedJournalFiles: number
   processedFiles: number
   processedEmbeddings: number
 }
@@ -29,7 +34,9 @@ function envNumber(name: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-const EMBEDDINGS_PER_TICK = Math.max(0, envNumber('PATENT_CORPUS_AUTO_EMBEDDING_BATCH', 4))
+const JOURNALS_PER_TICK = Math.max(0, envNumber('IPINDIA_JOURNAL_AUTO_WORKER_BATCH', 1))
+const EMBEDDING_CLAIM_MAX = Math.max(1, envNumber('PATENT_CORPUS_AUTO_EMBEDDING_CLAIM_MAX', 256))
+const EMBEDDINGS_PER_TICK = Math.max(0, Math.min(envNumber('PATENT_CORPUS_AUTO_EMBEDDING_BATCH', 32), EMBEDDING_CLAIM_MAX))
 
 function getMutableState(): PatentCorpusRunnerState {
   const globalStore = globalThis as any
@@ -43,6 +50,7 @@ function getMutableState(): PatentCorpusRunnerState {
       lastRunAt: null,
       lastStoppedAt: null,
       lastError: null,
+      processedJournalFiles: 0,
       processedFiles: 0,
       processedEmbeddings: 0,
     } satisfies PatentCorpusRunnerState
@@ -60,12 +68,18 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
 
   try {
     while (state.active) {
+      const processedJournals = JOURNALS_PER_TICK > 0
+        ? await processPendingIpIndiaJournalArchive(workerId, JOURNALS_PER_TICK)
+        : []
+      const journalCount = processedJournals.filter(Boolean).length
+      state.processedJournalFiles += journalCount
+
       const processedFiles = await processPendingPatentImportFiles(workerId, 1)
       const fileCount = processedFiles.filter(Boolean).length
       state.processedFiles += fileCount
 
       let embeddingCount = 0
-      if (fileCount === 0 && EMBEDDINGS_PER_TICK > 0 && process.env.OPENAI_API_KEY) {
+      if (EMBEDDINGS_PER_TICK > 0 && process.env.OPENAI_API_KEY) {
         const processedEmbeddings = await processPendingPatentEmbeddings(workerId, EMBEDDINGS_PER_TICK)
         embeddingCount = processedEmbeddings.filter(Boolean).length
         state.processedEmbeddings += embeddingCount
@@ -74,8 +88,14 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
       state.lastRunAt = new Date().toISOString()
       state.lastError = null
 
-      if (fileCount === 0 && embeddingCount === 0) {
-        const nextAttemptAt = await getNextPatentCorpusQueueAttemptAt()
+      if (journalCount === 0 && fileCount === 0 && embeddingCount === 0) {
+        const [nextPatentAttemptAt, nextJournalAttemptAt] = await Promise.all([
+          getNextPatentCorpusQueueAttemptAt(),
+          getNextIpIndiaJournalQueueAttemptAt(),
+        ])
+        const nextAttemptAt = [nextPatentAttemptAt, nextJournalAttemptAt]
+          .filter((value): value is Date => value instanceof Date)
+          .sort((a, b) => a.getTime() - b.getTime())[0] || null
         if (nextAttemptAt) {
           const delay = Math.min(MAX_WAKE_DELAY_MS, Math.max(1000, nextAttemptAt.getTime() - Date.now()))
           setTimeout(() => {

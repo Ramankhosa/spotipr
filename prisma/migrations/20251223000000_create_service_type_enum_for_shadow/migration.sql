@@ -1,0 +1,14 @@
+DO $$ BEGIN
+  CREATE TYPE "ServiceType" AS ENUM (
+    'PATENT_DRAFTING',
+    'NOVELTY_SEARCH',
+    'PRIOR_ART_SEARCH',
+    'IDEA_BANK',
+    'PERSONA_SYNC',
+    'DIAGRAM_GENERATION',
+    'PATENT_REVIEW',
+    'IDEATION'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;

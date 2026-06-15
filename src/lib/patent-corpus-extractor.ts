@@ -124,6 +124,7 @@ function compactWhitespace(value: string) {
 
 export function normalizePatentText(value: string) {
   return value
+    .replace(/\u0000/g, '')
     .replace(/\u00a0/g, ' ')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201c\u201d]/g, '"')
