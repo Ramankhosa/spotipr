@@ -25,6 +25,12 @@ function envBoolean(name: string, fallback: boolean) {
   return !['0', 'false', 'no', 'off'].includes(value.toLowerCase())
 }
 
+function realtimeEmbeddingsEnabled() {
+  const mode = String(process.env.PATENT_CORPUS_EMBEDDING_MODE || '').trim().toLowerCase()
+  if (mode) return !['batch', 'off', 'disabled', 'false', '0'].includes(mode)
+  return envBoolean('PATENT_CORPUS_REALTIME_EMBEDDINGS', true)
+}
+
 async function main() {
   const workerId = process.env.PATENT_CORPUS_WORKER_ID || `patent-corpus-worker-${process.pid}`
   const once = process.env.PATENT_CORPUS_WORKER_ONCE === 'true' || process.argv.includes('--once')
@@ -35,8 +41,19 @@ async function main() {
   const dailyLatestCheckIntervalMs = Math.max(60 * 60 * 1000, envNumber('IPINDIA_JOURNAL_DAILY_CHECK_INTERVAL_MS', 24 * 60 * 60 * 1000))
   const latestCheckLimit = Math.max(1, envNumber('IPINDIA_JOURNAL_LATEST_CHECK_LIMIT', 1))
   const embeddingClaimMax = Math.max(1, envNumber('PATENT_CORPUS_EMBEDDING_CLAIM_MAX', 512))
-  const embeddingBatch = Math.max(0, Math.min(envNumber('PATENT_CORPUS_EMBEDDING_BATCH', 128), embeddingClaimMax))
+  const realtimeEmbeddings = realtimeEmbeddingsEnabled()
+  const embeddingBatch = realtimeEmbeddings
+    ? Math.max(0, Math.min(envNumber('PATENT_CORPUS_EMBEDDING_BATCH', 128), embeddingClaimMax))
+    : 0
   let lastDailyLatestCheckAt = 0
+
+  console.log('[PatentCorpusWorker] Started:', {
+    workerId,
+    fileBatch,
+    journalBatch,
+    realtimeEmbeddings,
+    embeddingBatch,
+  })
 
   async function maybeQueueLatestJournals() {
     if (once || !dailyLatestCheck) return null

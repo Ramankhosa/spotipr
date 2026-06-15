@@ -44,6 +44,13 @@ const DEFAULT_BATCH_DIR = path.join(process.cwd(), 'scripts', '.patent-corpus-ba
 const OPENAI_BATCH_INPUT_LIMIT = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_INPUT_LIMIT || '50000') || 50000)
 const BATCH_LOCK_MS = Math.max(60 * 60 * 1000, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_LOCK_HOURS || '30') * 60 * 60 * 1000)
 const WATCH_INTERVAL_MS = Math.max(60_000, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_WATCH_INTERVAL_MS || '300000') || 300_000)
+const BATCH_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_MAX_ATTEMPTS || '10') || 10)
+
+function envBoolean(name: string, fallback: boolean) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return fallback
+  return !['0', 'false', 'no', 'off'].includes(value.toLowerCase())
+}
 
 function argValue(name: string) {
   const prefix = `${name}=`
@@ -142,16 +149,18 @@ async function downloadFileContent(fileId: string) {
   return response.text()
 }
 
-async function claimEmbeddingRows(limit: number, lockBy: string) {
+async function claimEmbeddingRows(limit: number, lockBy: string, retryFailed: boolean) {
   const now = new Date()
   const lockedUntil = new Date(now.getTime() + BATCH_LOCK_MS)
+  const claimableStatuses = retryFailed ? Prisma.sql`('QUEUED'::"PatentEmbeddingStatus", 'FAILED'::"PatentEmbeddingStatus")` : Prisma.sql`('QUEUED'::"PatentEmbeddingStatus")`
   const candidates = await prisma.$queryRaw<Array<{ id: string }>>`
     SELECT e."id"
     FROM "local_patent_embeddings" e
     JOIN "local_patents" p ON p."id" = e."localPatentId"
-    WHERE e."status" = 'QUEUED'::"PatentEmbeddingStatus"
+    WHERE e."status" IN ${claimableStatuses}
       AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
       AND e."nextAttemptAt" <= now()
+      AND e."attemptCount" < ${BATCH_MAX_ATTEMPTS}
       AND (
         e."lockedUntil" IS NULL
         OR e."lockedUntil" < now()
@@ -166,7 +175,7 @@ async function claimEmbeddingRows(limit: number, lockBy: string) {
   await (prisma as any).localPatentEmbedding.updateMany({
     where: {
       id: { in: ids },
-      status: 'QUEUED',
+      status: { in: retryFailed ? ['QUEUED', 'FAILED'] : ['QUEUED'] },
     },
     data: {
       status: 'PROCESSING',
@@ -192,14 +201,16 @@ async function claimEmbeddingRows(limit: number, lockBy: string) {
   `
 }
 
-async function countQueuedEmbeddingRows() {
+async function countQueuedEmbeddingRows(retryFailed: boolean) {
+  const claimableStatuses = retryFailed ? Prisma.sql`('QUEUED'::"PatentEmbeddingStatus", 'FAILED'::"PatentEmbeddingStatus")` : Prisma.sql`('QUEUED'::"PatentEmbeddingStatus")`
   const rows = await prisma.$queryRaw<Array<{ count: bigint | number | string }>>`
     SELECT COUNT(*) AS "count"
     FROM "local_patent_embeddings" e
     JOIN "local_patents" p ON p."id" = e."localPatentId"
-    WHERE e."status" = 'QUEUED'::"PatentEmbeddingStatus"
+    WHERE e."status" IN ${claimableStatuses}
       AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
       AND e."nextAttemptAt" <= now()
+      AND e."attemptCount" < ${BATCH_MAX_ATTEMPTS}
       AND (
         e."lockedUntil" IS NULL
         OR e."lockedUntil" < now()
@@ -251,11 +262,11 @@ async function createOpenAIBatch(inputFileId: string) {
   })
 }
 
-async function submitOneBatch(state: BatchState, stateFile: string, batchDir: string, limit: number) {
+async function submitOneBatch(state: BatchState, stateFile: string, batchDir: string, limit: number, retryFailed: boolean) {
   const localJobId = crypto.randomUUID()
   const localLockBy = `openai-batch:${localJobId}`
   const jsonlPath = path.join(batchDir, `${localJobId}.jsonl`)
-  const rows = await claimEmbeddingRows(limit, localLockBy)
+  const rows = await claimEmbeddingRows(limit, localLockBy, retryFailed)
   if (!rows.length) {
     console.log('[PatentCorpusBatchEmbed] No queued embedding rows found.')
     return null
@@ -460,6 +471,7 @@ async function submitAvailableBatches(params: {
   maxActiveJobs: number
   minRows: number
   enforceMinRows: boolean
+  retryFailed: boolean
 }) {
   let submitted = 0
   for (let index = 0; index < params.maxJobs; index += 1) {
@@ -473,7 +485,7 @@ async function submitAvailableBatches(params: {
     }
 
     if (params.enforceMinRows) {
-      const queuedRows = await countQueuedEmbeddingRows()
+      const queuedRows = await countQueuedEmbeddingRows(params.retryFailed)
       const activeImportWork = await hasActiveImportWork()
       if (queuedRows === 0) {
         console.log('[PatentCorpusBatchEmbed] No queued embedding rows found.')
@@ -488,7 +500,7 @@ async function submitAvailableBatches(params: {
       }
     }
 
-    const job = await submitOneBatch(params.state, params.stateFile, params.batchDir, params.limit)
+    const job = await submitOneBatch(params.state, params.stateFile, params.batchDir, params.limit, params.retryFailed)
     if (!job) break
     submitted += 1
   }
@@ -506,6 +518,7 @@ type BatchEmbedOptions = {
   shouldPoll: boolean
   watch: boolean
   watchIntervalMs: number
+  retryFailed: boolean
 }
 
 function parseOptions(): BatchEmbedOptions {
@@ -531,6 +544,7 @@ function parseOptions(): BatchEmbedOptions {
     shouldSubmit: hasArg('--watch') || hasArg('--auto') || hasArg('--submit') || hasArg('--run') || (!hasArg('--poll') && !hasArg('--process')),
     shouldPoll: hasArg('--watch') || hasArg('--auto') || hasArg('--poll') || hasArg('--process') || hasArg('--run') || (!hasArg('--submit')),
     watch: hasArg('--watch') || hasArg('--auto'),
+    retryFailed: hasArg('--retry-failed') || envBoolean('PATENT_CORPUS_OPENAI_BATCH_RETRY_FAILED', true),
     watchIntervalMs: Math.max(
       60_000,
       Number(argValue('--watch-interval-ms') || argValue('--interval-ms') || WATCH_INTERVAL_MS) || WATCH_INTERVAL_MS
@@ -551,6 +565,7 @@ async function runOnce(options: BatchEmbedOptions) {
       maxActiveJobs: options.maxActiveJobs,
       minRows: options.minRows,
       enforceMinRows: options.watch,
+      retryFailed: options.retryFailed,
     })
   }
 }
@@ -568,6 +583,7 @@ async function main() {
     minRows: options.minRows,
     maxJobsPerTick: options.maxJobs,
     maxActiveJobs: options.maxActiveJobs,
+    retryFailed: options.retryFailed,
     watchIntervalMs: options.watchIntervalMs,
     stateFile: options.stateFile,
   })

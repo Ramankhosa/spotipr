@@ -34,9 +34,24 @@ function envNumber(name: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function envBoolean(name: string, fallback: boolean) {
+  const value = process.env[name]
+  if (value === undefined || value === '') return fallback
+  return !['0', 'false', 'no', 'off'].includes(value.toLowerCase())
+}
+
+function realtimeEmbeddingsEnabled() {
+  const mode = String(process.env.PATENT_CORPUS_EMBEDDING_MODE || '').trim().toLowerCase()
+  if (mode) return !['batch', 'off', 'disabled', 'false', '0'].includes(mode)
+  return envBoolean('PATENT_CORPUS_REALTIME_EMBEDDINGS', true)
+}
+
 const JOURNALS_PER_TICK = Math.max(0, envNumber('IPINDIA_JOURNAL_AUTO_WORKER_BATCH', 1))
 const EMBEDDING_CLAIM_MAX = Math.max(1, envNumber('PATENT_CORPUS_AUTO_EMBEDDING_CLAIM_MAX', 256))
-const EMBEDDINGS_PER_TICK = Math.max(0, Math.min(envNumber('PATENT_CORPUS_AUTO_EMBEDDING_BATCH', 32), EMBEDDING_CLAIM_MAX))
+const REALTIME_EMBEDDINGS_ENABLED = realtimeEmbeddingsEnabled()
+const EMBEDDINGS_PER_TICK = REALTIME_EMBEDDINGS_ENABLED
+  ? Math.max(0, Math.min(envNumber('PATENT_CORPUS_AUTO_EMBEDDING_BATCH', 32), EMBEDDING_CLAIM_MAX))
+  : 0
 
 function getMutableState(): PatentCorpusRunnerState {
   const globalStore = globalThis as any
