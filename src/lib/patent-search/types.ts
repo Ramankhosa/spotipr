@@ -102,6 +102,7 @@ export interface PatentSearchRequest {
   sourceMode?: PatentSearchSourceMode
   llmExpansion?: boolean
   limit?: number
+  candidateLimit?: number
   offset?: number
   sort?: PatentSearchSort
   queryPlan?: Partial<PatentSearchQueryPlan>
@@ -120,6 +121,8 @@ export interface PatentResultScores {
   conceptVector?: number
   bestFeatureVector?: number
   featureCoverage?: number
+  rerank?: number
+  aiRelevance?: number
 }
 
 export interface NormalizedPatentResult {
@@ -155,6 +158,13 @@ export interface NormalizedPatentResult {
   matchReasons?: string[]
   retrievalMatches?: PatentRetrievalMatch[]
   retrievalScore?: number
+  rawRetrievalScore?: number
+  rerankDecision?: 'accept' | 'borderline' | 'reject' | string
+  rerankScore?: number
+  matched_features?: string[]
+  missing_features?: string[]
+  evidence_quality?: string
+  rerankReason?: string
   scores?: PatentResultScores
   relevanceScore?: number | null
   hybridScore?: number
@@ -185,9 +195,19 @@ export interface PatentSearchProviderStats {
   error?: string
 }
 
+export interface PatentSearchDiagnostics {
+  displayLimit: number
+  candidateLimit: number
+  resultCount: number
+  candidateResultCount: number
+  providerCandidateCount: number
+}
+
 export interface PatentSearchResponse {
   queryPlan: PatentSearchQueryPlan
   providerStats: PatentSearchProviderStats[]
   warnings: string[]
   results: NormalizedPatentResult[]
+  candidateResults?: NormalizedPatentResult[]
+  diagnostics?: PatentSearchDiagnostics
 }

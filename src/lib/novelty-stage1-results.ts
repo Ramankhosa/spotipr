@@ -1,4 +1,4 @@
-export const STAGE1_PAGE_SIZE = 20;
+export const STAGE1_PAGE_SIZE = 30;
 
 export type Stage1ResultSort = 'original' | 'score_desc' | 'newest' | 'oldest';
 

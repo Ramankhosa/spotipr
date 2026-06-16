@@ -83,6 +83,7 @@ export class PatentSearchOrchestrator {
 
   async search(input: PatentSearchRequest): Promise<PatentSearchResponse> {
     const limit = clampLimit(input.limit, 20, 100)
+    const candidateLimit = Math.max(limit, clampLimit(input.candidateLimit ?? limit, limit, 300))
     const queryPlan = await createPatentSearchQueryPlan(input)
     const providerIds = resolveProviderIds({
       providerIds: input.providerIds,
@@ -132,7 +133,8 @@ export class PatentSearchOrchestrator {
       try {
         const results = await provider.search({
           ...input,
-          limit,
+          limit: candidateLimit,
+          candidateLimit,
           queryPlan,
         })
         providerStats.push({
@@ -157,11 +159,22 @@ export class PatentSearchOrchestrator {
       }
     }))
 
+    const candidateResults = mergeProviderResults(providerResults, candidateLimit)
+    const results = candidateResults.slice(0, limit)
+
     return {
       queryPlan,
       providerStats: providerStats.sort((a, b) => String(a.providerId).localeCompare(String(b.providerId))),
       warnings: uniqueStrings(warnings),
-      results: mergeProviderResults(providerResults, limit),
+      results,
+      candidateResults,
+      diagnostics: {
+        displayLimit: limit,
+        candidateLimit,
+        resultCount: results.length,
+        candidateResultCount: candidateResults.length,
+        providerCandidateCount: providerResults.reduce((count, providerResult) => count + providerResult.results.length, 0),
+      },
     }
   }
 }

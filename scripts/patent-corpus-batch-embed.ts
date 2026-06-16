@@ -45,6 +45,10 @@ const OPENAI_BATCH_INPUT_LIMIT = Math.max(1, Number(process.env.PATENT_CORPUS_OP
 const BATCH_LOCK_MS = Math.max(60 * 60 * 1000, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_LOCK_HOURS || '30') * 60 * 60 * 1000)
 const WATCH_INTERVAL_MS = Math.max(60_000, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_WATCH_INTERVAL_MS || '300000') || 300_000)
 const BATCH_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_BATCH_MAX_ATTEMPTS || '10') || 10)
+const OPENAI_DOWNLOAD_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_FILE_DOWNLOAD_ATTEMPTS || '5') || 5)
+const OPENAI_ERROR_SNIPPET_CHARS = Math.max(500, Number(process.env.PATENT_CORPUS_OPENAI_ERROR_SNIPPET_CHARS || '2000') || 2000)
+const OPENAI_ACTIVE_BATCH_STATUSES = new Set(['validating', 'in_progress', 'finalizing', 'cancelling'])
+const OPENAI_LOCAL_TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'failed', 'expired', 'processed'])
 
 function envBoolean(name: string, fallback: boolean) {
   const value = process.env[name]
@@ -66,12 +70,76 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function jitter(ms: number) {
+  return Math.round(ms * (0.75 + Math.random() * 0.5))
+}
+
 function compactText(value: unknown) {
   return String(value || '').replace(/\s+/g, ' ').trim()
 }
 
+function truncateText(value: unknown, limit = OPENAI_ERROR_SNIPPET_CHARS) {
+  const text = String(value || '')
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]`
+}
+
+function errorMessage(error: unknown) {
+  return truncateText(error instanceof Error ? error.message : String(error))
+}
+
 function textForEmbedding(row: ClaimedEmbeddingRow) {
   return compactText(row.embeddingText || row.ragText || row.abstract || row.title)
+}
+
+function retryAfterMs(response: Response) {
+  const value = response.headers.get('retry-after')
+  if (!value) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const date = new Date(value)
+  if (!Number.isNaN(date.getTime())) return Math.max(0, date.getTime() - Date.now())
+  return null
+}
+
+function openAiBackoffMs(attemptIndex: number, response?: Response) {
+  const retryAfter = response ? retryAfterMs(response) : null
+  if (retryAfter !== null) return Math.min(retryAfter, 60_000)
+  return jitter(Math.min(60_000, 1000 * 2 ** attemptIndex))
+}
+
+function shouldRetryOpenAIStatus(status: number) {
+  return status === 408 || status === 409 || status === 429 || status >= 500
+}
+
+async function readResponseSnippet(response: Response, limit = OPENAI_ERROR_SNIPPET_CHARS) {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  try {
+    while (text.length < limit) {
+      const { done, value } = await reader.read()
+      if (done) break
+      text += decoder.decode(value, { stream: true })
+      if (text.length >= limit) {
+        await reader.cancel().catch(() => undefined)
+        break
+      }
+    }
+    text += decoder.decode()
+  } catch (error) {
+    return `${truncateText(text, limit)} [failed reading error body: ${errorMessage(error)}]`
+  }
+  return truncateText(text, limit)
+}
+
+function isOpenAIActiveJobStatus(status?: string) {
+  if (!status) return true
+  const normalized = status.toLowerCase()
+  if (OPENAI_ACTIVE_BATCH_STATUSES.has(normalized)) return true
+  if (OPENAI_LOCAL_TERMINAL_STATUSES.has(normalized)) return false
+  return true
 }
 
 async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
@@ -110,7 +178,7 @@ async function openaiJson<T>(pathName: string, init: RequestInit = {}): Promise<
     },
   })
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
+    const body = await readResponseSnippet(response)
     throw new Error(`OpenAI request failed: ${response.status} ${body}`)
   }
   return response.json() as Promise<T>
@@ -130,23 +198,74 @@ async function uploadBatchJsonl(jsonlPath: string) {
     body: formData,
   })
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
+    const body = await readResponseSnippet(response)
     throw new Error(`OpenAI file upload failed: ${response.status} ${body}`)
   }
   return response.json() as Promise<{ id: string }>
 }
 
-async function downloadFileContent(fileId: string) {
+async function fetchOpenAIFile(fileId: string) {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY is not configured.')
-  const response = await fetch(`https://api.openai.com/v1/files/${fileId}/content`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`OpenAI file download failed: ${response.status} ${body}`)
+
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt < OPENAI_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
+    let response: Response | null = null
+    try {
+      response = await fetch(`https://api.openai.com/v1/files/${fileId}/content`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      })
+      if (response.ok) return response
+
+      const body = await readResponseSnippet(response)
+      lastError = new Error(`OpenAI file download failed: ${response.status} ${body}`)
+      if (attempt < OPENAI_DOWNLOAD_MAX_ATTEMPTS - 1 && shouldRetryOpenAIStatus(response.status)) {
+        await sleep(openAiBackoffMs(attempt, response))
+        continue
+      }
+      throw lastError
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      if (attempt < OPENAI_DOWNLOAD_MAX_ATTEMPTS - 1 && (!response || shouldRetryOpenAIStatus(response.status))) {
+        await sleep(openAiBackoffMs(attempt, response || undefined))
+        continue
+      }
+      throw lastError
+    }
   }
-  return response.text()
+
+  throw lastError || new Error(`OpenAI file download failed for ${fileId}.`)
+}
+
+async function processOpenAIFileLines(fileId: string, onLine: (line: string, lineNumber: number) => Promise<void>) {
+  const response = await fetchOpenAIFile(fileId)
+  if (!response.body) throw new Error(`OpenAI file download failed for ${fileId}: empty response body.`)
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let lineNumber = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let newlineIndex = buffer.indexOf('\n')
+    while (newlineIndex !== -1) {
+      const line = buffer.slice(0, newlineIndex).replace(/\r$/, '')
+      buffer = buffer.slice(newlineIndex + 1)
+      lineNumber += 1
+      await onLine(line, lineNumber)
+      newlineIndex = buffer.indexOf('\n')
+    }
+  }
+
+  buffer += decoder.decode()
+  if (buffer.trim()) {
+    lineNumber += 1
+    await onLine(buffer.replace(/\r$/, ''), lineNumber)
+  }
 }
 
 async function claimEmbeddingRows(limit: number, lockBy: string, retryFailed: boolean) {
@@ -311,7 +430,7 @@ async function submitOneBatch(state: BatchState, stateFile: string, batchDir: st
     })
     return job
   } catch (error) {
-    await releaseLockedRows(localLockBy, error instanceof Error ? error.message : String(error))
+    await releaseLockedRows(localLockBy, errorMessage(error))
     throw error
   }
 }
@@ -350,23 +469,28 @@ async function requeueEmbedding(embeddingId: string, lockBy: string, errorMessag
   })
 }
 
-async function processBatchOutput(job: BatchJobState, content: string) {
+async function processBatchOutput(job: BatchJobState, fileId: string) {
   let completed = 0
   let failed = 0
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) continue
-    const item = JSON.parse(line)
+  await processOpenAIFileLines(fileId, async (line, lineNumber) => {
+    if (!line.trim()) return
+    let item: any
+    try {
+      item = JSON.parse(line)
+    } catch (error) {
+      throw new Error(`Invalid JSON in OpenAI batch output file ${fileId} at line ${lineNumber}: ${errorMessage(error)}`)
+    }
     const embeddingId = String(item.custom_id || '')
-    if (!embeddingId) continue
+    if (!embeddingId) return
     const embedding = item.response?.body?.data?.[0]?.embedding
     if (item.error || item.response?.status_code !== 200 || !Array.isArray(embedding)) {
       failed += 1
       await requeueEmbedding(embeddingId, job.lockBy, item.error?.message || `Batch line failed with status ${item.response?.status_code || 'unknown'}`)
-      continue
+      return
     }
     await setEmbeddingVector(embeddingId, embedding)
     completed += 1
-  }
+  })
   return {
     completed,
     failed,
@@ -374,31 +498,32 @@ async function processBatchOutput(job: BatchJobState, content: string) {
   }
 }
 
-async function processBatchErrorFile(job: BatchJobState, content: string) {
+async function processBatchErrorFile(job: BatchJobState, fileId: string) {
   let failed = 0
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) continue
-    const item = JSON.parse(line)
+  await processOpenAIFileLines(fileId, async (line, lineNumber) => {
+    if (!line.trim()) return
+    let item: any
+    try {
+      item = JSON.parse(line)
+    } catch (error) {
+      throw new Error(`Invalid JSON in OpenAI batch error file ${fileId} at line ${lineNumber}: ${errorMessage(error)}`)
+    }
     const embeddingId = String(item.custom_id || '')
-    if (!embeddingId) continue
+    if (!embeddingId) return
     failed += 1
     await requeueEmbedding(embeddingId, job.lockBy, item.error?.message || 'OpenAI batch line failed.')
-  }
+  })
   return failed
 }
 
 async function pollKnownJobs(state: BatchState, stateFile: string) {
-  const activeJobs = state.jobs.filter(job =>
-    job.openaiBatchId &&
-    !job.processedAt &&
-    !['cancelled', 'failed', 'expired'].includes(job.status)
-  )
-  if (!activeJobs.length) {
-    console.log('[PatentCorpusBatchEmbed] No active batch jobs in state.')
+  const pendingJobs = state.jobs.filter(job => job.openaiBatchId && !job.processedAt)
+  if (!pendingJobs.length) {
+    console.log('[PatentCorpusBatchEmbed] No pending batch jobs in state.')
     return
   }
 
-  for (const job of activeJobs) {
+  for (const job of pendingJobs) {
     try {
       const batch = await openaiJson<{
         id: string
@@ -414,10 +539,10 @@ async function pollKnownJobs(state: BatchState, stateFile: string) {
         let outputStats = { completed: 0, failed: 0, releasedMissing: 0 }
         let errorFailures = 0
         if (batch.output_file_id) {
-          outputStats = await processBatchOutput(job, await downloadFileContent(batch.output_file_id))
+          outputStats = await processBatchOutput(job, batch.output_file_id)
         }
         if (batch.error_file_id) {
-          errorFailures = await processBatchErrorFile(job, await downloadFileContent(batch.error_file_id))
+          errorFailures = await processBatchErrorFile(job, batch.error_file_id)
         }
         const released = await releaseLockedRows(job.lockBy, 'OpenAI batch completed without an output line for this embedding.')
         job.status = 'processed'
@@ -432,6 +557,8 @@ async function pollKnownJobs(state: BatchState, stateFile: string) {
       } else if (['cancelled', 'failed', 'expired'].includes(batch.status)) {
         const released = await releaseLockedRows(job.lockBy, `OpenAI batch ${batch.status}.`)
         job.lastError = `OpenAI batch ${batch.status}; released ${released.count || 0} rows.`
+        job.completedAt = new Date().toISOString()
+        job.processedAt = new Date().toISOString()
         console.warn('[PatentCorpusBatchEmbed] Batch ended without completion:', {
           openaiBatchId: job.openaiBatchId,
           status: batch.status,
@@ -444,7 +571,7 @@ async function pollKnownJobs(state: BatchState, stateFile: string) {
         })
       }
     } catch (error) {
-      job.lastError = error instanceof Error ? error.message : String(error)
+      job.lastError = errorMessage(error)
       console.error('[PatentCorpusBatchEmbed] Poll/process failed:', {
         openaiBatchId: job.openaiBatchId,
         error: job.lastError,
@@ -458,7 +585,7 @@ function isActiveJob(job: BatchJobState) {
   return Boolean(
     job.openaiBatchId &&
     !job.processedAt &&
-    !['cancelled', 'failed', 'expired', 'processed'].includes(job.status)
+    isOpenAIActiveJobStatus(job.status)
   )
 }
 

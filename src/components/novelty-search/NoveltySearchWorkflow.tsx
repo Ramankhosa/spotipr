@@ -646,7 +646,15 @@ export default function NoveltySearchWorkflow({
 
   const stage1Results = useMemo(() => {
     const root: any = searchState.results || {};
-    const results = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults;
+    const results =
+      root.retrievalCandidates ||
+      root.stage1?.retrievalCandidates ||
+      root.visiblePriorArtResults ||
+      root.stage1?.visiblePriorArtResults ||
+      root.priorArtResults ||
+      root.stage1?.priorArtResults ||
+      root.pqaiResults ||
+      root.stage1?.pqaiResults;
     return Array.isArray(results) ? results : [];
   }, [searchState.results]);
 
@@ -1041,7 +1049,7 @@ export default function NoveltySearchWorkflow({
     }
   };
 
-  const executeStage = async (stageNumber: string) => {
+  const executeStage = async (stageNumber: string, body?: Record<string, any>) => {
     setActiveExecutionStage(stageNumber);
     const searchId = latestSearchStateRef.current?.searchId || searchState.searchId;
     if (!searchId) {
@@ -1105,7 +1113,11 @@ export default function NoveltySearchWorkflow({
     try {
       let fetchOptions: RequestInit = {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          ...(body ? { 'Content-Type': 'application/json' } : {})
+        },
+        ...(body ? { body: JSON.stringify(body) } : {})
       };
 
       const response = await fetch(`/api/novelty-search/${searchId}/stage/${stageNumber}`, fetchOptions);
@@ -1127,10 +1139,10 @@ export default function NoveltySearchWorkflow({
       }
 
       if (stageNumber === '1') {
-        const items = Array.isArray(data?.results?.pqaiResults)
-          ? data.results.pqaiResults
-          : (Array.isArray(data?.results?.stage1?.pqaiResults) ? data.results.stage1.pqaiResults : []);
-        setStage1Message(`Search complete. Found ${items.length} patent${items.length !== 1 ? 's' : ''}.`);
+        const items = Array.isArray(data?.results?.retrievalCandidates)
+          ? data.results.retrievalCandidates
+          : (Array.isArray(data?.results?.stage1?.retrievalCandidates) ? data.results.stage1.retrievalCandidates : []);
+        setStage1Message(`Search complete. Retrieved ${items.length} candidate patent${items.length !== 1 ? 's' : ''} for AI relevance review.`);
         await new Promise(resolve => setTimeout(resolve, 1800));
       } else if (stageNumber === '1.5' || stageNumber === '2') {
         const aiRel = data?.results?.aiRelevance || data?.results?.stage1?.aiRelevance || {};
@@ -1321,6 +1333,10 @@ export default function NoveltySearchWorkflow({
   const handleRunCurrent = useCallback(async () => {
     await runStageForKey(selectedStageTab);
   }, [runStageForKey, selectedStageTab]);
+
+  const handleReviewMoreCandidates = async () => {
+    await executeStage('1.5', { appendNextBatch: true });
+  };
 
   // Stage 0 editing functions
   const startEditingStage0 = () => {
@@ -2392,11 +2408,19 @@ export default function NoveltySearchWorkflow({
   // Legacy Stage 1 Content, now shown inside Stage 2
   const renderStage1Content = () => {
     const root: any = (searchState.results as any) || {};
-    const rawPqaiResults = root.priorArtResults || root.stage1?.priorArtResults || root.pqaiResults || root.stage1?.pqaiResults || [];
-    const pqaiResults = Array.isArray(rawPqaiResults) ? rawPqaiResults : [];
+    const stage1Container: any = root.stage1 || root;
+    const aiRel = stage1Container.aiRelevance || root.aiRelevance || null;
+    const rawVisibleResults = stage1Container.visiblePriorArtResults || root.visiblePriorArtResults || stage1Container.pqaiResults || root.pqaiResults || [];
+    const pqaiResults = Array.isArray(rawVisibleResults) ? rawVisibleResults : [];
+    const retrievalCandidates = Array.isArray(stage1Container.retrievalCandidates)
+      ? stage1Container.retrievalCandidates
+      : (Array.isArray(root.retrievalCandidates) ? root.retrievalCandidates : []);
+    const candidateCount = retrievalCandidates.length;
     const hasStage1 = pqaiResults.length > 0;
+    const hasCandidatePool = candidateCount > 0;
+    const hasGate = Boolean(aiRel && (Array.isArray(aiRel.accepted) || Array.isArray(aiRel.borderline) || Array.isArray(aiRel.rejected)));
 
-    if (!hasStage1) {
+    if (!hasStage1 && !hasCandidatePool) {
       return (
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
@@ -2416,11 +2440,40 @@ export default function NoveltySearchWorkflow({
       );
     }
 
-    const highRelevanceCount = pqaiResults.filter((p: any) => getStage1ScorePercent(p) > 50).length;
+    if (!hasStage1) {
+      const message = hasGate
+        ? 'No high-confidence Indian prior art matches found in the current corpus.'
+        : 'Patent candidates were retrieved. Run AI relevance filtering to show only high-confidence matches.';
+      return (
+        <Card className="border border-slate-200 bg-white shadow-sm">
+          <CardContent className="py-16 text-center">
+            <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-slate-700 mb-2">No High-Confidence Matches</h3>
+            <p className="text-sm text-slate-500 max-w-md mx-auto">{message}</p>
+            <div className="mt-3 text-xs text-slate-500">
+              {candidateCount} hidden candidate{candidateCount !== 1 ? 's' : ''} retrieved for relevance review.
+            </div>
+            {hasGate && stage1Container.hasMoreCandidates && (
+              <Button onClick={handleReviewMoreCandidates} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
+                <Search className="w-4 h-4 mr-2" />
+                Review More Candidates
+              </Button>
+            )}
+            {!hasGate && canRunCurrent && selectedStageTab === '2' && (
+              <Button onClick={() => executeStage('1.5')} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
+                <Search className="w-4 h-4 mr-2" />
+                Run AI Relevance
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+
+    const highRelevanceCount = pqaiResults.filter((p: any) => getStage1ScorePercent(p) >= 70).length;
     const avgRelevance = pqaiResults.length > 0
       ? pqaiResults.reduce((avg: number, p: any) => avg + getStage1ScorePercent(p), 0) / pqaiResults.length
       : 0;
-    const stage1Container: any = root.stage1 || root;
     const providerStats = Array.isArray(stage1Container.providerStats) ? stage1Container.providerStats : [];
     const searchWarnings = Array.isArray(stage1Container.searchWarnings) ? stage1Container.searchWarnings : [];
     const queryPlan = stage1Container.queryPlan || null;
@@ -2444,8 +2497,8 @@ export default function NoveltySearchWorkflow({
                 <Search className="h-5 w-5 text-white" />
               </div>
               <div>
-                <CardTitle className="text-lg">Provider Search Results</CardTitle>
-                <CardDescription>Raw patent database matches before the AI relevance gate</CardDescription>
+                <CardTitle className="text-lg">High-Confidence Prior-Art Matches</CardTitle>
+                <CardDescription>AI-gated Indian corpus matches above the visible confidence threshold</CardDescription>
               </div>
             </div>
           </CardHeader>
@@ -2454,15 +2507,15 @@ export default function NoveltySearchWorkflow({
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-slate-900">{pqaiResults.length}</div>
-                <div className="text-xs font-medium text-slate-500">Patents Found</div>
+                <div className="text-xs font-medium text-slate-500">Visible Matches</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{highRelevanceCount}</div>
-                <div className="text-xs font-medium text-slate-500">Strong Provider Matches</div>
+                <div className="text-xs font-medium text-slate-500">At Least 70%</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-indigo-600">{avgRelevance.toFixed(0)}%</div>
-                <div className="text-xs font-medium text-slate-500">Avg Provider Score</div>
+                <div className="text-xs font-medium text-slate-500">Avg AI Score</div>
               </div>
             </div>
 
@@ -2520,7 +2573,7 @@ export default function NoveltySearchWorkflow({
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="h-4 w-4 text-slate-500" />
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">Filter returned patents</div>
+                    <div className="text-sm font-semibold text-slate-900">Filter high-confidence patents</div>
                     <div className="text-xs text-slate-500">
                       {filterOptions.providers.length} provider{filterOptions.providers.length !== 1 ? 's' : ''} and {filterOptions.matchedItems.length} matched item{filterOptions.matchedItems.length !== 1 ? 's' : ''}
                     </div>
@@ -2602,6 +2655,7 @@ export default function NoveltySearchWorkflow({
                     <option value="">All scores</option>
                     <option value="40">&gt;= 40%</option>
                     <option value="60">&gt;= 60%</option>
+                    <option value="70">&gt;= 70%</option>
                     <option value="80">&gt;= 80%</option>
                   </select>
                 </div>
@@ -2646,7 +2700,7 @@ export default function NoveltySearchWorkflow({
 
             <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm text-slate-600">
-                Showing {pagedResults.startIndex}-{pagedResults.endIndex} of {pagedResults.totalItems} filtered patents ({pqaiResults.length} total)
+                Showing {pagedResults.startIndex}-{pagedResults.endIndex} of {pagedResults.totalItems} filtered patents ({pqaiResults.length} visible, {candidateCount} reviewed/hidden candidates)
               </div>
               <div className="text-xs text-slate-500">
                 {STAGE1_PAGE_SIZE} patents per page
@@ -2755,6 +2809,18 @@ export default function NoveltySearchWorkflow({
                   Page {pagedResults.currentPage} of {pagedResults.totalPages}
                 </div>
                 <div className="flex items-center gap-2">
+                  {stage1Container.hasMoreCandidates && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg"
+                      onClick={handleReviewMoreCandidates}
+                      disabled={Boolean(activeExecutionStage) || searchState.isLoading}
+                    >
+                      Review More Candidates
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="outline"

@@ -101,7 +101,9 @@ export async function POST(
       result = await noveltySearchService.executeStage2(searchId, userId, requestHeaders);
       break;
     case '1.5':
-      result = await noveltySearchService.executeStage15(searchId, userId, requestHeaders);
+      result = await noveltySearchService.executeStage15(searchId, userId, requestHeaders, {
+        appendNextBatch: body?.appendNextBatch === true
+      });
       break;
     case '3':
       result = await noveltySearchService.executeStage3(searchId, userId, requestHeaders);

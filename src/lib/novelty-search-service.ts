@@ -7,6 +7,15 @@ import { ideaBankFunnel, isIdeaBankGenerationEnabled, type IdeaFunnelInput, type
 import { checkServiceQuota, trackServiceUsage } from './service-usage-tracker';
 import crypto from 'crypto';
 import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
+import {
+  DEFAULT_MINIMUM_VISIBLE_CONFIDENCE,
+  DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
+  buildVisiblePriorArtResults,
+  canonicalPriorArtNumber,
+  getPriorArtPublicationNumber,
+  normalizeRerankDecision,
+  type PriorArtGateRecord,
+} from '@/lib/novelty-prior-art-visibility';
 
 // LLM Prompt Specification for Novelty Search (enhanced versions)
 export const NOVELTY_SEARCH_NORMALIZATION_PROMPT = `
@@ -835,6 +844,10 @@ export interface NoveltySearchConfig {
     borderlineQuota: number; // number of borderline items to keep for diversity/recall
     maxCandidates: number;   // upper bound of PQAI items to gate
     batchSize: number;       // batch size for LLM calls
+    concurrency: number;     // number of Stage 1.5 batches to run at once
+    timeoutMs: number;       // total Stage 1.5 budget for one gate pass
+    visibleLimit: number;    // number of high-confidence patents shown by default
+    minimumVisibleConfidence: number;
   };
   stage0: {
     customPrompt?: string;
@@ -842,6 +855,7 @@ export interface NoveltySearchConfig {
   };
   stage1: {
     maxPatents: number;
+    candidateLimit: number;
     relevanceThresholds: { high: number; medium: number };
     customPrompt?: string;
   };
@@ -950,17 +964,6 @@ function buildIndianCorpusRetrievalQueries(searchQuery: string, inventionFeature
       label: feature,
     });
   });
-
-  for (let index = 0; index < Math.min(features.length - 1, 3); index += 1) {
-    addQuery({
-      id: `feature-pair-${index + 1}`,
-      type: 'feature_pair',
-      text: `${features[index]} ${features[index + 1]}`,
-      weight: 1.15,
-      featureIndexes: [index, index + 1],
-      label: `${features[index]} + ${features[index + 1]}`,
-    });
-  }
 
   return queries;
 }
@@ -1162,14 +1165,19 @@ export class NoveltySearchService extends BasePatentService {
     // New Stage 1.5 (AI Relevance) defaults
     stage15: {
       modelPreference: 'gemini-2.5-flash-lite',
-      thresholds: { high: 0.6, medium: 0.4 },
+      thresholds: { high: 0.7, medium: 0.45 },
       borderlineQuota: 5,
-      maxCandidates: 60,  // Match default Stage 1 retrieval count
-      batchSize: 12        // Increased from 8 to 12 to reduce number of LLM calls
+      maxCandidates: 120,
+      batchSize: 12,
+      concurrency: 3,
+      timeoutMs: 90000,
+      visibleLimit: DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
+      minimumVisibleConfidence: DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
     },
     stage0: {},
     stage1: {
-      maxPatents: 60, // Increased for more comprehensive analysis
+      maxPatents: DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
+      candidateLimit: 180,
       relevanceThresholds: { high: 0.8, medium: 0.5 }
     },
     stage35a: {
@@ -1489,7 +1497,12 @@ export class NoveltySearchService extends BasePatentService {
   /**
    * Execute Stage 1.5: AI Relevance Gate
    */
-  async executeStage15(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
+  async executeStage15(
+    searchId: string,
+    userId: string,
+    requestHeaders?: Record<string, string>,
+    options?: { appendNextBatch?: boolean }
+  ): Promise<NoveltySearchResponse> {
     try {
       const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
@@ -1497,12 +1510,13 @@ export class NoveltySearchService extends BasePatentService {
       const config = this.mergeConfig(searchRun.config as unknown as Partial<NoveltySearchConfig>);
       const stage0Data = searchRun.stage0Results as unknown as NormalizedIdea;
       const stage1Data = searchRun.stage1Results as unknown as any;
-      if (!stage1Data || !Array.isArray(stage1Data?.pqaiResults) || stage1Data.pqaiResults.length === 0) {
+      const candidatePool = this.getStage1CandidatePool(stage1Data);
+      if (!stage1Data || candidatePool.length === 0) {
         return { success: false, error: 'Stage 1 results are required before Stage 1.5' };
       }
 
-      if (stage1Data.aiRelevance?.byPn) {
-        const pqai = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
+      if (!options?.appendNextBatch && stage1Data.aiRelevance?.byPn) {
+        const pqai = candidatePool;
         const maxCandidates = config.stage15.maxCandidates;
         const candidates = pqai.slice(0, Math.min(maxCandidates, pqai.length));
         const cacheKey = this.createStage15CacheKey(stage0Data, candidates);
@@ -1517,11 +1531,11 @@ export class NoveltySearchService extends BasePatentService {
         }
       }
 
-      const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders);
+      const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders, options);
       if (!gate.success) return { success: false, error: gate.error || 'Stage 1.5 failed' };
 
       // Merge back into stage1Results and persist
-      const merged = { ...(stage1Data || {}), aiRelevance: gate.data };
+      const merged = this.mergeStage15Visibility(stage1Data, gate.data, config);
       await prisma.noveltySearchRun.update({ where: { id: searchId }, data: { stage1Results: merged as any } });
 
       return {
@@ -1572,7 +1586,7 @@ export class NoveltySearchService extends BasePatentService {
 
       // Determine next stage based on results
       const screeningData = stage1Result.data as any;
-      const hasResults = Array.isArray(screeningData?.pqaiResults) && screeningData.pqaiResults.length > 0;
+      const hasResults = this.getStage1CandidatePool(screeningData).length > 0;
       const nextStage: NoveltySearchStage = hasResults ? NoveltySearchStage.STAGE_3_5 : NoveltySearchStage.STAGE_4;
       const status: NoveltySearchStatus = NoveltySearchStatus.STAGE_1_COMPLETED;
 
@@ -1630,10 +1644,10 @@ export class NoveltySearchService extends BasePatentService {
         stage1Data = { ...(stage1Result.data || {}), stage0: stage0Data };
       }
 
-      if (Array.isArray(stage1Data?.pqaiResults) && stage1Data.pqaiResults.length > 0) {
+      if (this.getStage1CandidatePool(stage1Data).length > 0) {
         const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders);
         if (!gate.success) return { success: false, error: gate.error || 'AI relevance gate failed' };
-        stage1Data = { ...(stage1Data || {}), aiRelevance: gate.data };
+        stage1Data = this.mergeStage15Visibility(stage1Data, gate.data, config);
       } else {
         stage1Data = {
           ...(stage1Data || {}),
@@ -3047,22 +3061,33 @@ RESPONSE:`;
         llmExpansion: false,
         queryPlan: stage0QueryPlan,
         limit: config.stage1.maxPatents,
+        candidateLimit: config.stage1.candidateLimit,
         requestHeaders,
       });
 
-      const priorArtResults = searchResponse.results;
-      const pqaiResults = priorArtResults;
+      const retrievalCandidates = searchResponse.candidateResults || searchResponse.results;
+      const priorArtResults: any[] = [];
+      const pqaiResults: any[] = [];
 
       // Return raw PQAI results for UI
-      console.log(' Stage 1 completed successfully - found', priorArtResults.length, 'patents');
+      console.log(' Stage 1 completed successfully - found', retrievalCandidates.length, 'candidate patents');
       return {
         success: true,
         data: {
           priorArtResults,
           pqaiResults,
+          visiblePriorArtResults: [],
+          retrievalCandidates,
+          rawPriorArtResults: retrievalCandidates,
+          candidateResults: retrievalCandidates,
+          hiddenCandidateCount: retrievalCandidates.length,
+          hasMoreCandidates: retrievalCandidates.length > 0,
+          minimumVisibleConfidence: config.stage15.minimumVisibleConfidence,
+          nextBatchCursor: 0,
           queryPlan: searchResponse.queryPlan,
           providerStats: searchResponse.providerStats,
           searchWarnings: searchResponse.warnings,
+          searchDiagnostics: searchResponse.diagnostics,
           searchSource: {
             mode: sourceMode,
             providerIds: providerIds || searchResponse.providerStats.map(stat => stat.providerId),
@@ -3110,11 +3135,113 @@ RESPONSE:`;
     return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '');
   }
 
+  private getStage1CandidatePool(stage1Data: any): any[] {
+    const candidates = stage1Data?.retrievalCandidates || stage1Data?.candidateResults || stage1Data?.rawPriorArtResults;
+    if (Array.isArray(candidates)) return candidates;
+    const fallback = stage1Data?.priorArtResults || stage1Data?.pqaiResults;
+    return Array.isArray(fallback) ? fallback : [];
+  }
+
+  private buildStage15DecisionLists(
+    candidatePool: any[],
+    byPn: Record<string, PriorArtGateRecord | undefined>,
+    borderlineQuota: number
+  ) {
+    const accepted: string[] = [];
+    const borderline: string[] = [];
+    const rejected: string[] = [];
+    const seen = new Set<string>();
+
+    const add = (target: string[], pn: string) => {
+      const key = canonicalPriorArtNumber(pn) || pn.toUpperCase();
+      if (!key || seen.has(`${target === accepted ? 'a' : target === borderline ? 'b' : 'r'}:${key}`)) return;
+      seen.add(`${target === accepted ? 'a' : target === borderline ? 'b' : 'r'}:${key}`);
+      target.push(pn);
+    };
+
+    for (const candidate of candidatePool) {
+      const pn = getPriorArtPublicationNumber(candidate);
+      if (!pn) continue;
+      const gate = byPn[pn] || byPn[pn.toUpperCase()] || byPn[canonicalPriorArtNumber(pn)];
+      if (!gate) continue;
+      const decision = normalizeRerankDecision(gate.rerankDecision || gate.decision);
+      if (decision === 'accept') add(accepted, pn);
+      else if (decision === 'borderline') add(borderline, pn);
+      else add(rejected, pn);
+    }
+
+    return {
+      accepted,
+      borderline: borderline.slice(0, Math.max(0, borderlineQuota)),
+      rejected,
+    };
+  }
+
+  private fallbackCandidatesForGateFailure(candidatePool: any[], limit: number) {
+    return candidatePool.slice(0, Math.max(0, limit)).map(candidate => ({
+      ...candidate,
+      rerankDecision: 'reject',
+      rerankScore: 0,
+      evidence_quality: 'low',
+      rerankReason: 'AI relevance gate did not complete; candidate is retained only as a low-confidence fallback.',
+    }));
+  }
+
+  private mergeStage15Visibility(stage1Data: any, gateData: any, config: NoveltySearchConfig) {
+    const candidatePool = this.getStage1CandidatePool(stage1Data);
+    const visibleLimit = Math.max(
+      DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
+      Number(gateData?.visibleResultLimit || config.stage15.visibleLimit || DEFAULT_VISIBLE_PRIOR_ART_LIMIT)
+    );
+    const minimumVisibleConfidence = Number(
+      gateData?.minimumVisibleConfidence ||
+      config.stage15.minimumVisibleConfidence ||
+      DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
+    );
+    const visibility = buildVisiblePriorArtResults({
+      candidates: candidatePool,
+      byPn: gateData?.byPn || {},
+      minimumVisibleConfidence,
+      visibleLimit,
+    });
+    const fallbackCandidates = gateData?.gateStatus === 'failed'
+      ? this.fallbackCandidatesForGateFailure(candidatePool, config.stage15.visibleLimit || DEFAULT_VISIBLE_PRIOR_ART_LIMIT)
+      : [];
+
+    return {
+      ...(stage1Data || {}),
+      aiRelevance: {
+        ...(gateData || {}),
+        visiblePublicationNumbers: visibility.visiblePublicationNumbers,
+        visibleCount: visibility.visiblePriorArtResults.length,
+        highConfidenceCount: visibility.highConfidenceCount,
+        hiddenCandidateCount: visibility.hiddenCandidateCount,
+        minimumVisibleConfidence,
+      },
+      retrievalCandidates: candidatePool,
+      gatedCandidates: visibility.gatedCandidates,
+      visiblePriorArtResults: visibility.visiblePriorArtResults,
+      fallbackCandidates,
+      visibleResultLimit: visibleLimit,
+      minimumVisibleConfidence,
+      nextBatchCursor: gateData?.nextBatchCursor ?? gateData?.consideredCount ?? 0,
+      hasMoreCandidates: Boolean(gateData?.hasMoreCandidates),
+      hiddenCandidateCount: visibility.hiddenCandidateCount,
+      priorArtResults: visibility.visiblePriorArtResults,
+      pqaiResults: visibility.visiblePriorArtResults,
+    };
+  }
+
   private selectRelevantPatentsForDeepAnalysis(stage1Data: any, maxCandidates = 20): any[] {
-    const results = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
+    const visibleResults = Array.isArray(stage1Data?.visiblePriorArtResults)
+      ? stage1Data.visiblePriorArtResults
+      : (Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : []);
+    const gate = stage1Data?.aiRelevance;
+    const results = visibleResults.length
+      ? visibleResults
+      : (gate?.gateStatus === 'failed' && Array.isArray(stage1Data?.fallbackCandidates) ? stage1Data.fallbackCandidates : []);
     if (results.length === 0) return [];
 
-    const gate = stage1Data?.aiRelevance;
     const accepted = Array.isArray(gate?.accepted) ? gate.accepted : [];
     const borderline = Array.isArray(gate?.borderline) ? gate.borderline : [];
     const selected: any[] = [];
@@ -3337,19 +3464,55 @@ RESPONSE:`;
     stage0Data: NormalizedIdea,
     stage1Data: any,
     config: NoveltySearchConfig,
-    requestHeaders?: Record<string, string>
+    requestHeaders?: Record<string, string>,
+    options?: { appendNextBatch?: boolean }
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
-      const pqai = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
-      if (pqai.length === 0) return { success: true, data: { accepted: [], borderline: [], rejected: [], byPn: {} } };
+      const candidatePool = this.getStage1CandidatePool(stage1Data);
+      if (candidatePool.length === 0) return { success: true, data: { accepted: [], borderline: [], rejected: [], byPn: {} } };
 
-      const { thresholds, borderlineQuota, maxCandidates, modelPreference, batchSize } = config.stage15;
+      const {
+        thresholds,
+        borderlineQuota,
+        maxCandidates,
+        batchSize,
+        concurrency,
+        timeoutMs,
+        visibleLimit,
+        minimumVisibleConfidence,
+      } = config.stage15;
       const features = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
+      const existingGate = stage1Data?.aiRelevance || {};
+      const existingByPn: Record<string, PriorArtGateRecord | undefined> = options?.appendNextBatch
+        ? { ...(existingGate.byPn || {}) }
+        : {};
+      const previousVisibleLimit = Math.max(
+        DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
+        Number(stage1Data?.visibleResultLimit || existingGate.visibleResultLimit || visibleLimit || DEFAULT_VISIBLE_PRIOR_ART_LIMIT)
+      );
+      const targetVisibleLimit = options?.appendNextBatch
+        ? previousVisibleLimit + Math.max(1, visibleLimit || DEFAULT_VISIBLE_PRIOR_ART_LIMIT)
+        : previousVisibleLimit;
+      const highConfidenceAlreadyGated = buildVisiblePriorArtResults({
+        candidates: candidatePool,
+        byPn: existingByPn,
+        minimumVisibleConfidence,
+        visibleLimit: Number.MAX_SAFE_INTEGER,
+      }).highConfidenceCount;
 
-      // Use up to maxCandidates for gating
-      const candidates = pqai.slice(0, Math.min(maxCandidates, pqai.length));
+      let startIndex = options?.appendNextBatch
+        ? Math.max(0, Math.min(candidatePool.length, Number(existingGate.nextBatchCursor ?? existingGate.consideredCount ?? 0)))
+        : 0;
+
+      if (options?.appendNextBatch && highConfidenceAlreadyGated > previousVisibleLimit) {
+        startIndex = candidatePool.length;
+      }
+
+      const candidates = startIndex >= candidatePool.length
+        ? []
+        : candidatePool.slice(startIndex, Math.min(candidatePool.length, startIndex + Math.max(1, maxCandidates)));
       const cacheKey = this.createStage15CacheKey(stage0Data, candidates);
-      if (stage1Data.aiRelevance?.byPn && stage1Data.aiRelevance.cacheKey === cacheKey) {
+      if (!options?.appendNextBatch && stage1Data.aiRelevance?.byPn && stage1Data.aiRelevance.cacheKey === cacheKey) {
         return { success: true, data: stage1Data.aiRelevance };
       }
 
@@ -3375,6 +3538,7 @@ RESPONSE:`;
           '- borderline: related field or partial mechanism overlap worth bounded review.',
           '- reject: remote, generic keyword hit, or no concrete technical overlap.',
           '- Score means invention-level relevance, not mere feature overlap.',
+          `- Scores of ${minimumVisibleConfidence.toFixed(2)} or higher require concrete title/abstract evidence and non-low evidence quality.`,
           '- A patent may teach a useful component but should not receive a high score unless it shares the same technical purpose, same object/material/data target, or same operating mechanism.',
           '- If overlap is only a generic component, keep score below 0.40.',
           '- If overlap is one useful subsystem but not the same invention, normally keep score below 0.65.',
@@ -3394,16 +3558,45 @@ RESPONSE:`;
         ].join('\n');
       };
 
-      // Process in small batches; tolerate failures and fall back to PQAI scores
-      const byPn: Record<string, any> = {};
-      const accept: string[] = [];
-      const borderline: string[] = [];
-      const reject: string[] = [];
+      const byPn: Record<string, PriorArtGateRecord> = { ...(existingByPn as Record<string, PriorArtGateRecord>) };
+      const safeBatchSize = Math.max(1, Math.trunc(batchSize || 12));
+      const safeConcurrency = Math.max(1, Math.min(5, Math.trunc(concurrency || 3)));
+      const budgetMs = Math.max(10000, Math.trunc(timeoutMs || 90000));
+      const startedAt = Date.now();
+      const batches = this.createBatches(candidates, safeBatchSize);
+      let failedBatches = 0;
+      let processedBatches = 0;
+      let timedOut = false;
 
-      for (let i = 0; i < candidates.length; i += batchSize) {
-        const batch = candidates.slice(i, i + batchSize);
+      const markBatchRejected = (batch: any[], reason: string) => {
+        for (const item of batch) {
+          const pnRaw = getPriorArtPublicationNumber(item) || 'Unknown';
+          const record: PriorArtGateRecord = {
+            pn: pnRaw,
+            score: 0,
+            rerankScore: 0,
+            decision: 'reject',
+            matched_features: [],
+            missing_features: features,
+            reason,
+            evidence_quality: 'low',
+          };
+          byPn[String(pnRaw)] = record;
+          byPn[String(pnRaw).toUpperCase()] = record;
+          const canonical = canonicalPriorArtNumber(pnRaw);
+          if (canonical) byPn[canonical] = record;
+        }
+      };
 
-        // Run a single LLM call for the whole batch with timeout
+      const processBatch = async (batch: any[]) => {
+        const remainingMs = budgetMs - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+          timedOut = true;
+          failedBatches += 1;
+          markBatchRejected(batch, 'AI relevance gate timed out before this batch could be reviewed.');
+          return;
+        }
+
         let parsed: any[] | null = null;
         try {
           const prompt = buildBatchPrompt(batch);
@@ -3413,7 +3606,7 @@ RESPONSE:`;
               { taskCode: TaskCode.LLM5_NOVELTY_ASSESS, stageCode: 'NOVELTY_COMPARISON', prompt }
             ),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('LLM call timeout')), 30000) // 30 second timeout per batch
+              setTimeout(() => reject(new Error('LLM call timeout')), Math.min(30000, remainingMs))
             )
           ]) as { success: boolean; response?: any; error?: any };
           if (res.success && res.response?.output) {
@@ -3422,7 +3615,9 @@ RESPONSE:`;
           }
         } catch (error) {
           console.warn(`Stage 1.5 batch LLM call failed for batch of ${batch.length} items:`, error);
-          // If batching fails, will fall back to PQAI scores below
+          failedBatches += 1;
+          markBatchRejected(batch, 'AI relevance gate failed for this batch.');
+          return;
         }
 
         // Index parsed results by pn for quick lookup
@@ -3431,57 +3626,99 @@ RESPONSE:`;
           for (const r of parsed) {
             const k = String(r?.pn || '').toUpperCase();
             if (k) batchMap[k] = r;
+            const canonical = canonicalPriorArtNumber(r?.pn);
+            if (canonical) batchMap[canonical] = r;
           }
         }
 
-        // Consolidate each item using parsed array or fallback to PQAI score
+        // Consolidate each item. Missing or malformed LLM rows are rejected as low-confidence.
         for (const item of batch) {
-          const pnRaw = item.publication_number || item.publicationNumber || item.pn || item.id || 'Unknown';
+          const pnRaw = getPriorArtPublicationNumber(item) || 'Unknown';
           const k = String(pnRaw).toUpperCase();
-          const found = batchMap[k];
-          const pqaiScore = item.relevanceScore || item.score || item.relevance || 0;
-          const score = (found && typeof found.score === 'number') ? found.score : (typeof pqaiScore === 'number' ? pqaiScore : 0);
-          const decision = (found && typeof found.decision === 'string')
-            ? found.decision
-            : (score >= thresholds.high ? 'accept' : score >= thresholds.medium ? 'borderline' : 'reject');
-
-          byPn[String(pnRaw)] = {
+          const found = batchMap[k] || batchMap[canonicalPriorArtNumber(pnRaw)];
+          const score = (found && typeof found.score === 'number') ? Math.max(0, Math.min(1, found.score)) : 0;
+          const decision = found && typeof found.decision === 'string'
+            ? normalizeRerankDecision(found.decision)
+            : 'reject';
+          const record: PriorArtGateRecord = {
             pn: String(pnRaw),
             score,
+            rerankScore: score,
             decision,
             matched_features: Array.isArray(found?.matched_features) ? found.matched_features : [],
             missing_features: Array.isArray(found?.missing_features) ? found.missing_features : [],
-            reason: typeof found?.reason === 'string' ? found.reason : '',
-            evidence_quality: typeof found?.evidence_quality === 'string' ? found.evidence_quality : 'low'
+            reason: typeof found?.reason === 'string' ? found.reason : 'AI relevance gate did not return evidence for this candidate.',
+            evidence_quality: typeof found?.evidence_quality === 'string' ? found.evidence_quality : 'low',
           };
-          if (decision === 'accept') accept.push(String(pnRaw));
-          else if (decision === 'borderline') borderline.push(String(pnRaw));
-          else reject.push(String(pnRaw));
+          byPn[String(pnRaw)] = record;
+          byPn[k] = record;
+          const canonical = canonicalPriorArtNumber(pnRaw);
+          if (canonical) byPn[canonical] = record;
         }
+        processedBatches += 1;
+      };
+
+      for (let index = 0; index < batches.length; index += safeConcurrency) {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed >= budgetMs) {
+          timedOut = true;
+          for (const batch of batches.slice(index)) {
+            failedBatches += 1;
+            markBatchRejected(batch, 'AI relevance gate timed out before this batch could be reviewed.');
+          }
+          break;
+        }
+        await Promise.all(batches.slice(index, index + safeConcurrency).map(processBatch));
       }
 
-      // Trim borderline to quota but keep PQAI order
-      const canon = (x: any) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '');
-      const borderSet = new Set(borderline.map(p => canon(p)));
-      const trimmedBorderline: string[] = [];
-      for (const r of pqai) {
-        const pn = r.publication_number || r.publicationNumber || r.pn || r.id || '';
-        if (borderSet.has(canon(pn))) trimmedBorderline.push(String(pn));
-        if (trimmedBorderline.length >= borderlineQuota) break;
-      }
+      const nextBatchCursor = Math.min(candidatePool.length, startIndex + candidates.length);
+      const decisionLists = this.buildStage15DecisionLists(candidatePool, byPn, borderlineQuota);
+      const visibility = buildVisiblePriorArtResults({
+        candidates: candidatePool,
+        byPn,
+        minimumVisibleConfidence,
+        visibleLimit: targetVisibleLimit,
+      });
+      const totalBatches = batches.length;
+      const gateStatus = totalBatches > 0 && failedBatches >= totalBatches
+        ? 'failed'
+        : (failedBatches > 0 || timedOut ? 'partial' : 'complete');
+      const hasMoreCandidates = nextBatchCursor < candidatePool.length || visibility.highConfidenceCount > visibility.visiblePriorArtResults.length;
+      const consideredCount = new Set(
+        candidatePool
+          .map(candidate => getPriorArtPublicationNumber(candidate))
+          .filter(pn => {
+            const canonical = canonicalPriorArtNumber(pn);
+            return Boolean(byPn[pn] || byPn[pn.toUpperCase()] || (canonical && byPn[canonical]));
+          })
+          .map(pn => canonicalPriorArtNumber(pn) || pn.toUpperCase())
+      ).size;
 
       return {
         success: true,
         data: {
-          accepted: accept,
-          borderline: trimmedBorderline,
-          rejected: reject,
+          accepted: decisionLists.accepted,
+          borderline: decisionLists.borderline,
+          rejected: decisionLists.rejected,
           byPn,
           thresholds,
-          consideredCount: candidates.length,
-          totalCandidates: pqai.length,
-          boundedToTopCandidates: candidates.length < pqai.length,
-          cacheKey
+          consideredCount,
+          reviewedCandidateCount: nextBatchCursor,
+          totalCandidates: candidatePool.length,
+          boundedToTopCandidates: nextBatchCursor < candidatePool.length,
+          cacheKey,
+          gateStatus,
+          failedBatches,
+          processedBatches,
+          batchCount: totalBatches,
+          nextBatchCursor,
+          hasMoreCandidates,
+          minimumVisibleConfidence,
+          visibleResultLimit: targetVisibleLimit,
+          visiblePublicationNumbers: visibility.visiblePublicationNumbers,
+          visibleCount: visibility.visiblePriorArtResults.length,
+          highConfidenceCount: visibility.highConfidenceCount,
+          hiddenCandidateCount: visibility.hiddenCandidateCount,
         }
       };
     } catch (error) {
@@ -3499,11 +3736,20 @@ RESPONSE:`;
     try {
       console.log('ðŸ”¬ Starting Stage 3.5a: Feature Mapping Engine');
 
-      const pqaiResults = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
+      const visibleStage1Results = Array.isArray(stage1Data?.visiblePriorArtResults)
+        ? stage1Data.visiblePriorArtResults
+        : (Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : []);
+      const pqaiResults = visibleStage1Results.length
+        ? visibleStage1Results
+        : (
+          stage1Data?.aiRelevance?.gateStatus === 'failed' && Array.isArray(stage1Data?.fallbackCandidates)
+            ? stage1Data.fallbackCandidates
+            : []
+        );
       const inventionFeatures = stage0Data.inventionFeatures || [];
 
       if (pqaiResults.length === 0) {
-        return { success: false, error: 'No PQAI results available for feature mapping' };
+        return { success: false, error: 'No high-confidence prior art results available for feature mapping' };
       }
 
       if (inventionFeatures.length === 0) {

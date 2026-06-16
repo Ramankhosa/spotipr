@@ -225,8 +225,6 @@ interface IndianRankAccumulator {
   retrievalMatches: PatentRetrievalMatch[]
 }
 
-const FEATURE_VECTOR_MATCH_THRESHOLD = 0.42
-
 function clampScore(value: unknown) {
   const score = Number(value)
   if (!Number.isFinite(score)) return 0
@@ -238,9 +236,9 @@ function trimRetrievalText(value: unknown, maxWords = 36) {
 }
 
 function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number) {
-  if (query.type === 'concept' || query.type === 'semantic') return Math.max(40, Math.min(80, safeLimit * 2))
-  if (query.type === 'feature_pair') return 30
-  return 25
+  if (query.type === 'concept' || query.type === 'semantic') return Math.max(80, Math.min(200, safeLimit))
+  if (query.type === 'feature_pair') return 0
+  return Math.max(20, Math.min(35, Math.ceil(safeLimit / 6)))
 }
 
 function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['queryPlan'], title?: string): LocalRetrievalQuery[] {
@@ -248,6 +246,7 @@ function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['q
     .map((query, index): LocalRetrievalQuery | null => {
       const text = trimRetrievalText(query.text)
       if (!text) return null
+      if (query.type === 'feature_pair') return null
       return {
         ...query,
         id: query.id || `retrieval-${index + 1}`,
@@ -287,25 +286,10 @@ function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['q
       label: feature,
     })
   })
-  for (let index = 0; index < Math.min(features.length - 1, 3); index += 1) {
-    add({
-      id: `feature-pair-${index + 1}`,
-      type: 'feature_pair',
-      text: `${features[index]} ${features[index + 1]}`,
-      weight: 1.15,
-      featureIndexes: [index, index + 1],
-      label: `${features[index]} + ${features[index + 1]}`,
-    })
-  }
   if (!queries.length && semanticQuery) {
     add({ id: 'semantic', type: 'semantic', text: semanticQuery, weight: 1, label: 'Semantic query' })
   }
   return queries
-}
-
-function featureLabelsFor(query: LocalRetrievalQuery, inventionFeatures: string[]) {
-  const indexes = query.featureIndexes || (typeof query.featureIndex === 'number' ? [query.featureIndex] : [])
-  return uniqueStrings(indexes.map(index => inventionFeatures[index] || query.label || '').filter(Boolean))
 }
 
 function classificationMatches(result: NormalizedPatentResult, queryPlan: PatentProviderSearchRequest['queryPlan']) {
@@ -400,7 +384,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
-    const safeLimit = clampLimit(request.limit, 20, 100)
+    const safeLimit = clampLimit(request.limit, 20, 300)
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
     const filters = withExcludedTerms(queryPlan.fieldFilters || {}, queryPlan.excludedTerms || [])
@@ -419,7 +403,6 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       const result = rowToResult(row)
       const key = result.publicationNumber
       const existing = rows.get(key)
-      const featureLabels = retrievalQuery ? featureLabelsFor(retrievalQuery, queryPlan.inventionFeatures || []) : []
       const extraMatchedFields = retrievalQuery
         ? [retrievalQuery.type === 'concept' || retrievalQuery.type === 'semantic' ? 'semantic' : '']
         : []
@@ -470,22 +453,14 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         }
         if (retrievalQuery?.type === 'feature' || retrievalQuery?.type === 'feature_pair') {
           current.bestFeatureVectorScore = Math.max(current.bestFeatureVectorScore || 0, vectorScore)
-          if (vectorScore >= FEATURE_VECTOR_MATCH_THRESHOLD) {
-            featureLabels.forEach(feature => current.matchedFeatures.add(feature))
-          }
         }
         if (retrievalQuery && !current.retrievalMatches.some(match => match.queryId === retrievalQuery.id)) {
-          const attributedFeatureLabels = vectorScore >= FEATURE_VECTOR_MATCH_THRESHOLD ? featureLabels : []
           current.retrievalMatches.push({
             queryId: retrievalQuery.id,
             queryType: retrievalQuery.type,
             queryText: retrievalQuery.text,
             rank,
             score: vectorScore,
-            featureIndexes: attributedFeatureLabels.length
-              ? retrievalQuery.featureIndexes || (typeof retrievalQuery.featureIndex === 'number' ? [retrievalQuery.featureIndex] : undefined)
-              : undefined,
-            featureLabels: attributedFeatureLabels,
           })
         }
       }
@@ -543,6 +518,8 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           const retrievalQuery = retrievalQueries[queryIndex]
           const vector = vectors[queryIndex]
           if (!vector) continue
+          const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
+          if (limit <= 0) continue
           const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
           const vectorRows = await prisma.$queryRaw<any[]>`
             SELECT ${commonSelectSql(Prisma.sql`,
@@ -556,7 +533,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
               ...filterConditions,
             ])}
             ORDER BY e."embedding" <=> ${vectorLiteral}::vector
-            LIMIT ${retrievalQueryLimit(retrievalQuery, safeLimit)}
+            LIMIT ${limit}
           `
           vectorRows.forEach((row, index) => merge(row, 'vectorRank', index + 1, retrievalQuery.weight, retrievalQuery))
         }
@@ -605,7 +582,6 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }
     }
 
-    const featureCount = (queryPlan.inventionFeatures || []).length
     const sorted = Array.from(rows.values())
       .map(result => {
         const rank = ranks.get(result.publicationNumber) || {
@@ -618,20 +594,16 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           ...(result.matchedFeatures || []),
           ...Array.from(rank.matchedFeatures),
         ])
-        const featureCoverage = featureCount > 0
-          ? Math.min(1, matchedFeatures.length / Math.min(featureCount, 4))
-          : 0
-        const conceptSignal = rank.conceptVectorScore || rank.bestVectorScore || 0
+        const featureCoverage = 0
+        const conceptSignal = rank.conceptVectorScore || 0
         const featureSignal = rank.bestFeatureVectorScore || 0
         const classificationSignal = classMatches.length ? 1 : 0
         const retrievalScore =
-          (0.3 * conceptSignal) +
-          (0.3 * featureSignal) +
-          (0.15 * featureCoverage) +
-          (0.1 * (rank.textScore || 0)) +
-          (0.1 * (rank.titleScore || 0)) +
+          (0.45 * conceptSignal) +
+          (0.18 * (rank.textScore || 0)) +
+          (0.12 * (rank.titleScore || 0)) +
           (0.05 * classificationSignal) +
-          Math.min(0.05, rank.rrfScore)
+          Math.min(0.08, rank.rrfScore)
         const retrievalMatches = rank.retrievalMatches
           .sort((a, b) => (b.score || 0) - (a.score || 0))
           .slice(0, 8)
@@ -639,18 +611,17 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           ...result,
           hybridScore: Number(retrievalScore.toFixed(6)),
           retrievalScore: Number(retrievalScore.toFixed(6)),
+          rawRetrievalScore: Number(retrievalScore.toFixed(6)),
           vectorRank: rank.vectorRank,
           textRank: rank.textRank,
           matchedFields: uniqueStrings([
             ...(result.matchedFields || []),
-            matchedFeatures.length ? 'featureVector' : '',
             classMatches.length ? 'classification' : '',
           ]),
           matchedFeatures,
           retrievalMatches,
           matchReasons: uniqueStrings([
             ...(result.matchReasons || []),
-            matchedFeatures.length ? `Abstract embeddings matched ${matchedFeatures.length} invention feature(s)` : '',
             classMatches.length ? `Classification matched ${classMatches.join(', ')}` : '',
           ]),
           scores: {

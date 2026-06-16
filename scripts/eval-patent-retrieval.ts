@@ -89,9 +89,16 @@ function recallAt(results: string[], expected: Set<string>, k: number) {
   return hits / expected.size
 }
 
+function precisionAt(results: string[], expected: Set<string>, k: number) {
+  if (k <= 0) return 0
+  const top = results.slice(0, k)
+  if (!top.length) return 0
+  return top.filter(result => expected.has(result)).length / k
+}
+
 async function main() {
   const file = argValue('--file') || 'scripts/patent-retrieval-golden.json'
-  const limit = Math.max(25, Number(argValue('--limit') || '60') || 60)
+  const limit = Math.max(50, Number(argValue('--limit') || '60') || 60)
   const raw = await fs.readFile(file, 'utf8').catch(error => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(`Golden set not found: ${file}. Copy scripts/patent-retrieval-golden.example.json and add expected publication numbers.`)
@@ -107,6 +114,8 @@ async function main() {
   const rows = []
   let recall10 = 0
   let recall25 = 0
+  let recall50 = 0
+  let precision10 = 0
   let mrr = 0
 
   for (const testCase of cases) {
@@ -123,16 +132,23 @@ async function main() {
     const resultNumbers = results.map(result => compactPatentNumber(result.publicationNumber || result.pn)).filter(Boolean)
     const r10 = recallAt(resultNumbers, expected, 10)
     const r25 = recallAt(resultNumbers, expected, 25)
+    const r50 = recallAt(resultNumbers, expected, 50)
+    const p10 = precisionAt(resultNumbers, expected, 10)
     const rr = reciprocalRank(resultNumbers, expected)
     recall10 += r10
     recall25 += r25
+    recall50 += r50
+    precision10 += p10
     mrr += rr
     rows.push({
       id: testCase.id || testCase.query.slice(0, 60),
       expected: expected.size,
       recallAt10: Number(r10.toFixed(3)),
       recallAt25: Number(r25.toFixed(3)),
+      recallAt50: Number(r50.toFixed(3)),
+      precisionAt10: Number(p10.toFixed(3)),
       reciprocalRank: Number(rr.toFixed(3)),
+      topScore: Number((results[0]?.rawRetrievalScore || results[0]?.retrievalScore || results[0]?.relevanceScore || 0).toFixed(3)),
       top5: resultNumbers.slice(0, 5),
     })
   }
@@ -143,6 +159,8 @@ async function main() {
     cases: count,
     recallAt10: Number((recall10 / count).toFixed(3)),
     recallAt25: Number((recall25 / count).toFixed(3)),
+    recallAt50: Number((recall50 / count).toFixed(3)),
+    precisionAt10: Number((precision10 / count).toFixed(3)),
     mrr: Number((mrr / count).toFixed(3)),
   }, null, 2))
 }

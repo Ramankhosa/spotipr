@@ -15,6 +15,8 @@ export interface NoveltyAutoStageState {
   stage0Approved?: boolean;
   hasStage1Results?: boolean;
   hasStage15Results?: boolean;
+  hasVisiblePriorArtResults?: boolean;
+  stage15GateStatus?: string | null;
   hasStage35Results?: boolean;
   hasStage4Results?: boolean;
 }
@@ -26,7 +28,7 @@ export type NoveltyAutoStageAction =
 export const NOVELTY_AUTO_STOP_MESSAGES: Record<NoveltyAutoStopReason, string> = {
   START_REQUIRED: 'Start the novelty search from Idea Setup first.',
   NEEDS_STAGE0_APPROVAL: 'Approve the generated search terms before auto-running the remaining stages.',
-  NO_PATENTS: 'No patents were returned by the search. Adjust the search query or provider settings before continuing.',
+  NO_PATENTS: 'No high-confidence prior-art matches were found. Adjust the search query or review more candidates before continuing.',
   FAILED: 'Auto-run stopped because the novelty search is in a failed state.',
   COMPLETED: 'Novelty search is already complete.',
   NO_NEXT_STAGE: 'No remaining auto-run stage was found.',
@@ -49,6 +51,10 @@ export function getStage1ResultsFromNoveltyResults(results: any): any[] {
   const root = results || {};
   const stage1 = root.stage1 || {};
   const candidates =
+    root.retrievalCandidates ||
+    stage1.retrievalCandidates ||
+    root.visiblePriorArtResults ||
+    stage1.visiblePriorArtResults ||
     root.priorArtResults ||
     stage1.priorArtResults ||
     root.pqaiResults ||
@@ -117,12 +123,17 @@ export function buildNoveltyAutoStageState(
   stage0Approved: boolean
 ): NoveltyAutoStageState {
   const results = search.results;
+  const root = results || {};
+  const gate = root.aiRelevance || root.stage1?.aiRelevance;
+  const visiblePriorArt = root.visiblePriorArtResults || root.stage1?.visiblePriorArtResults || root.pqaiResults || root.stage1?.pqaiResults;
   const state: NoveltyAutoStageState = {
     status: search.status,
     currentStage: search.currentStage,
     stage0Approved,
     hasStage1Results: getStage1ResultsFromNoveltyResults(results).length > 0,
     hasStage15Results: hasStage15ResultsInNoveltyResults(results),
+    hasVisiblePriorArtResults: Array.isArray(visiblePriorArt) && visiblePriorArt.length > 0,
+    stage15GateStatus: typeof gate?.gateStatus === 'string' ? gate.gateStatus : null,
     hasStage35Results: hasStage35ResultsInNoveltyResults(results),
     hasStage4Results: hasStage4ResultsInNoveltyResults(results),
   };
@@ -150,6 +161,7 @@ export function getNextNoveltyAutoStage(state: NoveltyAutoStageState): NoveltyAu
   if (state.status === 'STAGE_0_COMPLETED') {
     if (!state.hasStage1Results) return { type: 'run', stageNumber: '1', visibleTab: '2' };
     if (!state.hasStage15Results) return { type: 'run', stageNumber: '1.5', visibleTab: '3' };
+    if (!state.hasVisiblePriorArtResults && state.stage15GateStatus !== 'failed') return { type: 'stop', reason: 'NO_PATENTS' };
     if (!state.hasStage35Results) return { type: 'run', stageNumber: '3', visibleTab: '4' };
     return { type: 'run', stageNumber: '4', visibleTab: '5' };
   }
@@ -160,6 +172,7 @@ export function getNextNoveltyAutoStage(state: NoveltyAutoStageState): NoveltyAu
     }
     if (!state.hasStage1Results) return { type: 'run', stageNumber: '1', visibleTab: '2' };
     if (!state.hasStage15Results) return { type: 'run', stageNumber: '1.5', visibleTab: '3' };
+    if (!state.hasVisiblePriorArtResults && state.stage15GateStatus !== 'failed') return { type: 'stop', reason: 'NO_PATENTS' };
     if (!state.hasStage35Results) return { type: 'run', stageNumber: '3', visibleTab: '4' };
     return { type: 'run', stageNumber: '4', visibleTab: '5' };
   }

@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
       sourceMode: body?.sourceMode,
       llmExpansion: body?.llmExpansion !== false,
       limit: Number(body?.limit || 20),
+      candidateLimit: body?.candidateLimit !== undefined ? Number(body.candidateLimit) : undefined,
       offset: Number(body?.offset || 0),
       sort: body?.sort,
       queryPlan: body?.queryPlan,
