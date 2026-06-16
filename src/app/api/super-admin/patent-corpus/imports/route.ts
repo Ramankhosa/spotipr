@@ -32,20 +32,22 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const take = Math.min(Math.max(Number(searchParams.get('take') || '25'), 1), 100)
 
-  const [batches, coverage] = await Promise.all([
-    (prisma as any).patentImportBatch.findMany({
-      orderBy: { createdAt: 'desc' },
-      take,
-      include: {
-        uploader: { select: { id: true, email: true, name: true } },
-        files: {
-          orderBy: { createdAt: 'asc' },
-          take: 5,
-        },
+  const batches = await (prisma as any).patentImportBatch.findMany({
+    orderBy: { createdAt: 'desc' },
+    take,
+    include: {
+      uploader: { select: { id: true, email: true, name: true } },
+      files: {
+        orderBy: { createdAt: 'asc' },
+        take: 5,
       },
-    }),
-    getPatentCorpusCoverageStats(),
-  ])
+    },
+  })
+
+  const coverage = await getPatentCorpusCoverageStats().catch(error => {
+    console.warn('[PatentCorpus] Coverage stats skipped:', error instanceof Error ? error.message : String(error))
+    return null
+  })
 
   return NextResponse.json({
     batches,

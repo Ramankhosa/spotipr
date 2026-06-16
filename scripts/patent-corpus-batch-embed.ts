@@ -2,14 +2,13 @@ import './load-env'
 import crypto from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
-import { Prisma, PrismaClient } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 import {
   PATENT_CORPUS_EMBEDDING_DIMENSIONS,
   PATENT_CORPUS_EMBEDDING_MODEL,
   setEmbeddingVector,
 } from '../src/lib/patent-corpus-service'
-
-const prisma = new PrismaClient()
+import { prisma } from '../src/lib/prisma'
 
 type BatchJobState = {
   localJobId: string

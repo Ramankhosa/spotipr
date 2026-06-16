@@ -31,6 +31,7 @@ const JOB_BACKOFF_BASE_MS = 2 * 60 * 1000
 const JOB_BACKOFF_MAX_MS = 60 * 60 * 1000
 const OPENAI_BACKOFF_BASE_MS = 750
 const OPENAI_BACKOFF_MAX_MS = 15_000
+const COVERAGE_STATS_CACHE_MS = Math.max(0, Number(process.env.PATENT_CORPUS_COVERAGE_STATS_CACHE_MS || '30000') || 30_000)
 
 type UploadInput = {
   fileName: string
@@ -72,6 +73,23 @@ type PatentEmbeddingWorkItem = {
   embedding: PatentEmbeddingJob
   text: string
 }
+
+type PatentCorpusCoverageStats = {
+  embeddingModel: string
+  totalPatents: number
+  titleOnlyPatents: number
+  enrichedPatents: number
+  patentsWithCompletedEmbedding: number
+  patentsWithoutCompletedEmbedding: number
+  patentsWithQueuedEmbedding: number
+  patentsWithFailedEmbedding: number
+  coveragePercent: number
+  embeddingCounts: Record<string, number>
+  importFileCounts: Record<string, number>
+}
+
+let coverageStatsCache: { value: PatentCorpusCoverageStats; expiresAt: number } | null = null
+let coverageStatsInFlight: Promise<PatentCorpusCoverageStats> | null = null
 
 function sha256(input: Buffer | string) {
   return crypto.createHash('sha256').update(input).digest('hex')
@@ -1113,54 +1131,52 @@ export async function requeuePatentImportFileEmbeddings(batchId: string, fileId:
   }
 }
 
-export async function getPatentCorpusCoverageStats() {
-  const [patentRows, embeddingRows, importRows] = await Promise.all([
-    prisma.$queryRaw<any[]>`
-      SELECT
-        COUNT(*)::int AS "totalPatents",
-        COUNT(*) FILTER (
-          WHERE p."abstract" IS NULL OR btrim(p."abstract") = ''
-        )::int AS "titleOnlyPatents",
-        COUNT(*) FILTER (
-          WHERE p."ipIndiaCapturedAt" IS NOT NULL
-        )::int AS "enrichedPatents",
-        COUNT(*) FILTER (
-          WHERE EXISTS (
-            SELECT 1 FROM "local_patent_embeddings" e
-            WHERE e."localPatentId" = p."id"
-              AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
-              AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
-              AND e."embedding" IS NOT NULL
-          )
-        )::int AS "patentsWithCompletedEmbedding",
-        COUNT(*) FILTER (
-          WHERE EXISTS (
-            SELECT 1 FROM "local_patent_embeddings" e
-            WHERE e."localPatentId" = p."id"
-              AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
-              AND e."status" = 'QUEUED'::"PatentEmbeddingStatus"
-          )
-        )::int AS "patentsWithQueuedEmbedding",
-        COUNT(*) FILTER (
-          WHERE EXISTS (
-            SELECT 1 FROM "local_patent_embeddings" e
-            WHERE e."localPatentId" = p."id"
-              AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
-              AND e."status" = 'FAILED'::"PatentEmbeddingStatus"
-          )
-        )::int AS "patentsWithFailedEmbedding"
-      FROM "local_patents" p
-    `,
-    (prisma as any).localPatentEmbedding.groupBy({
-      by: ['status'],
-      where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
-      _count: { id: true },
-    }).catch(() => []),
-    (prisma as any).patentImportFile.groupBy({
-      by: ['status'],
-      _count: { id: true },
-    }).catch(() => []),
-  ])
+async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageStats> {
+  const patentRows = await prisma.$queryRaw<any[]>`
+    SELECT
+      COUNT(*)::int AS "totalPatents",
+      COUNT(*) FILTER (
+        WHERE p."abstract" IS NULL OR btrim(p."abstract") = ''
+      )::int AS "titleOnlyPatents",
+      COUNT(*) FILTER (
+        WHERE p."ipIndiaCapturedAt" IS NOT NULL
+      )::int AS "enrichedPatents",
+      COUNT(*) FILTER (
+        WHERE EXISTS (
+          SELECT 1 FROM "local_patent_embeddings" e
+          WHERE e."localPatentId" = p."id"
+            AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+            AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
+            AND e."embedding" IS NOT NULL
+        )
+      )::int AS "patentsWithCompletedEmbedding",
+      COUNT(*) FILTER (
+        WHERE EXISTS (
+          SELECT 1 FROM "local_patent_embeddings" e
+          WHERE e."localPatentId" = p."id"
+            AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+            AND e."status" = 'QUEUED'::"PatentEmbeddingStatus"
+        )
+      )::int AS "patentsWithQueuedEmbedding",
+      COUNT(*) FILTER (
+        WHERE EXISTS (
+          SELECT 1 FROM "local_patent_embeddings" e
+          WHERE e."localPatentId" = p."id"
+            AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+            AND e."status" = 'FAILED'::"PatentEmbeddingStatus"
+        )
+      )::int AS "patentsWithFailedEmbedding"
+    FROM "local_patents" p
+  `
+  const embeddingRows = await (prisma as any).localPatentEmbedding.groupBy({
+    by: ['status'],
+    where: { model: PATENT_CORPUS_EMBEDDING_MODEL },
+    _count: { id: true },
+  }).catch(() => [])
+  const importRows = await (prisma as any).patentImportFile.groupBy({
+    by: ['status'],
+    _count: { id: true },
+  }).catch(() => [])
 
   const patentStats = patentRows[0] || {}
   const embeddingCounts = embeddingRows.reduce((acc: Record<string, number>, row: any) => {
@@ -1189,6 +1205,27 @@ export async function getPatentCorpusCoverageStats() {
     embeddingCounts,
     importFileCounts,
   }
+}
+
+export async function getPatentCorpusCoverageStats(options: { forceRefresh?: boolean } = {}) {
+  const now = Date.now()
+  if (!options.forceRefresh && coverageStatsCache && coverageStatsCache.expiresAt > now) {
+    return coverageStatsCache.value
+  }
+  if (!options.forceRefresh && coverageStatsInFlight) {
+    return coverageStatsInFlight
+  }
+
+  coverageStatsInFlight = computePatentCorpusCoverageStats()
+    .then(stats => {
+      coverageStatsCache = { value: stats, expiresAt: Date.now() + COVERAGE_STATS_CACHE_MS }
+      return stats
+    })
+    .finally(() => {
+      coverageStatsInFlight = null
+    })
+
+  return coverageStatsInFlight
 }
 
 export async function getNextPatentCorpusQueueAttemptAt() {
