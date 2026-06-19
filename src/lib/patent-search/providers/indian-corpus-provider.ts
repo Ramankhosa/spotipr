@@ -44,6 +44,10 @@ const METADATA_MATCH_CANDIDATE_CAP = Math.max(
   100,
   Number(process.env.PATENT_SEARCH_METADATA_CANDIDATE_CAP || '600') || 600
 )
+const SEARCH_STATEMENT_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.PATENT_SEARCH_STATEMENT_TIMEOUT_MS || '8000') || 8000
+)
 const TRIGRAM_SIMILARITY_THRESHOLD = String(
   Math.max(0.05, Math.min(0.5, Number(process.env.PATENT_SEARCH_TRIGRAM_THRESHOLD || '0.18') || 0.18))
 )
@@ -56,6 +60,13 @@ function corpusSourceCondition(corpusSource: string) {
     return Prisma.sql`p."corpusSources" @> ARRAY['pqai']::TEXT[]`
   }
   return Prisma.sql`p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]`
+}
+
+async function queryRawWithStatementTimeout<T = any>(query: Prisma.Sql, timeoutMs = SEARCH_STATEMENT_TIMEOUT_MS) {
+  return prisma.$transaction(async tx => {
+    await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`
+    return tx.$queryRaw<T[]>(query)
+  })
 }
 
 function validDate(value?: string) {
@@ -554,25 +565,24 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           Prisma.sql`${searchDocument} @@ q.query`,
           ...filterConditions,
         ]
-        const textRows = await prisma.$queryRaw<any[]>`
+        const textRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
           WITH q AS (
             SELECT websearch_to_tsquery('english'::regconfig, ${textQuery}) AS query
           ),
           hits AS MATERIALIZED (
-            SELECT
-              p."id",
-              ts_rank_cd(${searchDocument}, q.query) AS "textScore"
+            SELECT p."id"
             FROM "local_patents" p, q
             ${whereSql(conditions)}
-            ORDER BY "textScore" DESC
             LIMIT ${textCandidatePoolLimit}
           )
-          SELECT ${commonSelectSql(Prisma.sql`, hits."textScore" AS "textScore"`)}
+          SELECT ${commonSelectSql(Prisma.sql`,
+            ts_rank_cd(${searchDocumentExpression()}, q.query) AS "textScore"`)}
           FROM hits
           JOIN "local_patents" p ON p."id" = hits."id"
+          CROSS JOIN q
           ORDER BY "textScore" DESC
           LIMIT ${candidateLimit}
-        `
+        `)
         textRows.forEach((row, index) => merge(row, 'textRank', index + 1, 1))
       } catch (error) {
         console.warn('[IndianCorpusProvider] Full-text search skipped:', error)
@@ -586,25 +596,24 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           Prisma.sql`${metadataDocument} @@ mq.query`,
           ...filterConditions,
         ]
-        const metadataRows = await prisma.$queryRaw<any[]>`
+        const metadataRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
           WITH mq AS (
             SELECT websearch_to_tsquery('simple'::regconfig, ${textQuery}) AS query
           ),
           hits AS MATERIALIZED (
-            SELECT
-              p."id",
-              ts_rank_cd(${metadataDocument}, mq.query) AS "textScore"
+            SELECT p."id"
             FROM "local_patents" p, mq
             ${whereSql(metadataConditions)}
-            ORDER BY "textScore" DESC
             LIMIT ${metadataCandidatePoolLimit}
           )
-          SELECT ${commonSelectSql(Prisma.sql`, hits."textScore" AS "textScore"`)}
+          SELECT ${commonSelectSql(Prisma.sql`,
+            ts_rank_cd(${metadataDocumentExpression()}, mq.query) AS "textScore"`)}
           FROM hits
           JOIN "local_patents" p ON p."id" = hits."id"
+          CROSS JOIN mq
           ORDER BY "textScore" DESC
           LIMIT ${Math.min(candidateLimit, metadataCandidatePoolLimit)}
-        `
+        `)
         metadataRows.forEach((row, index) => merge(row, 'textRank', index + 1, 0.45))
       } catch (error) {
         console.warn('[IndianCorpusProvider] Metadata text search skipped:', error)
@@ -623,7 +632,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
           if (limit <= 0) continue
           const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
-          const vectorRows = await prisma.$queryRaw<any[]>`
+          const vectorRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
             SELECT ${commonSelectSql(Prisma.sql`,
               1 - (e."embedding" <=> ${vectorLiteral}::vector) AS "vectorScore"`)}
             FROM "local_patents" p
@@ -636,7 +645,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             ])}
             ORDER BY e."embedding" <=> ${vectorLiteral}::vector
             LIMIT ${limit}
-          `
+          `)
           vectorRows.forEach((row, index) => merge(row, 'vectorRank', index + 1, retrievalQuery.weight, retrievalQuery))
         }
       } catch (error) {
@@ -647,17 +656,12 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     if (textQuery.length >= 3 && !manualMode) {
       try {
         const trigramCandidatePoolLimit = Math.min(Math.max(candidateLimit * 6, 180), TRIGRAM_MATCH_CANDIDATE_CAP)
-        const titleRows = await prisma.$queryRaw<any[]>`
+        const titleRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
           WITH settings AS (
             SELECT set_config('pg_trgm.similarity_threshold', ${TRIGRAM_SIMILARITY_THRESHOLD}, true)
           ),
           hits AS MATERIALIZED (
-            SELECT
-              p."id",
-              GREATEST(
-                similarity(coalesce(p."title", ''), ${textQuery}),
-                similarity(coalesce(p."abstract", ''), ${textQuery}) * 0.75
-              ) AS "titleScore"
+            SELECT p."id"
             FROM "local_patents" p, settings
             ${whereSql([
               Prisma.sql`(
@@ -666,15 +670,18 @@ export class IndianCorpusProvider implements PatentSearchProvider {
               )`,
               ...filterConditions,
             ])}
-            ORDER BY "titleScore" DESC
             LIMIT ${trigramCandidatePoolLimit}
           )
-          SELECT ${commonSelectSql(Prisma.sql`, hits."titleScore" AS "titleScore"`)}
+          SELECT ${commonSelectSql(Prisma.sql`,
+            GREATEST(
+              similarity(coalesce(p."title", ''), ${textQuery}),
+              similarity(coalesce(p."abstract", ''), ${textQuery}) * 0.75
+            ) AS "titleScore"`)}
           FROM hits
           JOIN "local_patents" p ON p."id" = hits."id"
           ORDER BY "titleScore" DESC
           LIMIT ${candidateLimit}
-        `
+        `)
         titleRows.forEach((row, index) => merge(row, 'titleRank', index + 1, 0.85))
       } catch (error) {
         console.warn('[IndianCorpusProvider] Trigram search skipped:', error)
@@ -683,13 +690,13 @@ export class IndianCorpusProvider implements PatentSearchProvider {
 
     if (hasPositiveFieldFilters(filters)) {
       try {
-        const fieldRows = await prisma.$queryRaw<any[]>`
+        const fieldRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
           SELECT ${commonSelectSql(Prisma.sql`, 1.0 AS "fieldScore"`)}
           FROM "local_patents" p
           ${whereSql(filterConditions)}
           ORDER BY p."publicationDate" DESC NULLS LAST, p."id" DESC
           LIMIT ${candidateLimit}
-        `
+        `)
         fieldRows.forEach((row, index) => merge(row, 'fieldRank', index + 1, 1.1))
       } catch (error) {
         console.warn('[IndianCorpusProvider] Field search skipped:', error)
