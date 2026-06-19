@@ -1503,7 +1503,7 @@ model LocalPatent {
   sourceImportFile PatentImportFile? @relation(fields: [sourceImportFileId], references: [id], onDelete: SetNull)
 
   @@index([sourceImportFileId])
-  // Raw-SQL search indexes created by migrations 20260518143000 / 20260518170000 / 20260619120000.
+  // Raw-SQL search indexes created by migrations 20260518143000 / 20260518170000 / 20260619120000 / 20260619170000.
   // Modeled here so `prisma migrate dev` does not regenerate destructive DROP INDEX migrations.
   @@index([filingDate])
   @@index([publicationDate])

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import {
   PATENT_CORPUS_EMBEDDING_MODEL,
   PATENT_CORPUS_SOURCE_INDIAN,
+  PATENT_CORPUS_SOURCE_PQAI,
   requestOpenAIEmbeddings,
 } from '@/lib/patent-corpus-service'
 import type {
@@ -26,6 +27,36 @@ import {
   uniqueStrings,
   yearFromDate,
 } from '../utils'
+
+const MAX_VECTOR_RETRIEVAL_QUERIES = Math.max(
+  1,
+  Number(process.env.PATENT_SEARCH_MAX_VECTOR_QUERIES || '4') || 4
+)
+const TEXT_MATCH_CANDIDATE_CAP = Math.max(
+  200,
+  Number(process.env.PATENT_SEARCH_TEXT_CANDIDATE_CAP || '1600') || 1600
+)
+const TRIGRAM_MATCH_CANDIDATE_CAP = Math.max(
+  100,
+  Number(process.env.PATENT_SEARCH_TRIGRAM_CANDIDATE_CAP || '900') || 900
+)
+const METADATA_MATCH_CANDIDATE_CAP = Math.max(
+  100,
+  Number(process.env.PATENT_SEARCH_METADATA_CANDIDATE_CAP || '600') || 600
+)
+const TRIGRAM_SIMILARITY_THRESHOLD = String(
+  Math.max(0.05, Math.min(0.5, Number(process.env.PATENT_SEARCH_TRIGRAM_THRESHOLD || '0.18') || 0.18))
+)
+
+function corpusSourceCondition(corpusSource: string) {
+  if (corpusSource === PATENT_CORPUS_SOURCE_INDIAN) {
+    return Prisma.sql`p."corpusSources" @> ARRAY['indian-corpus']::TEXT[]`
+  }
+  if (corpusSource === PATENT_CORPUS_SOURCE_PQAI) {
+    return Prisma.sql`p."corpusSources" @> ARRAY['pqai']::TEXT[]`
+  }
+  return Prisma.sql`p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]`
+}
 
 function validDate(value?: string) {
   if (!value) return null
@@ -117,6 +148,25 @@ function titleExpression() {
 
 function abstractExpression() {
   return Prisma.sql`coalesce(p."abstract", '') || ' ' || coalesce(p."abstractOriginal", '')`
+}
+
+function searchDocumentExpression() {
+  return Prisma.sql`to_tsvector(
+    'english'::regconfig,
+    coalesce(p."ragText", '') || ' ' ||
+    coalesce(p."title", '') || ' ' ||
+    coalesce(p."abstract", '') || ' ' ||
+    coalesce(p."abstractOriginal", '')
+  )`
+}
+
+function metadataDocumentExpression() {
+  return Prisma.sql`to_tsvector(
+    'simple'::regconfig,
+    array_to_string(p."classifications", ' ') || ' ' ||
+    array_to_string(p."inventors", ' ') || ' ' ||
+    coalesce(p."applicants"::text, '')
+  )`
 }
 
 function patentTextExpression() {
@@ -241,9 +291,9 @@ function trimRetrievalText(value: unknown, maxWords = 36) {
 }
 
 function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number) {
-  if (query.type === 'concept' || query.type === 'semantic') return Math.max(80, Math.min(200, safeLimit))
+  if (query.type === 'concept' || query.type === 'semantic') return Math.max(60, Math.min(140, safeLimit))
   if (query.type === 'feature_pair') return 0
-  return Math.max(20, Math.min(35, Math.ceil(safeLimit / 6)))
+  return Math.max(12, Math.min(24, Math.ceil(safeLimit / 8)))
 }
 
 function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['queryPlan'], title?: string): LocalRetrievalQuery[] {
@@ -413,7 +463,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const queryPlan = request.queryPlan
     const filters = withExcludedTerms(queryPlan.fieldFilters || {}, queryPlan.excludedTerms || [])
     const filterConditions = [
-      Prisma.sql`p."corpusSources" @> ARRAY[${this.corpusSource}]::TEXT[]`,
+      corpusSourceCondition(this.corpusSource),
       ...buildWhereConditions(filters),
     ]
     const manualMode = request.searchMode === 'manual'
@@ -497,37 +547,29 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const textQuery = normalizeWhitespace(queryPlan.searchQuery || queryPlan.normalizedQuery)
     if (textQuery && !manualMode) {
       try {
+        const searchDocument = searchDocumentExpression()
+        const textCandidatePoolLimit = Math.min(Math.max(candidateLimit * 8, 300), TEXT_MATCH_CANDIDATE_CAP)
         const conditions = [
-          Prisma.sql`q.query @@ to_tsvector(
-            'english'::regconfig,
-            coalesce(p."ragText", '') || ' ' ||
-            coalesce(p."title", '') || ' ' ||
-            coalesce(p."abstract", '') || ' ' ||
-            coalesce(p."abstractOriginal", '') || ' ' ||
-            array_to_string(p."classifications", ' ') || ' ' ||
-            array_to_string(p."inventors", ' ') || ' ' ||
-            coalesce(p."applicants"::text, '')
-          )`,
+          Prisma.sql`numnode(q.query) > 0`,
+          Prisma.sql`${searchDocument} @@ q.query`,
           ...filterConditions,
         ]
         const textRows = await prisma.$queryRaw<any[]>`
-          WITH q AS (SELECT websearch_to_tsquery('english'::regconfig, ${textQuery}) AS query)
-          SELECT ${commonSelectSql(Prisma.sql`,
-            ts_rank_cd(
-              to_tsvector(
-                'english'::regconfig,
-                coalesce(p."ragText", '') || ' ' ||
-                coalesce(p."title", '') || ' ' ||
-                coalesce(p."abstract", '') || ' ' ||
-                coalesce(p."abstractOriginal", '') || ' ' ||
-                array_to_string(p."classifications", ' ') || ' ' ||
-                array_to_string(p."inventors", ' ') || ' ' ||
-                coalesce(p."applicants"::text, '')
-              ),
-              q.query
-            ) AS "textScore"`)}
-          FROM "local_patents" p, q
-          ${whereSql(conditions)}
+          WITH q AS (
+            SELECT websearch_to_tsquery('english'::regconfig, ${textQuery}) AS query
+          ),
+          hits AS MATERIALIZED (
+            SELECT
+              p."id",
+              ts_rank_cd(${searchDocument}, q.query) AS "textScore"
+            FROM "local_patents" p, q
+            ${whereSql(conditions)}
+            ORDER BY "textScore" DESC
+            LIMIT ${textCandidatePoolLimit}
+          )
+          SELECT ${commonSelectSql(Prisma.sql`, hits."textScore" AS "textScore"`)}
+          FROM hits
+          JOIN "local_patents" p ON p."id" = hits."id"
           ORDER BY "textScore" DESC
           LIMIT ${candidateLimit}
         `
@@ -535,14 +577,47 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       } catch (error) {
         console.warn('[IndianCorpusProvider] Full-text search skipped:', error)
       }
+
+      try {
+        const metadataDocument = metadataDocumentExpression()
+        const metadataCandidatePoolLimit = Math.min(Math.max(candidateLimit * 3, 120), METADATA_MATCH_CANDIDATE_CAP)
+        const metadataConditions = [
+          Prisma.sql`numnode(mq.query) > 0`,
+          Prisma.sql`${metadataDocument} @@ mq.query`,
+          ...filterConditions,
+        ]
+        const metadataRows = await prisma.$queryRaw<any[]>`
+          WITH mq AS (
+            SELECT websearch_to_tsquery('simple'::regconfig, ${textQuery}) AS query
+          ),
+          hits AS MATERIALIZED (
+            SELECT
+              p."id",
+              ts_rank_cd(${metadataDocument}, mq.query) AS "textScore"
+            FROM "local_patents" p, mq
+            ${whereSql(metadataConditions)}
+            ORDER BY "textScore" DESC
+            LIMIT ${metadataCandidatePoolLimit}
+          )
+          SELECT ${commonSelectSql(Prisma.sql`, hits."textScore" AS "textScore"`)}
+          FROM hits
+          JOIN "local_patents" p ON p."id" = hits."id"
+          ORDER BY "textScore" DESC
+          LIMIT ${Math.min(candidateLimit, metadataCandidatePoolLimit)}
+        `
+        metadataRows.forEach((row, index) => merge(row, 'textRank', index + 1, 0.45))
+      } catch (error) {
+        console.warn('[IndianCorpusProvider] Metadata text search skipped:', error)
+      }
     }
 
     const retrievalQueries = buildFallbackRetrievalQueries(queryPlan, request.title)
-    if (retrievalQueries.length > 0 && process.env.OPENAI_API_KEY && !manualMode) {
+    const vectorRetrievalQueries = retrievalQueries.slice(0, MAX_VECTOR_RETRIEVAL_QUERIES)
+    if (vectorRetrievalQueries.length > 0 && process.env.OPENAI_API_KEY && !manualMode) {
       try {
-        const vectors = await requestOpenAIEmbeddings(retrievalQueries.map(query => query.text))
-        for (let queryIndex = 0; queryIndex < retrievalQueries.length; queryIndex += 1) {
-          const retrievalQuery = retrievalQueries[queryIndex]
+        const vectors = await requestOpenAIEmbeddings(vectorRetrievalQueries.map(query => query.text))
+        for (let queryIndex = 0; queryIndex < vectorRetrievalQueries.length; queryIndex += 1) {
+          const retrievalQuery = vectorRetrievalQueries[queryIndex]
           const vector = vectors[queryIndex]
           if (!vector) continue
           const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
@@ -571,20 +646,32 @@ export class IndianCorpusProvider implements PatentSearchProvider {
 
     if (textQuery.length >= 3 && !manualMode) {
       try {
+        const trigramCandidatePoolLimit = Math.min(Math.max(candidateLimit * 6, 180), TRIGRAM_MATCH_CANDIDATE_CAP)
         const titleRows = await prisma.$queryRaw<any[]>`
-          SELECT ${commonSelectSql(Prisma.sql`,
-            GREATEST(
-              similarity(coalesce(p."title", ''), ${textQuery}),
-              similarity(coalesce(p."abstract", ''), ${textQuery}) * 0.75
-            ) AS "titleScore"`)}
-          FROM "local_patents" p
-          ${whereSql([
-            Prisma.sql`(
-              similarity(coalesce(p."title", ''), ${textQuery}) > 0.08
-              OR similarity(coalesce(p."abstract", ''), ${textQuery}) > 0.08
-            )`,
-            ...filterConditions,
-          ])}
+          WITH settings AS (
+            SELECT set_config('pg_trgm.similarity_threshold', ${TRIGRAM_SIMILARITY_THRESHOLD}, true)
+          ),
+          hits AS MATERIALIZED (
+            SELECT
+              p."id",
+              GREATEST(
+                similarity(coalesce(p."title", ''), ${textQuery}),
+                similarity(coalesce(p."abstract", ''), ${textQuery}) * 0.75
+              ) AS "titleScore"
+            FROM "local_patents" p, settings
+            ${whereSql([
+              Prisma.sql`(
+                p."title" % ${textQuery}
+                OR (p."abstract" IS NOT NULL AND p."abstract" % ${textQuery})
+              )`,
+              ...filterConditions,
+            ])}
+            ORDER BY "titleScore" DESC
+            LIMIT ${trigramCandidatePoolLimit}
+          )
+          SELECT ${commonSelectSql(Prisma.sql`, hits."titleScore" AS "titleScore"`)}
+          FROM hits
+          JOIN "local_patents" p ON p."id" = hits."id"
           ORDER BY "titleScore" DESC
           LIMIT ${candidateLimit}
         `
