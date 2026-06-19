@@ -1492,7 +1492,7 @@ model LocalPatent {
   extractionWarnings     Json?
   ipIndiaDetails         Json?
   ipIndiaCapturedAt      DateTime?
-  corpusSources          String[]  @default([])
+  corpusSources          String[]  @default(["indian-corpus"])
   pqaiDetails            Json?
   pqaiFetchedAt          DateTime?
 
@@ -1503,6 +1503,17 @@ model LocalPatent {
   sourceImportFile PatentImportFile? @relation(fields: [sourceImportFileId], references: [id], onDelete: SetNull)
 
   @@index([sourceImportFileId])
+  // Raw-SQL search indexes created by migrations 20260518143000 / 20260518170000 / 20260619120000.
+  // Modeled here so `prisma migrate dev` does not regenerate destructive DROP INDEX migrations.
+  @@index([filingDate])
+  @@index([publicationDate])
+  @@index([pqaiFetchedAt])
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_title_trgm_idx")
+  @@index([abstract(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_abstract_trgm_idx")
+  @@index([publicationNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_publicationNumber_trgm_idx")
+  @@index([applicationNumberRaw(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_applicationNumberRaw_trgm_idx")
+  @@index([classifications], type: Gin, map: "local_patents_classifications_gin_idx")
+  @@index([corpusSources], type: Gin, map: "local_patents_corpusSources_gin_idx")
   @@map("local_patents")
 }
 
@@ -1524,7 +1535,7 @@ model PatentImportBatch {
   startedAt          DateTime?
   completedAt        DateTime?
   createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  updatedAt          DateTime           @default(now()) @updatedAt
 
   uploader User               @relation(fields: [uploadedBy], references: [id])
   files    PatentImportFile[]
@@ -1563,7 +1574,7 @@ model PatentImportFile {
   startedAt            DateTime?
   completedAt          DateTime?
   createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  updatedAt            DateTime           @default(now()) @updatedAt
 
   batch PatentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   extractedPatents LocalPatent[]
@@ -1591,7 +1602,7 @@ model LocalPatentEmbedding {
   nextAttemptAt DateTime                     @default(now())
   embeddedAt    DateTime?
   createdAt     DateTime                     @default(now())
-  updatedAt     DateTime                     @updatedAt
+  updatedAt     DateTime                     @default(now()) @updatedAt
 
   patent LocalPatent @relation(fields: [localPatentId], references: [id], onDelete: Cascade)
 
@@ -1635,7 +1646,7 @@ model IpIndiaJournalFile {
   patentImportBatchId String?
   patentImportFileId  String?                  @unique
   createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt
+  updatedAt           DateTime                 @default(now()) @updatedAt
 
   patentImportBatch PatentImportBatch? @relation(fields: [patentImportBatchId], references: [id], onDelete: SetNull)
   patentImportFile  PatentImportFile?  @relation(fields: [patentImportFileId], references: [id], onDelete: SetNull)
@@ -1656,7 +1667,7 @@ model IpIndiaJournalArchiveControl {
   resumedAt       DateTime?
   resumedBy       String?
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime @default(now()) @updatedAt
 
   @@map("ipindia_journal_archive_control")
 }
