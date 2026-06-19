@@ -24,6 +24,94 @@ function normalizeCombinedScores(results: NormalizedPatentResult[]) {
   })
 }
 
+function hasMetadataValue(value: unknown) {
+  if (value === undefined || value === null) return false
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'string') return value.trim() !== '' && value.trim() !== '-'
+  return true
+}
+
+function firstMetadataValue(...values: unknown[]) {
+  return values.find(hasMetadataValue)
+}
+
+function mergeStringArrays(...values: unknown[]) {
+  return uniqueStrings(values.flatMap(value => {
+    if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean)
+    if (typeof value === 'string' && value.trim()) return [value.trim()]
+    return []
+  }))
+}
+
+function enrichPatentMetadata(
+  chosen: NormalizedPatentResult,
+  current: NormalizedPatentResult | undefined,
+  result: NormalizedPatentResult
+): NormalizedPatentResult {
+  const merged: any = { ...chosen }
+  const currentRaw: any = current?.raw || {}
+  const resultRaw: any = result.raw || {}
+  const chosenRaw: any = chosen.raw || {}
+
+  merged.applicationNumber = firstMetadataValue(
+    chosen.applicationNumber,
+    (chosen as any).application_number,
+    chosen.applicationNumberRaw,
+    current?.applicationNumber,
+    (current as any)?.application_number,
+    current?.applicationNumberRaw,
+    result.applicationNumber,
+    (result as any).application_number,
+    result.applicationNumberRaw,
+    chosenRaw.applicationNumberRaw,
+    currentRaw.applicationNumberRaw,
+    resultRaw.applicationNumberRaw
+  ) as any
+  merged.applicationNumberRaw = firstMetadataValue(
+    chosen.applicationNumberRaw,
+    current?.applicationNumberRaw,
+    result.applicationNumberRaw,
+    chosenRaw.applicationNumberRaw,
+    currentRaw.applicationNumberRaw,
+    resultRaw.applicationNumberRaw,
+    merged.applicationNumber
+  ) as any
+  merged.publicationDate = firstMetadataValue(
+    chosen.publicationDate,
+    (chosen as any).publication_date,
+    current?.publicationDate,
+    (current as any)?.publication_date,
+    result.publicationDate,
+    (result as any).publication_date,
+    chosenRaw.publicationDate,
+    currentRaw.publicationDate,
+    resultRaw.publicationDate
+  ) as any
+  merged.filingDate = firstMetadataValue(
+    chosen.filingDate,
+    (chosen as any).filing_date,
+    (chosen as any).applicationDate,
+    current?.filingDate,
+    (current as any)?.filing_date,
+    (current as any)?.applicationDate,
+    result.filingDate,
+    (result as any).filing_date,
+    (result as any).applicationDate,
+    chosenRaw.filingDate,
+    currentRaw.filingDate,
+    resultRaw.filingDate
+  ) as any
+  merged.abstract = firstMetadataValue(chosen.abstract, current?.abstract, result.abstract, chosenRaw.abstract, currentRaw.abstract, resultRaw.abstract) as any
+  merged.snippet = firstMetadataValue(chosen.snippet, current?.snippet, result.snippet, merged.abstract) as any
+  merged.applicants = firstMetadataValue(chosen.applicants, (chosen as any).assignees, current?.applicants, (current as any)?.assignees, result.applicants, (result as any).assignees, chosenRaw.applicants, currentRaw.applicants, resultRaw.applicants) as any
+  ;(merged as any).assignees = firstMetadataValue((chosen as any).assignees, chosen.applicants, (current as any)?.assignees, current?.applicants, (result as any).assignees, result.applicants, chosenRaw.applicants, currentRaw.applicants, resultRaw.applicants)
+  merged.inventors = mergeStringArrays(chosen.inventors, current?.inventors, result.inventors, chosenRaw.inventors, currentRaw.inventors, resultRaw.inventors)
+  merged.classifications = mergeStringArrays(chosen.classifications, current?.classifications, result.classifications, chosenRaw.classifications, currentRaw.classifications, resultRaw.classifications)
+  merged.cpcCodes = mergeStringArrays(chosen.cpcCodes, current?.cpcCodes, result.cpcCodes, (chosen as any).cpc_codes, (current as any)?.cpc_codes, (result as any).cpc_codes)
+  merged.ipcCodes = mergeStringArrays(chosen.ipcCodes, current?.ipcCodes, result.ipcCodes, (chosen as any).ipc_codes, (current as any)?.ipc_codes, (result as any).ipc_codes)
+  return merged as NormalizedPatentResult
+}
+
 function mergeProviderResults(providerResults: Array<{ providerId: PatentSearchProviderId; results: NormalizedPatentResult[] }>, limit: number) {
   const byKey = new Map<string, NormalizedPatentResult>()
   const scores = new Map<string, number>()
@@ -42,11 +130,12 @@ function mergeProviderResults(providerResults: Array<{ providerId: PatentSearchP
       const chosen = !current || (result.relevanceScore || 0) > (current.relevanceScore || 0)
         ? result
         : current
+      const enriched = enrichPatentMetadata(chosen, current, result)
 
       byKey.set(key, {
-        ...chosen,
+        ...enriched,
         sourceProviders,
-        sourceProvider: chosen.sourceProvider,
+        sourceProvider: enriched.sourceProvider,
         matchedFields: uniqueStrings([...(current?.matchedFields || []), ...(result.matchedFields || [])]),
         matchedFeatures: uniqueStrings([...(current?.matchedFeatures || []), ...(result.matchedFeatures || [])]),
         matchReasons: uniqueStrings([...(current?.matchReasons || []), ...(result.matchReasons || [])]),
@@ -58,7 +147,7 @@ function mergeProviderResults(providerResults: Array<{ providerId: PatentSearchP
         scores: {
           ...(current?.scores || {}),
           ...(result.scores || {}),
-          ...(chosen.scores || {}),
+          ...(enriched.scores || {}),
         },
       })
       scores.set(key, currentScore + providerScore)

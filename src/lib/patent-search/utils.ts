@@ -40,7 +40,8 @@ export function compactPatentKey(value: unknown) {
 export function canonicalPublicationNumber(value: unknown) {
   const compact = compactPatentKey(value)
   if (!compact) return ''
-  return compact.replace(/[A-Z]\d*$/, '')
+  const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/)
+  return kindSuffixMatch?.[1] || compact
 }
 
 export function canonicalPatentResultKey(result: NormalizedPatentResult) {

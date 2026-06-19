@@ -301,16 +301,19 @@ async function seedProductionPlans() {
       // FREE_PLAN - Very limited concurrency for basic users
       { planCode: 'FREE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: 1 },
       { planCode: 'FREE_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 1 },
+      { planCode: 'FREE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 1 },
 
       // PRO_PLAN - Moderate concurrency for professional users
       { planCode: 'PRO_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: 3 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 2 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 2 },
+      { planCode: 'PRO_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 3 },
 
       // ENTERPRISE_PLAN - High concurrency for enterprise users
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: 5 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 3 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 3 },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 4 },
     ]
 
     for (const rule of concurrencyRules) {
@@ -324,7 +327,7 @@ async function seedProductionPlans() {
         where: {
           scope_scopeId_taskCode_key: {
             scope: 'plan',
-            scopeId: plan.id,
+            scopeId: plan.code,
             taskCode: rule.taskCode,
             key: 'concurrency_limit'
           }
@@ -332,7 +335,7 @@ async function seedProductionPlans() {
         update: { value: rule.concurrencyLimit },
         create: {
           scope: 'plan',
-          scopeId: plan.id,
+          scopeId: plan.code,
           taskCode: rule.taskCode,
           key: 'concurrency_limit',
           value: rule.concurrencyLimit

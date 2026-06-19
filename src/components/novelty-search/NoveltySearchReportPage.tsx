@@ -16,7 +16,7 @@ export default function NoveltySearchReportPage({
   title = 'Novelty Search Report'
 }: NoveltySearchReportPageProps) {
   const reportRef = useRef<HTMLDivElement>(null);
-  const [isPrinting, setIsPrinting] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [patentDetailsMap, setPatentDetailsMap] = useState<Record<string, any>>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
 
@@ -163,14 +163,30 @@ export default function NoveltySearchReportPage({
   const concludingRemarks = stage4?.concluding_remarks || {};
   const structuredNarrative = stage4?.structured_narrative || {};
 
-  // Handle print
-  const handlePrint = () => {
-    setIsPrinting(true);
-    window.print();
-    setTimeout(() => setIsPrinting(false), 1000);
+  const handleProfessionalPdf = async () => {
+    try {
+      setIsDownloadingPdf(true);
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
+      const response = await fetch(`/api/novelty-search/${searchId}/attorney-report/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      if (!response.ok) throw new Error('Failed to generate professional PDF');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `patentnest-novelty-report-${searchId.slice(0, 8)}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Professional PDF download failed:', error);
+      alert('Professional PDF generation failed. Please try again.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
-
-  // Handle PDF download using html2canvas + jsPDF
 
   // Helper to get status for feature matrix
   const getStatus = (pm: any, feature: string): 'P' | 'Pt' | 'A' | '-' => {
@@ -196,11 +212,11 @@ export default function NoveltySearchReportPage({
 
   return (
     <>
-      {/* Print/Download Controls - Hidden when printing */}
+      {/* Download Controls */}
       <div className="no-print mb-4 flex gap-2 justify-end">
-        <Button onClick={handlePrint} variant="outline" disabled={isPrinting}>
+        <Button onClick={handleProfessionalPdf} disabled={isDownloadingPdf}>
           <Printer className="mr-2 h-4 w-4" />
-          Print / Save as PDF
+          {isDownloadingPdf ? 'Preparing PDF...' : 'Download Professional Report'}
         </Button>
       </div>
 
@@ -225,7 +241,8 @@ export default function NoveltySearchReportPage({
               page-break-before: always;
             }
             .avoid-break {
-              page-break-inside: avoid;
+              page-break-inside: auto;
+              break-inside: auto;
             }
             .section-header {
               page-break-after: avoid;
@@ -418,8 +435,8 @@ export default function NoveltySearchReportPage({
 
                 return (
                   <div key={idx} className="mb-6 avoid-break">
-                    {/* Red Header */}
-                    <div className="bg-red-600 text-white p-2 mb-2">
+                    {/* Reference Header */}
+                    <div className="bg-blue-700 text-white p-2 mb-2">
                       <h3 className="font-bold text-sm">Reference {idx + 1}: {pnFull}</h3>
                     </div>
 
@@ -463,8 +480,8 @@ export default function NoveltySearchReportPage({
                           <td className="border border-gray-300 p-2">{title}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top">Abstract:</td>
-                          <td className="border border-gray-300 p-2 text-justify">{abstract || 'No abstract available.'}</td>
+                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top">Technical Disclosure:</td>
+                          <td className="border border-gray-300 p-2 text-justify">{abstract || 'Citation disclosure reviewed.'}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -492,7 +509,7 @@ export default function NoveltySearchReportPage({
                 <span>Partial</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="w-4 h-4 bg-red-500 text-white text-center leading-4 font-bold">A</span>
+                <span className="w-4 h-4 bg-slate-500 text-white text-center leading-4 font-bold">A</span>
                 <span>Absent</span>
               </div>
             </div>
@@ -530,7 +547,7 @@ export default function NoveltySearchReportPage({
                             const bgColor = 
                               status === 'P' ? 'bg-green-500' :
                               status === 'Pt' ? 'bg-yellow-500' :
-                              status === 'A' ? 'bg-red-500' : 'bg-gray-200';
+                              status === 'A' ? 'bg-slate-500' : 'bg-gray-200';
                             const textColor = (status === 'A' || status === 'P') ? 'text-white' : 'text-black';
                             
                             return (
@@ -1018,9 +1035,9 @@ export default function NoveltySearchReportPage({
                           <td className="border border-gray-300 p-2 align-top" colSpan={2}>{title}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Abstract:</td>
+                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Technical Disclosure:</td>
                           <td className="border border-gray-300 p-2 text-justify align-top" colSpan={2}>
-                            {abstract && abstract.length > 0 ? abstract : 'No abstract available.'}
+                            {abstract && abstract.length > 0 ? abstract : 'Citation disclosure reviewed.'}
                           </td>
                         </tr>
                         {/* Feature Coverage Summary */}
@@ -1038,7 +1055,7 @@ export default function NoveltySearchReportPage({
                                   <span className="text-xs">Partial: {partialCount} feature{partialCount !== 1 ? 's' : ''}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                  <span className="w-3 h-3 bg-red-500 inline-block"></span>
+                                  <span className="w-3 h-3 bg-slate-500 inline-block"></span>
                                   <span className="text-xs">Absent: {absentCount} feature{absentCount !== 1 ? 's' : ''}</span>
                                 </div>
                                 <div className="mt-2 pt-2 border-t border-gray-200">
@@ -1251,5 +1268,3 @@ export default function NoveltySearchReportPage({
     </>
   );
 }
-
-

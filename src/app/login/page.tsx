@@ -16,6 +16,12 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const { login } = useAuth()
   const router = useRouter()
+  const redirectParam = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('redirect')
+    : null
+  const redirectAfterLogin = redirectParam?.startsWith('/') && !redirectParam.startsWith('//')
+    ? redirectParam
+    : '/dashboard'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -36,8 +42,8 @@ export default function LoginPage() {
       // Login succeeded but payment is required - redirect to payment page
       router.push(result.redirectUrl || '/pricing?checkout=true')
     } else if (result.success) {
-      // Full login success - redirect to dashboard
-      router.push('/dashboard')
+      // Full login success - redirect to requested local page or dashboard
+      router.push(redirectAfterLogin)
     } else {
       // Check if this is a social login account
       if (result.error?.includes('uses') && result.error?.includes('login')) {

@@ -5,12 +5,13 @@ import { unstable_noStore as noStore } from 'next/cache'
 import { useAuth } from '@/lib/auth-context'
 
 type FeatureCode = 'PRIOR_ART_SEARCH' | 'PATENT_DRAFTING' | 'IDEA_BANK' | 'DIAGRAM_GENERATION' | 'PERSONA_SYNC' | 'PATENT_REVIEW' | 'IDEATION' | 'NOVELTY_SEARCH'
-type PlanCode = 'FREE_PLAN' | 'PRO_PLAN' | 'ENTERPRISE_PLAN'
+type PlanCode = 'TRIAL' | 'BASIC_PLAN' | 'FREE_PLAN' | 'PRO_PLAN' | 'ENTERPRISE_PLAN'
+type QuotaValue = number | null
 
 interface FeatureQuota {
   featureCode: FeatureCode
-  dailyQuota: number
-  monthlyQuota: number
+  dailyQuota: QuotaValue
+  monthlyQuota: QuotaValue
   dailyTokenLimit?: number | null
   monthlyTokenLimit?: number | null
 }
@@ -95,8 +96,8 @@ export default function QuotaControllerPage() {
     field: 'dailyQuota' | 'monthlyQuota',
     value: string,
   ) => {
-    const numeric = value === '' ? 0 : Number(value)
-    if (Number.isNaN(numeric) || numeric < 0) {
+    const quotaValue: QuotaValue = value === '' ? null : Number(value)
+    if (quotaValue !== null && (Number.isNaN(quotaValue) || quotaValue < 0)) {
       return
     }
 
@@ -107,7 +108,7 @@ export default function QuotaControllerPage() {
           ...plan,
           features: plan.features.map((fq) =>
             fq.featureCode === featureCode
-              ? { ...fq, [field]: numeric }
+              ? { ...fq, [field]: quotaValue }
               : fq,
           ),
         }
@@ -124,8 +125,8 @@ export default function QuotaControllerPage() {
       const updates: Array<{
         planCode: PlanCode
         featureCode: FeatureCode
-        dailyQuota: number
-        monthlyQuota: number
+        dailyQuota: QuotaValue
+        monthlyQuota: QuotaValue
       }> = []
 
       for (const plan of plans) {
@@ -277,7 +278,8 @@ export default function QuotaControllerPage() {
                             <input
                               type="number"
                               min={0}
-                              value={f.monthlyQuota}
+                              value={f.monthlyQuota ?? ''}
+                              placeholder="Unlimited"
                               onChange={(e) =>
                                 updateQuotaValue(
                                   plan.code,
@@ -293,7 +295,8 @@ export default function QuotaControllerPage() {
                             <input
                               type="number"
                               min={0}
-                              value={f.dailyQuota}
+                              value={f.dailyQuota ?? ''}
+                              placeholder="Unlimited"
                               onChange={(e) =>
                                 updateQuotaValue(
                                   plan.code,

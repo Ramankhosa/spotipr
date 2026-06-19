@@ -26,6 +26,7 @@
     "patent-corpus:batch-embed": "tsx scripts/patent-corpus-batch-embed.ts",
     "patent-corpus:batch-embed:auto": "tsx scripts/patent-corpus-batch-embed.ts --watch --run",
     "patent-corpus:reembed": "tsx scripts/reembed-patent-corpus.ts",
+    "pqai-corpus:backfill": "tsx scripts/backfill-pqai-corpus-from-novelty-runs.ts",
     "patent-corpus:eval": "tsx scripts/eval-patent-retrieval.ts",
     "test": "vitest run"
   },

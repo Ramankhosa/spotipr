@@ -61,6 +61,22 @@ describe('novelty auto stage progression', () => {
     });
   });
 
+  test('runs deep analysis when relevance has only borderline candidates', () => {
+    expect(runAction({
+      status: 'STAGE_1_COMPLETED',
+      stage0Approved: true,
+      hasStage1Results: true,
+      hasStage15Results: true,
+      hasVisiblePriorArtResults: false,
+      hasBorderlinePriorArtResults: true,
+      stage15GateStatus: 'complete',
+    })).toEqual({
+      type: 'run',
+      stageNumber: '3',
+      visibleTab: '4',
+    });
+  });
+
   test('runs final report after deep analysis is complete', () => {
     expect(runAction({
       status: 'STAGE_3_5_COMPLETED',

@@ -105,7 +105,7 @@ async function main() {
     }
     throw error
   })
-  const cases = JSON.parse(raw) as GoldenCase[]
+  const cases = JSON.parse(raw.replace(/^\uFEFF/, '')) as GoldenCase[]
   if (!Array.isArray(cases) || cases.length === 0) {
     throw new Error('Golden set must be a non-empty JSON array.')
   }

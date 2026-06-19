@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { NoveltySearchService } from '@/lib/novelty-search-service';
 import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
 
 const noveltySearchService = new NoveltySearchService();
 
@@ -41,26 +42,28 @@ export async function GET(
     });
     if (!searchRun) return NextResponse.json({ error: 'Novelty search not found' }, { status: 404 });
 
+    const enrichedSearchRun = await hydrateNoveltyReportPatentMetadata(searchRun);
+
     return NextResponse.json({
       success: true,
       search: {
-        id: searchRun.id,
-        title: searchRun.title,
-        status: searchRun.status,
-        currentStage: searchRun.currentStage,
-        jurisdiction: searchRun.jurisdiction,
-        filingType: searchRun.filingType,
-        createdAt: searchRun.createdAt,
-        stage0CompletedAt: searchRun.stage0CompletedAt,
-        stage1CompletedAt: searchRun.stage1CompletedAt,
-        stage35CompletedAt: searchRun.stage35CompletedAt,
-        stage4CompletedAt: searchRun.stage4CompletedAt,
-        reportUrl: searchRun.reportUrl,
+        id: enrichedSearchRun.id,
+        title: enrichedSearchRun.title,
+        status: enrichedSearchRun.status,
+        currentStage: enrichedSearchRun.currentStage,
+        jurisdiction: enrichedSearchRun.jurisdiction,
+        filingType: enrichedSearchRun.filingType,
+        createdAt: enrichedSearchRun.createdAt,
+        stage0CompletedAt: enrichedSearchRun.stage0CompletedAt,
+        stage1CompletedAt: enrichedSearchRun.stage1CompletedAt,
+        stage35CompletedAt: enrichedSearchRun.stage35CompletedAt,
+        stage4CompletedAt: enrichedSearchRun.stage4CompletedAt,
+        reportUrl: enrichedSearchRun.reportUrl,
         results: {
-          stage0: searchRun.stage0Results,
-          stage1: searchRun.stage1Results,
-          stage35: searchRun.stage35Results,
-          stage4: searchRun.stage4Results
+          stage0: enrichedSearchRun.stage0Results,
+          stage1: enrichedSearchRun.stage1Results,
+          stage35: enrichedSearchRun.stage35Results,
+          stage4: enrichedSearchRun.stage4Results
         },
         recentActivity: searchRun.llmCalls.map(call => ({
           stage: call.stage,

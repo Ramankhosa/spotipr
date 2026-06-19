@@ -4,6 +4,7 @@ import type {
   PatentSearchProviderId,
 } from './types'
 import { IndianCorpusProvider } from './providers/indian-corpus-provider'
+import { PqaiCorpusProvider } from './providers/pqai-corpus-provider'
 import { PqaiProvider } from './providers/pqai-provider'
 
 class PlaceholderProvider implements PatentSearchProvider {
@@ -31,6 +32,7 @@ class PlaceholderProvider implements PatentSearchProvider {
 
 const providers: PatentSearchProvider[] = [
   new IndianCorpusProvider(),
+  new PqaiCorpusProvider(),
   new PqaiProvider(),
   new PlaceholderProvider('epo-ops', 'EPO OPS', ['EP', 'WO', '*']),
   new PlaceholderProvider('uspto', 'USPTO', ['US']),
@@ -60,15 +62,15 @@ export function resolveProviderIds(params: {
   if (params.providerIds?.length) return params.providerIds
 
   if (params.sourceMode === 'INDIAN_ONLY') return ['indian-corpus']
-  if (params.sourceMode === 'PQAI_ONLY') return ['pqai']
-  if (params.sourceMode === 'PQAI_PLUS_INDIAN') return ['indian-corpus', 'pqai']
+  if (params.sourceMode === 'PQAI_ONLY') return ['pqai-corpus', 'pqai']
+  if (params.sourceMode === 'PQAI_PLUS_INDIAN') return ['indian-corpus', 'pqai-corpus', 'pqai']
 
   const jurisdictions = (params.jurisdictions || []).map(value => value.toUpperCase())
   if (jurisdictions.length) {
     const ids: PatentSearchProviderId[] = []
     if (jurisdictions.includes('IN')) ids.push('indian-corpus')
-    if (jurisdictions.some(value => value !== 'IN')) ids.push('pqai')
-    return ids.length ? ids : ['pqai']
+    if (jurisdictions.some(value => value !== 'IN')) ids.push('pqai-corpus', 'pqai')
+    return ids.length ? ids : ['pqai-corpus', 'pqai']
   }
-  return ['pqai']
+  return ['pqai-corpus', 'pqai']
 }

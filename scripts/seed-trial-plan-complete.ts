@@ -55,6 +55,7 @@ const TRIAL_STAGE_MODELS: Record<string, string> = {
   // Novelty search stages
   'NOVELTY_QUERY_GENERATION':           'gemini-2.5-flash-lite',
   'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
+  'NOVELTY_CONSOLIDATED_ANALYSIS':      'gemini-2.5-flash-lite',
   'NOVELTY_FEATURE_ANALYSIS':           'gemini-2.5-flash-lite',
   'NOVELTY_COMPARISON':                 'gemini-2.5-flash-lite',
   'NOVELTY_REPORT_GENERATION':          'gemini-2.5-pro',
@@ -107,6 +108,7 @@ const TOKEN_LIMITS: Record<string, { maxTokensIn: number; maxTokensOut: number }
   'DRAFT_REVIEW':                       { maxTokensIn: 100000, maxTokensOut: 16000 },
   'NOVELTY_QUERY_GENERATION':           { maxTokensIn: 50000,  maxTokensOut: 8192 },
   'NOVELTY_RELEVANCE_SCORING':          { maxTokensIn: 50000,  maxTokensOut: 8192 },
+  'NOVELTY_CONSOLIDATED_ANALYSIS':      { maxTokensIn: 80000,  maxTokensOut: 16000 },
   'NOVELTY_FEATURE_ANALYSIS':           { maxTokensIn: 50000,  maxTokensOut: 8192 },
   'NOVELTY_COMPARISON':                 { maxTokensIn: 100000, maxTokensOut: 16000 },
   'NOVELTY_REPORT_GENERATION':          { maxTokensIn: 100000, maxTokensOut: 32000 },

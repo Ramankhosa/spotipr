@@ -4,6 +4,7 @@ import type {
   PatentSearchCapabilities,
   PatentSearchProvider,
 } from '../types'
+import { persistPqaiPatentResults } from '@/lib/patent-corpus-service'
 import { asStringArray, clampLimit, normalizeWhitespace, yearFromDate } from '../utils'
 
 function normalizePqaiQuery(query: string) {
@@ -90,7 +91,7 @@ function normalizePqaiResult(result: any): NormalizedPatentResult {
     link,
     sourceUrl: link,
     matchedFields: ['providerSearch'],
-    matchReasons: ['Returned by PQAI search'],
+    matchReasons: ['Returned by international patent search'],
     scores: {
       provider: relevanceScore ?? undefined,
       hybrid: relevanceScore ?? undefined,
@@ -102,7 +103,7 @@ function normalizePqaiResult(result: any): NormalizedPatentResult {
 
 export class PqaiProvider implements PatentSearchProvider {
   id = 'pqai'
-  label = 'PQAI Global Patent Search'
+  label = 'International Patent Search'
   jurisdictions = ['*']
   enabled = true
   capabilities: PatentSearchCapabilities = {
@@ -117,7 +118,7 @@ export class PqaiProvider implements PatentSearchProvider {
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
     const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || ''
-    if (!token) throw new Error('No PQAI API token configured. Set PQAI_API_TOKEN.')
+    if (!token) throw new Error('No international patent search token configured.')
 
     const maxResults = clampLimit(request.limit, 50, 50)
     const query = request.searchMode === 'manual'
@@ -159,10 +160,10 @@ export class PqaiProvider implements PatentSearchProvider {
     }
 
     if (!response.ok) {
-      let message = `PQAI API request failed (HTTP ${response.status})`
-      if (response.status === 500) message = 'PQAI API server error - the service may be temporarily unavailable'
-      if (response.status === 401 || response.status === 403) message = 'PQAI API authentication failed - please check your API token'
-      if (response.status === 429) message = 'PQAI API rate limit exceeded - please try again later'
+      let message = `International patent search request failed (HTTP ${response.status})`
+      if (response.status === 500) message = 'International patent search server error - the service may be temporarily unavailable'
+      if (response.status === 401 || response.status === 403) message = 'International patent search authentication failed - please check the configured token'
+      if (response.status === 429) message = 'International patent search rate limit exceeded - please try again later'
       throw new Error(message)
     }
 
@@ -175,9 +176,17 @@ export class PqaiProvider implements PatentSearchProvider {
           ? json
           : []
 
-    return results
+    const normalizedResults = results
       .map(normalizePqaiResult)
       .sort((a: NormalizedPatentResult, b: NormalizedPatentResult) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
       .slice(0, maxResults)
+
+    try {
+      await persistPqaiPatentResults(normalizedResults, { query })
+    } catch (error) {
+      console.warn('[PqaiProvider] Failed to persist PQAI results:', error)
+    }
+
+    return normalizedResults
   }
 }

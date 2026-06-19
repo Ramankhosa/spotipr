@@ -10,6 +10,28 @@ const PLAN_CODES = ['TRIAL', 'BASIC_PLAN', 'FREE_PLAN', 'PRO_PLAN', 'ENTERPRISE_
 
 type FeatureCode = (typeof FEATURE_CODES)[number]
 type PlanCode = (typeof PLAN_CODES)[number]
+type QuotaValue = number | null
+
+function sanitizeQuotaValue(value: unknown): QuotaValue {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return null
+  }
+
+  return Math.floor(numeric)
+}
+
+function normalizeDailyQuota(dailyQuota: QuotaValue, monthlyQuota: QuotaValue): QuotaValue {
+  if (dailyQuota === 0 && (monthlyQuota === null || monthlyQuota > 0)) {
+    return null
+  }
+
+  return dailyQuota
+}
 
 export async function GET(request: NextRequest) {
   // Allow both SUPER_ADMIN and SUPER_ADMIN_VIEWER to view plan quotas
@@ -76,8 +98,8 @@ export async function GET(request: NextRequest) {
         const pf = plan.planFeatures.find((f) => f.feature.code === code)
         return {
           featureCode: code,
-          dailyQuota: pf?.dailyQuota ?? 0,
-          monthlyQuota: pf?.monthlyQuota ?? 0,
+          dailyQuota: pf ? pf.dailyQuota : 0,
+          monthlyQuota: pf ? pf.monthlyQuota : 0,
           // Token limits (used by IDEATION feature for dual quota enforcement)
           dailyTokenLimit: (pf as any)?.dailyTokenLimit ?? null,
           monthlyTokenLimit: (pf as any)?.monthlyTokenLimit ?? null
@@ -113,16 +135,14 @@ export async function PUT(request: NextRequest) {
     const updates: Array<{
       planCode: PlanCode
       featureCode: FeatureCode
-      dailyQuota: number
-      monthlyQuota: number
+      dailyQuota: QuotaValue
+      monthlyQuota: QuotaValue
     }> = []
 
     for (const raw of body.updates) {
       if (
         !PLAN_CODES.includes(raw.planCode) ||
-        !FEATURE_CODES.includes(raw.featureCode) ||
-        typeof raw.dailyQuota !== 'number' ||
-        typeof raw.monthlyQuota !== 'number'
+        !FEATURE_CODES.includes(raw.featureCode)
       ) {
         return NextResponse.json(
           { error: 'Invalid update entry in payload' },
@@ -130,11 +150,17 @@ export async function PUT(request: NextRequest) {
         )
       }
 
+      const monthlyQuota = sanitizeQuotaValue(raw.monthlyQuota)
+      const dailyQuota = normalizeDailyQuota(
+        sanitizeQuotaValue(raw.dailyQuota),
+        monthlyQuota
+      )
+
       updates.push({
         planCode: raw.planCode,
         featureCode: raw.featureCode,
-        dailyQuota: Math.max(0, Math.floor(raw.dailyQuota)),
-        monthlyQuota: Math.max(0, Math.floor(raw.monthlyQuota))
+        dailyQuota,
+        monthlyQuota
       })
     }
 

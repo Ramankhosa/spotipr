@@ -124,6 +124,7 @@ export function createReservationService(config: MeteringConfig): ReservationSer
           where: {
             OR: [
               { scope: 'plan', scopeId: tenantPlan.plan.code },
+              { scope: 'plan', scopeId: tenantPlan.plan.id },
               { scope: 'tenant', scopeId: tenantId }
             ],
             key: 'concurrency_limit',

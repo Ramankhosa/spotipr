@@ -38,6 +38,26 @@ export const DEFAULT_STAGE1_RESULT_FILTERS: Stage1ResultFilters = {
   sort: 'original',
 };
 
+export function getRawStage1SearchResults(results: any): any[] {
+  const root = results || {};
+  const stage1 = root.stage1 || root;
+  const candidates =
+    stage1.retrievalCandidates ||
+    root.retrievalCandidates ||
+    stage1.candidateResults ||
+    root.candidateResults ||
+    stage1.rawPriorArtResults ||
+    root.rawPriorArtResults ||
+    stage1.priorArtResults ||
+    root.priorArtResults ||
+    stage1.pqaiResults ||
+    root.pqaiResults ||
+    stage1.visiblePriorArtResults ||
+    root.visiblePriorArtResults;
+
+  return Array.isArray(candidates) ? candidates : [];
+}
+
 function asArray(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (value === undefined || value === null || value === '') return [];

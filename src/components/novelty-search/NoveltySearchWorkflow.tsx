@@ -51,6 +51,7 @@ import {
   getStage1MatchedItems,
   getStage1PatentNumber,
   getStage1Providers,
+  getRawStage1SearchResults,
   getStage1ScorePercent,
   type Stage1ResultFilters,
 } from '@/lib/novelty-stage1-results';
@@ -290,6 +291,27 @@ function listPatentText(value: unknown, limit = 4) {
   return values.filter(Boolean).slice(0, limit).join(', ');
 }
 
+function displayInternationalPatentText(value: unknown) {
+  return String(value || '')
+    .replace(/PQAI_API_TOKEN/gi, 'international patent search token')
+    .replace(/PQAI_TOKEN/gi, 'international patent search token')
+    .replace(/Stored PQAI International Corpus/gi, 'Stored international patent corpus')
+    .replace(/PQAI Global Patent Search/gi, 'International patent search')
+    .replace(/PQAI API/gi, 'International patent search')
+    .replace(/PQAI patent corpus/gi, 'International patent corpus')
+    .replace(/\bpqai-corpus\b/gi, 'Stored international patents')
+    .replace(/\bPQAI\b/gi, 'International patents')
+    .replace(/\bpqai\b/gi, 'International patents');
+}
+
+function displayPatentProviderLabel(value: unknown) {
+  const raw = String(value || '').trim();
+  const normalized = raw.toLowerCase();
+  if (normalized === 'pqai') return 'International patents';
+  if (normalized === 'pqai-corpus') return 'Stored international patents';
+  return displayInternationalPatentText(raw);
+}
+
 export default function NoveltySearchWorkflow({
   patentId,
   projectId: initialProjectId,
@@ -370,7 +392,15 @@ export default function NoveltySearchWorkflow({
     quote?: string;
     reason?: string;
     field?: string;
+    extentScore?: number;
     confidence?: number;
+    featureId?: string;
+    userDisclosure?: string;
+    patentDisclosure?: string;
+    evidenceSource?: string;
+    attorneyRemark?: string;
+    noveltyImpact?: string;
+    claimReviewNote?: string;
     link?: string;
   }>(null);
 
@@ -645,17 +675,7 @@ export default function NoveltySearchWorkflow({
   }, [searchState.results]);
 
   const stage1Results = useMemo(() => {
-    const root: any = searchState.results || {};
-    const results =
-      root.retrievalCandidates ||
-      root.stage1?.retrievalCandidates ||
-      root.visiblePriorArtResults ||
-      root.stage1?.visiblePriorArtResults ||
-      root.priorArtResults ||
-      root.stage1?.priorArtResults ||
-      root.pqaiResults ||
-      root.stage1?.pqaiResults;
-    return Array.isArray(results) ? results : [];
+    return getRawStage1SearchResults(searchState.results);
   }, [searchState.results]);
 
   const hasStage1Results = stage1Results.length > 0;
@@ -1090,8 +1110,14 @@ export default function NoveltySearchWorkflow({
       setStage35Message(stageNumber === '3' ? 'Mapping features and generating patent remarks...' : stage35Messages[0]);
     } else if (stageNumber === '3.5a') {
       setIsStage35aSimulating(true);
+      const root: any = searchState.results || {};
+      const aiRel = root?.aiRelevance || root?.stage1?.aiRelevance || {};
+      const acceptedCount = Array.isArray(aiRel.accepted) ? aiRel.accepted.length : 0;
+      const borderlineCount = Array.isArray(aiRel.borderline) ? aiRel.borderline.length : 0;
       const stage35aMessages = [
-        'Selecting top patents by relevance...',
+        acceptedCount === 0 && borderlineCount > 0
+          ? 'No direct high-confidence matches; selecting borderline references...'
+          : 'Selecting top patents by relevance...',
         'Applying patent selection limits...',
         'Canonicalizing patents for feature mapping...',
         'Mapping invention features to patent evidence...',
@@ -1142,7 +1168,7 @@ export default function NoveltySearchWorkflow({
         const items = Array.isArray(data?.results?.retrievalCandidates)
           ? data.results.retrievalCandidates
           : (Array.isArray(data?.results?.stage1?.retrievalCandidates) ? data.results.stage1.retrievalCandidates : []);
-        setStage1Message(`Search complete. Retrieved ${items.length} candidate patent${items.length !== 1 ? 's' : ''} for AI relevance review.`);
+        setStage1Message(`Search complete. Retrieved ${items.length} candidate patent${items.length !== 1 ? 's' : ''}.`);
         await new Promise(resolve => setTimeout(resolve, 1800));
       } else if (stageNumber === '1.5' || stageNumber === '2') {
         const aiRel = data?.results?.aiRelevance || data?.results?.stage1?.aiRelevance || {};
@@ -1395,10 +1421,6 @@ export default function NoveltySearchWorkflow({
 
       markStage0Approved();
       setIsEditingStage0(false);
-      setSelectedStageTab('2');
-      if (autoMode) {
-        await runAllRemainingStages();
-      }
     } catch (error) {
       console.error('Save Stage 0 edits error:', error);
       setSearchState(prev => ({
@@ -1534,7 +1556,7 @@ export default function NoveltySearchWorkflow({
       return (
         <Alert variant="destructive" className="rounded-lg">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{manualSearchState.error}</AlertDescription>
+          <AlertDescription>{displayInternationalPatentText(manualSearchState.error)}</AlertDescription>
         </Alert>
       );
     }
@@ -1580,8 +1602,8 @@ export default function NoveltySearchWorkflow({
                 {manualSearchState.providerStats.map((stat: any) => (
                   <div key={stat.providerId || stat.label} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
                     <div>
-                      <div className="font-medium text-slate-800">{stat.label || stat.providerId}</div>
-                      {stat.error && <div className="text-xs text-rose-600">{stat.error}</div>}
+                      <div className="font-medium text-slate-800">{displayPatentProviderLabel(stat.label || stat.providerId)}</div>
+                      {stat.error && <div className="text-xs text-rose-600">{displayInternationalPatentText(stat.error)}</div>}
                     </div>
                     <Badge variant="outline" className={stat.requested ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500'}>
                       {stat.resultCount || 0} results
@@ -1611,7 +1633,7 @@ export default function NoveltySearchWorkflow({
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <div className="text-sm font-medium text-amber-900">Search warnings</div>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-800">
-                  {manualSearchState.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                  {manualSearchState.warnings.map((warning, index) => <li key={index}>{displayInternationalPatentText(warning)}</li>)}
                 </ul>
               </div>
             )}
@@ -1655,7 +1677,7 @@ export default function NoveltySearchWorkflow({
                           </a>
                           {sourceProviders.map((provider: string) => (
                             <Badge key={provider} variant="outline" className="border-slate-200 bg-slate-50 text-[11px] text-slate-600">
-                              {provider}
+                              {displayPatentProviderLabel(provider)}
                             </Badge>
                           ))}
                         </div>
@@ -1676,7 +1698,7 @@ export default function NoveltySearchWorkflow({
                       ))}
                       {matchReasons.slice(0, 2).map((reason: string, reasonIndex: number) => (
                         <Badge key={`${reason}-${reasonIndex}`} variant="outline" className="border-slate-200 bg-white text-[11px] text-slate-600">
-                          {reason}
+                          {displayInternationalPatentText(reason)}
                         </Badge>
                       ))}
                     </div>
@@ -1756,7 +1778,7 @@ export default function NoveltySearchWorkflow({
                 <option value="EP">European Patent (EP)</option>
                 <option value="WO">PCT (WO)</option>
                 <option value="AU">Australia (AU)</option>
-                <option value="*">Global / PQAI</option>
+                <option value="*">Global / International patents</option>
               </select>
             </div>
             <div className="space-y-1">
@@ -1768,8 +1790,8 @@ export default function NoveltySearchWorkflow({
                 className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
               >
                 <option value="INDIAN_ONLY">Indian database only</option>
-                <option value="PQAI_ONLY">PQAI global only</option>
-                <option value="PQAI_PLUS_INDIAN">PQAI + Indian database</option>
+                <option value="PQAI_ONLY">International patents only</option>
+                <option value="PQAI_PLUS_INDIAN">International patents + Indian database</option>
               </select>
             </div>
           </div>
@@ -1991,7 +2013,7 @@ export default function NoveltySearchWorkflow({
                   <option value="EP">European Patent (EP)</option>
                   <option value="WO">PCT (WO)</option>
                   <option value="AU">Australia (AU)</option>
-                  <option value="*">Global / PQAI</option>
+                  <option value="*">Global / International patents</option>
                 </select>
               </div>
 
@@ -2004,8 +2026,8 @@ export default function NoveltySearchWorkflow({
                 className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
               >
                 <option value="INDIAN_ONLY">Indian database only</option>
-                <option value="PQAI_ONLY">PQAI global only</option>
-                <option value="PQAI_PLUS_INDIAN">PQAI + Indian database</option>
+                <option value="PQAI_ONLY">International patents only</option>
+                <option value="PQAI_PLUS_INDIAN">International patents + Indian database</option>
               </select>
             </div>
             <label className="flex h-11 items-center justify-between self-end rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700">
@@ -2030,7 +2052,7 @@ export default function NoveltySearchWorkflow({
               >
                 <Alert variant="destructive" className="rounded-lg">
                   <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{searchState.error}</AlertDescription>
+                  <AlertDescription>{displayInternationalPatentText(searchState.error)}</AlertDescription>
                 </Alert>
               </motion.div>
             )}
@@ -2100,24 +2122,12 @@ export default function NoveltySearchWorkflow({
               </div>
             </div>
 
-            {/* Auto Mode Toggle */}
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-slate-500">Auto</span>
-                <button
-                  type="button"
-                  disabled={isAutoRunning || searchState.isLoading || !!activeExecutionStage}
-                  onClick={() => setAutoMode(prev => !prev)}
-                  className={`relative inline-flex h-5 w-9 rounded-full transition-colors ${
-                    autoMode ? 'bg-indigo-500' : 'bg-slate-200'
-                  } disabled:cursor-not-allowed disabled:opacity-60`}
-                >
-                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
-                    autoMode ? 'translate-x-4' : 'translate-x-0.5'
-                  } mt-0.5`} />
-                </button>
-              </div>
-
+              {stage0ApprovedForUi && (selectedStageTab !== '1' || hasStage1Results || isAutoRunning) && (
+                <Badge variant="outline" className="text-xs border-slate-200 bg-white text-slate-600">
+                  {isAutoRunning ? 'Auto running' : autoMode ? 'Auto mode' : 'Manual mode'}
+                </Badge>
+              )}
               <Badge 
                 variant="outline" 
                 className={`text-xs ${
@@ -2186,7 +2196,7 @@ export default function NoveltySearchWorkflow({
           >
             <Alert variant="destructive" className="rounded-lg border-rose-200 bg-rose-50">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{searchState.error}</AlertDescription>
+              <AlertDescription>{displayInternationalPatentText(searchState.error)}</AlertDescription>
             </Alert>
           </motion.div>
         )}
@@ -2318,7 +2328,7 @@ export default function NoveltySearchWorkflow({
                   <Button onClick={cancelStage0Edits} variant="outline" className="rounded-lg">Cancel</Button>
                   <Button onClick={saveStage0Edits} className="rounded-lg bg-emerald-600 hover:bg-emerald-700" disabled={!editedSearchQuery.trim() || editedFeatures.length === 0}>
                     <CheckCircle className="w-4 h-4 mr-2" />
-                    Save & Continue
+                    Save & Approve
                   </Button>
                 </div>
               </div>
@@ -2347,27 +2357,66 @@ export default function NoveltySearchWorkflow({
             )}
 
             {!isEditingStage0 && searchState.status === NoveltySearchStatus.STAGE_0_COMPLETED && (
-              <div className="mt-6 flex justify-end">
-                <Button
-                  size="sm"
-                  className={`rounded-lg ${stage0ApprovedForUi ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-                  disabled={isAutoRunning}
-                  onClick={async () => {
-                    markStage0Approved();
-                    // Auto-progress through all stages if autoMode is enabled
-                    if (autoMode) {
-                      setSelectedStageTab('2');
-                      // Run all stages automatically
-                      await runAllRemainingStages();
-                    } else if (selectedStageTab === '1') {
-                      // Just move to next tab
-                      setSelectedStageTab('2');
-                    }
-                  }}
-                >
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  {stage0ApprovedForUi ? 'Approved' : 'Approve Search Terms'}
-                </Button>
+              <div className="mt-6 border-t border-slate-200 pt-5">
+                {!stage0ApprovedForUi ? (
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      className="rounded-lg bg-indigo-600 hover:bg-indigo-700"
+                      disabled={isAutoRunning}
+                      onClick={markStage0Approved}
+                    >
+                      <CheckCircle className="w-4 h-4 mr-2" />
+                      Approve Search Terms
+                    </Button>
+                  </div>
+                ) : !hasStage1Results ? (
+                  <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-indigo-950">Choose execution mode</div>
+                        <div className="mt-1 text-xs leading-5 text-indigo-800">
+                          Run every remaining stage automatically, or continue manually and trigger each stage yourself.
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="rounded-lg border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50"
+                          disabled={isAutoRunning}
+                          onClick={() => {
+                            setAutoMode(false);
+                            setSelectedStageTab('2');
+                          }}
+                        >
+                          Manual Stage-by-Stage
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="rounded-lg bg-indigo-600 hover:bg-indigo-700"
+                          disabled={isAutoRunning}
+                          onClick={async () => {
+                            setAutoMode(true);
+                            setSelectedStageTab('2');
+                            await runAllRemainingStages();
+                          }}
+                        >
+                          <Zap className="mr-2 h-4 w-4" />
+                          Auto-Run Remaining Stages
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-end">
+                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                      Search terms approved
+                    </Badge>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -2410,12 +2459,16 @@ export default function NoveltySearchWorkflow({
     const root: any = (searchState.results as any) || {};
     const stage1Container: any = root.stage1 || root;
     const aiRel = stage1Container.aiRelevance || root.aiRelevance || null;
-    const rawVisibleResults = stage1Container.visiblePriorArtResults || root.visiblePriorArtResults || stage1Container.pqaiResults || root.pqaiResults || [];
-    const pqaiResults = Array.isArray(rawVisibleResults) ? rawVisibleResults : [];
-    const retrievalCandidates = Array.isArray(stage1Container.retrievalCandidates)
-      ? stage1Container.retrievalCandidates
-      : (Array.isArray(root.retrievalCandidates) ? root.retrievalCandidates : []);
-    const candidateCount = retrievalCandidates.length;
+    const pqaiResults = getRawStage1SearchResults(root);
+    const candidateCount = pqaiResults.length;
+    const retrievedCount = Number(stage1Container.retrievedCount ?? aiRel?.retrievedCount ?? candidateCount) || 0;
+    const reviewedCount = Number(stage1Container.reviewedCount ?? aiRel?.reviewedCount ?? aiRel?.consideredCount ?? 0) || 0;
+    const gateErrorCount = Number(stage1Container.gateErrorCount ?? aiRel?.gateErrorCount ?? 0) || 0;
+    const unreviewedCount = Number(
+      stage1Container.unreviewedCount ??
+      aiRel?.unreviewedCount ??
+      Math.max(0, retrievedCount - reviewedCount - gateErrorCount)
+    ) || 0;
     const hasStage1 = pqaiResults.length > 0;
     const hasCandidatePool = candidateCount > 0;
     const hasGate = Boolean(aiRel && (Array.isArray(aiRel.accepted) || Array.isArray(aiRel.borderline) || Array.isArray(aiRel.rejected)));
@@ -2441,17 +2494,18 @@ export default function NoveltySearchWorkflow({
     }
 
     if (!hasStage1) {
-      const message = hasGate
-        ? 'No high-confidence Indian prior art matches found in the current corpus.'
-        : 'Patent candidates were retrieved. Run AI relevance filtering to show only high-confidence matches.';
       return (
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="py-16 text-center">
             <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-slate-700 mb-2">No High-Confidence Matches</h3>
-            <p className="text-sm text-slate-500 max-w-md mx-auto">{message}</p>
+            <h3 className="text-lg font-semibold text-slate-700 mb-2">No Patent Candidates Returned</h3>
+            <p className="text-sm text-slate-500 max-w-md mx-auto">
+              The selected patent sources did not return candidate records for this query.
+            </p>
             <div className="mt-3 text-xs text-slate-500">
-              {candidateCount} hidden candidate{candidateCount !== 1 ? 's' : ''} retrieved for relevance review.
+              {retrievedCount} retrieved · {reviewedCount} reviewed
+              {gateErrorCount > 0 ? ` · ${gateErrorCount} gate error${gateErrorCount !== 1 ? 's' : ''}` : ''}
+              {unreviewedCount > 0 ? ` · ${unreviewedCount} unreviewed` : ''}
             </div>
             {hasGate && stage1Container.hasMoreCandidates && (
               <Button onClick={handleReviewMoreCandidates} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
@@ -2459,7 +2513,7 @@ export default function NoveltySearchWorkflow({
                 Review More Candidates
               </Button>
             )}
-            {!hasGate && canRunCurrent && selectedStageTab === '2' && (
+            {!hasGate && hasCandidatePool && canRunCurrent && selectedStageTab === '2' && (
               <Button onClick={() => executeStage('1.5')} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
                 <Search className="w-4 h-4 mr-2" />
                 Run AI Relevance
@@ -2497,8 +2551,8 @@ export default function NoveltySearchWorkflow({
                 <Search className="h-5 w-5 text-white" />
               </div>
               <div>
-                <CardTitle className="text-lg">High-Confidence Prior-Art Matches</CardTitle>
-                <CardDescription>AI-gated Indian corpus matches above the visible confidence threshold</CardDescription>
+                <CardTitle className="text-lg">Patent Search Results</CardTitle>
+                <CardDescription>Raw provider-ranked records before LLM relevance filtering</CardDescription>
               </div>
             </div>
           </CardHeader>
@@ -2507,16 +2561,34 @@ export default function NoveltySearchWorkflow({
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-slate-900">{pqaiResults.length}</div>
-                <div className="text-xs font-medium text-slate-500">Visible Matches</div>
+                <div className="text-xs font-medium text-slate-500">Returned Patents</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{highRelevanceCount}</div>
-                <div className="text-xs font-medium text-slate-500">At Least 70%</div>
+                <div className="text-xs font-medium text-slate-500">At Least 70% Search Score</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-indigo-600">{avgRelevance.toFixed(0)}%</div>
-                <div className="text-xs font-medium text-slate-500">Avg AI Score</div>
+                <div className="text-xs font-medium text-slate-500">Avg Search Score</div>
               </div>
+            </div>
+
+            <div className="mb-6 flex flex-col gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-indigo-950">Next: Relevance Analysis</div>
+                <div className="text-xs text-indigo-800">
+                  Review these returned patents, then run the LLM relevance gate to separate accepted, borderline, and rejected records.
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="w-fit rounded-lg bg-indigo-600 hover:bg-indigo-700"
+                onClick={() => setSelectedStageTab('3')}
+              >
+                Relevance Analysis
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
 
             {(queryPlan || providerStats.length > 0 || searchWarnings.length > 0) && (
@@ -2547,9 +2619,9 @@ export default function NoveltySearchWorkflow({
                       <div className="space-y-2">
                         {providerStats.map((stat: any) => (
                           <div key={stat.providerId || stat.label} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-xs">
-                            <span className="font-medium text-slate-700">{stat.label || stat.providerId}</span>
+                            <span className="font-medium text-slate-700">{displayPatentProviderLabel(stat.label || stat.providerId)}</span>
                             <span className={stat.error ? 'text-rose-600' : 'text-slate-600'}>
-                              {stat.error ? stat.error : `${stat.resultCount || 0} results`}
+                              {stat.error ? displayInternationalPatentText(stat.error) : `${stat.resultCount || 0} results`}
                             </span>
                           </div>
                         ))}
@@ -2560,7 +2632,7 @@ export default function NoveltySearchWorkflow({
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                       <div className="font-semibold">Search warnings</div>
                       <ul className="mt-2 list-disc space-y-1 pl-5">
-                        {searchWarnings.map((warning: string, index: number) => <li key={index}>{warning}</li>)}
+                        {searchWarnings.map((warning: string, index: number) => <li key={index}>{displayInternationalPatentText(warning)}</li>)}
                       </ul>
                     </div>
                   )}
@@ -2573,7 +2645,7 @@ export default function NoveltySearchWorkflow({
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="h-4 w-4 text-slate-500" />
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">Filter high-confidence patents</div>
+                    <div className="text-sm font-semibold text-slate-900">Filter returned patents</div>
                     <div className="text-xs text-slate-500">
                       {filterOptions.providers.length} provider{filterOptions.providers.length !== 1 ? 's' : ''} and {filterOptions.matchedItems.length} matched item{filterOptions.matchedItems.length !== 1 ? 's' : ''}
                     </div>
@@ -2626,7 +2698,7 @@ export default function NoveltySearchWorkflow({
                   >
                     <option value="">All providers</option>
                     {filterOptions.providers.map(provider => (
-                      <option key={provider} value={provider}>{provider}</option>
+                      <option key={provider} value={provider}>{displayPatentProviderLabel(provider)}</option>
                     ))}
                   </select>
                 </div>
@@ -2700,7 +2772,7 @@ export default function NoveltySearchWorkflow({
 
             <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm text-slate-600">
-                Showing {pagedResults.startIndex}-{pagedResults.endIndex} of {pagedResults.totalItems} filtered patents ({pqaiResults.length} visible, {candidateCount} reviewed/hidden candidates)
+                Showing {pagedResults.startIndex}-{pagedResults.endIndex} of {pagedResults.totalItems} filtered patents ({pqaiResults.length} returned · {reviewedCount} reviewed · {retrievedCount} retrieved{gateErrorCount > 0 ? ` · ${gateErrorCount} gate error${gateErrorCount !== 1 ? 's' : ''}` : ''}{unreviewedCount > 0 ? ` · ${unreviewedCount} unreviewed` : ''})
               </div>
               <div className="text-xs text-slate-500">
                 {STAGE1_PAGE_SIZE} patents per page
@@ -2759,7 +2831,7 @@ export default function NoveltySearchWorkflow({
                           {patentNumber} {pubDate && `- ${String(pubDate).slice(0, 10)}`}
                         </div>
                         <div className="text-xs text-slate-500 mt-1">
-                          Provider: {sourceProviders.join(', ') || 'patent-search'}
+                          Provider: {sourceProviders.map(displayPatentProviderLabel).join(', ') || 'patent-search'}
                         </div>
                         {matchedItems.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2878,6 +2950,7 @@ export default function NoveltySearchWorkflow({
     const bor = Array.isArray(aiRel.borderline) ? aiRel.borderline.length : 0;
     const rej = Array.isArray(aiRel.rejected) ? aiRel.rejected.length : 0;
     const total = acc + bor + rej;
+    const borderlineOnly = acc === 0 && bor > 0;
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -2936,6 +3009,12 @@ export default function NoveltySearchWorkflow({
                 <div className="text-xs font-medium text-slate-500">Total</div>
               </div>
             </div>
+
+            {borderlineOnly && (
+              <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                No direct high-confidence patents were accepted. Deep Analysis will map the borderline references so the report can still compare the closest available evidence instead of stopping here.
+              </div>
+            )}
 
             <div className="grid md:grid-cols-2 gap-6">
               <div>
@@ -3058,6 +3137,18 @@ export default function NoveltySearchWorkflow({
         ...(Array.isArray(patent.partial) ? patent.partial : []),
         ...(Array.isArray(patent.absent) ? patent.absent : [])
       ];
+    const stage4Any: any = (searchState.results as any)?.stage4 || {};
+    const perPatentRemarks: any[] = Array.isArray(stage4Any?.per_patent_remarks) ? stage4Any.per_patent_remarks : [];
+    const canonPn = (value: any) => {
+      const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/);
+      return kindSuffixMatch?.[1] || compact;
+    };
+    const comparisonRowFor = (pn: string, feature: string) => {
+      const remark = perPatentRemarks.find((item: any) => canonPn(item?.pn || item?.patent_number) === canonPn(pn));
+      const rows = Array.isArray(remark?.comparison_rows) ? remark.comparison_rows : [];
+      return rows.find((row: any) => String(row?.feature || '').toLowerCase() === String(feature || '').toLowerCase()) || null;
+    };
     const featureSignals = features.map(feature => {
       const cells = items.flatMap((patent: any) => cellsForPatent(patent).filter((cell: any) => cell?.feature === feature));
       const present = cells.filter((cell: any) => cell.status === 'Present').length;
@@ -3092,6 +3183,43 @@ export default function NoveltySearchWorkflow({
         case 'Absent': return 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100';
         default: return 'bg-slate-50 text-slate-600 border-slate-200';
       }
+    };
+    const scoreValue = (value: any) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return undefined;
+      return Math.max(0, Math.min(1, n > 1 && n <= 100 ? n / 100 : n));
+    };
+    const textSpecificityScore = (value: string) => {
+      const tokens = String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(token => token.length > 3 && !['patent', 'feature', 'disclosure', 'supporting', 'available', 'identified'].includes(token));
+      return Math.min(1, Array.from(new Set(tokens)).length / 28);
+    };
+    const featureOverlapScore = (feature: string, disclosure: string) => {
+      const text = String(disclosure || '').toLowerCase();
+      const tokens = Array.from(new Set(String(feature || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(token => token.length > 3)));
+      if (tokens.length === 0) return 0;
+      return tokens.filter(token => text.includes(token)).length / tokens.length;
+    };
+    const defaultExtentScore = (status: string, feature: string, patentDisclosure = '', quote = '', confidence?: number) => {
+      const evidenceText = [patentDisclosure, quote].filter(Boolean).join(' ');
+      const specificity = textSpecificityScore(evidenceText);
+      const overlap = featureOverlapScore(feature, evidenceText);
+      const rowConfidence = typeof confidence === 'number' ? confidence : 0.5;
+      const raw = status === 'Present'
+        ? 0.70 + overlap * 0.18 + specificity * 0.08 + rowConfidence * 0.04
+        : status === 'Partial'
+          ? 0.32 + overlap * 0.24 + specificity * 0.12 + rowConfidence * 0.06
+          : status === 'Absent'
+            ? 0.04 + Math.min(overlap, 0.5) * 0.12
+            : 0.14 + overlap * 0.12 + specificity * 0.08;
+      return Math.round(Math.max(0, Math.min(1, raw)) * 100) / 100;
     };
 
     return (
@@ -3253,21 +3381,37 @@ export default function NoveltySearchWorkflow({
                                 return byLower || null;
                               })();
 
-                              const quote = (cellObj && (cellObj.quote || cellObj.evidence)) ? String(cellObj.quote || cellObj.evidence) : '';
+                              const comparisonRow = comparisonRowFor(pn, f);
+                              const quote = comparisonRow?.evidence_quote
+                                ? String(comparisonRow.evidence_quote)
+                                : ((cellObj && (cellObj.quote || cellObj.evidence)) ? String(cellObj.quote || cellObj.evidence) : '');
                               const reason = cellObj && cellObj.reason ? String(cellObj.reason) : '';
-                              const field = cellObj && cellObj.field ? String(cellObj.field) : undefined;
-                              const confidence = (cellObj && typeof cellObj.confidence === 'number') ? cellObj.confidence : undefined;
+                              const field = comparisonRow?.evidence_source
+                                ? String(comparisonRow.evidence_source)
+                                : (cellObj && (cellObj.evidence_source || cellObj.field) ? String(cellObj.evidence_source || cellObj.field) : undefined);
+                              const confidence = scoreValue(comparisonRow?.confidence ?? cellObj?.confidence);
+                              const featureId = comparisonRow?.feature_id || cellObj?.feature_id || `KF${colIdx + 1}`;
+                              const userDisclosure = comparisonRow?.user_invention_disclosure || cellObj?.user_invention_disclosure;
+                              const patentDisclosure = comparisonRow?.patent_disclosure || cellObj?.patent_disclosure;
+                              const extentScore = scoreValue(comparisonRow?.extent_score ?? comparisonRow?.extentScore ?? cellObj?.extent_score ?? cellObj?.extentScore)
+                                ?? defaultExtentScore(status, f, patentDisclosure || quote || reason, quote, confidence);
+                              const attorneyRemark = comparisonRow?.attorney_remark || cellObj?.attorney_remark;
+                              const noveltyImpact = comparisonRow?.novelty_impact || cellObj?.novelty_impact;
+                              const claimReviewNote = comparisonRow?.claim_review_note || cellObj?.claim_review_note;
                               const link = (patent.link || (pn && `https://patents.google.com/patent/${pn}`)) as string | undefined;
 
                               const tooltip = (() => {
-                                if (status === 'Present' || status === 'Partial') {
+                                if (attorneyRemark) {
+                                  return attorneyRemark.length > 180 ? attorneyRemark.slice(0, 177) + '...' : attorneyRemark;
+                                }
+                                 if (status === 'Present' || status === 'Partial') {
                                   const snip = quote ? (quote.length > 160 ? quote.slice(0, 157) + '...' : quote) : 'No evidence provided';
-                                  const conf = (typeof confidence === 'number') ? ` - ${confidence.toFixed(2)}` : '';
+                                  const extent = (typeof extentScore === 'number') ? ` - extent ${Math.round(extentScore * 100)}%` : '';
                                   const fld = field ? ` (${field})` : '';
-                                  return `${status}${conf}${fld}: "${snip}"`;
+                                  return `${status}${extent}${fld}: "${snip}"`;
                                 }
                                 if (status === 'Absent') {
-                                  const r = reason || 'No direct evidence in title/abstract';
+                                  const r = reason || 'No direct supporting citation evidence';
                                   return `${status}: ${r}`;
                                 }
                                 return 'Unknown: No analysis available';
@@ -3286,7 +3430,15 @@ export default function NoveltySearchWorkflow({
                                       quote: quote || undefined,
                                       reason: reason || undefined,
                                       field,
+                                      extentScore,
                                       confidence,
+                                      featureId,
+                                      userDisclosure,
+                                      patentDisclosure,
+                                      evidenceSource: field,
+                                      attorneyRemark,
+                                      noveltyImpact,
+                                      claimReviewNote,
                                       link
                                     })}
                                     className={`
@@ -3295,9 +3447,16 @@ export default function NoveltySearchWorkflow({
                                       ${getStatusClass(status)}
                                     `}
                                   >
-                                    {status === 'Present' ? 'Present' :
-                                     status === 'Partial' ? 'Partial' :
-                                     status === 'Absent' ? 'Absent' : 'Unknown'}
+                                    <span className="block">
+                                      {status === 'Present' ? 'Present' :
+                                       status === 'Partial' ? 'Partial' :
+                                       status === 'Absent' ? 'Absent' : 'Unknown'}
+                                    </span>
+                                    {typeof extentScore === 'number' && (
+                                      <span className="mt-0.5 block text-[9px] font-semibold opacity-80">
+                                        {Math.round(extentScore * 100)}%
+                                      </span>
+                                    )}
                                   </button>
                                 </td>
                               );
@@ -3468,6 +3627,7 @@ export default function NoveltySearchWorkflow({
                 const relevantParts = Array.isArray(detailed.relevant_parts) ? detailed.relevant_parts : [];
                 const irrelevantParts = Array.isArray(detailed.irrelevant_parts) ? detailed.irrelevant_parts : [];
                 const noveltyComparison = detailed.novelty_comparison || '';
+                const comparisonRows = Array.isArray(patent.comparison_rows) ? patent.comparison_rows : [];
 
                 return (
                   <motion.div
@@ -3527,7 +3687,7 @@ export default function NoveltySearchWorkflow({
                       )}
 
                       {/* Detailed Analysis Section */}
-                      {(relevantParts.length > 0 || irrelevantParts.length > 0 || noveltyComparison) && (
+                      {(relevantParts.length > 0 || irrelevantParts.length > 0 || noveltyComparison || comparisonRows.length > 0) && (
                         <details className="group">
                           <summary className="cursor-pointer text-xs font-medium text-indigo-600 hover:text-indigo-700 flex items-center gap-1.5 select-none">
                             <span>View Detailed Analysis</span>
@@ -3588,6 +3748,46 @@ export default function NoveltySearchWorkflow({
                                   <span>Novelty Assessment</span>
                                 </div>
                                 <p className="text-xs text-slate-700">{noveltyComparison}</p>
+                              </div>
+                            )}
+
+                            {comparisonRows.length > 0 && (
+                              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                                <table className="min-w-full text-xs">
+                                  <thead className="bg-slate-50 text-slate-600">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-semibold">KF</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Feature</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Patent disclosure</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Status</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Attorney remark</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Claim review note</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {comparisonRows.map((row: any, rowIndex: number) => (
+                                      <tr key={`${row.feature || rowIndex}-${rowIndex}`}>
+                                        <td className="px-3 py-2 align-top font-semibold text-indigo-700">{row.feature_id || `KF${rowIndex + 1}`}</td>
+                                        <td className="px-3 py-2 align-top text-slate-700">{row.feature}</td>
+                                        <td className="px-3 py-2 align-top text-slate-700">
+                                          <div>{row.patent_disclosure || '-'}</div>
+                                          {row.evidence_quote && (
+                                            <div className="mt-1 text-[11px] text-slate-500">
+                                              Evidence ({String(row.evidence_source || 'citation record').replace(/title\s*\/\s*abstract|abstract/gi, 'citation record')}): {row.evidence_quote}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2 align-top">
+                                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getThreatLabel(row.status === 'Present' ? 'anticipates' : row.status === 'Partial' ? 'partial_novelty' : 'remote').color}`}>
+                                            {row.status || 'Unknown'}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 align-top text-slate-700">{row.attorney_remark || row.novelty_impact || '-'}</td>
+                                        <td className="px-3 py-2 align-top text-slate-700">{row.claim_review_note || '-'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             )}
                           </div>
@@ -3850,9 +4050,45 @@ export default function NoveltySearchWorkflow({
               <section>
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Feature</div>
                 <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                  {selectedEvidence.featureId && (
+                    <div className="mb-1 text-xs font-semibold text-indigo-600">{selectedEvidence.featureId}</div>
+                  )}
                   {selectedEvidence.feature}
                 </div>
               </section>
+
+              {(selectedEvidence.userDisclosure || selectedEvidence.patentDisclosure) && (
+                <section className="grid gap-3">
+                  {selectedEvidence.userDisclosure && (
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted User Idea</div>
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+                        {selectedEvidence.userDisclosure}
+                      </div>
+                    </div>
+                  )}
+                  {selectedEvidence.patentDisclosure && (
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Identified Patent Disclosure</div>
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+                        {selectedEvidence.patentDisclosure}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {typeof selectedEvidence.extentScore === 'number' && (
+                <section>
+                  <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-medium uppercase tracking-wide">Feature Extent</span>
+                    <span>{Math.round(selectedEvidence.extentScore * 100)}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.round(selectedEvidence.extentScore * 100)}%` }} />
+                  </div>
+                </section>
+              )}
 
               {typeof selectedEvidence.confidence === 'number' && (
                 <section>
@@ -3873,7 +4109,7 @@ export default function NoveltySearchWorkflow({
                     "{selectedEvidence.quote}"
                   </div>
                   {selectedEvidence.field && (
-                    <div className="mt-2 text-xs text-slate-500">Source field: {selectedEvidence.field}</div>
+                    <div className="mt-2 text-xs text-slate-500">Evidence source: {selectedEvidence.field}</div>
                   )}
                 </section>
               )}
@@ -3884,6 +4120,35 @@ export default function NoveltySearchWorkflow({
                   <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
                     {selectedEvidence.reason}
                   </div>
+                </section>
+              )}
+
+              {(selectedEvidence.attorneyRemark || selectedEvidence.noveltyImpact || selectedEvidence.claimReviewNote) && (
+                <section className="space-y-3">
+                  {selectedEvidence.attorneyRemark && (
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Attorney Remark</div>
+                      <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
+                        {selectedEvidence.attorneyRemark}
+                      </div>
+                    </div>
+                  )}
+                  {selectedEvidence.noveltyImpact && (
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Novelty Impact</div>
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+                        {selectedEvidence.noveltyImpact}
+                      </div>
+                    </div>
+                  )}
+                  {selectedEvidence.claimReviewNote && (
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Claim Review Note</div>
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+                        {selectedEvidence.claimReviewNote}
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
 

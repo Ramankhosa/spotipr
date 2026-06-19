@@ -130,6 +130,9 @@ describe('novelty search guardrails', () => {
     expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
       'novelty_focus must not include ordinary field-common parts'
     );
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      '"feature_type": "core_technical|implementation|novelty_candidate|generic_weak"'
+    );
     expect(source).toContain('Score means invention-level relevance, not mere feature overlap');
     expect(source).toContain('If overlap is only a generic component, keep score below 0.40');
     expect(source).toContain('A patent is not relevant merely because it discloses one generic component');
@@ -139,9 +142,71 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       'A feature marked Absent or Unknown in one patent is not automatically unique'
     );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('attorney_remark');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      '"novelty_threat": "high_overlap|moderate_overlap|related|low_overlap"'
+    );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"extent_score": 0.0');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Evaluate extent_score independently for every patent-feature pair');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, or none');
     expect(source).toContain('Relevance should reflect threat to the invention as a whole');
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain(
       'Never output "No significant risks identified"'
     );
+    expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain('Use comparison_rows as the source for feature-level remarks');
+  });
+
+  test('comparison row normalization returns complete attorney-grade rows for every feature', () => {
+    const service = new NoveltySearchService() as any;
+    const rows = service.normalizePatentComparisonRows(
+      [
+        {
+          feature_id: 'KF1',
+          feature: 'soil moisture measurement loop',
+          user_invention_disclosure: 'The user idea measures soil moisture repeatedly.',
+          patent_disclosure: 'The patent describes a soil moisture sensor.',
+          status: 'Present',
+          evidence_quote: 'soil moisture sensor',
+          evidence_source: 'abstract',
+          extent_score: 0.89,
+          confidence: 0.87,
+          attorney_remark: 'Direct abstract overlap.',
+          novelty_impact: 'This feature is covered.',
+          claim_review_note: 'Claim a narrower control rule.',
+        },
+      ],
+      {
+        pn: 'IN123A',
+        feature_analysis: [
+          { feature: 'soil moisture measurement loop', status: 'Present', quote: 'soil moisture sensor' },
+          { feature: 'threshold-based irrigation decision rule', status: 'Absent', reason: 'No threshold rule disclosed.' },
+        ],
+      },
+      {
+        searchQuery: 'soil moisture irrigation controller',
+        inventionFeatures: ['soil moisture measurement loop', 'threshold-based irrigation decision rule'],
+        featureDetails: [
+          { feature: 'threshold-based irrigation decision rule', user_disclosure: 'The controller applies a threshold rule.' },
+        ],
+      }
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      feature_id: 'KF1',
+      evidence_source: 'abstract',
+      extent_score: 0.89,
+      attorney_remark: 'Direct abstract overlap.',
+      claim_review_note: 'Claim a narrower control rule.',
+    });
+    expect(rows[1]).toMatchObject({
+      feature_id: 'KF2',
+      status: 'Absent',
+      user_invention_disclosure: 'The controller applies a threshold rule.',
+      evidence_source: 'none',
+    });
+    expect(rows[1].extent_score).toBeLessThanOrEqual(0.2);
+    expect(rows[1].attorney_remark).toContain('IN123A');
+    expect(rows[1].claim_review_note).toContain('threshold-based irrigation decision rule');
   });
 });

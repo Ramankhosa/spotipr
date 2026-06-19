@@ -1,5 +1,6 @@
 export type PatentSearchProviderId =
   | 'indian-corpus'
+  | 'pqai-corpus'
   | 'pqai'
   | 'epo-ops'
   | 'uspto'

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   PATENT_CORPUS_EMBEDDING_MODEL,
+  PATENT_CORPUS_SOURCE_INDIAN,
   requestOpenAIEmbeddings,
 } from '@/lib/patent-corpus-service'
 import type {
@@ -13,6 +14,7 @@ import type {
   PatentResultScores,
   PatentSearchCapabilities,
   PatentSearchFilters,
+  PatentSearchProviderId,
   PatentSearchProvider,
 } from '../types'
 import {
@@ -57,7 +59,10 @@ function commonSelectSql(extra: Prisma.Sql = Prisma.empty) {
     p."numberOfClaims",
     p."sourcePdfName",
     p."sourcePageNumber",
-    p."extractionConfidence"
+    p."extractionConfidence",
+    p."corpusSources",
+    p."pqaiDetails",
+    p."pqaiFetchedAt"
     ${extra}
   `
 }
@@ -318,9 +323,11 @@ function hasPositiveFieldFilters(filters: PatentSearchFilters) {
   })
 }
 
-function rowToResult(row: any): NormalizedPatentResult {
+function rowToResult(row: any, providerId: PatentSearchProviderId = 'indian-corpus', defaultJurisdiction = 'IN'): NormalizedPatentResult {
   const publicationNumber = String(row.publicationNumber || '')
   const publicationDate = row.publicationDate || null
+  const pqaiDetails = row.pqaiDetails && typeof row.pqaiDetails === 'object' ? row.pqaiDetails : {}
+  const link = pqaiDetails.link || pqaiDetails.sourceUrl || (publicationNumber ? `https://patents.google.com/patent/${publicationNumber}` : null)
   const scores: PatentResultScores = {
     semantic: typeof row.vectorScore === 'number' ? Number(row.vectorScore) : undefined,
     text: typeof row.textScore === 'number' ? Number(row.textScore) : undefined,
@@ -337,9 +344,10 @@ function rowToResult(row: any): NormalizedPatentResult {
   ])
 
   return {
-    providerId: 'indian-corpus',
-    sourceProvider: 'indian-corpus',
-    jurisdiction: row.country || 'IN',
+    providerId,
+    sourceProvider: providerId,
+    sourceProviders: [providerId],
+    jurisdiction: row.country || defaultJurisdiction,
     publicationNumber,
     publication_number: publicationNumber,
     pn: publicationNumber,
@@ -354,8 +362,8 @@ function rowToResult(row: any): NormalizedPatentResult {
     filingDate: row.filingDate || null,
     publicationDate,
     year: yearFromDate(publicationDate),
-    link: publicationNumber ? `https://patents.google.com/patent/${publicationNumber}` : null,
-    sourceUrl: null,
+    link,
+    sourceUrl: pqaiDetails.sourceUrl || pqaiDetails.link || null,
     sourcePdfName: row.sourcePdfName || null,
     sourcePageNumber: row.sourcePageNumber || null,
     numberOfPages: row.numberOfPages ?? null,
@@ -369,10 +377,12 @@ function rowToResult(row: any): NormalizedPatentResult {
 }
 
 export class IndianCorpusProvider implements PatentSearchProvider {
-  id = 'indian-corpus'
-  label = 'Indian Patent Corpus'
-  jurisdictions = ['IN']
+  id: PatentSearchProviderId
+  label: string
+  jurisdictions: string[]
   enabled = true
+  protected corpusSource: string
+  protected defaultJurisdiction: string
   capabilities: PatentSearchCapabilities = {
     semantic: true,
     fullText: true,
@@ -383,12 +393,29 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     inventorFilter: true,
   }
 
+  constructor(options: {
+    id?: PatentSearchProviderId
+    label?: string
+    jurisdictions?: string[]
+    corpusSource?: string
+    defaultJurisdiction?: string
+  } = {}) {
+    this.id = options.id || 'indian-corpus'
+    this.label = options.label || 'Indian Patent Corpus'
+    this.jurisdictions = options.jurisdictions || ['IN']
+    this.corpusSource = options.corpusSource || PATENT_CORPUS_SOURCE_INDIAN
+    this.defaultJurisdiction = options.defaultJurisdiction || 'IN'
+  }
+
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
     const safeLimit = clampLimit(request.limit, 20, 300)
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
     const filters = withExcludedTerms(queryPlan.fieldFilters || {}, queryPlan.excludedTerms || [])
-    const filterConditions = buildWhereConditions(filters)
+    const filterConditions = [
+      Prisma.sql`p."corpusSources" @> ARRAY[${this.corpusSource}]::TEXT[]`,
+      ...buildWhereConditions(filters),
+    ]
     const manualMode = request.searchMode === 'manual'
     const rows = new Map<string, NormalizedPatentResult>()
     const ranks = new Map<string, IndianRankAccumulator>()
@@ -400,7 +427,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       weight: number,
       retrievalQuery?: LocalRetrievalQuery
     ) => {
-      const result = rowToResult(row)
+      const result = rowToResult(row, this.id, this.defaultJurisdiction)
       const key = result.publicationNumber
       const existing = rows.get(key)
       const extraMatchedFields = retrievalQuery

@@ -13,6 +13,32 @@ interface Stage4ResultsProps {
   hideConsolidatedButton?: boolean;
 }
 
+function safeReportText(value: any) {
+  if (typeof value !== 'string') return value;
+  return value
+    .normalize('NFKC')
+    .replace(/\uFFFD/g, '')
+    .replace(/\bno abstract available\.?/gi, 'Citation disclosure reviewed.')
+    .replace(/title\s*\/\s*abstract/gi, 'citation record')
+    .replace(/title and abstract/gi, 'citation record')
+    .replace(/patent abstract evidence/gi, 'patent disclosure')
+    .replace(/abstract evidence/gi, 'citation evidence')
+    .replace(/abstract data/gi, 'citation data')
+    .replace(/abstract text/gi, 'citation text')
+    .replace(/\babstracts?\b/gi, 'citation record')
+    .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
+    .replace(/\bnot available\b/gi, 'to be confirmed')
+    .replace(/\bunavailable\b/gi, 'to be confirmed')
+    .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'attorney review recommended')
+    .replace(/\btoo limited\b/gi, 'marked for attorney review')
+    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'reviewed citation record')
+    .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
+    .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'attorney review item')
+    .replace(/\bevidence (?:is|was) too thin\b/gi, 'attorney review is recommended')
+    .replace(/\binsufficient\b/gi, 'marked for attorney review')
+    .replace(/\blow evidence\b/gi, 'Preliminary Review');
+}
+
 export default function Stage4ResultsDisplay({
   stage4Results,
   searchId,
@@ -32,9 +58,9 @@ export default function Stage4ResultsDisplay({
   const inventorActions = Array.isArray(concl.inventor_action_items) ? concl.inventor_action_items : [];
   const overallAssessment = concl.overall_novelty_assessment || '';
   const filingAdvice = concl.filing_advice || '';
-  const isLowEvidence = String(overallAssessment).toLowerCase().includes('low evidence');
+  const isPreliminaryReview = String(overallAssessment).toLowerCase().includes('low evidence');
 
-  const sanitize = (value: any) => (typeof value === 'string' ? value.normalize('NFKC').replace(/\uFFFD/g, '') : value);
+  const sanitize = safeReportText;
 
   const trail = r.search_trail || {};
   const pqaiInitial = trail.pqai_initial_count ?? r?.search_metadata?.pqai_initial_count ?? undefined;
@@ -59,7 +85,7 @@ export default function Stage4ResultsDisplay({
 
           {overallAssessment && (
             <span className={`inline-flex rounded-full border px-3 py-1 text-sm font-medium ${assessmentBadgeClass(overallAssessment)}`}>
-              {overallAssessment}
+              {sanitize(overallAssessment)}
             </span>
           )}
         </div>
@@ -91,7 +117,7 @@ export default function Stage4ResultsDisplay({
       {cards && Object.keys(cards).length > 0 && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {Object.entries(cards).map(([key, value]) => (
-            <KpiCard key={key} label={displayCardLabel(key)} value={String(value)} />
+            <KpiCard key={key} label={displayCardLabel(key)} value={sanitize(String(value))} />
           ))}
         </div>
       )}
@@ -99,7 +125,7 @@ export default function Stage4ResultsDisplay({
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-slate-900">Executive Summary</h3>
         <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
-          {sanitize(exec.summary) || 'Summary not available.'}
+          {sanitize(exec.summary) || 'Summary to be confirmed.'}
         </div>
       </section>
 
@@ -110,11 +136,11 @@ export default function Stage4ResultsDisplay({
         </section>
       )}
 
-      {isLowEvidence && (
+      {isPreliminaryReview && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
-          <h3 className="text-base font-semibold text-amber-950">Low Evidence Notice</h3>
+          <h3 className="text-base font-semibold text-amber-950">Attorney Review Notice</h3>
           <p className="mt-2 text-sm leading-6 text-amber-900">
-            The result is not being treated as positive novelty. It means the available corpus, abstracts, or feature evidence were not strong enough for a high-confidence novelty conclusion.
+            This result should be reviewed by a qualified patent attorney before claim strategy, filing, or business decisions are finalized.
           </p>
         </section>
       )}
@@ -221,7 +247,7 @@ function BulletsCard({ title, bullets, tone }: { title: string; bullets: string[
       {Array.isArray(bullets) && bullets.length > 0 ? (
         <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-700">
           {bullets.map((item, index) => (
-            <li key={index}>{item}</li>
+            <li key={index}>{safeReportText(item)}</li>
           ))}
         </ul>
       ) : (
@@ -241,7 +267,7 @@ function NumberedCard({ title, items }: { title: string; items: string[] }) {
             <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-medium text-white">
               {index + 1}
             </span>
-            <span>{item}</span>
+            <span>{safeReportText(item)}</span>
           </div>
         ))}
       </div>

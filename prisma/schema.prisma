@@ -1492,6 +1492,9 @@ model LocalPatent {
   extractionWarnings     Json?
   ipIndiaDetails         Json?
   ipIndiaCapturedAt      DateTime?
+  corpusSources          String[]  @default([])
+  pqaiDetails            Json?
+  pqaiFetchedAt          DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

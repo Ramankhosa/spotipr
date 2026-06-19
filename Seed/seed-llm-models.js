@@ -936,9 +936,10 @@ async function main() {
     { code: 'NOVELTY_QUERY_GENERATION', displayName: 'Query Generation', featureCode: 'NOVELTY_SEARCH', sortOrder: 1, description: 'Generate search queries from idea' },
     { code: 'NOVELTY_PATENT_SEARCH', displayName: 'Patent Search', featureCode: 'NOVELTY_SEARCH', sortOrder: 2, description: 'Search patent databases' },
     { code: 'NOVELTY_RELEVANCE_SCORING', displayName: 'Relevance Scoring', featureCode: 'NOVELTY_SEARCH', sortOrder: 3, description: 'Score patent relevance' },
-    { code: 'NOVELTY_FEATURE_ANALYSIS', displayName: 'Feature Analysis', featureCode: 'NOVELTY_SEARCH', sortOrder: 4, description: 'Analyze feature overlap' },
-    { code: 'NOVELTY_COMPARISON', displayName: 'Detailed Comparison', featureCode: 'NOVELTY_SEARCH', sortOrder: 5, description: 'Compare with prior art' },
-    { code: 'NOVELTY_REPORT_GENERATION', displayName: 'Report Generation', featureCode: 'NOVELTY_SEARCH', sortOrder: 6, description: 'Generate novelty report' },
+    { code: 'NOVELTY_CONSOLIDATED_ANALYSIS', displayName: 'Consolidated Deep Analysis', featureCode: 'NOVELTY_SEARCH', sortOrder: 4, description: 'Map invention features against shortlisted prior art and generate per-patent deep analysis' },
+    { code: 'NOVELTY_FEATURE_ANALYSIS', displayName: 'Feature Analysis', featureCode: 'NOVELTY_SEARCH', sortOrder: 5, description: 'Analyze feature overlap' },
+    { code: 'NOVELTY_COMPARISON', displayName: 'Detailed Comparison', featureCode: 'NOVELTY_SEARCH', sortOrder: 6, description: 'Compare with prior art' },
+    { code: 'NOVELTY_REPORT_GENERATION', displayName: 'Report Generation', featureCode: 'NOVELTY_SEARCH', sortOrder: 7, description: 'Generate novelty report' },
 
     // === IDEA BANK STAGES ===
     { code: 'IDEA_BANK_GENERATION', displayName: 'Idea Generation', featureCode: 'IDEA_BANK', sortOrder: 1, description: 'Generate white-space patent ideas from prior art analysis' },
@@ -1038,6 +1039,7 @@ async function main() {
     // Novelty search stages - HIGH LIMITS for analysis
     'NOVELTY_QUERY_GENERATION':           { maxTokensIn: 20000,  maxTokensOut: 8000 },
     'NOVELTY_RELEVANCE_SCORING':          { maxTokensIn: 40000,  maxTokensOut: 8000 },
+    'NOVELTY_CONSOLIDATED_ANALYSIS':      { maxTokensIn: 80000,  maxTokensOut: 16000 },
     'NOVELTY_FEATURE_ANALYSIS':           { maxTokensIn: 60000,  maxTokensOut: 16000 },
     'NOVELTY_COMPARISON':                 { maxTokensIn: 80000,  maxTokensOut: 16000 },
     'NOVELTY_REPORT_GENERATION':          { maxTokensIn: 100000, maxTokensOut: 16000 },  // Comprehensive report
@@ -1099,6 +1101,7 @@ async function main() {
       // Novelty search stages
       'NOVELTY_QUERY_GENERATION':           'gemini-2.5-flash-lite',
       'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
+      'NOVELTY_CONSOLIDATED_ANALYSIS':      'gemini-2.5-flash-lite',
       'NOVELTY_FEATURE_ANALYSIS':           'gemini-2.5-flash-lite',
       'NOVELTY_COMPARISON':                 'gemini-2.5-flash-lite',
       'NOVELTY_REPORT_GENERATION':          'gemini-2.5-pro',         // Major: use Pro
@@ -1155,6 +1158,7 @@ async function main() {
       // Novelty search stages
       'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
       'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
+      'NOVELTY_CONSOLIDATED_ANALYSIS':      'gemini-2.5-pro',
       'NOVELTY_FEATURE_ANALYSIS':           'gemini-2.5-pro',
       'NOVELTY_COMPARISON':                 'gpt-5-mini',
       'NOVELTY_REPORT_GENERATION':          'gpt-5',
@@ -1178,17 +1182,17 @@ async function main() {
     },
 
     // =========================================================================
-    // ENTERPRISE_PLAN - Premium: GPT-5 series (as provided by user)
+    // ENTERPRISE_PLAN - Premium: production model assignments
     // =========================================================================
     'ENTERPRISE_PLAN': {
       // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gpt-5-mini',
-      'DRAFT_CLAIM_GENERATION':             'gpt-5',
+      'DRAFT_IDEA_ENTRY':                   'gpt-5.4',
+      'DRAFT_CLAIM_GENERATION':             'claude-opus-4-6',
       'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',
       'DRAFT_CLAIM_REFINEMENT':             'gpt-5',
-      'DRAFT_FIGURE_PLANNER':               'gemini-2.5-pro',
+      'DRAFT_FIGURE_PLANNER':               'gpt-5.2',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gpt-4o',
+      'DRAFT_DIAGRAM_GENERATION':           'gpt-5.4',
       // Annexure/Section stages
       'DRAFT_ANNEXURE_TITLE':               'gpt-5-mini',
       'DRAFT_ANNEXURE_PREAMBLE':            'gpt-5-mini',
@@ -1196,21 +1200,22 @@ async function main() {
       'DRAFT_ANNEXURE_BACKGROUND':          'gpt-5-mini',
       'DRAFT_ANNEXURE_OBJECTS':             'gpt-5-mini',
       'DRAFT_ANNEXURE_SUMMARY':             'gpt-5',
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5',
+      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5.2',
       'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5',
       'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gpt-5-mini',
       'DRAFT_ANNEXURE_DRAWINGS':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gpt-5',
+      'DRAFT_ANNEXURE_DESCRIPTION':         'gpt-5.4',
       'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5-mini',
       'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gpt-5-mini',
       'DRAFT_ANNEXURE_CLAIMS':              'gpt-5',
       'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5-mini',
       'DRAFT_ANNEXURE_NUMERALS':            'gpt-5-nano',
       'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gpt-5-nano',
-      'DRAFT_REVIEW':                       'gpt-5.1',
+      'DRAFT_REVIEW':                       'gpt-5.2',
       // Novelty search stages
       'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
       'NOVELTY_RELEVANCE_SCORING':          'gpt-5-nano',
+      'NOVELTY_CONSOLIDATED_ANALYSIS':      'gpt-5',
       'NOVELTY_FEATURE_ANALYSIS':           'gpt-5',
       'NOVELTY_COMPARISON':                 'gpt-5',
       'NOVELTY_REPORT_GENERATION':          'gpt-5',
@@ -1234,6 +1239,41 @@ async function main() {
     }
   };
 
+  const planSpecificTokenLimits = {
+    ENTERPRISE_PLAN: {
+      DRAFT_IDEA_ENTRY: { maxTokensIn: 40000, maxTokensOut: 20000 },
+      DRAFT_CLAIM_GENERATION: { maxTokensIn: 30000, maxTokensOut: 16000 },
+      DRAFT_PRIOR_ART_ANALYSIS: { maxTokensIn: 50000, maxTokensOut: 16000 },
+      DRAFT_CLAIM_REFINEMENT: { maxTokensIn: 30000, maxTokensOut: 16000 },
+      DRAFT_FIGURE_PLANNER: { maxTokensIn: 30000, maxTokensOut: 16000 },
+      DRAFT_SKETCH_GENERATION: { maxTokensIn: 20000, maxTokensOut: 8192 },
+      DRAFT_DIAGRAM_GENERATION: { maxTokensIn: 30000, maxTokensOut: 16000 },
+      DRAFT_ANNEXURE_TITLE: { maxTokensIn: 20000, maxTokensOut: 2000 },
+      DRAFT_ANNEXURE_PREAMBLE: { maxTokensIn: 20000, maxTokensOut: 4000 },
+      DRAFT_ANNEXURE_FIELD: { maxTokensIn: 20000, maxTokensOut: 4000 },
+      DRAFT_ANNEXURE_BACKGROUND: { maxTokensIn: 40000, maxTokensOut: 16000 },
+      DRAFT_ANNEXURE_OBJECTS: { maxTokensIn: 20000, maxTokensOut: 8000 },
+      DRAFT_ANNEXURE_SUMMARY: { maxTokensIn: 40000, maxTokensOut: 16000 },
+      DRAFT_ANNEXURE_TECHNICAL_PROBLEM: { maxTokensIn: 30000, maxTokensOut: 10000 },
+      DRAFT_ANNEXURE_TECHNICAL_SOLUTION: { maxTokensIn: 30000, maxTokensOut: 10000 },
+      DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS: { maxTokensIn: 30000, maxTokensOut: 10000 },
+      DRAFT_ANNEXURE_DRAWINGS: { maxTokensIn: 30000, maxTokensOut: 10000 },
+      DRAFT_ANNEXURE_DESCRIPTION: { maxTokensIn: 60000, maxTokensOut: 16000 },
+      DRAFT_ANNEXURE_BEST_MODE: { maxTokensIn: 30000, maxTokensOut: 10000 },
+      DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY: { maxTokensIn: 20000, maxTokensOut: 8000 },
+      DRAFT_ANNEXURE_CLAIMS: { maxTokensIn: 40000, maxTokensOut: 16000 },
+      DRAFT_ANNEXURE_ABSTRACT: { maxTokensIn: 30000, maxTokensOut: 8000 },
+      DRAFT_ANNEXURE_NUMERALS: { maxTokensIn: 20000, maxTokensOut: 8000 },
+      DRAFT_ANNEXURE_CROSS_REFERENCE: { maxTokensIn: 30000, maxTokensOut: 10000 },
+      DRAFT_REVIEW: { maxTokensIn: 100000, maxTokensOut: 16000 }
+    }
+  };
+
+  const overwriteStageConfigs = process.env.SEED_OVERWRITE_STAGE_CONFIGS === 'true';
+  if (!overwriteStageConfigs) {
+    console.log('  Existing stage model configs will be preserved. Set SEED_OVERWRITE_STAGE_CONFIGS=true to overwrite.');
+  }
+
   try {
     for (const plan of plans) {
       const config = planConfigs[plan.code];
@@ -1244,11 +1284,12 @@ async function main() {
 
       console.log(`  📝 Configuring ${plan.code}...`);
       let configuredCount = 0;
+      let preservedCount = 0;
       
       for (const [stageCode, modelCode] of Object.entries(config)) {
         const stageId = stagesByCode[stageCode];
         const modelId = modelsByCode[modelCode];
-        const limits = tokenLimits[stageCode] || {};
+        const limits = planSpecificTokenLimits[plan.code]?.[stageCode] || tokenLimits[stageCode] || {};
         
         if (!stageId) {
           console.log(`    ⚠️ Stage ${stageCode} not found, skipping`);
@@ -1259,13 +1300,21 @@ async function main() {
           continue;
         }
 
+        const where = {
+          planId_stageId: {
+            planId: plan.id,
+            stageId: stageId
+          }
+        };
+        const existingConfig = await prisma.planStageModelConfig.findUnique({ where });
+
+        if (existingConfig && !overwriteStageConfigs) {
+          preservedCount++;
+          continue;
+        }
+
         await prisma.planStageModelConfig.upsert({
-          where: {
-            planId_stageId: {
-              planId: plan.id,
-              stageId: stageId
-            }
-          },
+          where,
           update: {
             modelId: modelId,
             maxTokensIn: limits.maxTokensIn || null,
@@ -1283,7 +1332,7 @@ async function main() {
         });
         configuredCount++;
       }
-      console.log(`  ✅ ${plan.code} configured (${configuredCount} stages)`);
+      console.log(`  ✅ ${plan.code} configured (${configuredCount} created/updated, ${preservedCount} preserved)`);
     }
   } catch (error) {
     if (error.code === 'P2021' || error.message.includes('does not exist')) {

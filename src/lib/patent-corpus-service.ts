@@ -9,10 +9,13 @@ import {
   PATENT_CORPUS_EXTRACTION_VERSION,
   extractPatentRecordsFromPdf,
 } from '@/lib/patent-corpus-extractor'
+import type { NormalizedPatentResult } from '@/lib/patent-search/types'
 
 export const PATENT_CORPUS_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'patent-corpus')
 export const PATENT_CORPUS_EMBEDDING_MODEL = process.env.PATENT_CORPUS_EMBEDDING_MODEL || 'text-embedding-3-small'
 export const PATENT_CORPUS_EMBEDDING_DIMENSIONS = 1536
+export const PATENT_CORPUS_SOURCE_INDIAN = 'indian-corpus'
+export const PATENT_CORPUS_SOURCE_PQAI = 'pqai'
 export const PATENT_CORPUS_MAX_PDFS_PER_BATCH = Math.max(
   1,
   Number(process.env.PATENT_CORPUS_MAX_PDFS_PER_BATCH || '100') || 100
@@ -86,6 +89,12 @@ type PatentCorpusCoverageStats = {
   coveragePercent: number
   embeddingCounts: Record<string, number>
   importFileCounts: Record<string, number>
+  sourceCoverage: Record<string, {
+    totalPatents: number
+    patentsWithCompletedEmbedding: number
+    patentsWithoutCompletedEmbedding: number
+    coveragePercent: number
+  }>
 }
 
 let coverageStatsCache: { value: PatentCorpusCoverageStats; expiresAt: number } | null = null
@@ -104,6 +113,75 @@ function sanitizePostgresText<T>(value: T): T {
     ) as T
   }
   return value
+}
+
+function compactPatentText(value: unknown) {
+  return String(value || '').replace(/\s+/g, ' ').trim()
+}
+
+function asStringList(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.map(item => compactPatentText(item)).filter(Boolean)
+}
+
+function uniqueStringList(values: unknown[]) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const text = compactPatentText(value)
+    if (!text) continue
+    const key = text.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(text)
+  }
+  return result
+}
+
+export function mergeCorpusSources(...sources: unknown[]) {
+  return uniqueStringList(sources.flatMap(source => Array.isArray(source) ? source : [source]))
+}
+
+function parsePatentDate(value: unknown): Date | null {
+  if (!value) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+  const text = compactPatentText(value)
+  if (!text) return null
+  const parsed = new Date(text)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function inferPatentCountry(publicationNumber: string, fallback?: unknown) {
+  const supplied = compactPatentText(fallback).toUpperCase()
+  if (supplied) return supplied.slice(0, 12)
+  const match = compactPatentText(publicationNumber).toUpperCase().match(/^([A-Z]{2})/)
+  return match?.[1] || null
+}
+
+function pqaiPatentText(result: NormalizedPatentResult) {
+  return compactPatentText([
+    result.title,
+    result.abstract || result.snippet,
+    asStringList(result.classifications).join(' '),
+    asStringList(result.cpcCodes).join(' '),
+    asStringList(result.ipcCodes).join(' '),
+  ].filter(Boolean).join('\n'))
+}
+
+function hasValue(value: unknown) {
+  if (value === undefined || value === null) return false
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'string') return value.trim().length > 0
+  return true
+}
+
+function keepExistingIfValuable(existing: any, field: string, nextValue: unknown) {
+  if (hasValue(existing?.[field])) return existing[field]
+  return nextValue
+}
+
+function canonicalPatentNumber(value: unknown) {
+  return compactPatentText(value).toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '')
 }
 
 function sleep(ms: number) {
@@ -611,11 +689,13 @@ function localPatentData(record: ExtractedPatentRecord, file: any) {
     extractionVersion: record.extractionVersion,
     extractionConfidence: record.extractionConfidence,
     extractionWarnings: record.extractionWarnings as any,
+    corpusSources: [PATENT_CORPUS_SOURCE_INDIAN],
   })
 }
 
 export function mergeLocalPatentDataForImport(record: ExtractedPatentRecord, file: any, existing?: any) {
   const data = localPatentData(record, file) as any
+  data.corpusSources = mergeCorpusSources(existing?.corpusSources, data.corpusSources, PATENT_CORPUS_SOURCE_INDIAN)
   if (existing?.ipIndiaCapturedAt) {
     data.claimsText = existing.claimsText
     data.descriptionText = existing.descriptionText
@@ -623,6 +703,8 @@ export function mergeLocalPatentDataForImport(record: ExtractedPatentRecord, fil
     data.ipIndiaCapturedAt = existing.ipIndiaCapturedAt
     data.ragText = existing.ragText || data.ragText
     data.embeddingText = existing.embeddingText || data.embeddingText
+    data.pqaiDetails = existing.pqaiDetails
+    data.pqaiFetchedAt = existing.pqaiFetchedAt
   }
   return sanitizePostgresText(data)
 }
@@ -688,6 +770,9 @@ async function upsertExtractedPatent(record: ExtractedPatentRecord, file: any, d
       ipIndiaCapturedAt: true,
       ragText: true,
       embeddingText: true,
+      corpusSources: true,
+      pqaiDetails: true,
+      pqaiFetchedAt: true,
     },
   })
   const data = mergeLocalPatentDataForImport(record, file, existing)
@@ -700,6 +785,155 @@ async function upsertExtractedPatent(record: ExtractedPatentRecord, file: any, d
   }
 
   return { created: !existing, patent }
+}
+
+const LOCAL_PATENT_PQAI_SELECT = {
+  id: true,
+  publicationNumber: true,
+  title: true,
+  abstract: true,
+  applicationNumberRaw: true,
+  kind: true,
+  country: true,
+  filingDate: true,
+  publicationDate: true,
+  applicants: true,
+  inventors: true,
+  classifications: true,
+  claimsText: true,
+  descriptionText: true,
+  ipIndiaDetails: true,
+  ipIndiaCapturedAt: true,
+  ragText: true,
+  embeddingText: true,
+  corpusSources: true,
+  pqaiDetails: true,
+  pqaiFetchedAt: true,
+}
+
+async function findLocalPatentForPqai(publicationNumber: string, db: any = prisma) {
+  const exact = await db.localPatent.findUnique({
+    where: { publicationNumber },
+    select: LOCAL_PATENT_PQAI_SELECT,
+  })
+  if (exact) return exact
+
+  const canonical = canonicalPatentNumber(publicationNumber)
+  if (!canonical || typeof db.$queryRaw !== 'function') return null
+
+  const rows = await db.$queryRaw<Array<{ id: number }>>`
+    SELECT "id"
+    FROM "local_patents"
+    WHERE regexp_replace(regexp_replace(upper("publicationNumber"), '[^A-Z0-9]', '', 'g'), '[A-Z][0-9]*$', '') = ${canonical}
+    ORDER BY "id" ASC
+    LIMIT 1
+  `
+  const id = rows[0]?.id
+  if (!id) return null
+  return db.localPatent.findUnique({
+    where: { id },
+    select: LOCAL_PATENT_PQAI_SELECT,
+  })
+}
+
+function buildPqaiPatentData(result: NormalizedPatentResult, existing: any, fetchedAt: Date, context?: { query?: string }) {
+  const publicationNumber = compactPatentText(result.publicationNumber || result.pn || result.publication_number)
+  const title = compactPatentText(result.title) || publicationNumber || 'Untitled Patent'
+  const abstract = compactPatentText(result.abstract || result.snippet) || null
+  const classifications = uniqueStringList([
+    ...asStringList(result.classifications),
+    ...asStringList(result.cpcCodes),
+    ...asStringList(result.ipcCodes),
+  ])
+  const inventors = uniqueStringList(asStringList(result.inventors))
+  const embeddingText = pqaiPatentText(result) || title
+  const existingHasRicherCapture = Boolean(existing?.ipIndiaCapturedAt || existing?.claimsText || existing?.descriptionText)
+  const raw = (result.raw && typeof result.raw === 'object') ? result.raw : null
+
+  const data: Record<string, any> = {
+    publicationNumber: existing?.publicationNumber || publicationNumber,
+    applicationNumberRaw: keepExistingIfValuable(existing, 'applicationNumberRaw', result.applicationNumberRaw || result.applicationNumber || null),
+    country: keepExistingIfValuable(existing, 'country', inferPatentCountry(publicationNumber, result.jurisdiction)),
+    filingDate: keepExistingIfValuable(existing, 'filingDate', parsePatentDate(result.filingDate)),
+    publicationDate: keepExistingIfValuable(existing, 'publicationDate', parsePatentDate(result.publicationDate)),
+    title: existingHasRicherCapture ? (existing?.title || title) : (title || existing?.title || publicationNumber),
+    abstract: existingHasRicherCapture ? (existing?.abstract || abstract) : (abstract || existing?.abstract || null),
+    applicants: keepExistingIfValuable(existing, 'applicants', result.applicants as any),
+    inventors: existing?.inventors?.length ? existing.inventors : inventors,
+    classifications: existing?.classifications?.length ? mergeCorpusSources(existing.classifications, classifications) : classifications,
+    ragText: existingHasRicherCapture ? (existing?.ragText || embeddingText) : (embeddingText || existing?.ragText || null),
+    embeddingText: existingHasRicherCapture ? (existing?.embeddingText || embeddingText) : (embeddingText || existing?.embeddingText || null),
+    corpusSources: mergeCorpusSources(existing?.corpusSources, PATENT_CORPUS_SOURCE_PQAI),
+    pqaiDetails: {
+      provider: 'pqai',
+      fetchedAt: fetchedAt.toISOString(),
+      query: context?.query || null,
+      link: result.link || result.sourceUrl || null,
+      sourceUrl: result.sourceUrl || result.link || null,
+      score: result.relevanceScore ?? result.hybridScore ?? null,
+      sourceProviders: result.sourceProviders || [result.sourceProvider || result.providerId || 'pqai'],
+      normalized: {
+        publicationNumber,
+        applicationNumber: result.applicationNumber || result.applicationNumberRaw || null,
+        title,
+        abstract,
+        jurisdiction: result.jurisdiction || null,
+        filingDate: result.filingDate || null,
+        publicationDate: result.publicationDate || null,
+        inventors,
+        classifications,
+      },
+      raw,
+    },
+    pqaiFetchedAt: fetchedAt,
+  }
+
+  if (existingHasRicherCapture) {
+    data.claimsText = existing.claimsText
+    data.descriptionText = existing.descriptionText
+    data.ipIndiaDetails = existing.ipIndiaDetails
+    data.ipIndiaCapturedAt = existing.ipIndiaCapturedAt
+  }
+
+  return sanitizePostgresText(data)
+}
+
+export async function persistPqaiPatentResults(
+  results: NormalizedPatentResult[],
+  context: { query?: string; fetchedAt?: Date } = {},
+  db: any = prisma
+) {
+  const fetchedAt = context.fetchedAt || new Date()
+  const patents = Array.isArray(results) ? results : []
+  let created = 0
+  let updated = 0
+  let queuedEmbeddings = 0
+  let skipped = 0
+
+  for (const result of patents) {
+    const publicationNumber = compactPatentText(result?.publicationNumber || result?.pn || result?.publication_number)
+    if (!publicationNumber || publicationNumber.toLowerCase() === 'unknown') {
+      skipped += 1
+      continue
+    }
+
+    const existing = await findLocalPatentForPqai(publicationNumber, db)
+    const data = buildPqaiPatentData(result, existing, fetchedAt, context)
+    const patent = existing
+      ? await db.localPatent.update({ where: { id: existing.id }, data })
+      : await db.localPatent.create({ data })
+
+    if (existing) updated += 1
+    else created += 1
+
+    const text = patent.embeddingText || data.embeddingText || patent.ragText || patent.abstract || patent.title
+    if (text) {
+      await queueEmbeddingForPatent(patent.id, text, db)
+      queuedEmbeddings += 1
+    }
+  }
+
+  return { created, updated, queuedEmbeddings, skipped }
 }
 
 export function patentWhereForImportFile(file: { id: string; fileHash?: string | null; originalName?: string | null }) {
@@ -1177,6 +1411,32 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
     by: ['status'],
     _count: { id: true },
   }).catch(() => [])
+  const sourceRows = await prisma.$queryRaw<any[]>`
+    WITH patent_sources AS (
+      SELECT
+        p."id",
+        unnest(
+          CASE
+            WHEN cardinality(p."corpusSources") > 0 THEN p."corpusSources"
+            ELSE ARRAY[${PATENT_CORPUS_SOURCE_INDIAN}]::TEXT[]
+          END
+        ) AS "source",
+        EXISTS (
+          SELECT 1 FROM "local_patent_embeddings" e
+          WHERE e."localPatentId" = p."id"
+            AND e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
+            AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
+            AND e."embedding" IS NOT NULL
+        ) AS "hasCompletedEmbedding"
+      FROM "local_patents" p
+    )
+    SELECT
+      "source",
+      COUNT(*)::int AS "totalPatents",
+      COUNT(*) FILTER (WHERE "hasCompletedEmbedding")::int AS "patentsWithCompletedEmbedding"
+    FROM patent_sources
+    GROUP BY "source"
+  `.catch(() => [])
 
   const patentStats = patentRows[0] || {}
   const embeddingCounts = embeddingRows.reduce((acc: Record<string, number>, row: any) => {
@@ -1189,6 +1449,21 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
   }, {})
   const totalPatents = Number(patentStats.totalPatents || 0)
   const patentsWithCompletedEmbedding = Number(patentStats.patentsWithCompletedEmbedding || 0)
+  const sourceCoverage = sourceRows.reduce((acc: PatentCorpusCoverageStats['sourceCoverage'], row: any) => {
+    const source = String(row.source || '').trim()
+    if (!source) return acc
+    const sourceTotal = Number(row.totalPatents || 0)
+    const sourceCompleted = Number(row.patentsWithCompletedEmbedding || 0)
+    acc[source] = {
+      totalPatents: sourceTotal,
+      patentsWithCompletedEmbedding: sourceCompleted,
+      patentsWithoutCompletedEmbedding: Math.max(0, sourceTotal - sourceCompleted),
+      coveragePercent: sourceTotal > 0
+        ? Number(((sourceCompleted / sourceTotal) * 100).toFixed(1))
+        : 0,
+    }
+    return acc
+  }, {})
 
   return {
     embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
@@ -1204,6 +1479,7 @@ async function computePatentCorpusCoverageStats(): Promise<PatentCorpusCoverageS
       : 0,
     embeddingCounts,
     importFileCounts,
+    sourceCoverage,
   }
 }
 

@@ -13,6 +13,8 @@ export interface PriorArtGateRecord {
   missing_features?: string[];
   reason?: string;
   evidence_quality?: string;
+  reviewStatus?: 'reviewed' | 'gate_error';
+  gateError?: 'timeout' | 'parse_error' | 'llm_error' | 'missing_candidate_row';
 }
 
 export interface VisiblePriorArtBuildResult<T = any> {
@@ -75,6 +77,8 @@ export function annotatePriorArtCandidate<T = any>(candidate: T, gate: PriorArtG
     matched_features: Array.isArray(gate.matched_features) ? gate.matched_features : [],
     missing_features: Array.isArray(gate.missing_features) ? gate.missing_features : [],
     evidence_quality: evidenceQuality,
+    reviewStatus: gate.reviewStatus || 'reviewed',
+    gateError: gate.gateError,
     rerankReason: typeof gate.reason === 'string' ? gate.reason : '',
     relevanceScore: rerankScore,
     scores: {
@@ -112,19 +116,27 @@ export function buildVisiblePriorArtResults<T = any>(params: {
   ));
 
   const gatedCandidates: T[] = [];
-  const highConfidence: T[] = [];
+  const highConfidence: Array<{ item: T; index: number; score: number }> = [];
 
-  for (const candidate of candidates) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
     const gate = getGateRecordForCandidate(candidate, byPn);
     if (!gate) continue;
     const annotated = annotatePriorArtCandidate(candidate, gate);
     gatedCandidates.push(annotated);
     if (isVisiblePriorArtGate(gate, minimumVisibleConfidence)) {
-      highConfidence.push(annotated);
+      highConfidence.push({
+        item: annotated,
+        index,
+        score: finiteScore(gate.rerankScore, gate.score),
+      });
     }
   }
 
-  const visiblePriorArtResults = highConfidence.slice(0, visibleLimit);
+  const visiblePriorArtResults = highConfidence
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+    .slice(0, visibleLimit)
+    .map(entry => entry.item);
   return {
     gatedCandidates,
     visiblePriorArtResults,

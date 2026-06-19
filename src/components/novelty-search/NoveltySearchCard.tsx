@@ -37,7 +37,7 @@ export default function NoveltySearchCard({ onClick }: NoveltySearchCardProps) {
             </div>
             <div className="flex items-center gap-2">
               <Search className="h-4 w-4 text-purple-600" />
-              <span>PQAI Integration</span>
+              <span>International Patent Search</span>
             </div>
           </div>
 

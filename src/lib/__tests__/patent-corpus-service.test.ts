@@ -3,9 +3,18 @@ import type { ExtractedPatentRecord } from '@/lib/patent-corpus-extractor'
 
 const mocks = vi.hoisted(() => ({
   prisma: {
+    $queryRaw: vi.fn(),
+    localPatent: {
+      findUnique: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
     localPatentEmbedding: {
+      findUnique: vi.fn(),
+      create: vi.fn(),
       findMany: vi.fn(),
       updateMany: vi.fn(),
+      update: vi.fn(),
       deleteMany: vi.fn(),
     },
   },
@@ -18,6 +27,9 @@ vi.mock('@/lib/prisma', () => ({
 import {
   claimNextPatentEmbeddings,
   mergeLocalPatentDataForImport,
+  PATENT_CORPUS_SOURCE_INDIAN,
+  PATENT_CORPUS_SOURCE_PQAI,
+  persistPqaiPatentResults,
 } from '@/lib/patent-corpus-service'
 
 function patentRecord(overrides: Partial<ExtractedPatentRecord> = {}): ExtractedPatentRecord {
@@ -53,6 +65,8 @@ function patentRecord(overrides: Partial<ExtractedPatentRecord> = {}): Extracted
 describe('patent corpus service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.prisma.$queryRaw.mockResolvedValue([])
+    mocks.prisma.localPatentEmbedding.deleteMany.mockResolvedValue({ count: 0 })
   })
 
   it('claims due failed embeddings under the max attempt cap', async () => {
@@ -105,5 +119,93 @@ describe('patent corpus service', () => {
     expect(merged.ipIndiaCapturedAt).toBe(capturedAt)
     expect(merged.ragText).toBe('enriched rag')
     expect(merged.embeddingText).toBe('enriched embedding')
+    expect(merged.corpusSources).toEqual([PATENT_CORPUS_SOURCE_INDIAN])
+  })
+
+  it('persists PQAI results as PQAI corpus records and queues embeddings', async () => {
+    mocks.prisma.localPatent.findUnique.mockResolvedValue(null)
+    mocks.prisma.localPatent.create.mockImplementation(async ({ data }: any) => ({ id: 101, ...data }))
+    mocks.prisma.localPatentEmbedding.findUnique.mockResolvedValue(null)
+    mocks.prisma.localPatentEmbedding.create.mockResolvedValue({ id: 'embedding-1' })
+
+    const stats = await persistPqaiPatentResults([
+      {
+        providerId: 'pqai',
+        sourceProvider: 'pqai',
+        publicationNumber: 'US2026000001A1',
+        title: 'Stored international patent',
+        abstract: 'A technical international patent abstract.',
+        inventors: ['Inventor One'],
+        classifications: ['G06F 16/00'],
+        relevanceScore: 0.82,
+        raw: { result_id: 'pqai-1' },
+      },
+    ] as any, { query: 'international patent query', fetchedAt: new Date('2026-06-19T00:00:00.000Z') }, mocks.prisma)
+
+    expect(stats).toMatchObject({ created: 1, updated: 0, queuedEmbeddings: 1, skipped: 0 })
+    expect(mocks.prisma.localPatent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        publicationNumber: 'US2026000001A1',
+        corpusSources: [PATENT_CORPUS_SOURCE_PQAI],
+        pqaiDetails: expect.objectContaining({
+          provider: 'pqai',
+          query: 'international patent query',
+        }),
+        embeddingText: expect.stringContaining('Stored international patent'),
+      }),
+    }))
+    expect(mocks.prisma.localPatentEmbedding.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        localPatentId: 101,
+        status: 'QUEUED',
+      }),
+    }))
+  })
+
+  it('adds PQAI source to existing Indian records without replacing enriched fields', async () => {
+    const capturedAt = new Date('2026-01-01T00:00:00.000Z')
+    mocks.prisma.localPatent.findUnique.mockResolvedValue({
+      id: 7,
+      publicationNumber: 'IN202411077405A',
+      title: 'Indian title',
+      abstract: 'Indian abstract',
+      claimsText: '1. Captured claim.',
+      descriptionText: 'Captured description.',
+      ipIndiaDetails: { source: 'IP India' },
+      ipIndiaCapturedAt: capturedAt,
+      ragText: 'enriched rag',
+      embeddingText: 'enriched embedding',
+      corpusSources: [PATENT_CORPUS_SOURCE_INDIAN],
+      inventors: [],
+      classifications: ['A01G 25/16'],
+    })
+    mocks.prisma.localPatent.update.mockImplementation(async ({ data }: any) => ({ id: 7, ...data }))
+    mocks.prisma.localPatentEmbedding.findUnique.mockResolvedValue(null)
+    mocks.prisma.localPatentEmbedding.create.mockResolvedValue({ id: 'embedding-2' })
+
+    await persistPqaiPatentResults([
+      {
+        providerId: 'pqai',
+        sourceProvider: 'pqai',
+        publicationNumber: 'IN202411077405A',
+        title: 'PQAI title',
+        abstract: 'PQAI abstract',
+      },
+    ] as any, {}, mocks.prisma)
+
+    expect(mocks.prisma.localPatent.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 7 },
+      data: expect.objectContaining({
+        title: 'Indian title',
+        abstract: 'Indian abstract',
+        claimsText: '1. Captured claim.',
+        descriptionText: 'Captured description.',
+        ipIndiaDetails: { source: 'IP India' },
+        ipIndiaCapturedAt: capturedAt,
+        ragText: 'enriched rag',
+        embeddingText: 'enriched embedding',
+        corpusSources: [PATENT_CORPUS_SOURCE_INDIAN, PATENT_CORPUS_SOURCE_PQAI],
+      }),
+    }))
   })
 })

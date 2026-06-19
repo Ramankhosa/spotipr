@@ -3,6 +3,45 @@ import { prisma } from '@/lib/prisma';
 import { verifyJWT } from '@/lib/auth';
 import crypto from 'crypto';
 
+function parseOrigin(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const normalized = value.startsWith('http://') || value.startsWith('https://')
+      ? value
+      : `https://${value}`;
+    return new URL(normalized).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalOrigin(value: string | null | undefined): boolean {
+  return Boolean(value && /\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(value));
+}
+
+function getShareBaseUrl(request: NextRequest): string {
+  const configured = parseOrigin(
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.NEXTAUTH_URL ||
+    process.env.SITE_URL
+  );
+
+  if (configured && !(process.env.NODE_ENV === 'production' && isLocalOrigin(configured))) {
+    return configured;
+  }
+
+  const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+  const forwardedProto = request.headers.get('x-forwarded-proto') || (forwardedHost?.includes('localhost') ? 'http' : 'https');
+  const forwardedOrigin = parseOrigin(forwardedHost ? `${forwardedProto}://${forwardedHost}` : request.nextUrl.origin);
+
+  if (forwardedOrigin && !(process.env.NODE_ENV === 'production' && isLocalOrigin(forwardedOrigin))) {
+    return forwardedOrigin;
+  }
+
+  return process.env.NODE_ENV === 'production' ? 'https://patentnest.ai' : (forwardedOrigin || 'http://localhost:3000');
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: { searchId: string } }
@@ -75,7 +114,7 @@ export async function POST(
     const shareToken = Buffer.from(`${searchId}.${timestamp}.${hash}`).toString('base64url');
 
     // Generate shareable URL
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    const baseUrl = getShareBaseUrl(request);
     const shareUrl = `${baseUrl}/share/novelty-report/${searchId}?token=${shareToken}`;
 
     return NextResponse.json({

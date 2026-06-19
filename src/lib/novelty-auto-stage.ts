@@ -1,3 +1,5 @@
+import { getRawStage1SearchResults } from './novelty-stage1-results';
+
 export type NoveltyAutoStageNumber = '1' | '1.5' | '3' | '4';
 export type NoveltyAutoVisibleTab = '2' | '3' | '4' | '5';
 
@@ -16,6 +18,7 @@ export interface NoveltyAutoStageState {
   hasStage1Results?: boolean;
   hasStage15Results?: boolean;
   hasVisiblePriorArtResults?: boolean;
+  hasBorderlinePriorArtResults?: boolean;
   stage15GateStatus?: string | null;
   hasStage35Results?: boolean;
   hasStage4Results?: boolean;
@@ -48,18 +51,7 @@ export function isStage0EffectivelyApproved(state: NoveltyAutoStageState): boole
 }
 
 export function getStage1ResultsFromNoveltyResults(results: any): any[] {
-  const root = results || {};
-  const stage1 = root.stage1 || {};
-  const candidates =
-    root.retrievalCandidates ||
-    stage1.retrievalCandidates ||
-    root.visiblePriorArtResults ||
-    stage1.visiblePriorArtResults ||
-    root.priorArtResults ||
-    stage1.priorArtResults ||
-    root.pqaiResults ||
-    stage1.pqaiResults;
-  return Array.isArray(candidates) ? candidates : [];
+  return getRawStage1SearchResults(results);
 }
 
 export function hasStage15ResultsInNoveltyResults(results: any): boolean {
@@ -133,6 +125,7 @@ export function buildNoveltyAutoStageState(
     hasStage1Results: getStage1ResultsFromNoveltyResults(results).length > 0,
     hasStage15Results: hasStage15ResultsInNoveltyResults(results),
     hasVisiblePriorArtResults: Array.isArray(visiblePriorArt) && visiblePriorArt.length > 0,
+    hasBorderlinePriorArtResults: Array.isArray(gate?.borderline) && gate.borderline.length > 0,
     stage15GateStatus: typeof gate?.gateStatus === 'string' ? gate.gateStatus : null,
     hasStage35Results: hasStage35ResultsInNoveltyResults(results),
     hasStage4Results: hasStage4ResultsInNoveltyResults(results),
@@ -161,7 +154,7 @@ export function getNextNoveltyAutoStage(state: NoveltyAutoStageState): NoveltyAu
   if (state.status === 'STAGE_0_COMPLETED') {
     if (!state.hasStage1Results) return { type: 'run', stageNumber: '1', visibleTab: '2' };
     if (!state.hasStage15Results) return { type: 'run', stageNumber: '1.5', visibleTab: '3' };
-    if (!state.hasVisiblePriorArtResults && state.stage15GateStatus !== 'failed') return { type: 'stop', reason: 'NO_PATENTS' };
+    if (state.hasVisiblePriorArtResults === false && !state.hasBorderlinePriorArtResults && state.stage15GateStatus !== 'failed') return { type: 'stop', reason: 'NO_PATENTS' };
     if (!state.hasStage35Results) return { type: 'run', stageNumber: '3', visibleTab: '4' };
     return { type: 'run', stageNumber: '4', visibleTab: '5' };
   }
@@ -172,7 +165,7 @@ export function getNextNoveltyAutoStage(state: NoveltyAutoStageState): NoveltyAu
     }
     if (!state.hasStage1Results) return { type: 'run', stageNumber: '1', visibleTab: '2' };
     if (!state.hasStage15Results) return { type: 'run', stageNumber: '1.5', visibleTab: '3' };
-    if (!state.hasVisiblePriorArtResults && state.stage15GateStatus !== 'failed') return { type: 'stop', reason: 'NO_PATENTS' };
+    if (state.hasVisiblePriorArtResults === false && !state.hasBorderlinePriorArtResults && state.stage15GateStatus !== 'failed') return { type: 'stop', reason: 'NO_PATENTS' };
     if (!state.hasStage35Results) return { type: 'run', stageNumber: '3', visibleTab: '4' };
     return { type: 'run', stageNumber: '4', visibleTab: '5' };
   }

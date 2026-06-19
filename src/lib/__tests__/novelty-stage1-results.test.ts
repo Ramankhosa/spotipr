@@ -3,6 +3,7 @@ import {
   DEFAULT_STAGE1_RESULT_FILTERS,
   filterAndPaginateStage1Results,
   filterStage1Results,
+  getRawStage1SearchResults,
   getStage1ScorePercent,
   type Stage1ResultFilters,
 } from '@/lib/novelty-stage1-results';
@@ -13,6 +14,25 @@ const filters = (overrides: Partial<Stage1ResultFilters> = {}): Stage1ResultFilt
 });
 
 describe('novelty Stage 1 result helpers', () => {
+  test('raw search results prefer retrieval candidates over relevance-visible matches', () => {
+    const results = {
+      stage1: {
+        retrievalCandidates: [
+          { publicationNumber: 'RAW-1' },
+          { publicationNumber: 'RAW-2' },
+        ],
+        visiblePriorArtResults: [
+          { publicationNumber: 'VISIBLE-1' },
+        ],
+        pqaiResults: [
+          { publicationNumber: 'VISIBLE-1' },
+        ],
+      },
+    };
+
+    expect(getRawStage1SearchResults(results).map(item => item.publicationNumber)).toEqual(['RAW-1', 'RAW-2']);
+  });
+
   test('pagination splits 45 results into three pages at page size 20', () => {
     const results = Array.from({ length: 45 }, (_, index) => ({
       publicationNumber: `IN${index + 1}`,

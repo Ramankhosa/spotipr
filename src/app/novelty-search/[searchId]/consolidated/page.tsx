@@ -4,41 +4,61 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ConsolidatedNoveltyReport from '@/components/novelty-search/ConsolidatedNoveltyReport';
 import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/lib/auth-context';
 
 export default function ConsolidatedNoveltyReportPage() {
   const params = useParams();
   const searchId = params?.searchId as string;
+  const { user, isLoading: isAuthLoading, authFetch } = useAuth();
   const [searchData, setSearchData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!searchId) return;
+    if (!searchId || isAuthLoading) return;
+
+    if (!user) {
+      setError('Please sign in to view this report.');
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
     const fetchSearchData = async () => {
       try {
         setIsLoading(true);
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-        const response = await fetch(`/api/novelty-search/${searchId}`, {
-          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        setError(null);
+
+        const response = await authFetch(`/api/novelty-search/${searchId}`, {
           cache: 'no-store'
         });
-        if (!response.ok) throw new Error('Failed to fetch search data');
-        const data = await response.json();
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          throw new Error(data?.error || data?.message || 'Failed to fetch search data');
+        }
+
         if (data.success && data.search) {
-          setSearchData(data.search);
+          if (!cancelled) setSearchData(data.search);
         } else {
           throw new Error('Invalid response format');
         }
       } catch (err: any) {
-        setError(err.message || 'Failed to load report');
+        if (!cancelled) setError(err.message || 'Failed to load report');
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
-    fetchSearchData();
-  }, [searchId]);
 
-  if (isLoading) {
+    fetchSearchData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authFetch, isAuthLoading, searchId, user]);
+
+  if (isLoading || isAuthLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
@@ -51,7 +71,11 @@ export default function ConsolidatedNoveltyReportPage() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <p className="text-red-600 mb-4">Error: {error}</p>
-          <a href="/dashboard" className="text-blue-600 hover:underline">Return to Dashboard</a>
+          {!user ? (
+            <a href={`/login?redirect=${encodeURIComponent(`/novelty-search/${searchId}/consolidated`)}`} className="text-blue-600 hover:underline">Sign in to view report</a>
+          ) : (
+            <a href="/dashboard" className="text-blue-600 hover:underline">Return to Dashboard</a>
+          )}
         </div>
       </div>
     );
@@ -76,4 +100,3 @@ export default function ConsolidatedNoveltyReportPage() {
     </div>
   );
 }
-

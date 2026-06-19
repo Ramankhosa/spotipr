@@ -65,4 +65,33 @@ describe('buildVisiblePriorArtResults', () => {
     expect(result.visiblePriorArtResults).toHaveLength(30);
     expect(result.highConfidenceCount).toBe(35);
   });
+
+  test('sorts visible matches by rerank score before applying the visible cap', () => {
+    const result = buildVisiblePriorArtResults({
+      candidates: [candidate('IN1'), candidate('IN2'), candidate('IN3')],
+      byPn: {
+        IN1: { pn: 'IN1', decision: 'accept', score: 0.71, evidence_quality: 'medium' },
+        IN2: { pn: 'IN2', decision: 'accept', score: 0.95, evidence_quality: 'high' },
+        IN3: { pn: 'IN3', decision: 'accept', score: 0.8, evidence_quality: 'medium' },
+      },
+      minimumVisibleConfidence: 0.7,
+      visibleLimit: 2,
+    });
+
+    expect(result.visiblePublicationNumbers).toEqual(['IN2', 'IN3']);
+  });
+
+  test('keeps missing evidence quality hidden even with an accepted high score', () => {
+    const result = buildVisiblePriorArtResults({
+      candidates: [candidate('IN1')],
+      byPn: {
+        IN1: { pn: 'IN1', decision: 'accept', score: 0.95 },
+      },
+      minimumVisibleConfidence: 0.7,
+      visibleLimit: 30,
+    });
+
+    expect(result.visiblePriorArtResults).toHaveLength(0);
+    expect(result.gatedCandidates).toHaveLength(1);
+  });
 });

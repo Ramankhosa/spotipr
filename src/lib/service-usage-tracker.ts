@@ -181,8 +181,26 @@ async function getPlanQuotaLimits(tenantId: string, serviceType: ServiceType): P
   const planFeature = tenantPlan.plan.planFeatures?.find(
     pf => pf.feature.code === featureCode
   )
+
+  const feature = planFeature?.feature || await prisma.feature.findUnique({
+    where: { code: featureCode as any }
+  })
+
+  const tenantOverride = feature ? await prisma.tenantFeatureOverride.findUnique({
+    where: {
+      tenantId_featureId: {
+        tenantId,
+        featureId: feature.id
+      }
+    }
+  }) : null
+
+  const activeOverride = (
+    tenantOverride &&
+    (!tenantOverride.expiresAt || tenantOverride.expiresAt > new Date())
+  ) ? tenantOverride : null
   
-  if (!planFeature) {
+  if (!planFeature && !activeOverride) {
     return {
       dailyCompletionLimit: null,
       monthlyCompletionLimit: null,
@@ -190,12 +208,25 @@ async function getPlanQuotaLimits(tenantId: string, serviceType: ServiceType): P
       monthlyTokenLimit: null
     }
   }
+
+  const dailyCompletionLimit = activeOverride && activeOverride.dailyQuota !== null
+    ? activeOverride.dailyQuota
+    : planFeature?.dailyQuota ?? null
+  const monthlyCompletionLimit = activeOverride && activeOverride.monthlyQuota !== null
+    ? activeOverride.monthlyQuota
+    : planFeature?.monthlyQuota ?? null
+  const dailyTokenLimit = activeOverride && activeOverride.dailyTokenLimit !== null
+    ? activeOverride.dailyTokenLimit
+    : (planFeature as any)?.dailyTokenLimit || null
+  const monthlyTokenLimit = activeOverride && activeOverride.monthlyTokenLimit !== null
+    ? activeOverride.monthlyTokenLimit
+    : (planFeature as any)?.monthlyTokenLimit || null
   
   return {
-    dailyCompletionLimit: planFeature.dailyQuota,
-    monthlyCompletionLimit: planFeature.monthlyQuota,
-    dailyTokenLimit: (planFeature as any).dailyTokenLimit || null,
-    monthlyTokenLimit: (planFeature as any).monthlyTokenLimit || null
+    dailyCompletionLimit,
+    monthlyCompletionLimit,
+    dailyTokenLimit,
+    monthlyTokenLimit
   }
 }
 

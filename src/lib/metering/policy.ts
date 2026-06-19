@@ -175,6 +175,7 @@ export function createPolicyService(config: MeteringConfig): PolicyService {
           where: {
             OR: [
               { scope: 'plan', scopeId: tenantPlan.plan.code },
+              { scope: 'plan', scopeId: tenantPlan.plan.id },
               { scope: 'tenant', scopeId: tenantId }
             ],
             ...(taskCode && { taskCode })
