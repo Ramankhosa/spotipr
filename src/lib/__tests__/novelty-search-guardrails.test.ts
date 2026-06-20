@@ -134,7 +134,8 @@ describe('novelty search guardrails', () => {
       '"feature_type": "core_technical|implementation|novelty_candidate|generic_weak"'
     );
     expect(source).toContain('Score means invention-level relevance, not mere feature overlap');
-    expect(source).toContain('If overlap is only a generic component, keep score below 0.40');
+    expect(source).toContain('A component patent should be kept as component');
+    expect(source).toContain('If overlap is only a generic component with no concrete feature support');
     expect(source).toContain('A patent is not relevant merely because it discloses one generic component');
     expect(PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3).toContain(
       'A feature marked Absent or Unknown in one patent is not automatically unique'

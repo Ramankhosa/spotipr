@@ -659,7 +659,7 @@ export default function NoveltySearchWorkflow({
   const hasStage15 = useCallback((): boolean => {
     const r: any = searchState.results || {};
     const gate = r?.aiRelevance || r?.stage1?.aiRelevance;
-    return !!(gate && (Array.isArray(gate.accepted) || Array.isArray(gate.borderline) || Array.isArray(gate.rejected)));
+    return !!(gate && (Array.isArray(gate.accepted) || Array.isArray(gate.component) || Array.isArray(gate.borderline) || Array.isArray(gate.rejected)));
   }, [searchState.results]);
 
   const hasStage15Results = useMemo(() => hasStage15(), [hasStage15]);
@@ -687,6 +687,7 @@ export default function NoveltySearchWorkflow({
     const aiRel = root?.aiRelevance || root?.stage1?.aiRelevance || {};
     return normalizeIpIndiaApplicationNumbers([
       ...(Array.isArray(aiRel.accepted) ? aiRel.accepted : []),
+      ...(Array.isArray(aiRel.component) ? aiRel.component : []),
       ...(Array.isArray(aiRel.borderline) ? aiRel.borderline : []),
     ]);
   }, [searchState.results]);
@@ -1097,7 +1098,7 @@ export default function NoveltySearchWorkflow({
       const relevanceMessages = [
         'Reviewing top provider-ranked candidates...',
         'Comparing candidates against the invention features...',
-        'Separating accepted, borderline, and rejected patents...',
+        'Separating direct, component, borderline, and rejected patents...',
         'Preparing relevance analysis...'
       ];
       for (let i = 0; i < relevanceMessages.length; i++) {
@@ -1113,10 +1114,11 @@ export default function NoveltySearchWorkflow({
       const root: any = searchState.results || {};
       const aiRel = root?.aiRelevance || root?.stage1?.aiRelevance || {};
       const acceptedCount = Array.isArray(aiRel.accepted) ? aiRel.accepted.length : 0;
+      const componentCount = Array.isArray(aiRel.component) ? aiRel.component.length : 0;
       const borderlineCount = Array.isArray(aiRel.borderline) ? aiRel.borderline.length : 0;
       const stage35aMessages = [
-        acceptedCount === 0 && borderlineCount > 0
-          ? 'No direct high-confidence matches; selecting borderline references...'
+        acceptedCount === 0 && (componentCount > 0 || borderlineCount > 0)
+          ? 'No direct high-confidence matches; selecting component/borderline references...'
           : 'Selecting top patents by relevance...',
         'Applying patent selection limits...',
         'Canonicalizing patents for feature mapping...',
@@ -1173,9 +1175,10 @@ export default function NoveltySearchWorkflow({
       } else if (stageNumber === '1.5' || stageNumber === '2') {
         const aiRel = data?.results?.aiRelevance || data?.results?.stage1?.aiRelevance || {};
         const acc = Array.isArray(aiRel.accepted) ? aiRel.accepted.length : 0;
+        const cmp = Array.isArray(aiRel.component) ? aiRel.component.length : 0;
         const bor = Array.isArray(aiRel.borderline) ? aiRel.borderline.length : 0;
         const rej = Array.isArray(aiRel.rejected) ? aiRel.rejected.length : 0;
-        setStage1Message(`Relevance analysis complete. Accepted ${acc}, borderline ${bor}, rejected ${rej}.`);
+        setStage1Message(`Relevance analysis complete. Direct ${acc}, component ${cmp}, borderline ${bor}, rejected ${rej}.`);
         await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
@@ -2583,7 +2586,7 @@ export default function NoveltySearchWorkflow({
               <div>
                 <div className="text-sm font-semibold text-indigo-950">Next: Relevance Analysis</div>
                 <div className="text-xs text-indigo-800">
-                  Review these returned patents, then run the LLM relevance gate to separate accepted, borderline, and rejected records.
+                  Review these returned patents, then run the LLM relevance gate to separate direct, component, borderline, and rejected records.
                 </div>
               </div>
               <Button
@@ -2953,10 +2956,11 @@ export default function NoveltySearchWorkflow({
     }
 
     const acc = Array.isArray(aiRel.accepted) ? aiRel.accepted.length : 0;
+    const cmp = Array.isArray(aiRel.component) ? aiRel.component.length : 0;
     const bor = Array.isArray(aiRel.borderline) ? aiRel.borderline.length : 0;
     const rej = Array.isArray(aiRel.rejected) ? aiRel.rejected.length : 0;
-    const total = acc + bor + rej;
-    const borderlineOnly = acc === 0 && bor > 0;
+    const total = acc + cmp + bor + rej;
+    const nonDirectOnly = acc === 0 && (cmp > 0 || bor > 0);
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -2985,7 +2989,7 @@ export default function NoveltySearchWorkflow({
                   className="rounded-lg"
                   onClick={() => openIpIndiaForPatentNumbers(aiRelevantPatentNumbers)}
                   disabled={aiRelevantPatentNumbers.length === 0}
-                  title="Open IP India Public Search and preload accepted/borderline application numbers"
+                  title="Open IP India Public Search and preload direct/component/borderline application numbers"
                 >
                   <ExternalLink className="mr-2 h-4 w-4" />
                   IP India Search
@@ -2997,10 +3001,14 @@ export default function NoveltySearchWorkflow({
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-4 gap-4 mb-6">
+            <div className="grid grid-cols-5 gap-4 mb-6">
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-emerald-600">{acc}</div>
-                <div className="text-xs font-medium text-slate-500">Accepted</div>
+                <div className="text-xs font-medium text-slate-500">Direct</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
+                <div className="text-3xl font-bold text-sky-600">{cmp}</div>
+                <div className="text-xs font-medium text-slate-500">Component</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
                 <div className="text-3xl font-bold text-amber-600">{bor}</div>
@@ -3016,21 +3024,32 @@ export default function NoveltySearchWorkflow({
               </div>
             </div>
 
-            {borderlineOnly && (
+            {nonDirectOnly && (
               <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                No direct high-confidence patents were accepted. Deep Analysis will map the borderline references so the report can still compare the closest available evidence instead of stopping here.
+                No direct high-confidence patents were accepted. Deep Analysis will map component and/or borderline references so the report still captures partial prior-art evidence instead of stopping here.
               </div>
             )}
 
-            <div className="grid md:grid-cols-2 gap-6">
+            <div className="grid md:grid-cols-3 gap-6">
               <div>
                 <div className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                  Accepted Patents
+                  Direct Patents
                 </div>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {Array.isArray(aiRel.accepted) && aiRel.accepted.slice(0, 10).map((pn: string, i: number) => (
                     <div key={i} className="text-xs text-slate-700 p-2 bg-emerald-50 rounded">{pn}</div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-sky-500" />
+                  Component / Feature-Level Patents
+                </div>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {Array.isArray(aiRel.component) && aiRel.component.slice(0, 10).map((pn: string, i: number) => (
+                    <div key={i} className="text-xs text-slate-700 p-2 bg-sky-50 rounded">{pn}</div>
                   ))}
                 </div>
               </div>

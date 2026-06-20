@@ -59,6 +59,8 @@ interface CitationView {
   assignees: string;
   relevance: number | null;
   evidenceQuality: string;
+  matchCategory: 'direct' | 'component' | 'borderline' | 'rejected';
+  matchCategoryLabel: string;
   noveltyThreat: string;
   coverageScore: number;
   claimImpactSummary: string;
@@ -420,6 +422,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
       assignees: item.assignees,
       relevance: item.relevanceScore,
       evidenceQuality: item.evidenceQuality,
+      matchCategory: item.matchCategory,
+      matchCategoryLabel: item.matchCategoryLabel,
       noveltyThreat: item.noveltyThreat,
       coverageScore: item.coverage.score,
       claimImpactSummary: item.claimImpactSummary,
@@ -561,7 +565,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 ['1.3', 'Key Features'],
                 ['1.4', 'Scoring Legend'],
                 ['1.5', 'Summary of Relevant Citations'],
-                ['1.6', 'Key Feature Analysis'],
+                ['1.6', 'Component / Feature-Level Prior Art'],
+                ['1.7', 'Key Feature Analysis'],
                 ['2.1', 'Details of Relevant Patent Citations'],
                 ['2.3', 'List of Other Shortlisted Citations'],
                 ['3', 'Applicant / Assignee Landscape'],
@@ -658,6 +663,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                   <HeaderCell className="w-16">S.No.</HeaderCell>
                   <HeaderCell className="w-40">Citation No.</HeaderCell>
                   <HeaderCell>Title</HeaderCell>
+                  <HeaderCell className="w-44">Match Category</HeaderCell>
                   <HeaderCell className="w-40">Retrieval Relevance</HeaderCell>
                   <HeaderCell className="w-36">Evidence</HeaderCell>
                 </tr>
@@ -668,6 +674,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                     <Cell>{index + 1}</Cell>
                     <Cell><a className="font-semibold text-blue-700 underline" href={`#citation-${index + 1}`}>{citation.publicationNumber}</a></Cell>
                     <Cell>{citation.title}</Cell>
+                    <Cell>{citation.matchCategoryLabel}</Cell>
                     <Cell>{pct(citation.relevance)}</Cell>
                     <Cell>{citation.evidenceQuality}</Cell>
                   </tr>
@@ -676,7 +683,43 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
             </DenseTable>
           </Section>
 
-          <Section id="section-1-6" title="1.6 Key Feature Analysis">
+          <Section id="section-1-6" title="1.6 Component / Feature-Level Prior Art">
+            <p className="mb-4 max-w-4xl text-sm leading-6 text-slate-700">
+              These patents disclose one or more relevant invention features or subsystems, but they are not treated as full invention-level matches by themselves.
+            </p>
+            {reportData.citations.some(citation => citation.matchCategory === 'component') ? (
+              <DenseTable>
+                <thead>
+                  <tr>
+                    <HeaderCell className="w-16">S.No.</HeaderCell>
+                    <HeaderCell className="w-40">Citation No.</HeaderCell>
+                    <HeaderCell>Title</HeaderCell>
+                    <HeaderCell className="w-40">Matched Scope</HeaderCell>
+                    <HeaderCell className="w-40">Retrieval Relevance</HeaderCell>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportData.citations
+                    .filter(citation => citation.matchCategory === 'component')
+                    .map((citation, index) => (
+                      <tr className="print-row" key={citation.publicationNumber}>
+                        <Cell>{index + 1}</Cell>
+                        <Cell><a className="font-semibold text-blue-700 underline" href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`}>{citation.publicationNumber}</a></Cell>
+                        <Cell>{citation.title}</Cell>
+                        <Cell>{citation.matchCategoryLabel}</Cell>
+                        <Cell>{pct(citation.relevance)}</Cell>
+                      </tr>
+                    ))}
+                </tbody>
+              </DenseTable>
+            ) : (
+              <div className="rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm text-slate-700">
+                No separate component / feature-level references were classified in this run.
+              </div>
+            )}
+          </Section>
+
+          <Section id="section-1-7" title="1.7 Key Feature Analysis">
             <p className="mb-4 max-w-4xl text-sm leading-6 text-slate-700">
               Each cell reflects whether the cited patent record appears to disclose the corresponding key feature. Feature coverage is separate from retrieval relevance and legal conclusions.
             </p>
@@ -721,7 +764,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                     <tbody>
                       <tr><Cell className="w-48 font-semibold">Publication No:</Cell><Cell>{citation.publicationNumber}</Cell><Cell className="w-48 font-semibold">Publication Date:</Cell><Cell>{citation.publicationDate}</Cell></tr>
                       <tr><Cell className="font-semibold">Application No:</Cell><Cell>{citation.applicationNumber}</Cell><Cell className="font-semibold">Application Date:</Cell><Cell>{citation.filingDate}</Cell></tr>
-                      <tr><Cell className="font-semibold">Priority Date:</Cell><Cell>{citation.priorityDate}</Cell><Cell className="font-semibold">Overlap Category:</Cell><Cell><span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${threatClass(citation.noveltyThreat)}`}>{citation.noveltyThreat}</span></Cell></tr>
+                      <tr><Cell className="font-semibold">Priority Date:</Cell><Cell>{citation.priorityDate}</Cell><Cell className="font-semibold">Match Category:</Cell><Cell>{citation.matchCategoryLabel}</Cell></tr>
+                      <tr><Cell className="font-semibold">Overlap Category:</Cell><Cell><span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${threatClass(citation.noveltyThreat)}`}>{citation.noveltyThreat}</span></Cell><Cell className="font-semibold">Evidence Quality:</Cell><Cell>{citation.evidenceQuality}</Cell></tr>
                       <tr><Cell className="font-semibold">Feature Coverage:</Cell><Cell>{pct(citation.coverageScore)}</Cell><Cell className="font-semibold">Retrieval Relevance:</Cell><Cell>{pct(citation.relevance)}</Cell></tr>
                       <tr><Cell className="font-semibold">Inventor(s):</Cell><Cell colSpan={3}>{citation.inventors}</Cell></tr>
                       <tr><Cell className="font-semibold">Assignee(s):</Cell><Cell colSpan={3}>{citation.assignees}</Cell></tr>

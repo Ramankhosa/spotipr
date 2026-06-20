@@ -153,8 +153,8 @@ export default function NoveltySearchReportPage({
   
   console.log(`Stage 1 deduplicated patents: ${patentsToShowRaw.length} -> ${patentsToShow.length}`);
 
-  const gateCount = aiRelevance && (Array.isArray(aiRelevance.accepted) || Array.isArray(aiRelevance.borderline))
-    ? ((aiRelevance.accepted?.length || 0) + (aiRelevance.borderline?.length || 0))
+  const gateCount = aiRelevance && (Array.isArray(aiRelevance.accepted) || Array.isArray(aiRelevance.component) || Array.isArray(aiRelevance.borderline))
+    ? ((aiRelevance.accepted?.length || 0) + (aiRelevance.component?.length || 0) + (aiRelevance.borderline?.length || 0))
     : null;
   const shortlistedCount = shortlistedPns.size > 0 ? shortlistedPns.size : (gateCount ?? selectedCount);
 

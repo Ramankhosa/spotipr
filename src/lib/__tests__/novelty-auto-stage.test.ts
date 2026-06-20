@@ -77,6 +77,33 @@ describe('novelty auto stage progression', () => {
     });
   });
 
+  test('runs deep analysis when relevance has only component candidates', () => {
+    const state = buildNoveltyAutoStageState({
+      status: 'STAGE_1_COMPLETED',
+      currentStage: 'STAGE_3_5',
+      results: {
+        stage1: {
+          retrievalCandidates: [{ publicationNumber: 'IN1' }],
+          aiRelevance: {
+            accepted: [],
+            component: ['IN1'],
+            borderline: [],
+            rejected: [],
+            gateStatus: 'complete',
+          },
+        },
+      },
+    }, true);
+
+    expect(state.hasStage15Results).toBe(true);
+    expect(state.hasBorderlinePriorArtResults).toBe(true);
+    expect(runAction(state)).toEqual({
+      type: 'run',
+      stageNumber: '3',
+      visibleTab: '4',
+    });
+  });
+
   test('runs final report after deep analysis is complete', () => {
     expect(runAction({
       status: 'STAGE_3_5_COMPLETED',

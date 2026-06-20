@@ -2,6 +2,9 @@ export interface NoveltyReportCountSummary {
   patentsSearched: number;
   patentsFound: number;
   directlyRelevant: number;
+  directMatches: number;
+  componentMatches: number;
+  borderlineMatches: number;
   screened: number;
   candidateMatches: number;
   detailedCitations: number;
@@ -75,7 +78,10 @@ export function buildNoveltyReportCountSummary(stage1: any, stage35: any): Novel
     stage1?.priorArtResults,
     stage1?.pqaiResults
   );
-  const gateMatchUnique = uniquePatentCount(aiRelevance?.accepted, aiRelevance?.borderline);
+  const directMatches = uniquePatentCount(aiRelevance?.accepted);
+  const componentMatches = uniquePatentCount(aiRelevance?.component);
+  const borderlineMatches = uniquePatentCount(aiRelevance?.borderline);
+  const gateMatchUnique = uniquePatentCount(aiRelevance?.accepted, aiRelevance?.component, aiRelevance?.borderline);
   const patentsSearched = finiteCount(
     stage1?.retrievedCount,
     aiRelevance?.retrievedCount,
@@ -91,14 +97,18 @@ export function buildNoveltyReportCountSummary(stage1: any, stage35: any): Novel
     ),
     patentsSearched
   );
+  const hasComponentCategory = Array.isArray(aiRelevance?.component);
   const directlyRelevant = boundedCount(
-    finiteCount(
-      detailedCitations,
-      stage1?.visibleCount,
-      aiRelevance?.visibleCount,
-      aiRelevance?.highConfidenceCount,
-      visibleUnique
-    ),
+    hasComponentCategory
+      ? directMatches
+      : finiteCount(
+          directMatches,
+          stage1?.visibleCount,
+          aiRelevance?.visibleCount,
+          aiRelevance?.highConfidenceCount,
+          visibleUnique,
+          detailedCitations
+        ),
     patentsSearched
   );
   const candidateMatches = boundedCount(
@@ -111,6 +121,9 @@ export function buildNoveltyReportCountSummary(stage1: any, stage35: any): Novel
     patentsSearched,
     patentsFound,
     directlyRelevant,
+    directMatches: boundedCount(directMatches, patentsSearched),
+    componentMatches: boundedCount(componentMatches, patentsSearched),
+    borderlineMatches: boundedCount(borderlineMatches, patentsSearched),
     screened,
     candidateMatches,
     detailedCitations,

@@ -54,13 +54,18 @@ describe('buildNoveltyAttorneyReportModel', () => {
           },
         ],
         aiRelevance: {
+          accepted: ['IN123A'],
+          component: ['IN456A'],
+          borderline: [],
           byPn: {
             IN123: {
+              decision: 'accept',
               score: 0.82,
               rerankScore: 0.82,
               evidence_quality: 'high',
             },
             IN456: {
+              decision: 'component',
               score: 0.61,
               rerankScore: 0.61,
               evidence_quality: 'medium',
@@ -160,7 +165,8 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.countLabels.map(item => item.label)).toEqual([
       'Candidate records retrieved/ranked',
       'Shortlisted candidate citations',
-      'High-relevance mapped citations',
+      'Direct invention-level mapped citations',
+      'Component / feature-level mapped citations',
       'Citations selected for detailed feature mapping',
     ]);
     expect(model.scoringLegend.map(item => item.label)).toEqual(expect.arrayContaining([
@@ -171,6 +177,11 @@ describe('buildNoveltyAttorneyReportModel', () => {
     ]));
 
     expect(model.citations[0]).toMatchObject({ citationNo: 'D1', publicationNumber: 'IN123A' });
+    expect(model.citations[0]).toMatchObject({
+      matchCategory: 'direct',
+      matchCategoryLabel: 'Direct invention-level match',
+    });
+    expect(model.componentCitations.map(item => item.publicationNumber)).toEqual(['IN456A']);
     expect(model.comparisons[0].technicalDisclosure).toContain('soil moisture sensor');
     expect(model.comparisons[0].rows).toHaveLength(3);
     expect(model.comparisons[0].noveltyThreat).toBe('Related / moderate-overlap');
@@ -211,7 +222,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.counts).toMatchObject({
       searched: 180,
       found: 2,
-      directlyRelevant: 2,
+      directlyRelevant: 1,
       analyzed: 2,
     });
   });

@@ -1,5 +1,6 @@
 import type { FeatureMapCell, NormalizedIdea, PatentFeatureMap, PerPatentRemark } from './novelty-search-service';
 import { buildNoveltyReportCountSummary } from './novelty-report-counts';
+import { matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
 
 export type AttorneyReportFeatureType = 'core_technical' | 'implementation' | 'novelty_candidate' | 'generic_weak';
 
@@ -34,6 +35,8 @@ export interface AttorneyReportCitation {
   title: string;
   relevanceScore: number | null;
   evidenceQuality: string;
+  matchCategory: 'direct' | 'component' | 'borderline' | 'rejected';
+  matchCategoryLabel: string;
 }
 
 export interface AttorneyReportEntityGroup {
@@ -113,6 +116,9 @@ export interface AttorneyReportModel {
     summary: string;
   };
   citations: AttorneyReportCitation[];
+  componentCitations: AttorneyReportCitation[];
+  directCitations: AttorneyReportCitation[];
+  borderlineCitations: AttorneyReportCitation[];
   otherShortlistedCitations: AttorneyReportCitation[];
   assignees: string[];
   inventors: string[];
@@ -442,6 +448,16 @@ function gateRecordFor(stage1: any, pn: string) {
   return canonical ? byPn[canonical] : undefined;
 }
 
+function gateDecisionForReport(gate: any, meta: any): unknown {
+  const explicit = gate?.rerankDecision || gate?.decision || meta?.rerankDecision || meta?.decision;
+  if (explicit) return explicit;
+  const score = numberScore(gate?.rerankScore ?? gate?.score ?? meta?.rerankScore ?? meta?.relevanceScore ?? meta?.score);
+  const evidenceQuality = cleanText(gate?.evidence_quality || meta?.evidence_quality, 'medium').toLowerCase();
+  if (typeof score === 'number' && score >= 0.7 && evidenceQuality !== 'low') return 'accept';
+  if (typeof score === 'number' && score >= 0.4) return 'borderline';
+  return 'reject';
+}
+
 function remarkFor(stage4: any, pn: string): PerPatentRemark | undefined {
   const canonical = canonicalPatentNumber(pn);
   const remarks = Array.isArray(stage4?.per_patent_remarks) ? stage4.per_patent_remarks : [];
@@ -614,6 +630,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       ? meta.ipIndiaDetails
       : ((rawMeta as any).ipIndiaDetails && typeof (rawMeta as any).ipIndiaDetails === 'object' ? (rawMeta as any).ipIndiaDetails : {});
     const gate = gateRecordFor(stage1, pn) || {};
+    const gateDecision = normalizeRerankDecision(gateDecisionForReport(gate, meta));
+    const category = matchCategoryFromDecision(gateDecision);
     const remark = remarkFor(stage4, pn);
     const rows = buildFeatureRows(stage0, searchRun.inventionDescription || '', map, remark);
     const present = rows.filter(row => row.status === 'Present').length;
@@ -632,6 +650,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       title: firstText(map.title, meta.title, remark?.title, 'Untitled Patent'),
       relevanceScore: numberScore(gate.rerankScore ?? gate.score ?? meta.rerankScore ?? meta.relevanceScore ?? remark?.relevance),
       evidenceQuality: cleanText(gate.evidence_quality || meta.evidence_quality, 'medium'),
+      matchCategory: category,
+      matchCategoryLabel: matchCategoryLabel(gateDecision),
       link: firstText(map.link, meta.link, meta.url, `https://patents.google.com/patent/${pn}`),
       technicalDisclosure: reportSafeText(firstText(...sourceDisclosureFields(remark), ...sourceDisclosureFields(meta), ...sourceDisclosureFields(rawMeta), ...sourceDisclosureFields(map), 'Citation disclosure reviewed.')),
       publicationDate: formatDate(firstText(meta.publicationDate, meta.publication_date, meta.date, (rawMeta as any).publicationDate, (rawMeta as any).publication_date, (ipIndiaDetails as any).publicationDate, (ipIndiaDetails as any).publication_date)),
@@ -653,13 +673,18 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     };
   });
 
-  const citations = comparisons.map(({ citationNo, publicationNumber, title, relevanceScore, evidenceQuality }) => ({
+  const citations = comparisons.map(({ citationNo, publicationNumber, title, relevanceScore, evidenceQuality, matchCategory, matchCategoryLabel }) => ({
     citationNo,
     publicationNumber,
     title,
     relevanceScore,
     evidenceQuality,
+    matchCategory,
+    matchCategoryLabel,
   }));
+  const directCitations = citations.filter(citation => citation.matchCategory === 'direct');
+  const componentCitations = citations.filter(citation => citation.matchCategory === 'component');
+  const borderlineCitations = citations.filter(citation => citation.matchCategory === 'borderline');
   const compared = new Set(comparisons.map(item => canonicalPatentNumber(item.publicationNumber)));
   const otherShortlistedCitations = Array.from(patentIndex.values())
     .filter(item => !compared.has(canonicalPatentNumber(getPublicationNumber(item))))
@@ -670,6 +695,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       title: firstText(item?.title, item?.invention_title, 'Untitled Patent'),
       relevanceScore: numberScore(item?.relevanceScore ?? item?.score ?? item?.relevance),
       evidenceQuality: cleanText(item?.evidence_quality, 'not mapped'),
+      matchCategory: 'rejected' as const,
+      matchCategoryLabel: 'Not mapped / shortlisted',
     }));
   const assigneeSignals = comparisons
     .flatMap(item => item.assignees.split(',').map(value => cleanText(value)))
@@ -720,7 +747,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     countLabels: [
       { label: 'Candidate records retrieved/ranked', value: counts.patentsSearched },
       { label: 'Shortlisted candidate citations', value: counts.patentsFound },
-      { label: 'High-relevance mapped citations', value: counts.directlyRelevant },
+      { label: 'Direct invention-level mapped citations', value: counts.directMatches },
+      { label: 'Component / feature-level mapped citations', value: counts.componentMatches },
       { label: 'Citations selected for detailed feature mapping', value: counts.detailedCitations },
     ],
     scoringLegend: [
@@ -728,6 +756,9 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { label: 'Partial', meaning: 'Related concept found, but one or more elements are missing.' },
       { label: 'Absent / weak signal', meaning: 'No reliable support found in the reviewed citation text.' },
       { label: 'Retrieval Relevance', meaning: 'Ranking score based on semantic and textual overlap, not a legal conclusion.' },
+      { label: 'Direct match', meaning: 'Citation appears to overlap the invention-level core mechanism or core feature combination.' },
+      { label: 'Component / feature-level match', meaning: 'Citation discloses one or more relevant features or subsystems, but not the full invention as a whole.' },
+      { label: 'Distributed component coverage', meaning: 'Features found across multiple references indicate landscape/obviousness-style risk, not one-reference anticipation by itself.' },
       { label: 'Feature Coverage', meaning: 'Share of extracted features mapped as Present or Partial for one citation.' },
       { label: 'Evidence Confidence', meaning: 'Automated evidence confidence for the mapped source text.' },
       { label: 'Evidence Source', meaning: 'Mapped support is limited to title, abstract, inference, or none in this report version.' },
@@ -738,7 +769,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '1.3', title: 'Key Features' },
       { number: '1.4', title: 'Scoring Legend' },
       { number: '1.5', title: 'Summary of Relevant Citations' },
-      { number: '1.6', title: 'Key Feature Analysis Matrix' },
+      { number: '1.6', title: 'Component / Feature-Level Prior Art' },
+      { number: '1.7', title: 'Key Feature Analysis Matrix' },
       { number: '2.1', title: 'Details of Relevant Patent Citations' },
       { number: '2.3', title: 'List of Other Shortlisted Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
@@ -754,6 +786,9 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
         : 'No standalone generic feature risk was detected from the extracted feature list.',
     },
     citations,
+    directCitations,
+    componentCitations,
+    borderlineCitations,
     otherShortlistedCitations,
     assignees,
     inventors,

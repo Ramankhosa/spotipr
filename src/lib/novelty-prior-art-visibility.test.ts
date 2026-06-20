@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildVisiblePriorArtResults } from './novelty-prior-art-visibility';
+import { buildVisiblePriorArtResults, matchCategoryFromDecision, normalizeRerankDecision } from './novelty-prior-art-visibility';
 
 function candidate(pn: string) {
   return { publicationNumber: pn, title: `Patent ${pn}` };
@@ -22,6 +22,26 @@ describe('buildVisiblePriorArtResults', () => {
     expect(result.visiblePublicationNumbers).toEqual(['IN1']);
     expect(result.gatedCandidates).toHaveLength(4);
     expect(result.hiddenCandidateCount).toBe(3);
+  });
+
+  test('normalizes component decisions but does not make them direct visible matches', () => {
+    expect(normalizeRerankDecision('feature-level')).toBe('component');
+    expect(matchCategoryFromDecision('component')).toBe('component');
+
+    const result = buildVisiblePriorArtResults({
+      candidates: [candidate('IN1')],
+      byPn: {
+        IN1: { pn: 'IN1', decision: 'component', score: 0.9, evidence_quality: 'high' },
+      },
+      minimumVisibleConfidence: 0.7,
+      visibleLimit: 30,
+    });
+
+    expect(result.visiblePublicationNumbers).toEqual([]);
+    expect(result.gatedCandidates[0]).toMatchObject({
+      rerankDecision: 'component',
+      matchCategory: 'component',
+    });
   });
 
   test('caps the visible list without backfilling weak candidates', () => {

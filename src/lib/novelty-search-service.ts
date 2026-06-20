@@ -15,6 +15,8 @@ import {
   buildVisiblePriorArtResults,
   canonicalPriorArtNumber,
   getPriorArtPublicationNumber,
+  matchCategoryFromDecision,
+  matchCategoryLabel,
   normalizeRerankDecision,
   type PriorArtGateRecord,
 } from '@/lib/novelty-prior-art-visibility';
@@ -387,7 +389,7 @@ PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, Retrieval hin
 
 TASK
 For each patent, do all of the following in one pass:
-1. Decide relevance: accept, borderline, or reject.
+1. Decide relevance: accept, component, borderline, or reject.
 2. Map every invention feature as Present, Partial, Absent, or Unknown.
 3. Provide per-patent overlap-risk remarks.
 4. Provide attorney-review comparison rows showing the user invention disclosure side-by-side with the patent disclosure.
@@ -409,13 +411,14 @@ OUTPUT JSON SHAPE:
 {
   "aiRelevance": {
     "accepted": ["PN"],
+    "component": ["PN"],
     "borderline": ["PN"],
     "rejected": ["PN"],
     "byPn": {
       "PN": {
         "pn": "PN",
         "score": 0.0,
-        "decision": "accept|borderline|reject",
+        "decision": "accept|component|borderline|reject",
         "matched_features": ["feature"],
         "missing_features": ["feature"],
         "reason": "short reason",
@@ -484,6 +487,10 @@ OUTPUT JSON SHAPE:
 RULES
 - Copy feature strings exactly.
 - Return every patent PN supplied in feature_map and byPn.
+- Use accept only for direct invention-level/core-combination overlap.
+- Use component when the patent discloses one or more concrete invention features/subsystems but not the overall invention or core combination.
+- Use borderline for weak, ambiguous, or adjacent references worth bounded attorney review.
+- Do not treat distributed component disclosures across multiple patents as one patent anticipating the full invention.
 - Return one comparison_rows item per invention feature for every patent.
 - comparison_rows must compare the submitted user idea against the patent feature by feature; do not collapse rows into a one-line summary.
 - extent_score must be the actual disclosure extent for that feature in that specific patent: Present usually 0.75-1.00, Partial 0.35-0.74, Absent 0.00-0.20, Unknown 0.00-0.35.
@@ -1214,6 +1221,9 @@ export interface AggregationResult {
   per_feature_uniqueness: PerFeatureUniqueness[];
   integration_check: IntegrationCheck;
   novelty_score: number;
+  single_reference_max_coverage?: number;
+  distributed_component_coverage?: number;
+  distributed_component_features?: string[];
   decision: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence';
   confidence: 'High' | 'Medium' | 'Low';
   risk_factors: string[];
@@ -1781,6 +1791,7 @@ export class NoveltySearchService extends BasePatentService {
           ...(stage1Data || {}),
           aiRelevance: {
             accepted: [],
+            component: [],
             borderline: [],
             rejected: [],
             byPn: {},
@@ -3432,14 +3443,15 @@ RESPONSE:`;
     borderlineQuota: number
   ) {
     const accepted: string[] = [];
+    const component: string[] = [];
     const borderline: string[] = [];
     const rejected: string[] = [];
     const seen = new Set<string>();
 
-    const add = (target: string[], pn: string) => {
+    const add = (target: string[], bucket: string, pn: string) => {
       const key = canonicalPriorArtNumber(pn) || pn.toUpperCase();
-      if (!key || seen.has(`${target === accepted ? 'a' : target === borderline ? 'b' : 'r'}:${key}`)) return;
-      seen.add(`${target === accepted ? 'a' : target === borderline ? 'b' : 'r'}:${key}`);
+      if (!key || seen.has(`${bucket}:${key}`)) return;
+      seen.add(`${bucket}:${key}`);
       target.push(pn);
     };
 
@@ -3450,13 +3462,15 @@ RESPONSE:`;
       if (!gate) continue;
       if (gate.reviewStatus === 'gate_error') continue;
       const decision = normalizeRerankDecision(gate.rerankDecision || gate.decision);
-      if (decision === 'accept') add(accepted, pn);
-      else if (decision === 'borderline') add(borderline, pn);
-      else add(rejected, pn);
+      if (decision === 'accept') add(accepted, 'accepted', pn);
+      else if (decision === 'component') add(component, 'component', pn);
+      else if (decision === 'borderline') add(borderline, 'borderline', pn);
+      else add(rejected, 'rejected', pn);
     }
 
     return {
       accepted,
+      component,
       borderline: borderline.slice(0, Math.max(0, borderlineQuota)),
       rejected,
     };
@@ -3537,17 +3551,23 @@ RESPONSE:`;
       stage1Data?.minimumVisibleConfidence ||
       DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
     );
+    const mediumConfidence = Number(gate?.thresholds?.medium ?? 0.4);
     const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0) => ({
       ...candidate,
       rerankScore: score,
-      rerankDecision: record?.decision || record?.rerankDecision,
+      rerankDecision: normalizeRerankDecision(record?.rerankDecision || record?.decision),
+      matchCategory: matchCategoryFromDecision(record?.rerankDecision || record?.decision),
+      matchCategoryLabel: matchCategoryLabel(record?.rerankDecision || record?.decision),
       evidence_quality: record?.evidence_quality,
       matched_features: record?.matched_features,
       missing_features: record?.missing_features,
       rerankReason: record?.reason,
     });
     const selectedKeys = new Set<string>();
-    const selectByDecision = (decisionName: 'accept' | 'borderline', options: { requireHighConfidence?: boolean } = {}) => {
+    const selectByDecision = (
+      decisionName: 'accept' | 'component' | 'borderline',
+      options: { requireHighConfidence?: boolean; requireNonLowEvidence?: boolean; minScore?: number } = {}
+    ) => {
       if (!(candidatePool.length > 0 && gate?.byPn && gate?.gateStatus !== 'failed')) return [];
       return candidatePool
         .map((candidate, index) => {
@@ -3565,6 +3585,11 @@ RESPONSE:`;
             const evidenceQuality = String(item.record.evidence_quality || '').toLowerCase();
             return item.score >= minimumVisibleConfidence && evidenceQuality !== 'low';
           }
+          if (typeof options.minScore === 'number' && item.score < options.minScore) return false;
+          if (options.requireNonLowEvidence) {
+            const evidenceQuality = String(item.record.evidence_quality || '').toLowerCase();
+            if (evidenceQuality === 'low') return false;
+          }
           return Boolean(item.key && !selectedKeys.has(item.key));
         })
         .sort((a, b) => (b.score - a.score) || (a.index - b.index))
@@ -3576,10 +3601,10 @@ RESPONSE:`;
     };
 
     const accepted = selectByDecision('accept', { requireHighConfidence: true });
-    if (accepted.length > 0) return accepted.slice(0, Math.max(0, maxCandidates));
-
+    const component = selectByDecision('component', { minScore: mediumConfidence, requireNonLowEvidence: true });
     const borderline = selectByDecision('borderline');
-    if (borderline.length > 0) return borderline.slice(0, Math.max(0, maxCandidates));
+    const categorySelected = [...accepted, ...component, ...borderline].slice(0, Math.max(0, maxCandidates));
+    if (categorySelected.length > 0) return categorySelected;
 
     const visibleResults = Array.isArray(stage1Data?.visiblePriorArtResults)
       ? stage1Data.visiblePriorArtResults
@@ -3590,6 +3615,7 @@ RESPONSE:`;
     if (results.length === 0) return [];
 
     const acceptedPns = Array.isArray(gate?.accepted) ? gate.accepted : [];
+    const componentPns = Array.isArray(gate?.component) ? gate.component : [];
     const borderlinePns = Array.isArray(gate?.borderline) ? gate.borderline : [];
     const selected: any[] = [];
     const seen = new Set<string>();
@@ -3610,7 +3636,8 @@ RESPONSE:`;
     };
 
     addBySet(acceptedPns);
-    if (selected.length === 0) addBySet(borderlinePns);
+    if (selected.length < maxCandidates) addBySet(componentPns);
+    if (selected.length < maxCandidates) addBySet(borderlinePns);
 
     if (selected.length === 0) {
       return results.slice(0, maxCandidates);
@@ -3742,7 +3769,7 @@ RESPONSE:`;
 
   private mergeConsolidatedAnalysisBatches(parsedBatches: any[]) {
     const merged = {
-      aiRelevance: { accepted: [] as string[], borderline: [] as string[], rejected: [] as string[], byPn: {} as Record<string, any> },
+      aiRelevance: { accepted: [] as string[], component: [] as string[], borderline: [] as string[], rejected: [] as string[], byPn: {} as Record<string, any> },
       feature_map: [] as any[],
       per_patent_remarks: [] as any[],
       novelty_signals: {
@@ -3770,6 +3797,7 @@ RESPONSE:`;
     for (const parsed of parsedBatches) {
       if (!parsed || typeof parsed !== 'object') continue;
       uniquePush(merged.aiRelevance.accepted, Array.isArray(parsed.aiRelevance?.accepted) ? parsed.aiRelevance.accepted : []);
+      uniquePush(merged.aiRelevance.component, Array.isArray(parsed.aiRelevance?.component) ? parsed.aiRelevance.component : []);
       uniquePush(merged.aiRelevance.borderline, Array.isArray(parsed.aiRelevance?.borderline) ? parsed.aiRelevance.borderline : []);
       uniquePush(merged.aiRelevance.rejected, Array.isArray(parsed.aiRelevance?.rejected) ? parsed.aiRelevance.rejected : []);
       Object.assign(merged.aiRelevance.byPn, parsed.aiRelevance?.byPn || {});
@@ -4353,7 +4381,7 @@ RESPONSE:`;
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       const candidatePool = this.getStage1CandidatePool(stage1Data);
-      if (candidatePool.length === 0) return { success: true, data: { accepted: [], borderline: [], rejected: [], byPn: {} } };
+      if (candidatePool.length === 0) return { success: true, data: { accepted: [], component: [], borderline: [], rejected: [], byPn: {} } };
 
       const {
         modelPreference,
@@ -4419,17 +4447,18 @@ RESPONSE:`;
           '',
           'For each patent, decide whether it should proceed to deep novelty mapping.',
           'Decision policy:',
-          '- accept: concrete overlap with one or more core mechanisms.',
-          '- borderline: related field or partial mechanism overlap worth bounded review.',
+          '- accept: direct invention-level overlap with the core mechanism or core feature combination.',
+          '- component: concrete disclosure of one or more meaningful invention features, subsystems, materials, process steps, or implementation details, but not the full invention/core combination.',
+          '- borderline: weak, adjacent, ambiguous, or partial relationship worth bounded attorney review.',
           '- reject: remote, generic keyword hit, or no concrete technical overlap.',
           '- Score means invention-level relevance, not mere feature overlap.',
           `- Scores of ${minimumVisibleConfidence.toFixed(2)} or higher require concrete title/abstract evidence and non-low evidence quality.`,
-          '- A patent may teach a useful component but should not receive a high score unless it shares the same technical purpose, same object/material/data target, or same operating mechanism.',
-          '- If overlap is only a generic component, keep score below 0.40.',
-          '- If overlap is one useful subsystem but not the same invention, normally keep score below 0.65.',
+          '- A component patent should be kept as component even if it is not the same invention, provided the title/abstract concretely supports at least one extracted feature.',
+          '- If overlap is only a generic component with no concrete feature support, reject it or keep it borderline with low score.',
+          '- Do not label a component as accept unless the same technical purpose, same object/material/data target, and same operating mechanism are also present.',
           '',
           'Each array element must be:',
-          '{"pn":"<id>","score":0..1,"decision":"accept|borderline|reject","matched_features":["feature"],"missing_features":["feature"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
+          '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature"],"missing_features":["feature"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
           '',
           'Rules:',
           '- Use title/abstract only.',
@@ -4617,6 +4646,7 @@ RESPONSE:`;
         success: true,
         data: {
           accepted: decisionLists.accepted,
+          component: decisionLists.component,
           borderline: decisionLists.borderline,
           rejected: decisionLists.rejected,
           byPn,
@@ -4680,70 +4710,32 @@ RESPONSE:`;
         return { success: false, error: 'No invention features available for mapping' };
       }
 
-      // Sort patents by PQAI relevance score (already sorted in searchPQAI function)
-      // Select top 50% of patents (min 10, max 20) for feature analysis
+      // Stage 1.5 already orders candidates by match quality:
+      // direct invention-level matches first, then component/feature-level matches,
+      // then borderline references. Keep that ordering and only enforce the
+      // configured mapping cap here.
       const totalPatents = pqaiResults.length;
-      const targetCount = Math.ceil(totalPatents * 0.5); // Top 50%
       const selectedCount = Math.min(
-        Math.max(targetCount, 10), // At least 10 patents
-        Math.min(totalPatents, 20) // At most 20 patents, but not more than available
+        totalPatents,
+        Math.max(1, Math.min(Math.trunc(config.stage35a.maxRefsTotal || 20), 20))
       );
 
       console.log(`ðŸŽ¯ PATENT SELECTION LOGIC:`);
       console.log(`   - Total patents available: ${totalPatents}`);
-      console.log(`   - Target selection (50%): ${targetCount} patents`);
-      console.log(`   - Constrained selection: min(10, max(50%, 20)) = ${selectedCount} patents`);
+      console.log(`   - Stage 1.5 ordered direct, component, then borderline matches`);
+      console.log(`   - Mapping cap applied: ${selectedCount} patents`);
       console.log(`   - Selection percentage: ${((selectedCount/totalPatents)*100).toFixed(1)}%`);
 
-      let selectedPatents: any[] = [];
       const gate = (stage1Data && (stage1Data as any).aiRelevance) ? (stage1Data as any).aiRelevance : null;
-      if (gate && (Array.isArray(gate.accepted) || Array.isArray(gate.borderline))) {
-        const accepted = Array.isArray(gate.accepted) ? gate.accepted : [];
-        const borderline = Array.isArray(gate.borderline) ? gate.borderline : [];
-        const canon = (x: any) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '');
-        const setA = new Set(accepted.map((s: string) => s.toUpperCase()));
-        const setAc = new Set(accepted.map((s: string) => canon(s)));
-        const setB = new Set(borderline.map((s: string) => s.toUpperCase()));
-        const setBc = new Set(borderline.map((s: string) => canon(s)));
+      console.log('[Stage3.5a][Selection]', {
+        totalPatents,
+        selectedCount,
+        acceptedCount: Array.isArray(gate?.accepted) ? gate.accepted.length : 0,
+        componentCount: Array.isArray(gate?.component) ? gate.component.length : 0,
+        borderlineCount: Array.isArray(gate?.borderline) ? gate.borderline.length : 0,
+      });
 
-        // Overflow allowances if accepted/borderline exceed the 50% quota
-        const accExtra = Math.ceil(totalPatents * (config.stage35a.acceptedOverflowRatio ?? 0.15));
-        const borExtra = Math.ceil(totalPatents * (config.stage35a.borderlineOverflowRatio ?? 0.10));
-        const maxAccepted = Math.min(accepted.length, selectedCount + accExtra);
-        const maxTotalAllowed = selectedCount + accExtra + borExtra;
-        console.log('[Stage3.5a][Selection]', {
-          totalPatents,
-          baseQuota: selectedCount,
-          acceptedCount: accepted.length,
-          borderlineCount: borderline.length,
-          acceptedOverflowAllowed: accExtra,
-          borderlineOverflowAllowed: borExtra,
-          maxAccepted,
-          maxTotalAllowed
-        });
-
-        // 1) Accepted first (by PQAI order), up to maxAccepted
-        for (const r of pqaiResults) {
-          if (selectedPatents.length >= maxAccepted) break;
-          const pn = r.publicationNumber || r.pn || r.publication_number || r.id;
-          const k = String(pn || '').toUpperCase();
-          const kc = canon(pn);
-          if (setA.has(k) || setAc.has(kc)) selectedPatents.push(r);
-        }
-
-        // 2) Borderline next, while total stays within maxTotalAllowed
-        for (const r of pqaiResults) {
-          if (selectedPatents.length >= maxTotalAllowed) break;
-          if (selectedPatents.includes(r)) continue;
-          const pn = r.publicationNumber || r.pn || r.publication_number || r.id;
-          const k = String(pn || '').toUpperCase();
-          const kc = canon(pn);
-          if (setB.has(k) || setBc.has(kc)) selectedPatents.push(r);
-        }
-
-      } else {
-        selectedPatents = pqaiResults.slice(0, selectedCount);
-      }
+      const selectedPatents: any[] = pqaiResults.slice(0, selectedCount);
 
       console.log(`\nðŸ“‹ SELECTED PATENTS FOR STAGE 3.5a ANALYSIS:`);
       selectedPatents.forEach((patent: any, index: number) => {
@@ -4916,6 +4908,16 @@ RESPONSE:`;
 
       // Compute novelty score
       const noveltyScore = this.computeNoveltyScore(perFeatureUniqueness, config.stage35a.criticalFeatures);
+      const singleReferenceMaxCoverage = perPatentCoverage.reduce(
+        (max, row) => Math.max(max, Number(row.coverage_ratio || 0)),
+        0
+      );
+      const distributedComponentFeatures = perFeatureUniqueness
+        .filter(row => (row.present_in || 0) + (row.partial_in || 0) > 0)
+        .map(row => row.feature);
+      const distributedComponentCoverage = inventionFeatures.length
+        ? Math.round((distributedComponentFeatures.length / inventionFeatures.length) * 100) / 100
+        : 0;
 
       // Determine decision and confidence
       const { decision, confidence } = this.computeDecisionAndConfidence(
@@ -4936,6 +4938,11 @@ RESPONSE:`;
         integrationCheck,
         decision
       );
+      if (!integrationCheck.any_single_patent_covers_majority && distributedComponentCoverage >= 0.5) {
+        riskFactors.push(
+          `Distributed component coverage: ${distributedComponentFeatures.length}/${inventionFeatures.length} features appear across multiple references; treat as combination/landscape risk, not one-reference anticipation.`
+        );
+      }
 
       // Build per-patent remarks from Stage 3.5a maps so Stage 4 and the UI
       // can reuse them without extra LLM calls (each remark kept short and dense).
@@ -4998,6 +5005,9 @@ RESPONSE:`;
         per_feature_uniqueness: perFeatureUniqueness,
         integration_check: integrationCheck,
         novelty_score: noveltyScore,
+        single_reference_max_coverage: Math.round(singleReferenceMaxCoverage * 100) / 100,
+        distributed_component_coverage: distributedComponentCoverage,
+        distributed_component_features: distributedComponentFeatures,
         decision,
         confidence,
         risk_factors: riskFactors,
@@ -6383,6 +6393,7 @@ OUTPUT JSON:
           // Added context to expand the Stage 4 summary
           pqai_initial_count: stage1CandidatePool.length,
           ai_relevance_accepted: Array.isArray(stage1Data?.aiRelevance?.accepted) ? stage1Data.aiRelevance.accepted.length : undefined,
+          ai_relevance_component: Array.isArray(stage1Data?.aiRelevance?.component) ? stage1Data.aiRelevance.component.length : undefined,
           ai_relevance_borderline: Array.isArray(stage1Data?.aiRelevance?.borderline) ? stage1Data.aiRelevance.borderline.length : undefined
         },
         patent_details: selectedPatents.map(patent => ({
@@ -6426,7 +6437,7 @@ OUTPUT JSON:
 
       // Expand summary to describe the full pipeline and selection logic for user confidence
       basePrompt += "\n\nOUTPUT CONTENT REQUIREMENTS:";
-      basePrompt += "\n- In executive_summary.summary, state: initial PQAI results (search_metadata.pqai_initial_count); accepted and borderline counts from AI Relevance (if present); final selected_patents_count; and the selection logic (greedy feature coverage).";
+      basePrompt += "\n- In executive_summary.summary, state: initial PQAI results (search_metadata.pqai_initial_count); direct accepted, component/feature-level, and borderline counts from AI Relevance (if present); final selected_patents_count; and the selection logic (greedy feature coverage).";
       basePrompt += "\n- Under concluding_remarks, keep key_strengths/risks/recommendations and also include:";
       basePrompt += "\n  â€¢ 'advisory' field: Do NOT give legal conclusions; advise deep analysis of selected patents and next steps.";
       basePrompt += "\n  â€¢ 'patent_numbers' array listing the selected patent_number values for user review.";
@@ -6452,7 +6463,7 @@ OUTPUT JSON:
       basePrompt += "\n- Be evidence-driven; avoid advocacy language and generic fluff.";
       basePrompt += "\n- Treat unknown/insufficient-evidence cells as weaknesses that lower confidence.";
       basePrompt += "\n- Decision policy: If any single patent maps to >= 60% of features AND all critical features in title/abstract evidence, classify it as high mapped overlap unless a concrete, technical differentiator is clearly evidenced.";
-      basePrompt += "\n- If features are scattered across multiple patents without integration, state this plainly; do not imply differentiation unless integration is truly absent from the available title/abstract evidence.";
+      basePrompt += "\n- If features are scattered across multiple patents without integration, state this plainly as distributed component coverage; do not describe scattered component coverage as one-reference anticipation of the full invention.";
 
       if (isIdeaBankGenerationEnabled()) {
       // Request new patent ideas for the Idea Bank using the same creative brief used in drafting's AI relevance review

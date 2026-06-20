@@ -387,16 +387,17 @@ function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
 }
 
 function drawCitationTable(doc: PdfDoc, citations: AttorneyReportCitation[]) {
-  const widths = [36, 102, 214, 70, 68];
-  drawTableRow(doc, ['S.No.', 'Citation No.', 'Title', 'Retrieval Relevance', 'Evidence'], widths, { header: true });
+  const widths = [34, 86, 184, 82, 58, 46];
+  drawTableRow(doc, ['S.No.', 'Citation No.', 'Title', 'Match Category', 'Retrieval', 'Evidence'], widths, { header: true });
   citations.forEach((citation, index) => {
     drawTableRow(doc, [
       String(index + 1),
       citation.publicationNumber,
       citation.title,
+      citation.matchCategoryLabel,
       pct(citation.relevanceScore),
       citation.evidenceQuality,
-    ], widths, { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined, maxHeight: 70 });
+    ], widths, { fills: index % 2 ? widths.map(() => COLORS.tableAlt) : undefined, maxHeight: 70 });
   });
 }
 
@@ -556,7 +557,18 @@ export async function GET(
     startSection('1.5', 'Summary of Relevant Citations');
     drawCitationTable(doc, report.citations);
 
-    startSection('1.6', 'Key Feature Analysis Matrix');
+    startSection('1.6', 'Component / Feature-Level Prior Art');
+    drawParagraph(
+      doc,
+      'These citations disclose one or more relevant invention features, subsystems, materials, process steps, or implementation details, but are not treated as full invention-level matches by themselves.'
+    );
+    if (report.componentCitations.length > 0) {
+      drawCitationTable(doc, report.componentCitations);
+    } else {
+      drawParagraph(doc, 'No separate component / feature-level references were classified in this run.');
+    }
+
+    startSection('1.7', 'Key Feature Analysis Matrix');
     drawFeatureStatusMatrix(doc, report);
 
     startSection('2.1', 'Details of Relevant Patent Citations');
@@ -573,6 +585,7 @@ export async function GET(
         ['Application No.', item.applicationNumber],
         ['Filing Date', item.filingDate],
         ['Feature Coverage', pct(item.coverage.score)],
+        ['Match Category', item.matchCategoryLabel],
         ['Overlap Category', item.noveltyThreat],
         ['Assignee(s)', item.assignees],
         ['Inventor(s)', item.inventors],

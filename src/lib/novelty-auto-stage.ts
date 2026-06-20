@@ -61,6 +61,7 @@ export function hasStage15ResultsInNoveltyResults(results: any): boolean {
     gate &&
     (
       Array.isArray(gate.accepted) ||
+      Array.isArray(gate.component) ||
       Array.isArray(gate.borderline) ||
       Array.isArray(gate.rejected)
     )
@@ -125,7 +126,7 @@ export function buildNoveltyAutoStageState(
     hasStage1Results: getStage1ResultsFromNoveltyResults(results).length > 0,
     hasStage15Results: hasStage15ResultsInNoveltyResults(results),
     hasVisiblePriorArtResults: Array.isArray(visiblePriorArt) && visiblePriorArt.length > 0,
-    hasBorderlinePriorArtResults: Array.isArray(gate?.borderline) && gate.borderline.length > 0,
+    hasBorderlinePriorArtResults: (Array.isArray(gate?.component) && gate.component.length > 0) || (Array.isArray(gate?.borderline) && gate.borderline.length > 0),
     stage15GateStatus: typeof gate?.gateStatus === 'string' ? gate.gateStatus : null,
     hasStage35Results: hasStage35ResultsInNoveltyResults(results),
     hasStage4Results: hasStage4ResultsInNoveltyResults(results),

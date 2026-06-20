@@ -36,6 +36,9 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     expect(svc.parseStage15GateResponse('{"results":[{"pn":"IN3","score":0.6,"decision":"borderline"}]}')).toMatchObject([
       { pn: 'IN3', score: 0.6, decision: 'borderline' },
     ]);
+    expect(svc.parseStage15GateResponse('[{"pn":"IN4","score":0.52,"decision":"component"}]')).toMatchObject([
+      { pn: 'IN4', score: 0.52, decision: 'component' },
+    ]);
     expect(svc.coerceGateScore({ score: '0.82' })).toBe(0.82);
   });
 
@@ -66,6 +69,7 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
 
     expect(svc.buildStage15DecisionLists(candidates, byPn, 5)).toEqual({
       accepted: ['IN1'],
+      component: [],
       borderline: [],
       rejected: [],
     });
@@ -75,6 +79,27 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
       reviewedCount: 1,
       gateErrorCount: 1,
       unreviewedCount: 1,
+    });
+  });
+
+  test('keeps component decisions as a separate Stage 1.5 bucket', () => {
+    const svc = service();
+    const candidates = [
+      { publicationNumber: 'IN1' },
+      { publicationNumber: 'IN2' },
+      { publicationNumber: 'IN3' },
+    ];
+    const byPn = {
+      IN1: { pn: 'IN1', decision: 'accept', reviewStatus: 'reviewed' },
+      IN2: { pn: 'IN2', decision: 'component', reviewStatus: 'reviewed' },
+      IN3: { pn: 'IN3', decision: 'borderline', reviewStatus: 'reviewed' },
+    };
+
+    expect(svc.buildStage15DecisionLists(candidates, byPn, 5)).toEqual({
+      accepted: ['IN1'],
+      component: ['IN2'],
+      borderline: ['IN3'],
+      rejected: [],
     });
   });
 
@@ -157,6 +182,42 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     expect(selected.every((item: any) => item.rerankDecision === 'borderline')).toBe(true);
   });
 
+  test('selects direct, then component, then borderline candidates for deep analysis', () => {
+    const svc = service();
+    const retrievalCandidates = [
+      { publicationNumber: 'IN_DIRECT', title: 'Direct match' },
+      { publicationNumber: 'IN_COMPONENT', title: 'Component match' },
+      { publicationNumber: 'IN_BORDERLINE', title: 'Borderline match' },
+    ];
+    const stage1Data = {
+      retrievalCandidates,
+      aiRelevance: {
+        accepted: ['IN_DIRECT'],
+        component: ['IN_COMPONENT'],
+        borderline: ['IN_BORDERLINE'],
+        rejected: [],
+        byPn: {
+          IN_DIRECT: { pn: 'IN_DIRECT', decision: 'accept', score: 0.9, evidence_quality: 'high', reviewStatus: 'reviewed' },
+          IN_COMPONENT: { pn: 'IN_COMPONENT', decision: 'component', score: 0.55, evidence_quality: 'medium', reviewStatus: 'reviewed' },
+          IN_BORDERLINE: { pn: 'IN_BORDERLINE', decision: 'borderline', score: 0.45, evidence_quality: 'medium', reviewStatus: 'reviewed' },
+        },
+        gateStatus: 'complete',
+        minimumVisibleConfidence: 0.7,
+        thresholds: { high: 0.7, medium: 0.4 },
+      },
+    };
+
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 3);
+
+    expect(selected.map((item: any) => item.publicationNumber)).toEqual([
+      'IN_DIRECT',
+      'IN_COMPONENT',
+      'IN_BORDERLINE',
+    ]);
+    expect(selected.map((item: any) => item.rerankDecision)).toEqual(['accept', 'component', 'borderline']);
+    expect(selected[1].matchCategory).toBe('component');
+  });
+
   test('keeps no-high-confidence path when accepted and borderline are both empty', () => {
     const svc = service();
     const stage1Data = {
@@ -164,6 +225,7 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
       retrievalCandidates: [{ publicationNumber: 'IN1' }, { publicationNumber: 'IN2' }],
       aiRelevance: {
         accepted: [],
+        component: [],
         borderline: [],
         rejected: ['IN1', 'IN2'],
         byPn: {

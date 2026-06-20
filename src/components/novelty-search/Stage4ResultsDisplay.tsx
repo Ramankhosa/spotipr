@@ -65,6 +65,7 @@ export default function Stage4ResultsDisplay({
   const trail = r.search_trail || {};
   const pqaiInitial = trail.pqai_initial_count ?? r?.search_metadata?.pqai_initial_count ?? undefined;
   const aiAccepted = trail.ai_relevance_accepted ?? r?.search_metadata?.ai_relevance_accepted ?? undefined;
+  const aiComponent = trail.ai_relevance_component ?? r?.search_metadata?.ai_relevance_component ?? undefined;
   const aiBorderline = trail.ai_relevance_borderline ?? r?.search_metadata?.ai_relevance_borderline ?? undefined;
   const deepAnalyzed = trail.deeply_analyzed_count ?? (Array.isArray(remarks) ? remarks.length : undefined);
   const displayCardLabel = (key: string) => key === 'Unique Features' ? 'Potential Differentiators' : key;
@@ -147,9 +148,10 @@ export default function Stage4ResultsDisplay({
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-slate-900">Search Trail</h3>
-        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
           <KpiCard label="Patent Database Screened" value={pqaiInitial ?? '-'} />
-          <KpiCard label="AI Accepted" value={aiAccepted ?? '-'} />
+          <KpiCard label="AI Direct" value={aiAccepted ?? '-'} />
+          <KpiCard label="AI Component" value={aiComponent ?? '-'} />
           <KpiCard label="AI Borderline" value={aiBorderline ?? '-'} />
           <KpiCard label="Deeply Analyzed" value={deepAnalyzed ?? '-'} />
         </div>

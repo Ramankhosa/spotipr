@@ -1,7 +1,8 @@
 export const DEFAULT_VISIBLE_PRIOR_ART_LIMIT = 30;
 export const DEFAULT_MINIMUM_VISIBLE_CONFIDENCE = 0.7;
 
-export type RerankDecision = 'accept' | 'borderline' | 'reject';
+export type RerankDecision = 'accept' | 'component' | 'borderline' | 'reject';
+export type PriorArtMatchCategory = 'direct' | 'component' | 'borderline' | 'rejected';
 
 export interface PriorArtGateRecord {
   pn?: string;
@@ -42,8 +43,32 @@ export function canonicalPriorArtNumber(value: unknown): string {
 export function normalizeRerankDecision(value: unknown): RerankDecision {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'accept' || normalized === 'accepted') return 'accept';
+  if (
+    normalized === 'component' ||
+    normalized === 'feature' ||
+    normalized === 'feature_level' ||
+    normalized === 'feature-level' ||
+    normalized === 'partial_feature' ||
+    normalized === 'subsystem'
+  ) return 'component';
   if (normalized === 'borderline') return 'borderline';
   return 'reject';
+}
+
+export function matchCategoryFromDecision(value: unknown): PriorArtMatchCategory {
+  const decision = normalizeRerankDecision(value);
+  if (decision === 'accept') return 'direct';
+  if (decision === 'component') return 'component';
+  if (decision === 'borderline') return 'borderline';
+  return 'rejected';
+}
+
+export function matchCategoryLabel(value: unknown): string {
+  const category = matchCategoryFromDecision(value);
+  if (category === 'direct') return 'Direct invention-level match';
+  if (category === 'component') return 'Component / feature-level prior art';
+  if (category === 'borderline') return 'Borderline / needs review';
+  return 'Rejected / remote';
 }
 
 function finiteScore(...values: unknown[]): number {
@@ -74,6 +99,8 @@ export function annotatePriorArtCandidate<T = any>(candidate: T, gate: PriorArtG
     ...(candidate as any),
     rerankScore,
     rerankDecision,
+    matchCategory: matchCategoryFromDecision(rerankDecision),
+    matchCategoryLabel: matchCategoryLabel(rerankDecision),
     matched_features: Array.isArray(gate.matched_features) ? gate.matched_features : [],
     missing_features: Array.isArray(gate.missing_features) ? gate.missing_features : [],
     evidence_quality: evidenceQuality,
