@@ -209,28 +209,36 @@ function displayEvidenceSource(value: unknown, fallback = 'citation record'): st
 function reportSafeText(value: unknown, fallback = ''): string {
   const sourceTerm = sourceDisclosureTerm();
   return cleanText(value, fallback)
-    .replace(new RegExp(`\\bno ${sourceTerm} available\\.?`, 'gi'), 'No abstract text available; title reviewed where available.')
-    .replace(new RegExp(`title\\s*\\/\\s*${sourceTerm}`, 'gi'), 'title/abstract evidence')
-    .replace(new RegExp(`title and ${sourceTerm}`, 'gi'), 'title/abstract evidence')
-    .replace(new RegExp(`patent ${sourceTerm} evidence`, 'gi'), 'patent abstract evidence')
+    .replace(new RegExp(`\\bno ${sourceTerm} available\\.?`, 'gi'), 'Limited available patent data; review the full patent document where needed.')
+    .replace(new RegExp(`title\\s*\\/\\s*${sourceTerm}`, 'gi'), 'available patent data')
+    .replace(new RegExp(`title and ${sourceTerm}`, 'gi'), 'available patent data')
+    .replace(new RegExp(`patent ${sourceTerm} evidence`, 'gi'), 'available patent data')
+    .replace(/\bpatent abstract evidence\b/gi, 'available patent data')
+    .replace(/\babstract evidence\b/gi, 'available patent data')
+    .replace(/\babstract data\b/gi, 'available patent data')
+    .replace(/\babstract text\b/gi, 'available patent data')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
     .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'attorney review recommended')
     .replace(/\btoo limited\b/gi, 'marked for attorney review')
-    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'reviewed title/abstract evidence')
+    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'limited available patent data')
     .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
     .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'attorney review item')
     .replace(/\bevidence (?:is|was) too thin\b/gi, 'attorney review is recommended')
-    .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the reviewed title/abstract evidence')
-    .replace(/\bcitation record only\b/gi, 'reviewed title/abstract evidence')
+    .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the limited available patent data')
+    .replace(/\bcitation record only\b/gi, 'limited available patent data')
     .replace(/\binsufficient\b/gi, 'marked for attorney review')
-    .replace(/\blow evidence\b/gi, 'Preliminary Review')
+    .replace(/\blow evidence\b/gi, 'Limited Available Data')
     .replace(/\bavailable patent record\b/gi, 'reviewed patent record')
-    .replace(/\bavailable citation record\b/gi, 'reviewed title/abstract evidence')
+    .replace(/\bavailable citation record\b/gi, 'limited available patent data')
     .replace(/\bavailable patent disclosure\b/gi, 'reviewed patent disclosure')
     .replace(/\bavailable patent evidence\b/gi, 'reviewed patent evidence')
-    .replace(/\bfinal attorney remarks?\b/gi, 'preliminary claim-positioning observations')
+    .replace(/\bfinal attorney remarks?\b/gi, 'claim-positioning observations')
+    .replace(/\bpreliminary review report\b/gi, 'patent intelligence report')
+    .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
+    .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
+    .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence')
     .replace(/\bfinal attorney opinion\b/gi, 'attorney review required')
     .replace(/\bnon-patentable\b/gi, 'high mapped-overlap risk')
     .replace(/\bpatentable\b/gi, 'potential novelty space')
@@ -286,12 +294,12 @@ function safeOverlapLabel(value: unknown): { label: string; level: AttorneyRepor
 
 function safeAssessmentDecision(value: unknown): string {
   const text = String(value || '').toLowerCase().replace(/[_-]+/g, ' ').trim();
-  if (!text) return 'Preliminary Review';
-  if (/low evidence/.test(text)) return 'Low evidence / needs review';
+  if (!text) return 'Needs Review';
+  if (/low evidence/.test(text)) return 'Limited available data / needs review';
   if (/not novel|anticipat|obvious|high/.test(text)) return 'High mapped-overlap risk';
   if (/partial/.test(text)) return 'Potential novelty space with mapped overlap';
   if (/novel|patentable/.test(text)) return 'Potential novelty space';
-  return reportSafeText(value, 'Preliminary Review');
+  return reportSafeText(value, 'Needs Review');
 }
 
 function isGenericFeatureText(feature: string): boolean {
@@ -474,20 +482,20 @@ function defaultNoveltyImpact(status: FeatureMapCell['status'], feature: string)
   if (status === 'Present') return `Overlap risk: the reviewed patent evidence appears to cover ${feature}.`;
   if (status === 'Partial') return `Partial overlap: attorney review should distinguish the missing element of ${feature}.`;
   if (status === 'Absent') return `Potential differentiator: ${feature} is not shown in the reviewed patent disclosure.`;
-  return `Review focus: attorney review should confirm how ${feature} is treated in title/abstract evidence.`;
+  return `Review focus: attorney review should confirm how ${feature} is treated in the full patent documents.`;
 }
 
 function defaultAttorneyRemark(status: FeatureMapCell['status'], feature: string): string {
   if (status === 'Present') return `The reference appears to disclose this feature in the reviewed patent record.`;
-  if (status === 'Partial') return `The reference is technically related to this feature but does not show all required elements in the reviewed title/abstract evidence.`;
+  if (status === 'Partial') return `The reference is technically related to this feature but does not show all required elements in the available patent data.`;
   if (status === 'Absent') return `This reference does not show supporting disclosure for this feature.`;
   return `Attorney review should confirm the treatment of this feature in the source record.`;
 }
 
 function defaultClaimReviewNote(status: FeatureMapCell['status'], feature: string): string {
-  if (status === 'Present') return `Do not rely on ${feature} alone unless full-text review shows a narrower distinction.`;
+  if (status === 'Present') return `Do not rely on ${feature} alone unless full patent document review shows a narrower distinction.`;
   if (status === 'Partial') return `Claim drafting should emphasize the missing element of ${feature}.`;
-  if (status === 'Absent') return `This may be a claim focus point, subject to full-text prior-art review.`;
+  if (status === 'Absent') return `This may be a claim focus point, subject to full patent document prior-art review.`;
   return `Request more evidence before relying on this feature in claim strategy.`;
 }
 
@@ -497,7 +505,7 @@ function buildClaimImpactSummary(rows: AttorneyReportFeatureRow[], riskLabel: st
   const absent = rows.filter(row => row.status === 'Absent').length;
   const weak = rows.filter(row => row.status === 'Unknown' || !row.evidenceQuote).length;
   return reportSafeText(
-    `This citation has ${present} Present and ${partial} Partial mapped feature(s), with ${absent} Absent / weak-signal feature(s). ${riskLabel}. Use full-text review to confirm claim-level treatment${weak ? `, especially for ${weak} weak-evidence row(s)` : ''}.`
+    `This citation has ${present} Present and ${partial} Partial mapped feature(s), with ${absent} Absent / weak-signal feature(s). ${riskLabel}. Use full patent document review to confirm claim-level treatment${weak ? `, especially for ${weak} weak-evidence row(s)` : ''}.`
   );
 }
 
@@ -726,14 +734,14 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     methodology: {
       corpus: sourceModeLabel(sourceMode),
       retrievalMode: 'Hybrid retrieval/ranking with AI relevance gating and feature mapping',
-      searchedEvidence: 'Mapped feature evidence is limited to available title and abstract text. Claims, complete specifications, legal status, family data, and non-patent literature are not part of this mapped evidence layer.',
+      searchedEvidence: 'Mapped feature evidence is based on limited available patent data. For a higher-confidence assessment, review the full patent documents, including claims, detailed description/specification, drawings, legal status, family data, and non-patent literature.',
       techniques: [
         'LLM-assisted invention normalization and key-feature extraction',
         'Patent candidate retrieval and ranking',
         'AI relevance gating before detailed mapping',
         'Feature-by-feature evidence mapping using explicit source labels',
       ],
-      preliminaryStatus: 'AI-generated preliminary patent intelligence output; not attorney-reviewed unless separately marked.',
+      preliminaryStatus: 'AI-generated patent intelligence output for attorney review; not a legal opinion unless separately reviewed by qualified counsel.',
     },
     counts: {
       searched: counts.patentsSearched,
@@ -775,7 +783,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '2.3', title: 'List of Other Shortlisted Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
       { number: '4', title: 'Repeated Inventor / Entity Signals' },
-      { number: '5', title: 'Preliminary Claim-Positioning Observations' },
+      { number: '5', title: 'Claim-Positioning Observations' },
       { number: '6', title: 'Limitations and Next Steps' },
     ],
     featureSummaries,
@@ -798,7 +806,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     finalAssessment: {
       decision: safeAssessmentDecision(stage4?.decision || stage4?.concluding_remarks?.overall_novelty_assessment),
       confidence: cleanText(stage4?.confidence || stage4?.executive_summary?.confidence, 'Low'),
-      summary: reportSafeText(stage4?.executive_summary?.summary || stage4?.structured_narrative?.verdict || stage4?.message, 'Preliminary claim-positioning observations prepared for review.'),
+      summary: reportSafeText(stage4?.executive_summary?.summary || stage4?.structured_narrative?.verdict || stage4?.message, 'Claim-positioning observations prepared for review.'),
       risks: (Array.isArray(stage4?.risk_factors) ? stage4.risk_factors : (Array.isArray(stage4?.concluding_remarks?.key_risks) ? stage4.concluding_remarks.key_risks : [])).map((item: any) => reportSafeText(item)).filter(Boolean),
       recommendations: (Array.isArray(stage4?.concluding_remarks?.strategic_recommendations) ? stage4.concluding_remarks.strategic_recommendations : []).map((item: any) => reportSafeText(item)).filter(Boolean),
     },
@@ -816,12 +824,12 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       featureMappingConfidence: counts.detailedCitations >= 5 ? 'Medium' : 'Low',
       legalConclusion: 'Not provided; requires attorney review.',
     },
-    overallDraftingDirection: 'Focus any claim drafting discussion on concrete features that remain unmapped or only partially mapped in title/abstract evidence, and verify all mapped references with full claims, specifications, family data, and legal status.',
-    limitations: 'This report is an AI-generated preliminary patent intelligence output. It is based on automated retrieval, ranking, and feature mapping of available patent records. It is not a legal opinion. Full claims, complete specifications, prosecution history, legal status, family members, and non-patent literature should be reviewed by a qualified patent professional before making filing, validity, enforcement, or freedom-to-operate decisions.',
+    overallDraftingDirection: 'Focus any claim drafting discussion on concrete features that remain unmapped or only partially mapped in the available patent data, and verify all mapped references with full patent documents, including claims, detailed description/specification, drawings, family data, and legal status.',
+    limitations: 'This report is based on automated retrieval, ranking, and feature mapping from limited available patent data. For the highest-confidence analysis, review the full patent documents, including claims, detailed description/specification, drawings, prosecution history, legal status, family members, and non-patent literature with a qualified patent professional. This report is not a legal opinion and should not be used alone for filing, validity, enforcement, or freedom-to-operate decisions.',
     nextSteps: [
       'Review the highest-overlap mapped citations at claim level.',
       'Narrow invention disclosure around technical differentiators that are Absent / weak signal or only partially mapped.',
-      'Validate results with full-text patent and non-patent literature searching.',
+      'Validate results with full patent documents and non-patent literature searching.',
       'Ask the inventor for implementation details where features are generic, weak, or inferred.',
     ],
   };

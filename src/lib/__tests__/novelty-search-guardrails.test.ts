@@ -171,10 +171,10 @@ describe('novelty search guardrails', () => {
       'Candidates have already passed Stage 1.5 relevance screening'
     );
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
-      'If no title/abstract quote supports the feature, use Absent or Unknown'
+      'If no supplied patent-data quote supports the feature, use Absent or Unknown'
     );
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
-      'Use Absent when the Title/Abstract is adequate to compare'
+      'Use Absent when the supplied patent data is adequate to compare'
     );
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       'Do not output aiRelevance, accepted, component, borderline, or rejected routing lists'
@@ -182,6 +182,10 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"extent_score": 0.0');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Evaluate extent_score independently for every patent-feature pair');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, or none');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('limited available patent data');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Do not repeat the source-field limitation in narrative fields');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).not.toContain('title/abstract evidence');
+    expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).not.toContain('preliminary claim-positioning');
     expect(source).toContain('Relevance should reflect threat to the invention as a whole');
     expect(source).toContain("const stage0SearchQuery = String(stage0Data.searchQuery || '').trim()");
     expect(source).toContain('retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features)');

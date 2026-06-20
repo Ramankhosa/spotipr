@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildNoveltyAttorneyReportModel } from './novelty-attorney-report';
 
 describe('buildNoveltyAttorneyReportModel', () => {
-  it('builds safe title/abstract report sections and side-by-side comparison rows', () => {
+  it('builds safe limited-data report sections and side-by-side comparison rows', () => {
     const model = buildNoveltyAttorneyReportModel({
       id: 'search123456789',
       title: 'Soil moisture irrigation controller',
@@ -159,9 +159,13 @@ describe('buildNoveltyAttorneyReportModel', () => {
 
     expect(model.reportNumber).toMatch(/^PN-NOV-IN-\d{8}-SEARCH12$/);
     expect(model.tableOfContents.map(item => item.title)).toContain('Search Scope and Methodology');
-    expect(model.tableOfContents.map(item => item.title)).toContain('Preliminary Claim-Positioning Observations');
+    expect(model.tableOfContents.map(item => item.title)).toContain('Claim-Positioning Observations');
     expect(model.evidenceBasis).toContain('Automated patent intelligence');
-    expect(model.methodology.searchedEvidence).toContain('title and abstract text');
+    expect(model.methodology.searchedEvidence).toContain('limited available patent data');
+    expect(model.methodology.searchedEvidence).toContain('full patent documents');
+    expect(model.methodology.preliminaryStatus).not.toMatch(/preliminary/i);
+    expect(model.limitations).toContain('full patent documents');
+    expect(model.limitations).not.toMatch(/preliminary|title\/abstract|title and abstract/i);
     expect(model.countLabels.map(item => item.label)).toEqual([
       'Candidate records retrieved/ranked',
       'Shortlisted candidate citations',

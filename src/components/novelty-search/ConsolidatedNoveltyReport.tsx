@@ -124,27 +124,35 @@ function displayEvidenceSource(value: unknown, fallback = 'citation record') {
 
 function reportSafeText(value: unknown, fallback = '') {
   return cleanText(value, fallback)
-    .replace(/\bno abstract available\.?/gi, 'No abstract text available; title reviewed where available.')
-    .replace(/title\s*\/\s*abstract/gi, 'title/abstract evidence')
-    .replace(/title and abstract/gi, 'title/abstract evidence')
+    .replace(/\bno abstract available\.?/gi, 'Limited available patent data; review the full patent document where needed.')
+    .replace(/title\s*\/\s*abstract/gi, 'available patent data')
+    .replace(/title and abstract/gi, 'available patent data')
+    .replace(/patent abstract evidence/gi, 'available patent data')
+    .replace(/abstract evidence/gi, 'available patent data')
+    .replace(/abstract data/gi, 'available patent data')
+    .replace(/abstract text/gi, 'available patent data')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
     .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'attorney review recommended')
     .replace(/\btoo limited\b/gi, 'marked for attorney review')
-    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'reviewed title/abstract evidence')
+    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'limited available patent data')
     .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
     .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'attorney review item')
     .replace(/\bevidence (?:is|was) too thin\b/gi, 'attorney review is recommended')
-    .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the reviewed title/abstract evidence')
-    .replace(/\bcitation record only\b/gi, 'reviewed title/abstract evidence')
+    .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the limited available patent data')
+    .replace(/\bcitation record only\b/gi, 'limited available patent data')
     .replace(/\binsufficient\b/gi, 'marked for attorney review')
-    .replace(/\blow evidence\b/gi, 'Preliminary Review')
+    .replace(/\blow evidence\b/gi, 'Limited Available Data')
     .replace(/\bavailable patent record\b/gi, 'reviewed patent record')
-    .replace(/\bavailable citation record\b/gi, 'reviewed title/abstract evidence')
+    .replace(/\bavailable citation record\b/gi, 'limited available patent data')
     .replace(/\bavailable patent disclosure\b/gi, 'reviewed patent disclosure')
     .replace(/\bavailable patent evidence\b/gi, 'reviewed patent evidence')
-    .replace(/\bfinal attorney remarks?\b/gi, 'preliminary claim-positioning observations')
+    .replace(/\bfinal attorney remarks?\b/gi, 'claim-positioning observations')
+    .replace(/\bpreliminary review report\b/gi, 'patent intelligence report')
+    .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
+    .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
+    .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence')
     .replace(/\bfinal attorney opinion\b/gi, 'attorney review required')
     .replace(/\bnon-patentable\b/gi, 'high mapped-overlap risk')
     .replace(/\bpatentable\b/gi, 'potential novelty space')
@@ -253,7 +261,7 @@ function gateRecordFor(stage1: any, pn: string) {
 
 function defaultAttorneyRemark(status: FeatureStatus, feature: string, pn: string) {
   if (status === 'Present') return `${pn} appears to disclose this feature in the reviewed patent record.`;
-  if (status === 'Partial') return `${pn} is related to this feature, but the reviewed title/abstract evidence does not show all required elements.`;
+  if (status === 'Partial') return `${pn} is related to this feature, but the available patent data does not show all required elements.`;
   if (status === 'Absent') return `${pn} does not show support for this feature in the reviewed disclosure. Treat as a potential distinction, not confirmed novelty.`;
   return `${pn} should be checked by counsel for this feature before final claim positioning.`;
 }
@@ -262,14 +270,14 @@ function defaultNoveltyImpact(status: FeatureStatus, feature: string) {
   if (status === 'Present') return `Overlap risk: ${feature} is mapped to this citation.`;
   if (status === 'Partial') return `Partial overlap: a narrower distinction may exist for ${feature}.`;
   if (status === 'Absent') return `Potential differentiator: ${feature} is not shown in the reviewed patent disclosure.`;
-  return `Review focus: attorney review should confirm how ${feature} is treated in title/abstract evidence.`;
+  return `Review focus: attorney review should confirm how ${feature} is treated in the full patent documents.`;
 }
 
 function defaultClaimReviewNote(status: FeatureStatus, feature: string) {
   if (status === 'Present') return `Do not rely on ${feature} alone for novelty without a narrower claim distinction.`;
-  if (status === 'Partial') return `Emphasize the missing element of ${feature} and verify full text before filing.`;
-  if (status === 'Absent') return `Consider claiming ${feature} if supported by the disclosure and after full-text review.`;
-  return `Request full patent text or additional inventor detail before relying on ${feature}.`;
+  if (status === 'Partial') return `Emphasize the missing element of ${feature} and verify the full patent documents before filing.`;
+  if (status === 'Absent') return `Consider claiming ${feature} if supported by the disclosure and after full patent document review.`;
+  return `Request full patent documents or additional inventor detail before relying on ${feature}.`;
 }
 
 function textSpecificityScore(value: string) {
@@ -571,7 +579,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 ['2.3', 'List of Other Shortlisted Citations'],
                 ['3', 'Applicant / Assignee Landscape'],
                 ['4', 'Repeated Inventor / Entity Signals'],
-                ['5', 'Preliminary Claim-Positioning Observations'],
+                ['5', 'Claim-Positioning Observations'],
                 ['6', 'Limitations and Next Steps'],
               ].map(([number, label]) => (
                 <a key={number} href={`#section-${number.replace('.', '-')}`} className="flex gap-3 text-slate-700 hover:text-blue-700">
@@ -865,7 +873,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
             <EntityLandscapeBlock landscape={reportData.inventorSignals} />
           </Section>
 
-          <Section id="section-5" title="05 Preliminary Claim-Positioning Observations" breakBefore>
+          <Section id="section-5" title="05 Claim-Positioning Observations" breakBefore>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="rounded-sm border border-slate-300 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Automated overlap position</div>
@@ -903,7 +911,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
           </Section>
 
           <footer className="mt-12 border-t border-slate-300 pt-6 text-center text-xs leading-5 text-slate-500">
-            <p>Generated by PatentNest.ai - Confidential - AI-generated preliminary patent intelligence.</p>
+            <p>Generated by PatentNest.ai - Confidential - AI-generated patent intelligence.</p>
             <p>Not a legal opinion. Consult a qualified patent professional before making filing, validity, enforcement, or FTO decisions.</p>
           </footer>
         </main>

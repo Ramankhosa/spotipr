@@ -18,25 +18,29 @@ function safeReportText(value: any) {
   return value
     .normalize('NFKC')
     .replace(/\uFFFD/g, '')
-    .replace(/\bno abstract available\.?/gi, 'Citation disclosure reviewed.')
-    .replace(/title\s*\/\s*abstract/gi, 'citation record')
-    .replace(/title and abstract/gi, 'citation record')
-    .replace(/patent abstract evidence/gi, 'patent disclosure')
-    .replace(/abstract evidence/gi, 'citation evidence')
-    .replace(/abstract data/gi, 'citation data')
-    .replace(/abstract text/gi, 'citation text')
-    .replace(/\babstracts?\b/gi, 'citation record')
+    .replace(/\bno abstract available\.?/gi, 'Limited available patent data; review the full patent document where needed.')
+    .replace(/title\s*\/\s*abstract/gi, 'available patent data')
+    .replace(/title and abstract/gi, 'available patent data')
+    .replace(/patent abstract evidence/gi, 'available patent data')
+    .replace(/abstract evidence/gi, 'available patent data')
+    .replace(/abstract data/gi, 'available patent data')
+    .replace(/abstract text/gi, 'available patent data')
+    .replace(/\babstracts?\b/gi, 'available patent data')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
     .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'attorney review recommended')
     .replace(/\btoo limited\b/gi, 'marked for attorney review')
-    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'reviewed citation record')
+    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'limited available patent data')
     .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
     .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'attorney review item')
     .replace(/\bevidence (?:is|was) too thin\b/gi, 'attorney review is recommended')
     .replace(/\binsufficient\b/gi, 'marked for attorney review')
-    .replace(/\blow evidence\b/gi, 'Preliminary Review');
+    .replace(/\blow evidence\b/gi, 'Limited Available Data')
+    .replace(/\bpreliminary review report\b/gi, 'patent intelligence report')
+    .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
+    .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
+    .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence');
 }
 
 export default function Stage4ResultsDisplay({
@@ -58,7 +62,7 @@ export default function Stage4ResultsDisplay({
   const inventorActions = Array.isArray(concl.inventor_action_items) ? concl.inventor_action_items : [];
   const overallAssessment = concl.overall_novelty_assessment || '';
   const filingAdvice = concl.filing_advice || '';
-  const isPreliminaryReview = String(overallAssessment).toLowerCase().includes('low evidence');
+  const needsReviewNotice = String(overallAssessment).toLowerCase().includes('low evidence');
 
   const sanitize = safeReportText;
 
@@ -137,7 +141,7 @@ export default function Stage4ResultsDisplay({
         </section>
       )}
 
-      {isPreliminaryReview && (
+      {needsReviewNotice && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
           <h3 className="text-base font-semibold text-amber-950">Attorney Review Notice</h3>
           <p className="mt-2 text-sm leading-6 text-amber-900">

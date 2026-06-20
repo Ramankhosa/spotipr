@@ -262,7 +262,7 @@ For every patent and feature, decide:
 - "Partial" → related but missing a key element
 - "Absent" → not supported by the text
 
-Use title/abstract text only.
+Use the supplied patent data fields only.
 Match by meaning (synonyms, paraphrases) but require concrete evidence; generic words like "AI", "sensor", "module", "controller" don't qualify unless they implement the full mechanism.
 
 When Present/Partial, quote ≤25 words from the patent as evidence (direct quote + optional short paraphrase ≤ 20 words).
@@ -315,9 +315,9 @@ TASK
 For each patent PN, classify EVERY feature EXACTLY ONCE as:
 - Present = mechanism clearly described with concrete wording
 - Partial = related but missing a required element/constraint
-- Absent = no concrete evidence in Title/Abstract
+- Absent = no concrete evidence in the supplied patent data
 
-Use Title/Abstract text only.
+Use the supplied patent data fields only.
 
 SEMANTIC MATCHING
 - Treat synonyms/paraphrases/hypernyms/hyponyms as matches if they implement the same mechanism.
@@ -327,10 +327,10 @@ SEMANTIC MATCHING
   - "classify images" ~= "image classification", "recognition via ML/CNN model".
 - Present when the quote shows the mechanism in action (verb + object). Avoid generic mentions like "AI module" without the image mechanism.
 - Partial when related terms appear but a required element/constraint is missing (e.g., the real-time or edge aspect).
-- Absent only when no concrete evidence for the mechanism exists in Title/Abstract.
+- Absent only when no concrete evidence for the mechanism exists in the supplied patent data.
 
 EVIDENCE AND CONFIDENCE
-- Quotes must be verbatim and <= 18 words from Title/Abstract; include the decisive mechanism phrase.
+- Quotes must be verbatim and <= 18 words from the supplied patent data; include the decisive mechanism phrase.
 - Confidence rubric: 0.9-1.0 explicit phrase match; 0.6-0.8 clear paraphrase; 0.3-0.5 weak/indirect hint.
 
 OUTPUT (JSON only)
@@ -354,7 +354,7 @@ OUTPUT (JSON only)
       ],
       "absent": [
         {"feature":"<copy from FEATURES>",
-         "reason":"no direct evidence in title/abstract"}
+         "reason":"no direct evidence in available patent data"}
       ]
     }
   ],
@@ -376,15 +376,15 @@ PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, optional Retr
 
 TASK
 For each patent PN, classify EVERY feature EXACTLY ONCE:
-- Present: the same mechanism is concretely disclosed in Title/Abstract.
+- Present: the same mechanism is concretely disclosed in the supplied patent data.
 - Partial: related mechanism is disclosed, but a required element, constraint, interaction, material, or step is missing.
-- Absent: the Title/Abstract gives no support for the feature.
+- Absent: the supplied patent data gives no support for the feature.
 - Unknown: the text is too thin, generic, unclear, or unavailable to assess.
 
 NOVELTY EVIDENCE RULES
-- Use only the supplied Title/Abstract. Do not assume claims or missing details.
+- Use only the supplied patent data fields. Do not assume claims or missing details.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
-- Use Retrieval hints to focus review, but Present/Partial still require Title/Abstract support.
+- Use Retrieval hints to focus review, but Present/Partial still require support in the supplied patent data.
 - Treat synonyms and paraphrases as matches only when they implement the same mechanism.
 - Generic mentions of processor, sensor, controller, AI, module, app, server, or network do not satisfy a feature unless the full interaction is disclosed.
 - Present/Partial require a verbatim quote <= 18 words and a field of "title" or "abstract".
@@ -433,17 +433,18 @@ For each patent, do all of the following in one pass:
 4. Summarize novelty signals across the candidate set.
 
 EVIDENCE RULES
-- Use only the supplied Title and Abstract as evidence.
+- Use only the supplied patent data fields as evidence.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
-- Use Retrieval hints to focus review, but Present/Partial still require Title/Abstract support.
-- Present/Partial require a short quote from title or abstract. If no title/abstract quote supports the feature, use Absent or Unknown.
+- Use Retrieval hints to focus review, but Present/Partial still require support in the supplied patent data.
+- Present/Partial require a short quote from the supplied patent data. If no supplied patent-data quote supports the feature, use Absent or Unknown.
 - user_invention_disclosure must be based only on FEATURE DETAILS or INVENTION DISCLOSURE, not on the prior-art patent.
-- patent_disclosure/evidence_quote must be based only on the supplied patent Title/Abstract.
-- Use Absent when the Title/Abstract is adequate to compare and the feature is not disclosed.
-- Use Unknown when the Title/Abstract is thin, vague, unavailable, translated poorly, or too generic to assess.
+- patent_disclosure/evidence_quote must be based only on the supplied patent data.
+- Use Absent when the supplied patent data is adequate to compare and the feature is not disclosed.
+- Use Unknown when the supplied patent data is thin, vague, unavailable, translated poorly, or too generic to assess.
 - Do not treat missing evidence as novelty.
 - A feature marked Absent or Unknown in one patent is not automatically unique. It is only a potential differentiator if it is absent from the closest references and is not a generic field-common component.
 - Generic words like system, module, sensor, controller, AI, battery, app, or server are not enough unless the full mechanism is disclosed.
+- Do not describe this analysis by naming the source-field limitation, by saying it is based on only available data, or by calling it an early-stage review/report. If noting limitations, say it is based on limited available patent data and recommend review of full patent documents including claims, detailed description/specification, drawings, legal status, and family data.
 
 OUTPUT JSON SHAPE:
 {
@@ -474,11 +475,11 @@ OUTPUT JSON SHAPE:
           "user_invention_disclosure": "what the user's invention has or does for this feature",
           "patent_disclosure": "what this patent discloses for the same feature, or why evidence is missing",
           "status": "Present|Partial|Absent|Unknown",
-          "evidence_quote": "short title/abstract quote or empty string",
+          "evidence_quote": "short supporting quote or empty string",
           "evidence_source": "title|abstract|none",
           "extent_score": 0.0,
           "confidence": 0.0,
-          "attorney_remark": "attorney-style feature comparison grounded in the submitted idea and title/abstract evidence",
+          "attorney_remark": "attorney-style feature comparison grounded in the submitted idea and available patent data",
           "novelty_impact": "specific mapped overlap or difference without legal conclusions",
           "claim_review_note": "specific claim drafting or attorney-review note"
         }
@@ -515,7 +516,8 @@ RULES
 - extent_score must be the actual disclosure extent for that feature in that specific patent: Present usually 0.75-1.00, Partial 0.35-0.74, Absent 0.00-0.20, Unknown 0.00-0.35.
 - Evaluate extent_score independently for every patent-feature pair. Do not reuse the same feature-level score across different patents unless their evidence is materially identical.
 - confidence means confidence in the row assessment, not degree of feature disclosure.
-- evidence_source must be title, abstract, or none. Do not cite claims, descriptions, embodiments, examples, or figures.
+- evidence_source must be title, abstract, or none. Do not cite unavailable claims, descriptions, embodiments, examples, or figures.
+- Do not repeat the source-field limitation in narrative fields; use "available patent data" or "limited available patent data" for user-facing limitation language.
 - attorney_remark and claim_review_note must be specific to the feature and status, not generic boilerplate.
 - Do not add markdown, comments, citations, or text outside JSON.
 - ASCII only.`;
@@ -687,7 +689,7 @@ GUIDELINES:
 /* LEGACY: live Stage 4 uses STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 */
 // Lightweight prompt: compile final report strictly from per-patent remarks
 /* LEGACY: superseded by STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 */
-export const STAGE4_REPORT_PROMPT_V3 = `You are a senior patent novelty analyst preparing preliminary claim-positioning observations for the Novelty UI.
+export const STAGE4_REPORT_PROMPT_V3 = `You are a senior patent novelty analyst preparing claim-positioning observations for the Novelty UI.
 
 IMPORTANT: Detailed per-patent analysis is already provided in Stage 3.5c. Your role is to provide evidence-limited strategic observations.
 
@@ -759,12 +761,13 @@ Authoring guidance:
 - Be HONEST: If the closest patents have high mapped overlap, say so and explain why.
 - Be CONSTRUCTIVE: Always provide actionable suggestions for improvement.
 - Focus on the TOP 2-3 closest matching patents when drawing conclusions.
+- Do not describe the analysis by naming the source-field limitation, by saying it is based on only available data, or by calling it an early-stage review/report. If noting limitations, say it is based on limited available patent data and recommend review of full patent documents including claims and detailed description/specification.
 - course_corrections should offer real alternatives if current approach has issues.
 - inventor_action_items should be specific and actionable (not generic advice).
 - idea_bank_suggestions should help pivot or strengthen the technical differentiation.
 `;
 
-export const STAGE4_REPORT_PROMPT_FROM_REMARKS_V2 = `You are a senior patent novelty analyst preparing preliminary claim-positioning observations from per-patent analysis.
+export const STAGE4_REPORT_PROMPT_FROM_REMARKS_V2 = `You are a senior patent novelty analyst preparing claim-positioning observations from per-patent analysis.
 
 IMPORTANT: Detailed per-patent analysis is already provided in Stage 3.5c. Your role is to provide evidence-limited strategic observations.
 
@@ -829,12 +832,13 @@ Output JSON shape (exact keys):
 Authoring guidance:
 - Identify the TOP OVERLAP RISKS from per_patent_remarks (highest relevance or high_overlap novelty_threat).
 - honest_assessment should directly address these mapped-overlap risks and evidence limits.
+- Do not describe the analysis by naming the source-field limitation, by saying it is based on only available data, or by calling it an early-stage review/report. If noting limitations, say it is based on limited available patent data and recommend review of full patent documents including claims and detailed description/specification.
 - course_corrections should offer REAL alternatives if current approach has serious issues.
 - inventor_action_items should be specific and immediately actionable.
 - idea_bank_suggestions should help pivot or strengthen technical differentiation
 `;
 
-export const STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 = `You are a senior patent novelty analyst preparing preliminary claim-positioning observations from per-patent overlap remarks.
+export const STAGE4_REPORT_PROMPT_FROM_REMARKS_V3 = `You are a senior patent novelty analyst preparing claim-positioning observations from per-patent overlap remarks.
 
 INPUTS PROVIDED BELOW:
 - invention_features: JSON array of mechanism-level features
@@ -847,9 +851,9 @@ Synthesize an honest, evidence-based mapped-overlap report. Do not re-run featur
 Use comparison_rows as the source for feature-level remarks. Do not collapse them into generic one-line summaries.
 
 DECISION POLICY
-- High Overlap: one mapped citation covers most core features, or all critical features are present in title/abstract evidence.
+- High Overlap: one mapped citation covers most core features, or all critical features are present in the available patent data.
 - Moderate Overlap: important overlap exists, but some mechanism-level differentiators remain.
-- Lower Mapped Overlap: closest mapped references miss multiple core mechanisms in title/abstract evidence.
+- Lower Mapped Overlap: closest mapped references miss multiple core mechanisms in the available patent data.
 - Low Evidence: evidence is too thin, missing, ambiguous, or corpus coverage is weak.
 
 STRICT RULES
@@ -862,6 +866,7 @@ STRICT RULES
 - If the closest reference discloses most broad structural/process/composition/data-flow elements, state that broad claim positioning is weak even if a narrower differentiator remains.
 - Do not list as key_strengths any feature that is Present or Partial in the closest high-overlap reference.
 - key_risks must reflect any risk stated in the executive summary, evidence basis, or filing advice. Never output "No significant risks identified" if any high-overlap, majority-overlap, or weak-evidence risk is discussed elsewhere.
+- Do not describe the analysis by naming the source-field limitation, by saying it is based on only available data, or by calling it an early-stage review/report. If noting limitations, say it is based on limited available patent data and recommend review of full patent documents including claims, detailed description/specification, drawings, legal status, and family data.
 
 OUTPUT JSON SHAPE:
 {
@@ -2264,8 +2269,8 @@ export class NoveltySearchService extends BasePatentService {
             '  "summary": "2-3 sentence analysis summary",',
             '  "detailedAnalysis": {',
             '    "relevant_parts": ["specific overlapping elements - what the patent covers that matches the invention"],',
-            '    "irrelevant_parts": ["differentiators - what is not mapped in title/abstract evidence"],',
-            '    "novelty_comparison": "title/abstract evidence comparison without legal conclusions"',
+            '    "irrelevant_parts": ["differentiators - what is not mapped in the available patent data"],',
+            '    "novelty_comparison": "available patent data comparison without legal conclusions"',
             '  },',
             '  "overlap_features": ["features present in both"],',
             '  "missing_features": ["features absent from patent"],',
@@ -2274,10 +2279,10 @@ export class NoveltySearchService extends BasePatentService {
             '}',
             '',
             'OVERLAP RISK LEVELS:',
-            '- high_overlap: Title/abstract evidence maps most core features',
-            '- moderate_overlap: Title/abstract evidence maps multiple important features',
+            '- high_overlap: Available patent data maps most core features',
+            '- moderate_overlap: Available patent data maps multiple important features',
             '- related: Same field or component-level overlap, but not a close feature map',
-            '- low_overlap: Minimal title/abstract overlap',
+            '- low_overlap: Minimal available-patent-data overlap',
             '',
             'Relevance should reflect threat to the invention as a whole. A patent that only teaches a component, material, sensor, clamp, UI, generic algorithm, carrier, excipient, circuit element, or standard process step should be described as a component-level or background reference and should not receive high relevance unless it also shares the same core mechanism.',
             'Be HONEST and STRAIGHTFORWARD. If a patent is highly relevant, say so clearly.',
@@ -2351,7 +2356,7 @@ export class NoveltySearchService extends BasePatentService {
               if (present.length) lines.push(`Overlaps on: ${present.slice(0, 4).join(', ')}${present.length > 4 ? '...' : ''}.`);
               if (absent.length) lines.push(`Missing vs idea: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? '...' : ''}.`);
               if (partial.length) lines.push(`Partially aligned: ${partial.slice(0, 3).join(', ')}${partial.length > 3 ? '...' : ''}.`);
-              if (lines.length === 0) lines.push('Insufficient evidence in title/abstract to assess overlap.');
+              if (lines.length === 0) lines.push('Limited available patent data is insufficient to assess overlap.');
               // Compute relevance score for fallback
               const total = Math.max(1, features.length);
               const relevanceScore = (present.length + partial.length * 0.5) / total;
@@ -2369,9 +2374,9 @@ export class NoveltySearchService extends BasePatentService {
                 novelty_threat: threatLevel,
                 summary: lines.join(' '),
                 detailedAnalysis: {
-                  relevant_parts: present.map((f: string) => `Title/abstract maps to: ${f}`),
-                  irrelevant_parts: absent.map((f: string) => `Title/abstract does not map: ${f}`),
-                  novelty_comparison: `This citation ${present.length > 0 ? `has title/abstract overlap on ${present.length} feature(s)` : 'has minimal title/abstract overlap'} with the invention. ${absent.length > 0 ? `${absent.length} potential differentiator(s) need full-record review.` : ''}`
+                  relevant_parts: present.map((f: string) => `Available patent data maps to: ${f}`),
+                  irrelevant_parts: absent.map((f: string) => `Available patent data does not map: ${f}`),
+                  novelty_comparison: `This citation ${present.length > 0 ? `has available-patent-data overlap on ${present.length} feature(s)` : 'has minimal available-patent-data overlap'} with the invention. ${absent.length > 0 ? `${absent.length} potential differentiator(s) need full patent document review.` : ''}`
                 }
               };
             }
@@ -2423,8 +2428,8 @@ export class NoveltySearchService extends BasePatentService {
           '  "summary": "2-3 sentence analysis",',
           '  "detailedAnalysis": {',
           '    "relevant_parts": ["overlapping elements"],',
-          '    "irrelevant_parts": ["differentiators not mapped in title/abstract evidence"],',
-          '    "novelty_comparison": "title/abstract evidence comparison without legal conclusions"',
+          '    "irrelevant_parts": ["differentiators not mapped in the available patent data"],',
+          '    "novelty_comparison": "available patent data comparison without legal conclusions"',
           '  },',
           '  "overlap_features": ["features in both"],',
           '  "missing_features": ["features absent"],',
@@ -2494,7 +2499,7 @@ export class NoveltySearchService extends BasePatentService {
           if (present.length) lines.push(`Overlaps on: ${present.slice(0, 4).join(', ')}${present.length > 4 ? '...' : ''}.`);
           if (absent.length) lines.push(`Missing vs idea: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? '...' : ''}.`);
           if (partial.length) lines.push(`Partially aligned: ${partial.slice(0, 3).join(', ')}${partial.length > 3 ? '...' : ''}.`);
-          if (lines.length === 0) lines.push('Insufficient evidence in title/abstract to assess overlap.');
+          if (lines.length === 0) lines.push('Limited available patent data is insufficient to assess overlap.');
           // Compute relevance score for fallback
           const total = Math.max(1, features.length);
           const relevanceScore = (present.length + partial.length * 0.5) / total;
@@ -2514,7 +2519,7 @@ export class NoveltySearchService extends BasePatentService {
             detailedAnalysis: {
               relevant_parts: present.map((f: string) => `Title/abstract maps to: ${f}`),
               irrelevant_parts: absent.map((f: string) => `Title/abstract does not map: ${f}`),
-              novelty_comparison: `This citation ${present.length > 0 ? `has title/abstract overlap on ${present.length} feature(s)` : 'has minimal title/abstract overlap'} with the invention. ${absent.length > 0 ? `${absent.length} potential differentiator(s) need full-record review.` : ''}`
+                  novelty_comparison: `This citation ${present.length > 0 ? `has available-patent-data overlap on ${present.length} feature(s)` : 'has minimal available-patent-data overlap'} with the invention. ${absent.length > 0 ? `${absent.length} potential differentiator(s) need full patent document review.` : ''}`
             }
           };
         }
@@ -3069,12 +3074,13 @@ PATENT TO ASSESS:
 - Abstract: ${(patent as any).abstract || 'Not available'}
 
 TASK:
-Determine if this patent is RELEVANT to the invention by identifying overlap between the patent's title/abstract and the invention features.
+Determine if this patent is RELEVANT to the invention by identifying overlap between the supplied patent data and the invention features.
 
 RELEVANCE CRITERIA:
-- Patent title/abstract indicates presence of at least one invention feature with technical proximity
+- Supplied patent data indicates presence of at least one invention feature with technical proximity
 - If none of the features appear present, mark as not relevant
 - A patent is not relevant merely because it discloses one generic component. If only one generic feature overlaps, return is_relevant=false unless the same object, same operation, or same technical problem is also present.
+- In the reasoning field, do not name the source-field limitation or use early-stage-review wording. Refer to available patent data if evidence limits must be mentioned.
 
 OUTPUT FORMAT:
 Respond with ONLY a JSON object:
@@ -3847,8 +3853,8 @@ RESPONSE:`;
         cell?.quote ||
         cell?.reason ||
         (status === 'Present' || status === 'Partial'
-          ? 'Patent title/abstract contains related disclosure.'
-          : 'No supporting patent title/abstract evidence was identified for this feature.')
+          ? 'Available patent data contains related disclosure.'
+          : 'No supporting patent data was identified for this feature.')
       ).trim();
       const suppliedExtentScore = this.normalizeScore(
         suppliedRow.extent_score ??
@@ -3940,23 +3946,23 @@ RESPONSE:`;
   private defaultNoveltyImpact(status: FeatureMapCell['status'], feature: string): string {
     if (status === 'Present') return `Overlap risk: this reference appears to disclose ${feature}; attorney review should identify claim distinctions.`;
     if (status === 'Partial') return `Partial overlap: this reference is related but lacks at least one element of ${feature}.`;
-    if (status === 'Absent') return `Potential differentiator: this feature was not found in the available title/abstract evidence.`;
-    return `Evidence gap: the available title/abstract is too thin to compare this feature reliably.`;
+    if (status === 'Absent') return `Potential differentiator: this feature was not found in the available patent data.`;
+    return `Evidence gap: the available patent data is too thin to compare this feature reliably.`;
   }
 
   private defaultAttorneyRemark(status: FeatureMapCell['status'], feature: string, pn?: string): string {
     const reference = pn ? `Reference ${pn}` : 'This reference';
-    if (status === 'Present') return `${reference} appears to disclose the same feature in the available title/abstract evidence: ${feature}.`;
-    if (status === 'Partial') return `${reference} is technically related to ${feature}, but at least one required element is not apparent from the title/abstract.`;
-    if (status === 'Absent') return `${reference} does not show title/abstract support for ${feature}; treat this as a potential distinction, not confirmed novelty.`;
-    return `${reference} has insufficient title/abstract evidence to compare ${feature} reliably.`;
+    if (status === 'Present') return `${reference} appears to disclose the same feature in the available patent data: ${feature}.`;
+    if (status === 'Partial') return `${reference} is technically related to ${feature}, but at least one required element is not apparent from the available patent data.`;
+    if (status === 'Absent') return `${reference} does not show support for ${feature} in the available patent data; treat this as a potential distinction, not confirmed novelty.`;
+    return `${reference} has insufficient available patent data to compare ${feature} reliably.`;
   }
 
   private defaultClaimReviewNote(status: FeatureMapCell['status'], feature: string): string {
     if (status === 'Present') return `Avoid relying on ${feature} alone for independent-claim novelty; identify narrower technical distinctions.`;
-    if (status === 'Partial') return `Draft claims around the missing element of ${feature} and verify the full patent text before relying on it.`;
-    if (status === 'Absent') return `Consider emphasizing ${feature}, subject to full-text prior-art review and enablement support.`;
-    return `Request full patent text or additional inventor detail before forming a claim strategy around ${feature}.`;
+    if (status === 'Partial') return `Draft claims around the missing element of ${feature} and verify the full patent documents before relying on it.`;
+    if (status === 'Absent') return `Consider emphasizing ${feature}, subject to full patent document prior-art review and enablement support.`;
+    return `Request full patent documents or additional inventor detail before forming a claim strategy around ${feature}.`;
   }
 
   private hasNoHighConfidencePriorArt(stage1Data: any): boolean {
@@ -4532,9 +4538,9 @@ RESPONSE:`;
           'Your job is to decide whether each patent should proceed to deep novelty mapping. This is not a final patentability opinion. Keep references that may be useful for novelty, inventive-step, component mapping, or bounded attorney review.',
           '',
           'Decision policy:',
-          '- accept: the title/abstract discloses the same or very close invention-level combination, including substantially the same technical purpose, same object/material/data target, and same operating mechanism.',
-          '- component: the title/abstract concretely discloses at least one meaningful atomic invention feature, subsystem, material structure, layer arrangement, module, process step, release mechanism, detection mechanism, indicator mechanism, compliance mechanism, control mechanism, verification mechanism, manufacturing step, or implementation detail, even if the full invention combination is missing.',
-          '- borderline: the title/abstract has a weak, adjacent, ambiguous, partial, or transferable relationship that may still help bounded attorney review.',
+          '- accept: the supplied patent data discloses the same or very close invention-level combination, including substantially the same technical purpose, same object/material/data target, and same operating mechanism.',
+          '- component: the supplied patent data concretely discloses at least one meaningful atomic invention feature, subsystem, material structure, layer arrangement, module, process step, release mechanism, detection mechanism, indicator mechanism, compliance mechanism, control mechanism, verification mechanism, manufacturing step, or implementation detail, even if the full invention combination is missing.',
+          '- borderline: the supplied patent data has a weak, adjacent, ambiguous, partial, or transferable relationship that may still help bounded attorney review.',
           '- reject: remote keyword hit, generic field reference, duplicate noise with no new useful detail, or no concrete technical overlap with any atomic invention feature.',
           '',
           'Score policy:',
@@ -4544,7 +4550,7 @@ RESPONSE:`;
           '- Do not reject a concrete component disclosure merely because it lacks the full invention combination.',
           '- Full invention overlap is not required for component.',
           '- Same technical purpose, same object/material/data target, and same operating mechanism are required only for accept, not for component.',
-          '- If title/abstract concretely supports one or more atomic invention features, classify as component unless the overlap is merely generic.',
+          '- If the supplied patent data concretely supports one or more atomic invention features, classify as component unless the overlap is merely generic.',
           '- If the overlap is generic only, such as device, system, composition, layer, module, sensor, controller, polymer, marker, app, server, algorithm, coating, film, dosage form, platform, or method without meaningful technical role or mechanism, classify as borderline or reject.',
           '',
           'Suggested score calibration:',
@@ -4554,13 +4560,13 @@ RESPONSE:`;
           '- reject: 0.00-0.25 for remote, generic, duplicate noise, or no concrete atomic feature support.',
           '',
           'Component-salvage rule:',
-          '- Keep as component if the title/abstract concretely discloses an atomic invention feature, subsystem, material structure, layer arrangement, module architecture, process step, release mechanism, detection mechanism, indicator mechanism, compliance mechanism, control mechanism, verification marker, manufacturing method, or implementation detail.',
+          '- Keep as component if the supplied patent data concretely discloses an atomic invention feature, subsystem, material structure, layer arrangement, module architecture, process step, release mechanism, detection mechanism, indicator mechanism, compliance mechanism, control mechanism, verification marker, manufacturing method, or implementation detail.',
           '- A component decision means the reference is useful for mapping one part of the invention; it does not mean the full invention is disclosed or anticipated.',
           '- A reference may be component even when it belongs to a different embodiment, product type, form factor, or application area, provided the disclosed technical mechanism clearly maps to an atomic invention feature.',
           '- Do not keep as component merely because the reference shares a broad field, environment, purpose, or keyword.',
           '',
           'Form-factor and object-target rule:',
-          '- If the reference uses a different form factor, product type, material target, data target, biological target, or operating environment, downgrade by at least one level unless the title/abstract discloses a technical mechanism that directly maps to an atomic invention feature.',
+          '- If the reference uses a different form factor, product type, material target, data target, biological target, or operating environment, downgrade by at least one level unless the supplied patent data discloses a technical mechanism that directly maps to an atomic invention feature.',
           '- A different form factor with the same component performing the same technical function may be component.',
           '- A different form factor with only broad purpose similarity should be borderline or reject.',
           '- Do not label a different-form-factor reference as accept unless the core feature combination and operating mechanism are still substantially the same.',
@@ -4569,7 +4575,7 @@ RESPONSE:`;
           '- Reference discloses the same product/system/process with the same core feature combination and same operating mechanism: accept, because it may anticipate the invention-level concept.',
           '- Reference discloses the same technical problem and same solution architecture, but misses one optional or peripheral feature: accept or high component, depending on how central the missing feature is.',
           '- Reference discloses one major subsystem, layer, module, material, chemical composition, control step, sensor arrangement, release mechanism, detection mechanism, verification mechanism, or manufacturing step from the invention: component, even if the full invention is absent.',
-          '- Reference discloses a known implementation detail that could be combined with other references to challenge inventive step: component, provided the title/abstract concretely supports the detail.',
+          '- Reference discloses a known implementation detail that could be combined with other references to challenge inventive step: component, provided the supplied patent data concretely supports the detail.',
           '- Reference discloses the same result or purpose but uses a different object, material target, data target, mechanism, or technical route: borderline, unless a concrete atomic feature is still present.',
           '- Reference uses similar words from the same broad field but does not disclose any concrete atomic invention feature: reject.',
           '- Reference discloses only a generic version of a term such as device, system, composition, layer, module, sensor, controller, polymer, marker, app, server, algorithm, or coating without technical role or mechanism: reject or borderline.',
@@ -4578,13 +4584,13 @@ RESPONSE:`;
           '- Reference discloses a diagnostic, testing, packaging, monitoring, or support tool related to the same environment but not the invention object or mechanism: borderline or reject.',
           '- Reference discloses the same material or component but for a completely different function with no clear transferability: borderline or reject.',
           '- Reference discloses the same component performing the same function in a different form factor: component, but not accept unless the invention-level combination is also present.',
-          '- Reference discloses a broad platform that could include the invention but does not concretely disclose the relevant features in the title/abstract: borderline or reject.',
+          '- Reference discloses a broad platform that could include the invention but does not concretely disclose the relevant features in the supplied patent data: borderline or reject.',
           '- Reference discloses a narrower embodiment of one invention feature with strong technical detail: component, even if its score is below accept range.',
           '- Reference appears to be a duplicate family member of an already accepted/component reference: component or borderline, but assign lower score unless it adds new technical detail.',
           '',
           'Evidence quality:',
-          '- high: title/abstract explicitly names the matched atomic technical feature or a close technical synonym.',
-          '- medium: title/abstract clearly implies the matched feature through a described technical mechanism.',
+          '- high: supplied patent data explicitly names the matched atomic technical feature or a close technical synonym.',
+          '- medium: supplied patent data clearly implies the matched feature through a described technical mechanism.',
           '- low: broad field similarity, ambiguous wording, indirect relation, or weak transferable analogy only.',
           '',
           'Deep mapping rule:',
@@ -4592,16 +4598,17 @@ RESPONSE:`;
           '- borderline decisions may proceed to bounded deep mapping, preferably capped by score, evidence quality, or top-N selection.',
           '- reject decisions should not proceed to deep mapping.',
           '- Decision should dominate score. Do not discard component references only because their score is below the accept range.',
-          '- Reject only when the title/abstract lacks concrete support for any atomic invention feature.',
+          '- Reject only when the supplied patent data lacks concrete support for any atomic invention feature.',
           '',
           'Output requirements:',
           'Each array element must be:',
           '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature_id_or_exact_feature_label"],"missing_features":["feature_id_or_exact_feature_label"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
           '',
           'Rules:',
-          '- Use title/abstract only.',
+          '- Use only the supplied patent data fields.',
           '- Retrieval hints are not evidence; use them only to focus review.',
-          '- Do not copy hinted matched features unless title/abstract supports them.',
+          '- Do not copy hinted matched features unless the supplied patent data supports them.',
+          '- In reason, do not name the source-field limitation or use early-stage-review wording. Refer to available patent data if evidence limits must be mentioned.',
           '- matched_features must contain only feature IDs or exact feature labels from the provided invention feature list.',
           '- Do not invent new feature names in matched_features.',
           '- Use reasonable technical synonyms when matching features.',
@@ -5122,7 +5129,7 @@ RESPONSE:`;
             lines.push(`Partially aligned: ${partial.slice(0, 3).join(', ')}${partial.length > 3 ? '…' : ''}.`);
           }
           if (lines.length === 0) {
-            lines.push('Insufficient evidence in title/abstract to assess overlap.');
+            lines.push('Limited available patent data is insufficient to assess overlap.');
           }
           remarks = lines.join(' ');
         }
@@ -5290,12 +5297,12 @@ RESPONSE:`;
 
     return {
       integration: integrationCheck.any_single_patent_covers_majority === false
-        ? "No reviewed title/abstract maps a majority of the identified features; this is an evidence-limited differentiation signal, not a novelty conclusion."
-        : "At least one reviewed title/abstract maps a majority of the identified features, creating elevated overlap risk.",
+        ? "No reviewed patent record maps a majority of the identified features; this is an evidence-limited differentiation signal, not a novelty conclusion."
+        : "At least one reviewed patent record maps a majority of the identified features, creating elevated overlap risk.",
 
       feature_insights: `Analysis reveals ${uniqueFeatures} of ${totalFeatures} features with high uniqueness (>80%). Features related to core functionality show ${(uniqueFeatures/totalFeatures * 100).toFixed(0)}% uniqueness across the patent landscape.`,
 
-      verdict: `The mapped differentiation indicator is ${score}% with ${aggregationResult.confidence.toLowerCase()} confidence. Review the cited title/abstract evidence before drawing filing conclusions.`
+      verdict: `The mapped differentiation indicator is ${score}% with ${aggregationResult.confidence.toLowerCase()} confidence. Review the cited patent records and full patent documents before drawing filing conclusions.`
     };
   }
 
@@ -5373,7 +5380,7 @@ RESPONSE:`;
         ]
       },
       report_metadata: {
-        title: "Preliminary Patent Intelligence Report",
+        title: "Patent Intelligence Report",
         search_id: searchRun.id,
         date: new Date().toISOString().split('T')[0],
         analyst: "SpotIPR AI",
@@ -5399,13 +5406,13 @@ RESPONSE:`;
       section_1_3_summary: {
         anchor: "summary",
         title: "Summary",
-        description: `Based on the submitted invention disclosure, candidate patent citations are mapped using title/abstract evidence only. Further, ${selectedCount} other patent citations are shortlisted for attorney review.`,
+        description: `Based on the submitted invention disclosure, candidate patent citations are mapped using limited available patent data. Further, ${selectedCount} other patent citations are shortlisted for attorney review.`,
         citations_table: citationsTable
       },
       section_1_4_feature_analysis: {
         anchor: "feature-analysis",
         title: "Key Feature Analysis",
-        description: "The broad key features are prepared based on the submitted invention information. The analysis maps title/abstract evidence against extracted features and does not provide a legal conclusion.",
+        description: "The broad key features are prepared based on the submitted invention information. The analysis maps available patent data against extracted features and does not provide a legal conclusion.",
         feature_matrix: {
           patent_numbers: selectedPatents?.map(p => p.patentNumber) || [],
           features: (stage0Data.inventionFeatures || []).map((feature, index) => ({
@@ -5461,7 +5468,7 @@ RESPONSE:`;
         })) || []
       },
       concluding_remarks: {
-        title: "Preliminary Claim-Positioning Observations",
+        title: "Claim-Positioning Observations",
         overall_novelty_assessment: aggregationResult.decision,
         key_strengths: [
           `Potential novelty-space score: ${score}%`,
@@ -5472,11 +5479,11 @@ RESPONSE:`;
           "Detailed analysis not available"
         ],
         strategic_recommendations: aggregationResult.decision === 'Novel' ?
-          ["Prepare attorney review around mapped differentiators", "Validate with full claims and specifications"] :
+          ["Prepare attorney review around mapped differentiators", "Validate with full patent documents, including claims and detailed description/specification"] :
           ["Narrow disclosure to potential differentiators", "Request attorney review before filing decisions"],
         filing_advice: aggregationResult.decision === 'Novel' ?
-          "Potential novelty space identified from title/abstract evidence; validate with full-record attorney review." :
-          "Mapped overlap exists from title/abstract evidence; review claims and specifications before filing decisions."
+          "Potential novelty space identified from limited available patent data; validate with full patent document review." :
+          "Mapped overlap exists in the available patent data; review full patent documents, including claims and detailed description/specification, before filing decisions."
       }
     };
   }
@@ -5503,7 +5510,7 @@ RESPONSE:`;
 
     // Professional integration analysis
     const integrationLine = integration?.any_single_patent_covers_majority === false
-      ? 'No single reviewed title/abstract maps a majority of the extracted features; this is an evidence-limited differentiation signal, not a legal novelty conclusion.'
+      ? 'No single reviewed patent record maps a majority of the extracted features; this is an evidence-limited differentiation signal, not a legal novelty conclusion.'
       : (integration?.explanation || 'Several references exhibit partial feature overlap; patentability depends on the claim scope and the specific combination of elements.');
 
     // Professional executive summary
@@ -5564,17 +5571,17 @@ RESPONSE:`;
     let actionPhrase = '';
     
     if (decision === 'Novel') {
-      verdictPhrase = 'The title/abstract evidence shows a larger apparent differentiation window';
+      verdictPhrase = 'The available patent data shows a larger apparent differentiation window';
       actionPhrase = 'Recommend attorney review of the differentiators before any filing decision.';
     } else if (decision === 'Partially Novel') {
-      verdictPhrase = 'The title/abstract evidence shows mixed mapped overlap with identifiable differentiation points';
+      verdictPhrase = 'The available patent data shows mixed mapped overlap with identifiable differentiation points';
       actionPhrase = 'Recommend focusing attorney review on potential differentiators and overlapping elements.';
     } else if (decision === 'Not Novel') {
-      verdictPhrase = 'Significant title/abstract mapped overlap has been identified';
-      actionPhrase = 'Recommend re-evaluating the technical scope and identifying distinctions not captured in available title/abstract evidence.';
+      verdictPhrase = 'Significant mapped overlap has been identified in the available patent data';
+      actionPhrase = 'Recommend re-evaluating the technical scope and identifying distinctions not captured in the available patent data.';
     } else {
-      verdictPhrase = 'Available title/abstract evidence is limited for a comprehensive assessment';
-      actionPhrase = 'Consider expanding the search and reviewing full patent records before making decisions.';
+      verdictPhrase = 'Available patent data is limited for a comprehensive assessment';
+      actionPhrase = 'Consider expanding the search and reviewing full patent documents before making decisions.';
     }
 
     let featureAnalysis = `Feature-level analysis across ${totalFeatures} key invention features indicates: `;
@@ -5592,7 +5599,7 @@ RESPONSE:`;
       featureAnalysis += `${lowCount} feature(s) have substantial mapped overlap requiring attorney review. `;
     }
 
-    return `${verdictPhrase} with a calculated title/abstract differentiation score of ${scorePercent}% (${confidence.toLowerCase()} confidence). ${featureAnalysis}${integrationLine} ${actionPhrase}`;
+    return `${verdictPhrase} with a calculated mapped-differentiation score of ${scorePercent}% (${confidence.toLowerCase()} confidence). ${featureAnalysis}${integrationLine} ${actionPhrase}`;
   }
 
   /**
@@ -5621,10 +5628,10 @@ RESPONSE:`;
       }
     }
     if (aggregationResult.integration_check?.any_single_patent_covers_majority === false) {
-      keyStrengths.push('No single mapped citation covers the majority of features in available title/abstract evidence');
+      keyStrengths.push('No single mapped citation covers the majority of features in the available patent data');
     }
     if (score >= 0.7 && potentialDifferentiators.length > 0) {
-      keyStrengths.push('Title/abstract differentiation score exceeds 70% with mapped differentiators still present');
+      keyStrengths.push('Mapped-differentiation score exceeds 70% with mapped differentiators still present');
     }
     if (confidence === 'High') {
       keyStrengths.push('Higher confidence in the automated mapping based on broader candidate coverage');
@@ -5655,14 +5662,14 @@ RESPONSE:`;
     const finalRisks = this.mergeRiskLists(deterministicRisks, existingRisks).map((risk: string) => String(risk)
       .replace(/substantial prior art overlap.*claim narrowing/i, 'substantial mapped overlap - consider narrower claim positioning')
       .replace(/Prior art citations may be combined under obviousness analysis.*$/i, 'Multiple mapped citations cover related features; attorney review should assess combination risk')
-      .replace(/review for potential anticipation/i, 'review for high title/abstract mapped coverage')
+      .replace(/review for potential anticipation/i, 'review for high mapped coverage in the available patent data')
     );
 
     // Build strategic recommendations for inventors
     const recommendations: string[] = [];
     if (decision === 'Novel') {
       recommendations.push('Prepare attorney review around the identified potential differentiators');
-      recommendations.push('Validate differentiators against full claims and specifications before filing decisions');
+      recommendations.push('Validate differentiators against full patent documents, including claims and detailed description/specification, before filing decisions');
       recommendations.push('Run a separate freedom-to-operate review for commercial implementation');
     } else if (decision === 'Partially Novel') {
       recommendations.push('Focus claim-positioning review on the filtered potential differentiators');
@@ -5678,12 +5685,12 @@ RESPONSE:`;
 
     // Build evidence-limited filing advice without legal patentability conclusions.
     const filingAdvice = decision === 'Novel'
-      ? 'Based on available title/abstract evidence, differentiators remain for attorney review. Validate them against full patent records before any filing decision.'
+      ? 'Based on limited available patent data, differentiators remain for attorney review. Validate them against full patent documents before any filing decision.'
       : decision === 'Partially Novel'
-        ? 'The title/abstract mapping shows both overlap and potential differentiators. Work with patent counsel to evaluate claim positioning around the filtered differentiators.'
+        ? 'The available patent data shows both overlap and potential differentiators. Work with patent counsel to evaluate claim positioning around the filtered differentiators.'
         : decision === 'Not Novel'
           ? 'Significant mapped overlap suggests the current disclosure needs refinement. Identify additional technical distinctions and review full records with counsel.'
-          : 'Insufficient title/abstract evidence for a reliable assessment. Consider expanded search and full-record review before making filing decisions.';
+          : 'Limited available patent data is insufficient for a reliable assessment. Consider expanded search and full patent document review before making filing decisions.';
 
     // Build "why novelty exists" explanation
     const uniqueFeaturesText = topDifferentiatorNames.length > 0
@@ -5691,7 +5698,7 @@ RESPONSE:`;
       : 'key technical features';
     const visibleWhyNovel = potentialDifferentiators.length > 0
       ? `The apparent differentiation window is primarily supported by ${potentialDifferentiators.length} potential differentiator(s): ${uniqueFeaturesText}. ${integrationLine} Attorney review should validate whether the specific configuration and technical integration remain distinct in full records.`
-      : `The assessment is based on overall title/abstract feature mapping. ${integrationLine}`;
+      : `The assessment is based on overall feature mapping from limited available patent data. ${integrationLine}`;
 
     // Build inventor action items
     const inventorActions: string[] = [];
@@ -5707,9 +5714,9 @@ RESPONSE:`;
 
     return {
       ...existingRemarks,
-      title: 'Preliminary Claim-Positioning Observations',
+      title: 'Claim-Positioning Observations',
       overall_novelty_assessment: existingRemarks.overall_novelty_assessment || decision,
-      novelty_score_summary: `${(score * 100).toFixed(1)}% title/abstract differentiation score with ${confidence.toLowerCase()} confidence`,
+      novelty_score_summary: `${(score * 100).toFixed(1)}% mapped-differentiation score with ${confidence.toLowerCase()} confidence`,
       why_novelty_exists: existingRemarks.why_novelty_exists || visibleWhyNovel,
       key_strengths: keyStrengths.length > 0 ? keyStrengths : (Array.isArray(existingRemarks.key_strengths) ? existingRemarks.key_strengths : []),
       key_risks: finalRisks,
@@ -6094,7 +6101,7 @@ RESPONSE:`;
         },
         feature_matrix: featureMatrix,
         top_references: topReferences,
-        final_remarks: `Analysis based on title/abstract review of ${aggregationResult.per_patent_coverage.length} references.`,
+        final_remarks: `Analysis based on limited available patent data for ${aggregationResult.per_patent_coverage.length} references. Review full patent documents, including claims and detailed description/specification, for highest-confidence analysis.`,
         appendices: {
           prior_art_metadata: [], // Would populate from PQAI data
           methodology: `Feature mapping used Present/Partial/Absent assessment with ${config.stage35a.batchSize} patents per batch.`,
@@ -6592,11 +6599,11 @@ OUTPUT JSON:
       basePrompt += "\n    title: patent_title,";
       basePrompt += "\n    relevance: 0.0-1.0 score (how relevant to our invention),";
       basePrompt += "\n    novelty_threat: 'high_overlap' | 'moderate_overlap' | 'related' | 'low_overlap',";
-      basePrompt += "\n    summary: 1-2 sentence explanation of title/abstract relationship to our invention,";
+      basePrompt += "\n    summary: 1-2 sentence explanation of the available patent data relationship to our invention,";
       basePrompt += "\n    detailedAnalysis: {";
       basePrompt += "\n      summary: brief overview,";
-      basePrompt += "\n      relevant_parts: [specific overlapping title/abstract elements],";
-      basePrompt += "\n      irrelevant_parts: [elements not mapped in title/abstract evidence],";
+      basePrompt += "\n      relevant_parts: [specific overlapping elements from available patent data],";
+      basePrompt += "\n      irrelevant_parts: [elements not mapped in the available patent data],";
       basePrompt += "\n      novelty_comparison: evidence-based comparison without legal conclusions";
       basePrompt += "\n    }";
       basePrompt += "\n  }";
@@ -6607,7 +6614,8 @@ OUTPUT JSON:
       basePrompt += "\n- You are an objective, skeptical examiner. Do not justify the idea; challenge it.";
       basePrompt += "\n- Be evidence-driven; avoid advocacy language and generic fluff.";
       basePrompt += "\n- Treat unknown/insufficient-evidence cells as weaknesses that lower confidence.";
-      basePrompt += "\n- Decision policy: If any single patent maps to >= 60% of features AND all critical features in title/abstract evidence, classify it as high mapped overlap unless a concrete, technical differentiator is clearly evidenced.";
+      basePrompt += "\n- Decision policy: If any single patent maps to >= 60% of features AND all critical features in the available patent data, classify it as high mapped overlap unless a concrete, technical differentiator is clearly evidenced.";
+      basePrompt += "\n- Do not describe this analysis by naming the source-field limitation, by saying it is based on only available data, or by calling it an early-stage review/report. If noting limitations, say it is based on limited available patent data and recommend review of full patent documents including claims and detailed description/specification.";
       basePrompt += "\n- If features are scattered across multiple patents without integration, state this plainly as distributed component coverage; do not describe scattered component coverage as one-reference anticipation of the full invention.";
 
       if (isIdeaBankGenerationEnabled()) {
@@ -7447,7 +7455,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           field: hasSupportingEvidence ? 'title/abstract' : undefined,
           evidence_source: hasSupportingEvidence ? 'title/abstract' : 'none',
           reason: status === 'Unknown'
-            ? 'Deterministic fallback could not establish this feature from title or abstract evidence.'
+            ? 'Deterministic fallback could not establish this feature from the available patent data.'
             : `Deterministic token overlap matched ${matched.length} of ${Math.max(tokens.length, 1)} feature terms.`,
           attorney_remark: this.defaultAttorneyRemark(status, featureText, patent.canonicalPn),
           novelty_impact: this.defaultNoveltyImpact(status, featureText),
@@ -7476,8 +7484,8 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         absent,
         feature_analysis: featureAnalysis,
         remarks: coverageScore > 0
-          ? `Deterministic fallback found ${present.length} present and ${partial.length} partial feature overlap(s) in title/abstract text.`
-          : 'Deterministic fallback could not establish feature overlap from the available title/abstract evidence.',
+          ? `Deterministic fallback found ${present.length} present and ${partial.length} partial feature overlap(s) in the available patent data.`
+          : 'Deterministic fallback could not establish feature overlap from the available patent data.',
         decision: coverageScore >= 0.6 ? 'high_overlap' : coverageScore >= 0.35 ? 'mapped_overlap' : 'potential_novelty_space'
       };
     });
@@ -7521,15 +7529,15 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           relevance,
           novelty_threat: noveltyThreat,
           summary: relevance >= 0.5
-            ? 'Deterministic title/abstract analysis identifies this citation as a material mapped-overlap reference.'
-            : 'Deterministic title/abstract analysis identifies limited overlap with the invention.',
+            ? 'Deterministic available-patent-data analysis identifies this citation as a material mapped-overlap reference.'
+            : 'Deterministic available-patent-data analysis identifies limited overlap with the invention.',
           comparison_rows: this.normalizePatentComparisonRows([], patent, stage0Data),
           detailedAnalysis: {
             relevant_parts: [...present, ...partial].map(feature => `Mapped overlap: ${feature}`),
             irrelevant_parts: missing.map(feature => `Not mapped in this reference: ${feature}`),
             novelty_comparison: unknown.length > 0
               ? 'Evidence is incomplete; do not treat missing support as positive novelty without further claim review.'
-              : 'Comparison is based on deterministic feature mapping from available title/abstract evidence.'
+              : 'Comparison is based on deterministic feature mapping from limited available patent data.'
           },
           decision: relevance >= 0.6 ? 'high_overlap' : relevance >= 0.35 ? 'mapped_overlap' : 'potential_novelty_space'
         };

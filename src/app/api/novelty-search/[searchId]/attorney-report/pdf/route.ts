@@ -502,7 +502,7 @@ export async function GET(
       autoFirstPage: true,
       info: { Title: report.reportTitle, Author: report.preparedBy, Subject: report.inventionTitle },
     });
-    const sectionPages: Array<{ number: string; title: string; page: number }> = [];
+    const sectionPages: Array<{ number: string; title: string; page: number; destination: string }> = [];
 
     drawCover(doc, report);
 
@@ -512,7 +512,9 @@ export async function GET(
     addPage(doc);
     const startSection = (number: string, title: string) => {
       ensureSpace(doc, 54);
-      sectionPages.push({ number, title, page: doc.bufferedPageRange().count });
+      const destination = `section-${sectionPages.length + 1}`;
+      doc.addNamedDestination(destination, 'XYZ', PAGE.left, Math.max(PAGE.top, doc.y - 8), null);
+      sectionPages.push({ number, title, page: doc.bufferedPageRange().count, destination });
       drawSectionHeading(doc, `${number} ${title}`);
     };
 
@@ -618,7 +620,7 @@ export async function GET(
     startSection('4', 'Repeated Inventor / Entity Signals');
     drawEntityLandscape(doc, report.inventorSignals);
 
-    startSection('5', 'Preliminary Claim-Positioning Observations');
+    startSection('5', 'Claim-Positioning Observations');
     drawMetadataGrid(doc, [
       ['Automated overlap position', report.finalAssessment.decision],
       ['Automated report confidence', report.finalAssessment.confidence],
@@ -643,10 +645,12 @@ export async function GET(
     doc.moveDown(1);
     sectionPages.forEach(item => {
       const y = doc.y;
+      const rowHeight = 17;
       doc.font('Helvetica').fontSize(9.5).fillColor(COLORS.text)
         .text(`${item.number} ${item.title}`, PAGE.left, y, { width: contentWidth(doc) - 58 });
       doc.font('Helvetica-Bold').fontSize(9.5).fillColor(COLORS.blue)
         .text(String(item.page), doc.page.width - PAGE.right - 42, y, { width: 42, align: 'right' });
+      doc.goTo(PAGE.left, y - 2, contentWidth(doc), rowHeight, item.destination, { Border: [0, 0, 0] });
       doc.moveTo(PAGE.left, doc.y + 4).lineTo(doc.page.width - PAGE.right, doc.y + 4).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
       doc.moveDown(0.6);
     });
