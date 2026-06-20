@@ -245,8 +245,8 @@ function searchDocumentExpression() {
 function metadataDocumentExpression() {
   return Prisma.sql`to_tsvector(
     'simple'::regconfig,
-    array_to_string(p."classifications", ' ') || ' ' ||
-    array_to_string(p."inventors", ' ') || ' ' ||
+    "immutable_text_array_to_string"(p."classifications", ' ') || ' ' ||
+    "immutable_text_array_to_string"(p."inventors", ' ') || ' ' ||
     coalesce(p."applicants"::text, '')
   )`
 }
