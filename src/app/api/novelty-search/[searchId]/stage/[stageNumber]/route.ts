@@ -22,10 +22,8 @@ export async function POST(
 
     // Get JWT token from authorization header
     const authHeader = request.headers.get('authorization');
-    console.log('Authorization header received:', authHeader ? `${authHeader.substring(0, 20)}...` : 'null/undefined');
 
     if (!authHeader) {
-      console.log('No authorization header found');
       return NextResponse.json(
         { error: 'Authorization header missing' },
         { status: 401 }
@@ -33,7 +31,6 @@ export async function POST(
     }
 
     if (!authHeader.startsWith('Bearer ')) {
-      console.log('Authorization header does not start with Bearer:', authHeader.substring(0, 20));
       return NextResponse.json(
         { error: 'Authorization token must start with Bearer' },
         { status: 401 }
@@ -41,10 +38,8 @@ export async function POST(
     }
 
     const jwtToken = authHeader.substring(7);
-    console.log('Extracted JWT token length:', jwtToken ? jwtToken.length : 0);
 
     if (!jwtToken || jwtToken.trim() === '') {
-      console.log('JWT token is empty after extraction');
       return NextResponse.json(
         { error: 'JWT token is empty' },
         { status: 401 }

@@ -20,6 +20,7 @@ import {
 } from '@/lib/novelty-prior-art-visibility';
 
 const PATENTNEST_APP_URL = 'https://patentnest.ai';
+const FEATURE_MAPPING_CACHE_VERSION = 'v1.2';
 
 function escapeEmailHtml(value: unknown): string {
   return String(value ?? '')
@@ -1187,7 +1188,7 @@ export interface IntegrationCheck {
 export interface FeatureMatrixCell {
   patentNumber: string;
   feature: string;
-  status: 'Present' | 'Partial' | 'Absent';
+  status: 'Present' | 'Partial' | 'Absent' | 'Unknown';
   extent_score?: number;
   confidence?: number;
   evidence?: string;
@@ -1834,7 +1835,7 @@ export class NoveltySearchService extends BasePatentService {
       }
 
       let stage1Data = searchRun.stage1Results as unknown as any;
-      if (!stage1Data || !Array.isArray(stage1Data?.pqaiResults)) {
+      if (!stage1Data || this.getStage1CandidatePool(stage1Data).length === 0) {
         const discovery = await this.executeStage1(searchId, userId, requestHeaders);
         if (!discovery.success) return discovery;
         searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
@@ -1978,15 +1979,25 @@ export class NoveltySearchService extends BasePatentService {
         }
       }
 
-      // If client provided a list of selected publication numbers, filter Stage 1 PQAI results to those
-      if (Array.isArray(selectedPublicationNumbers) && selectedPublicationNumbers.length > 0 && Array.isArray(stage1Data?.pqaiResults)) {
-        const pnSet = new Set(selectedPublicationNumbers);
-        const before = stage1Data.pqaiResults.length;
-        stage1Data.pqaiResults = stage1Data.pqaiResults.filter((p: any) => {
-          const pn = p.publicationNumber || p.pn || p.patent_number || p.publication_number || p.id;
-          return pn && pnSet.has(pn);
+      // Filter the canonical Stage 1 candidate pool. New runs store provider results
+      // in retrievalCandidates; pqaiResults exists only for old-run compatibility.
+      if (Array.isArray(selectedPublicationNumbers) && selectedPublicationNumbers.length > 0) {
+        const selected = new Set(selectedPublicationNumbers.map(canonicalPriorArtNumber).filter(Boolean));
+        const candidatePool = this.getStage1CandidatePool(stage1Data);
+        const filteredCandidates = candidatePool.filter((candidate: any) => {
+          const pn = getPriorArtPublicationNumber(candidate);
+          return Boolean(pn && selected.has(canonicalPriorArtNumber(pn)));
         });
-        console.log('[Stage3.5a][Service] Filtered PQAI results by selection:', { before, after: stage1Data.pqaiResults.length });
+        stage1Data = {
+          ...stage1Data,
+          retrievalCandidates: filteredCandidates,
+          candidateResults: filteredCandidates,
+          rawPriorArtResults: filteredCandidates,
+        };
+        console.log('[Stage3.5a][Service] Filtered candidate results by selection:', {
+          before: candidatePool.length,
+          after: filteredCandidates.length,
+        });
       }
 
       // If AI relevance (Stage 1.5) has not been computed yet, do it now
@@ -2152,8 +2163,8 @@ export class NoveltySearchService extends BasePatentService {
       // Build quick lookup for abstracts from Stage 1 PQAI results
       const abstractByPn = new Map<string, string>();
       const titleByPn = new Map<string, string>();
-      const pqai = Array.isArray(stage1Data?.pqaiResults) ? stage1Data.pqaiResults : [];
-      for (const r of pqai) {
+      const stage1Candidates = this.getStage1CandidatePool(stage1Data);
+      for (const r of stage1Candidates) {
         const pn = String(r.publication_number || r.publicationNumber || r.pn || r.id || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
         if (!pn) continue;
         const title = String(r.title || r.publication_title || '').trim();
@@ -2190,10 +2201,11 @@ export class NoveltySearchService extends BasePatentService {
           const itemsText = batch.map((p, idx) => {
             const pnB = String(p.pn || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const titleB = p.title || titleByPn.get(pnB) || 'Untitled';
-            const abstractB = abstractByPn.get(pnB) || p.link || '';
+            const abstractB = abstractByPn.get(pnB) || '';
             const presentB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Present').map((c: FeatureMapCell) => c.feature);
             const partialB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Partial').map((c: FeatureMapCell) => c.feature);
-            const absentB = features.filter(f => !presentB.includes(f) && !partialB.includes(f));
+            const absentB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Absent').map((c: FeatureMapCell) => c.feature);
+            const unknownB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Unknown').map((c: FeatureMapCell) => c.feature);
             const maxAbs = abstractB ? String(abstractB).split(/\s+/).slice(0, 120).join(' ') : '';
             return [
               `Item ${idx + 1}:`,
@@ -2204,6 +2216,7 @@ export class NoveltySearchService extends BasePatentService {
               `Present: ${JSON.stringify(presentB)}`,
               `Partial: ${JSON.stringify(partialB)}`,
               `Absent: ${JSON.stringify(absentB)}`,
+              `Unknown: ${JSON.stringify(unknownB)}`,
               '---'
             ].join('\n');
           }).join('\n');
@@ -2269,10 +2282,10 @@ export class NoveltySearchService extends BasePatentService {
             const p = batch[i];
             const pn = String(p.pn || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const title = p.title || titleByPn.get(pn);
-            const abstract = abstractByPn.get(pn) || p.link || '';
+            const abstract = abstractByPn.get(pn) || '';
             const present = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Present').map((c: FeatureMapCell) => c.feature);
             const partial = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Partial').map((c: FeatureMapCell) => c.feature);
-            const absent = features.filter(f => !present.includes(f) && !partial.includes(f));
+            const absent = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Absent').map((c: FeatureMapCell) => c.feature);
             const maxAbstract = abstract ? String(abstract).split(/\s+/).slice(0, 120).join(' ') : '';
 
             let item: PerPatentRemark | null = null;
@@ -2358,12 +2371,12 @@ export class NoveltySearchService extends BasePatentService {
           const p = rankedFeatureMaps[i];
           const pn = String(p.pn || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
           const title = p.title || titleByPn.get(pn);
-          const abstract = abstractByPn.get(pn) || p.link || '';
+          const abstract = abstractByPn.get(pn) || '';
 
         // Summarize local present/absent lists deterministically
         const present = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Present').map((c: FeatureMapCell) => c.feature);
         const partial = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Partial').map((c: FeatureMapCell) => c.feature);
-        const absent = features.filter(f => !present.includes(f) && !partial.includes(f));
+        const absent = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Absent').map((c: FeatureMapCell) => c.feature);
 
         // Build detailed prompt for single patent analysis
         const maxAbstract = abstract ? String(abstract).split(/\s+/).slice(0, 120).join(' ') : '';
@@ -2592,7 +2605,7 @@ export class NoveltySearchService extends BasePatentService {
         results: {
           stage0: search.stage0Results,
           stage1: search.stage1Results ? {
-            patentCount: Array.isArray((search.stage1Results as any).pqaiResults) ? (search.stage1Results as any).pqaiResults.length : 0
+            patentCount: this.getStage1CandidatePool(search.stage1Results as any).length
           } : null,
           stage35: search.stage35Results ? {
             assessmentCount: Array.isArray(search.stage35Results) ? search.stage35Results.length : 0
@@ -3142,7 +3155,11 @@ RESPONSE:`;
         .replace('{title}', request.title || 'Untitled Invention')
         .replace('{rawIdea}', request.inventionDescription || 'No description provided');
 
-      console.log('ðŸ“ Stage 0 Final Prompt:', prompt);
+      console.log('[NoveltyPipeline] stage_summary', {
+        stage: 'stage0_prompt_ready',
+        searchId,
+        disclosureLength: request.inventionDescription?.length || 0,
+      });
 
       // Execute LLM call for query generation/normalization using admin-configured model
       const llmResult = await llmGateway.executeLLMOperation(
@@ -3159,9 +3176,7 @@ RESPONSE:`;
       }
 
       // Parse response
-      console.log('Stage 0 LLM response:', llmResult.response?.output);
       const normalizedData = this.parseLLMResponse(llmResult.response?.output || '');
-      console.log('Stage 0 parsed data:', normalizedData);
 
       // Extract search query and invention features
       const extractedFields: NormalizedIdea = {
@@ -3187,14 +3202,23 @@ RESPONSE:`;
 
       if (!extractedFields.searchQuery) {
         console.warn('No search query found in LLM response, using fallback');
-        extractedFields.searchQuery = `${request.title} related technology`.substring(0, 25);
+        extractedFields.searchQuery = normalizeRetrievalText(
+          `${request.title || ''} ${request.inventionDescription || ''}`,
+          35
+        ) || 'related technology';
       }
 
       if (!extractedFields.inventionFeatures || extractedFields.inventionFeatures.length === 0) {
-        // Heuristic fallback: split title/idea into candidate tokens
-        const seed = `${request.title} ${request.inventionDescription}`.toLowerCase();
-        const tokens = seed.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(t => t.length > 3);
-        extractedFields.inventionFeatures = Array.from(new Set(tokens)).slice(0, 8);
+        // Preserve technical context in the fallback instead of treating isolated
+        // words as invention features.
+        const clauses = `${request.title || ''}. ${request.inventionDescription || ''}`
+          .split(/[.;\n]+/)
+          .map(value => normalizeRetrievalText(value, 22))
+          .filter(value => value.length >= 12);
+        extractedFields.inventionFeatures = Array.from(new Set(clauses)).slice(0, 8);
+        if (extractedFields.inventionFeatures.length === 0) {
+          extractedFields.inventionFeatures = [extractedFields.searchQuery];
+        }
       }
 
       if (!Array.isArray(extractedFields.featureDetails) || extractedFields.featureDetails.length === 0) {
@@ -3206,7 +3230,12 @@ RESPONSE:`;
         }));
       }
 
-      console.log(' Stage 0 completed successfully');
+      console.log('[NoveltyPipeline] stage_summary', {
+        stage: 'stage0_completed',
+        searchId,
+        searchQueryLength: extractedFields.searchQuery.length,
+        featureCount: extractedFields.inventionFeatures.length,
+      });
       return { success: true, data: extractedFields };
 
     } catch (error) {
@@ -3925,8 +3954,8 @@ RESPONSE:`;
       feature,
       present_in: 0,
       partial_in: 0,
-      absent_in: reviewedCount,
-      uniqueness: 1,
+      absent_in: 0,
+      uniqueness: 0,
     }));
 
     const stage35Data: FeatureMapBatchResult = {
@@ -3954,7 +3983,7 @@ RESPONSE:`;
         any_single_patent_covers_majority: false,
         explanation: message,
       },
-      novelty_score: 1,
+      novelty_score: 0,
       decision: 'Low Evidence',
       confidence: 'Low',
       risk_factors: [
@@ -4136,13 +4165,17 @@ RESPONSE:`;
       return { success: false, error: 'Consolidated remarks failed validation.' };
     }
 
-    const qualityFlags = parsed.quality_flags && typeof parsed.quality_flags === 'object'
+    const parsedQualityFlags = parsed.quality_flags && typeof parsed.quality_flags === 'object'
       ? {
         low_evidence: Boolean(parsed.quality_flags.low_evidence),
         ambiguous_abstracts: Boolean(parsed.quality_flags.ambiguous_abstracts),
         language_mismatch: Boolean(parsed.quality_flags.language_mismatch)
       }
       : this.calculateQualityFlags(featureMaps, normalizedPatents);
+    const qualityFlags = {
+      ...parsedQualityFlags,
+      low_evidence: parsedQualityFlags.low_evidence || stage1Data?.aiRelevance?.gateStatus !== 'complete',
+    };
     const stats = {
       ...this.calculateFeatureMappingStats(featureMaps, normalizedPatents),
       ...(parsed.stats && typeof parsed.stats === 'object' ? parsed.stats : {}),
@@ -4774,19 +4807,21 @@ RESPONSE:`;
         }
       }
 
-      // Compute deterministic per-patent decision and normalize remarks if present
+      // Preserve the LLM's semantic decision. Deterministic code supplies only a
+      // neutral overlap label when the model omitted one.
       try {
-        const critical = config.stage35a?.criticalFeatures || [];
         const total = Math.max(1, inventionFeatures.length);
         for (const pm of allFeatureMaps) {
           const present = (pm.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Present').map((c: FeatureMapCell) => c.feature);
           const partial = (pm.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Partial').map((c: FeatureMapCell) => c.feature);
-          const coverage = present.length / total;
-          const allCriticalPresent = critical.length > 0 ? critical.every(cf => present.includes(cf)) : false;
-          const decision: 'novel'|'partial_novelty'|'obvious' = (allCriticalPresent && coverage >= 0.6)
-            ? 'obvious'
-            : ((present.length + partial.length) / total >= 0.4 ? 'partial_novelty' : 'novel');
-          (pm as any).decision = decision;
+          if (!(pm as any).decision && !(pm as any).model_decision) {
+            const overlap = (present.length + partial.length * 0.5) / total;
+            (pm as any).decision = overlap >= 0.6
+              ? 'high_overlap'
+              : overlap >= 0.35
+                ? 'mapped_overlap'
+                : 'potential_novelty_space';
+          }
           if ((pm as any).remarks) {
             // Normalize whitespace only; do not trim content so full LLM remarks are preserved
             (pm as any).remarks = String((pm as any).remarks).replace(/\s+/g, ' ').trim();
@@ -4798,7 +4833,11 @@ RESPONSE:`;
       await this.storeFeatureMapResults(searchId, allFeatureMaps);
 
       // Calculate quality flags and stats
-      const qualityFlags = this.calculateQualityFlags(allFeatureMaps, normalizedPatents);
+      const calculatedQualityFlags = this.calculateQualityFlags(allFeatureMaps, normalizedPatents);
+      const qualityFlags = {
+        ...calculatedQualityFlags,
+        low_evidence: calculatedQualityFlags.low_evidence || stage1Data?.aiRelevance?.gateStatus !== 'complete',
+      };
       const stats = this.calculateFeatureMappingStats(allFeatureMaps, normalizedPatents);
 
       const result: FeatureMapBatchResult = {
@@ -4831,7 +4870,21 @@ RESPONSE:`;
 
       const inventionFeatures = stage0Data.inventionFeatures || [];
       const featureMaps = stage35aData.feature_map;
-      const qualityFlags = stage35aData.quality_flags;
+      const totalFeatureCells = featureMaps.reduce(
+        (count, map) => count + (Array.isArray(map.feature_analysis) ? map.feature_analysis.length : 0),
+        0
+      );
+      const unknownFeatureCells = featureMaps.reduce(
+        (count, map) => count + (map.feature_analysis || []).filter(cell => cell.status === 'Unknown').length,
+        0
+      );
+      const qualityFlags = {
+        ...stage35aData.quality_flags,
+        low_evidence: Boolean(
+          stage35aData.quality_flags?.low_evidence ||
+          (totalFeatureCells > 0 && unknownFeatureCells / totalFeatureCells >= 0.25)
+        ),
+      };
 
       if (featureMaps.length === 0) {
         if (stage35aData.noHighConfidencePriorArt) {
@@ -4897,7 +4950,9 @@ RESPONSE:`;
         const partial = (pm.feature_analysis || [])
           .filter((c: FeatureMapCell) => c.status === 'Partial')
           .map((c: FeatureMapCell) => c.feature);
-        const absent = inventionFeatures.filter(f => !present.includes(f) && !partial.includes(f));
+        const absent = (pm.feature_analysis || [])
+          .filter((cell: FeatureMapCell) => cell.status === 'Absent')
+          .map((cell: FeatureMapCell) => cell.feature);
 
         let remarks = (pm as any).remarks as string | undefined;
         if (remarks) {
@@ -5006,8 +5061,6 @@ RESPONSE:`;
           const featureCell = patentMap.feature_analysis?.find(cell => cell.feature === feature);
 
           if (featureCell) {
-            // Use the new format if available, fallback to old format
-            const status = featureCell.status === 'Unknown' ? 'Absent' : featureCell.status;
             const evidence = typeof featureCell.evidence === 'string'
               ? featureCell.evidence
               : featureCell.quote || '';
@@ -5017,7 +5070,7 @@ RESPONSE:`;
             cells.push({
               patentNumber,
               feature,
-              status,
+              status: featureCell.status,
               confidence,
               evidence,
               reason
@@ -5027,7 +5080,7 @@ RESPONSE:`;
             cells.push({
               patentNumber,
               feature,
-              status: 'Absent',
+              status: 'Unknown',
               reason: 'No analysis available'
             });
           }
@@ -5082,12 +5135,12 @@ RESPONSE:`;
 
     return {
       integration: integrationCheck.any_single_patent_covers_majority === false
-        ? "None of the reviewed patents integrate more than 60% of the identified features, indicating the combination is novel rather than the individual components."
-        : "Some patents show significant feature integration, suggesting moderate novelty at the system level.",
+        ? "No reviewed title/abstract maps a majority of the identified features; this is an evidence-limited differentiation signal, not a novelty conclusion."
+        : "At least one reviewed title/abstract maps a majority of the identified features, creating elevated overlap risk.",
 
       feature_insights: `Analysis reveals ${uniqueFeatures} of ${totalFeatures} features with high uniqueness (>80%). Features related to core functionality show ${(uniqueFeatures/totalFeatures * 100).toFixed(0)}% uniqueness across the patent landscape.`,
 
-      verdict: `The data supports a ${decision.toLowerCase()} determination with ${score}% novelty score and ${aggregationResult.confidence.toLowerCase()} confidence. The feature-level analysis demonstrates strong technical differentiation.`
+      verdict: `The mapped differentiation indicator is ${score}% with ${aggregationResult.confidence.toLowerCase()} confidence. Review the cited title/abstract evidence before drawing filing conclusions.`
     };
   }
 
@@ -5295,7 +5348,7 @@ RESPONSE:`;
 
     // Professional integration analysis
     const integrationLine = integration?.any_single_patent_covers_majority === false
-      ? 'No single prior-art reference discloses a majority of the claimed features in combination, supporting system-level novelty arising from the specific integration of these elements.'
+      ? 'No single reviewed title/abstract maps a majority of the extracted features; this is an evidence-limited differentiation signal, not a legal novelty conclusion.'
       : (integration?.explanation || 'Several references exhibit partial feature overlap; patentability depends on the claim scope and the specific combination of elements.');
 
     // Professional executive summary
@@ -5311,7 +5364,7 @@ RESPONSE:`;
       novelty_score: (score * 100).toFixed(1) + "%",
       confidence: aggregationResult.confidence,
       visual_cards: {
-        "Novelty Score": (score * 100).toFixed(1) + "%",
+        "Mapped Differentiation": (score * 100).toFixed(1) + "%",
         "Patents Analyzed": aggregationResult.per_patent_coverage.length.toString(),
         "Unique Features": `${potentialDifferentiators.length} of ${totalFeatures}`,
         "Confidence": aggregationResult.confidence
@@ -5468,18 +5521,8 @@ RESPONSE:`;
       recommendations.push('Consult with patent counsel before proceeding');
     }
 
-    // Build filing advice
-    let filingAdvice = '';
-    if (decision === 'Novel') {
-      filingAdvice = 'Based on this analysis, the invention appears to meet the novelty and non-obviousness requirements under 35 U.S.C. §§ 102 and 103. Recommend proceeding with patent application preparation with focus on the identified differentiators.';
-    } else if (decision === 'Partially Novel') {
-      filingAdvice = 'The invention shows patentable subject matter, but claim scope may need refinement. Recommend working with patent counsel to focus claims on the filtered potential differentiators while avoiding prior art overlap.';
-    } else if (decision === 'Not Novel') {
-      filingAdvice = 'Significant prior art overlap suggests challenges meeting novelty requirements. Recommend inventor consultation to identify any unconsidered aspects or technical improvements that may distinguish from prior art.';
-    } else {
-      filingAdvice = 'Insufficient prior art for definitive assessment. Consider expanded search before making filing decisions.';
-    }
-    filingAdvice = decision === 'Novel'
+    // Build evidence-limited filing advice without legal patentability conclusions.
+    const filingAdvice = decision === 'Novel'
       ? 'Based on available title/abstract evidence, differentiators remain for attorney review. Validate them against full patent records before any filing decision.'
       : decision === 'Partially Novel'
         ? 'The title/abstract mapping shows both overlap and potential differentiators. Work with patent counsel to evaluate claim positioning around the filtered differentiators.'
@@ -5491,9 +5534,6 @@ RESPONSE:`;
     const uniqueFeaturesText = topDifferentiatorNames.length > 0
       ? topDifferentiatorNames.slice(0, 3).join(', ')
       : 'key technical features';
-    const whyNovel = potentialDifferentiators.length > 0
-      ? `Novelty determination is primarily supported by ${potentialDifferentiators.length} potential differentiator(s): ${uniqueFeaturesText}. ${integrationLine} The inventive contribution lies in the specific configuration and technical integration of these elements.`
-      : `The novelty assessment is based on the overall feature mapping analysis. ${integrationLine}`;
     const visibleWhyNovel = potentialDifferentiators.length > 0
       ? `The apparent differentiation window is primarily supported by ${potentialDifferentiators.length} potential differentiator(s): ${uniqueFeaturesText}. ${integrationLine} Attorney review should validate whether the specific configuration and technical integration remain distinct in full records.`
       : `The assessment is based on overall title/abstract feature mapping. ${integrationLine}`;
@@ -5941,7 +5981,7 @@ OUTPUT JSON:
       const cells = patentMap.feature_analysis;
       const presentCount = cells.filter(c => c.status === 'Present').length;
       const partialCount = cells.filter(c => c.status === 'Partial').length;
-      const absentCount = cells.filter(c => c.status === 'Absent' || c.status === 'Unknown').length;
+      const absentCount = cells.filter(c => c.status === 'Absent').length;
       const coverageRatio = inventionFeatures.length > 0 ? presentCount / inventionFeatures.length : 0;
 
       return {
@@ -5959,9 +5999,10 @@ OUTPUT JSON:
       const totalPatents = featureMaps.length;
       const presentIn = featureMaps.filter(p => p.feature_analysis.find(c => c.feature === feature)?.status === 'Present').length;
       const partialIn = featureMaps.filter(p => p.feature_analysis.find(c => c.feature === feature)?.status === 'Partial').length;
-      const absentIn = totalPatents - presentIn - partialIn;
+      const absentIn = featureMaps.filter(p => p.feature_analysis.find(c => c.feature === feature)?.status === 'Absent').length;
 
-      const uniqueness = totalPatents > 0 ? 1 - (presentIn / totalPatents) : 1;
+      // Unknown evidence must not increase apparent uniqueness.
+      const uniqueness = totalPatents > 0 ? absentIn / totalPatents : 0;
 
       return {
         feature,
@@ -6040,8 +6081,9 @@ OUTPUT JSON:
         // Only Partial evidence: retain 50% novelty
         noveltyFactor = 0.5;
       } else {
-        // No Present or Partial evidence: fully novel
-        noveltyFactor = 1;
+        // Only explicit Absent assessments contribute here. Unknown evidence must
+        // not be converted into positive novelty.
+        noveltyFactor = u.uniqueness;
       }
 
       novelWeight += weight * noveltyFactor;
@@ -6930,7 +6972,7 @@ ${candidatesText}`;
   ): Promise<{ success: boolean; featureMaps?: PatentFeatureMap[]; error?: string }> {
     try {
       // Check cache first
-      const batchHash = this.createBatchHash(batch, inventionFeatures);
+      const batchHash = this.createBatchHash(batch, inventionFeatures, config.stage35a.modelPreference);
       const ideaHash = this.createIdeaHash(inventionFeatures);
       const cached = await this.checkFeatureMappingCache(searchId, ideaHash, batchHash);
 
@@ -7032,6 +7074,8 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       }
     }
 
+    await (prisma as any).featureMapCell.deleteMany({ where: { searchId } });
+
     // Bulk insert
     if (cells.length > 0) {
       await (prisma as any).featureMapCell.createMany({
@@ -7047,10 +7091,11 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     const avgAbstractLength = patentsAnalyzed > 0 ? totalAbstractWords / patentsAnalyzed : 0;
 
     // Check for non-English abstracts (simple heuristic)
-    const nonEnglishCount = originalPatents.filter(p =>
-      /[^\x00-\x7F]/.test(p.abstract) || // Non-ASCII characters
-      /^[^\w\s]*$/.test(p.abstract.replace(/\s/g, '')) // Very few word characters
-    ).length;
+    const nonEnglishCount = originalPatents.filter(p => {
+      const abstract = String(p?.abstract || '');
+      return /[^\x00-\x7F]/.test(abstract) || // Non-ASCII characters
+        /^[^\w\s]*$/.test(abstract.replace(/\s/g, '')); // Very few word characters
+    }).length;
 
     const languageMismatch = nonEnglishCount > originalPatents.length * 0.5;
 
@@ -7070,10 +7115,15 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     };
   }
 
-  private createBatchHash(batch: any[], inventionFeatures: string[]): string {
-    const batchData = batch.map(p => `${p.canonicalPn}:${p.title}`).join('|');
+  private createBatchHash(batch: any[], inventionFeatures: string[], modelPreference = ''): string {
+    const batchData = batch
+      .map(p => `${p.canonicalPn}:${p.title || ''}:${p.abstract || ''}`)
+      .join('|');
     const featuresData = inventionFeatures.join('|');
-    return crypto.createHash('md5').update(`${batchData}||${featuresData}`).digest('hex');
+    return crypto
+      .createHash('sha1')
+      .update(`${FEATURE_MAPPING_CACHE_VERSION}||${modelPreference}||${batchData}||${featuresData}`)
+      .digest('hex');
   }
 
   private createStage15CacheKey(stage0Data: NormalizedIdea, candidates: any[]): string {
@@ -7099,7 +7149,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         where: {
           ideaHash,
           batchHash,
-          promptVersion: 'v1.0',
+          promptVersion: FEATURE_MAPPING_CACHE_VERSION,
           expiresAt: {
             gt: new Date() // Not expired
           }
@@ -7129,7 +7179,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           ideaHash_batchHash_promptVersion: {
             ideaHash,
             batchHash,
-            promptVersion: 'v1.1'
+            promptVersion: FEATURE_MAPPING_CACHE_VERSION
           }
         },
         update: {
@@ -7139,7 +7189,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         create: {
           ideaHash,
           batchHash,
-          promptVersion: 'v1.1',
+          promptVersion: FEATURE_MAPPING_CACHE_VERSION,
           featureMaps: featureMaps as any,
           expiresAt
         }
@@ -7217,8 +7267,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           ? 'Present'
           : overlap >= 0.25
             ? 'Partial'
-            : 'Absent';
-        const quote = status === 'Absent' ? undefined : quoteFor(combined, matched.length ? matched : tokens);
+            : 'Unknown';
+        const hasSupportingEvidence = status === 'Present' || status === 'Partial';
+        const quote = hasSupportingEvidence ? quoteFor(combined, matched.length ? matched : tokens) : undefined;
         const confidence = this.roundScore(status === 'Present'
           ? 0.60 + overlap * 0.30
           : status === 'Partial'
@@ -7237,10 +7288,10 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           extent_score: extentScore,
           confidence,
           quote,
-          field: status === 'Absent' ? undefined : 'title/abstract',
-          evidence_source: status === 'Absent' ? 'none' : 'title/abstract',
-          reason: status === 'Absent'
-            ? 'No deterministic title or abstract token overlap was found.'
+          field: hasSupportingEvidence ? 'title/abstract' : undefined,
+          evidence_source: hasSupportingEvidence ? 'title/abstract' : 'none',
+          reason: status === 'Unknown'
+            ? 'Deterministic fallback could not establish this feature from title or abstract evidence.'
             : `Deterministic token overlap matched ${matched.length} of ${Math.max(tokens.length, 1)} feature terms.`,
           attorney_remark: this.defaultAttorneyRemark(status, featureText, patent.canonicalPn),
           novelty_impact: this.defaultNoveltyImpact(status, featureText),
@@ -7270,7 +7321,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         feature_analysis: featureAnalysis,
         remarks: coverageScore > 0
           ? `Deterministic fallback found ${present.length} present and ${partial.length} partial feature overlap(s) in title/abstract text.`
-          : 'Deterministic fallback found no direct feature overlap in title/abstract text.',
+          : 'Deterministic fallback could not establish feature overlap from the available title/abstract evidence.',
         decision: coverageScore >= 0.6 ? 'high_overlap' : coverageScore >= 0.35 ? 'mapped_overlap' : 'potential_novelty_space'
       };
     });
@@ -7291,7 +7342,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         const present = cells.filter((cell: FeatureMapCell) => cell.status === 'Present').map((cell: FeatureMapCell) => cell.feature);
         const partial = cells.filter((cell: FeatureMapCell) => cell.status === 'Partial').map((cell: FeatureMapCell) => cell.feature);
         const unknown = cells.filter((cell: FeatureMapCell) => cell.status === 'Unknown').map((cell: FeatureMapCell) => cell.feature);
-        const missing = features.filter(feature => !present.includes(feature) && !partial.includes(feature));
+        const missing: string[] = cells
+          .filter((cell: FeatureMapCell) => cell.status === 'Absent')
+          .map((cell: FeatureMapCell) => cell.feature);
         const relevance = (present.length + partial.length * 0.5) / Math.max(1, features.length);
         const noveltyThreat = relevance >= 0.7 ? 'high_overlap' : relevance >= 0.5 ? 'moderate_overlap' : relevance >= 0.3 ? 'related' : 'low_overlap';
         const evidenceNote = unknown.length > 0 ? ` ${unknown.length} feature(s) had weak evidence.` : '';
@@ -7343,6 +7396,53 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       typeof remark?.relevance === 'number' ||
       typeof remark?.novelty_threat === 'string'
     ));
+  }
+
+  private normalizeEvidenceForVerification(value: unknown): string {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private validateFeatureCellEvidence(cell: FeatureMapCell, patent: any): FeatureMapCell {
+    if (cell.status !== 'Present' && cell.status !== 'Partial') return cell;
+
+    const evidenceObject = cell.evidence && typeof cell.evidence === 'object' ? cell.evidence : null;
+    const quote = String(
+      cell.quote ||
+      evidenceObject?.quote ||
+      (typeof cell.evidence === 'string' ? cell.evidence : '') ||
+      ''
+    ).trim();
+    const sourceHint = String(cell.field || cell.evidence_source || evidenceObject?.field || '').toLowerCase();
+    const title = String(patent?.title || '');
+    const abstract = String(patent?.abstract || '');
+    const sourceText = sourceHint === 'title'
+      ? title
+      : sourceHint === 'abstract'
+        ? abstract
+        : `${title} ${abstract}`;
+    const normalizedQuote = this.normalizeEvidenceForVerification(quote);
+    const normalizedSource = this.normalizeEvidenceForVerification(sourceText);
+
+    if (!normalizedQuote || !normalizedSource.includes(normalizedQuote)) {
+      return {
+        ...cell,
+        status: 'Unknown',
+        quote: undefined,
+        field: undefined,
+        evidence_source: 'none',
+        extent_score: 0.2,
+        confidence: Math.min(typeof cell.confidence === 'number' ? cell.confidence : 0.4, 0.4),
+        reason: 'Supplied evidence quote was not found in the available title or abstract.',
+      };
+    }
+
+    return { ...cell, quote };
   }
 
   private validateAndRepairFeatureMaps(featureMaps: PatentFeatureMap[], batch: any[], inventionFeatures: string[]): PatentFeatureMap[] {
@@ -7423,21 +7523,17 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         }
       }
 
-      // Calculate coverage score if not provided
-      let coverage = patentMap.coverage;
-      if (!coverage && validatedCells.length > 0) {
-        const present = validatedCells.filter(c => c.status === 'Present').length;
-        const partial = validatedCells.filter(c => c.status === 'Partial').length;
-        const absent = validatedCells.filter(c => c.status === 'Absent').length;
-        const totalScore = validatedCells.reduce((sum, cell) => {
-          if (cell.status === 'Present') return sum + 1.0;
-          if (cell.status === 'Partial') return sum + 0.5;
-          return sum;
-        }, 0);
-        const coverageScore = validatedCells.length > 0 ? totalScore / validatedCells.length : 0;
-
-        coverage = { present, partial, absent, coverage_score: coverageScore };
-      }
+      const evidenceValidatedCells = validatedCells.map(cell => this.validateFeatureCellEvidence(cell, patent));
+      const present = evidenceValidatedCells.filter(c => c.status === 'Present').length;
+      const partial = evidenceValidatedCells.filter(c => c.status === 'Partial').length;
+      const absent = evidenceValidatedCells.filter(c => c.status === 'Absent').length;
+      const totalScore = evidenceValidatedCells.reduce((sum, cell) => {
+        if (cell.status === 'Present') return sum + 1.0;
+        if (cell.status === 'Partial') return sum + 0.5;
+        return sum;
+      }, 0);
+      const coverageScore = evidenceValidatedCells.length > 0 ? totalScore / evidenceValidatedCells.length : 0;
+      const coverage = { present, partial, absent, coverage_score: coverageScore };
 
       validated.push({
         pn: patentMap.pn,
@@ -7447,7 +7543,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         present: patentMap.present,
         partial: patentMap.partial,
         absent: patentMap.absent,
-        feature_analysis: validatedCells,
+        feature_analysis: evidenceValidatedCells,
         remarks: (patentMap as any).remarks,
         model_decision: (patentMap as any).model_decision,
         decision: (patentMap as any).decision

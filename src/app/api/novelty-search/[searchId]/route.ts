@@ -3,6 +3,7 @@ import { NoveltySearchService } from '@/lib/novelty-search-service';
 import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
+import { NoveltySearchStage, NoveltySearchStatus, Prisma } from '@prisma/client';
 
 const noveltySearchService = new NoveltySearchService();
 
@@ -171,20 +172,40 @@ export async function PATCH(
         : (existingStage0.inventionType ? [existingStage0.inventionType] : undefined);
       const cpcCodes = Array.isArray(existingStage0.cpcCodes) ? existingStage0.cpcCodes : undefined;
       const ipcCodes = Array.isArray(existingStage0.ipcCodes) ? existingStage0.ipcCodes : undefined;
+      const approvedSearchQuery = String(searchQuery || '').trim();
+      const approvedFeatures = Array.isArray(inventionFeatures)
+        ? inventionFeatures.map((feature: unknown) => String(feature || '').trim()).filter(Boolean)
+        : [];
+      const stage0Changed = approvedSearchQuery !== String(existingStage0.searchQuery || '').trim() ||
+        JSON.stringify(approvedFeatures) !== JSON.stringify(existingStage0.inventionFeatures || []);
 
       await prisma.noveltySearchRun.update({
         where: { id: searchId, userId: user.id },
         data: {
           stage0Results: {
             ...existingStage0,
-            searchQuery,
-            inventionFeatures,
+            searchQuery: approvedSearchQuery,
+            inventionFeatures: approvedFeatures,
             ...(inventionType ? { inventionType } : {}),
             ...(cpcCodes ? { cpcCodes } : {}),
             ...(ipcCodes ? { ipcCodes } : {})
-          }
+          },
+          ...(stage0Changed ? {
+            status: NoveltySearchStatus.STAGE_0_COMPLETED,
+            currentStage: NoveltySearchStage.STAGE_1,
+            stage1CompletedAt: null,
+            stage1Results: Prisma.JsonNull,
+            stage35CompletedAt: null,
+            stage35Results: Prisma.JsonNull,
+            stage4CompletedAt: null,
+            stage4Results: Prisma.JsonNull,
+            reportUrl: null,
+          } : {}),
         }
       });
+      if (stage0Changed) {
+        await (prisma as any).featureMapCell.deleteMany({ where: { searchId } });
+      }
     }
 
     return NextResponse.json({

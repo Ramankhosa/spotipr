@@ -107,6 +107,7 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
       noHighConfidencePriorArt: true,
       decision: 'Low Evidence',
       confidence: 'Low',
+      novelty_score: 0,
       per_patent_coverage: [],
     });
   });

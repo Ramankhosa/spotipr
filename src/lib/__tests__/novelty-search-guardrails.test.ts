@@ -150,6 +150,9 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Evaluate extent_score independently for every patent-feature pair');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, or none');
     expect(source).toContain('Relevance should reflect threat to the invention as a whole');
+    expect(source).toContain("const stage0SearchQuery = String(stage0Data.searchQuery || '').trim()");
+    expect(source).toContain('retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features)');
+    expect(source).toContain("const features = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : []");
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain(
       'Never output "No significant risks identified"'
     );
@@ -208,5 +211,97 @@ describe('novelty search guardrails', () => {
     expect(rows[1].extent_score).toBeLessThanOrEqual(0.2);
     expect(rows[1].attorney_remark).toContain('IN123A');
     expect(rows[1].claim_review_note).toContain('threshold-based irrigation decision rule');
+  });
+
+  test('preserves Unknown cells in the feature matrix', () => {
+    const service = new NoveltySearchService() as any;
+    const matrix = service.generateFeatureMatrix(
+      [{
+        pn: 'IN1',
+        title: 'Thin disclosure',
+        feature_analysis: [{ feature: 'closed-loop dosing', status: 'Unknown', reason: 'Abstract is too thin.' }],
+      }],
+      ['closed-loop dosing'],
+      { patents_analyzed: 1 }
+    );
+
+    expect(matrix.cells).toHaveLength(1);
+    expect(matrix.cells[0]).toMatchObject({ status: 'Unknown', reason: 'Abstract is too thin.' });
+  });
+
+  test('rejects a Present or Partial evidence quote not found in the supplied patent text', () => {
+    const service = new NoveltySearchService() as any;
+    const patent = {
+      title: 'Closed-loop irrigation controller',
+      abstract: 'A moisture sensor controls a valve using a measured threshold.',
+    };
+
+    expect(service.validateFeatureCellEvidence({
+      feature: 'threshold-controlled irrigation',
+      status: 'Present',
+      quote: 'moisture sensor controls a valve',
+      field: 'abstract',
+      confidence: 0.9,
+    }, patent)).toMatchObject({ status: 'Present' });
+
+    expect(service.validateFeatureCellEvidence({
+      feature: 'threshold-controlled irrigation',
+      status: 'Present',
+      quote: 'an invented disclosure that is not present',
+      field: 'abstract',
+      confidence: 0.9,
+    }, patent)).toMatchObject({
+      status: 'Unknown',
+      evidence_source: 'none',
+    });
+  });
+
+  test('does not count Unknown evidence as Absent or unique', () => {
+    const service = new NoveltySearchService() as any;
+    const result = service.computePerFeatureUniqueness([
+      { pn: 'IN1', feature_analysis: [{ feature: 'feature A', status: 'Unknown' }] },
+      { pn: 'IN2', feature_analysis: [{ feature: 'feature A', status: 'Absent' }] },
+    ], ['feature A']);
+
+    expect(result).toEqual([{
+      feature: 'feature A',
+      present_in: 0,
+      partial_in: 0,
+      absent_in: 1,
+      uniqueness: 0.5,
+    }]);
+  });
+
+  test('feature-map cache hash changes with evidence or model', () => {
+    const service = new NoveltySearchService() as any;
+    const features = ['feature A'];
+    const first = service.createBatchHash(
+      [{ canonicalPn: 'IN1', title: 'Patent', abstract: 'first evidence' }],
+      features,
+      'model-a'
+    );
+    const changedEvidence = service.createBatchHash(
+      [{ canonicalPn: 'IN1', title: 'Patent', abstract: 'second evidence' }],
+      features,
+      'model-a'
+    );
+    const changedModel = service.createBatchHash(
+      [{ canonicalPn: 'IN1', title: 'Patent', abstract: 'first evidence' }],
+      features,
+      'model-b'
+    );
+
+    expect(changedEvidence).not.toBe(first);
+    expect(changedModel).not.toBe(first);
+  });
+
+  test('canonical Stage 1 candidates are used instead of the legacy empty PQAI list', () => {
+    const service = new NoveltySearchService() as any;
+    const candidate = { publicationNumber: 'IN1', title: 'Candidate' };
+
+    expect(service.getStage1CandidatePool({
+      retrievalCandidates: [candidate],
+      pqaiResults: [],
+    })).toEqual([candidate]);
   });
 });

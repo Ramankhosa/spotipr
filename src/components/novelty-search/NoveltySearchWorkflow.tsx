@@ -1398,26 +1398,32 @@ export default function NoveltySearchWorkflow({
 
       const currentState = latestSearchStateRef.current || searchState;
       const currentResults = currentState.results || {};
+      const approvedStage0 = {
+        ...(currentResults?.stage0 || currentResults),
+        searchQuery: editedSearchQuery,
+        inventionFeatures: editedFeatures
+      };
       const nextResults = {
-        ...currentResults,
-        stage0: {
-          ...currentResults?.stage0,
-          searchQuery: editedSearchQuery,
-          inventionFeatures: editedFeatures
-        },
+        stage0: approvedStage0,
         searchQuery: editedSearchQuery,
         inventionFeatures: editedFeatures
       };
       const nextState = {
         ...currentState,
-        results: nextResults
+        status: NoveltySearchStatus.STAGE_0_COMPLETED,
+        currentStage: NoveltySearchStage.STAGE_1,
+        results: nextResults,
       };
       latestSearchStateRef.current = nextState;
       autoStageStateRef.current = buildNoveltyAutoStageState(nextState, true);
       setSearchState(prev => ({
         ...prev,
-        results: nextResults
+        status: NoveltySearchStatus.STAGE_0_COMPLETED,
+        currentStage: NoveltySearchStage.STAGE_1,
+        results: nextResults,
       }));
+      setCompletedStages(['stage0']);
+      setStageProgress({ stage0: 100, stage1: 0, stage3_5: 0, stage4: 0 });
 
       markStage0Approved();
       setIsEditingStage0(false);
