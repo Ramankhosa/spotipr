@@ -95,6 +95,38 @@ async function main() {
   `
   log('vector_indexes', { count: vectorIndexes.length, indexes: vectorIndexes })
 
+  const searchIndexes = await prisma.$queryRaw<any[]>`
+    SELECT tablename AS "tableName", indexname AS "indexName", indexdef AS "indexDefinition"
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename IN ('local_patents', 'local_patent_embeddings')
+      AND (
+        indexname ILIKE '%search_tsv%'
+        OR indexname ILIKE '%metadata_tsv%'
+        OR indexname ILIKE '%trgm%'
+        OR indexname ILIKE '%embedding_hnsw%'
+        OR indexname ILIKE '%embedding_ivfflat%'
+      )
+    ORDER BY tablename, indexname
+  `
+  log('search_indexes', { count: searchIndexes.length, indexes: searchIndexes })
+  const searchIndexNames = new Set(searchIndexes.map(row => String(row.indexName || '')))
+  const requiredProductionIndexes = [
+    'local_patents_indian_search_tsv_idx',
+    'local_patents_indian_metadata_tsv_idx',
+    'local_patents_title_trgm_idx',
+    'local_patents_abstract_trgm_idx',
+  ]
+  const missingProductionIndexes = requiredProductionIndexes.filter(indexName => !searchIndexNames.has(indexName))
+  const hasVectorIndex = searchIndexNames.has('local_patent_embeddings_embedding_hnsw_idx') ||
+    searchIndexNames.has('local_patent_embeddings_embedding_ivfflat_idx')
+  if (missingProductionIndexes.length) {
+    findings.push(`Production is missing search indexes: ${missingProductionIndexes.join(', ')}. Run pending Prisma migrations before increasing query timeouts.`)
+  }
+  if (!hasVectorIndex) {
+    findings.push('Production is missing a pgvector HNSW/IVFFlat embedding index; nearest-neighbor queries may scan all vectors.')
+  }
+
   const inventory = await prisma.$queryRaw<any[]>`
     SELECT
       e."model",

@@ -128,10 +128,16 @@ function corpusSourceCondition(corpusSource: string) {
 }
 
 async function queryRawWithStatementTimeout<T = any>(query: Prisma.Sql, timeoutMs = SEARCH_STATEMENT_TIMEOUT_MS) {
-  return prisma.$transaction(async tx => {
-    await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`
-    return tx.$queryRaw<T[]>(query)
-  })
+  // Use a sequential transaction instead of an interactive callback transaction.
+  // Prisma's interactive transaction default expires after 5 seconds, which is
+  // shorter than this provider's PostgreSQL statement timeout (8 seconds).
+  // Both operations below still run on the same connection/transaction, so the
+  // transaction-local statement_timeout applies to the search query.
+  const [, rows] = await prisma.$transaction([
+    prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`,
+    prisma.$queryRaw<T[]>(query),
+  ])
+  return rows
 }
 
 function validDate(value?: string) {

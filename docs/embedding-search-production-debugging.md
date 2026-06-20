@@ -109,6 +109,8 @@ The final `findings` event checks the PM2/runtime key, pgvector extension and co
 
 ## Common findings
 
+- Prisma `P2028 Transaction already closed` at about 8 seconds means an older build is using a 5-second interactive transaction around an 8-second PostgreSQL statement timeout. Deploy the current build; it uses a sequential transaction so the configured database timeout applies correctly.
+- If searches then report PostgreSQL statement timeout, run `npx prisma migrate deploy`. The `20260619170000_optimize_local_patent_search` migration adds the corpus-specific full-text and metadata indexes required by the current queries.
 - `missing_openai_api_key`: PM2 did not receive `OPENAI_SEARCH_API_KEY` or the fallback `OPENAI_API_KEY`. Set one in the deployment environment and restart with `--update-env`.
 - Completed vectors exist, but not for the configured model: align `PATENT_CORPUS_EMBEDDING_MODEL` with the indexed rows or re-embed the corpus.
 - Queued rows with no completed rows: start or repair the patent corpus worker and verify its PM2 process also has the OpenAI key.
