@@ -14,7 +14,7 @@ export interface PriorArtGateRecord {
   missing_features?: string[];
   reason?: string;
   evidence_quality?: string;
-  reviewStatus?: 'reviewed' | 'gate_error';
+  reviewStatus?: 'reviewed' | 'gate_error' | 'review_error';
   gateError?: 'timeout' | 'parse_error' | 'llm_error' | 'missing_candidate_row';
 }
 
@@ -51,7 +51,20 @@ export function normalizeRerankDecision(value: unknown): RerankDecision {
     normalized === 'partial_feature' ||
     normalized === 'subsystem'
   ) return 'component';
-  if (normalized === 'borderline') return 'borderline';
+  if (
+    normalized === 'borderline' ||
+    normalized === 'review_error' ||
+    normalized === 'review-error' ||
+    normalized === 'needs_review' ||
+    normalized === 'needs-review' ||
+    normalized === 'manual_review' ||
+    normalized === 'manual-review' ||
+    normalized === 'uncertain' ||
+    normalized === 'unknown' ||
+    normalized === 'parse_error' ||
+    normalized === 'parse-error' ||
+    normalized === 'error'
+  ) return 'borderline';
   return 'reject';
 }
 
@@ -118,13 +131,19 @@ export function annotatePriorArtCandidate<T = any>(candidate: T, gate: PriorArtG
 
 export function isVisiblePriorArtGate(
   gate: PriorArtGateRecord | undefined,
-  minimumVisibleConfidence = DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
+  _minimumVisibleConfidence = DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
 ): boolean {
   if (!gate) return false;
-  const score = finiteScore(gate.rerankScore, gate.score);
   const decision = normalizeRerankDecision(gate.rerankDecision || gate.decision);
-  const evidenceQuality = String(gate.evidence_quality || 'low').toLowerCase();
-  return decision === 'accept' && score >= minimumVisibleConfidence && evidenceQuality !== 'low';
+  return decision === 'accept' || decision === 'component' || decision === 'borderline';
+}
+
+function visibleDecisionPriority(value: unknown): number {
+  const decision = normalizeRerankDecision(value);
+  if (decision === 'accept') return 0;
+  if (decision === 'component') return 1;
+  if (decision === 'borderline') return 2;
+  return 3;
 }
 
 export function buildVisiblePriorArtResults<T = any>(params: {
@@ -143,7 +162,7 @@ export function buildVisiblePriorArtResults<T = any>(params: {
   ));
 
   const gatedCandidates: T[] = [];
-  const highConfidence: Array<{ item: T; index: number; score: number }> = [];
+  const reviewable: Array<{ item: T; index: number; score: number; priority: number }> = [];
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
@@ -152,23 +171,24 @@ export function buildVisiblePriorArtResults<T = any>(params: {
     const annotated = annotatePriorArtCandidate(candidate, gate);
     gatedCandidates.push(annotated);
     if (isVisiblePriorArtGate(gate, minimumVisibleConfidence)) {
-      highConfidence.push({
+      reviewable.push({
         item: annotated,
         index,
         score: finiteScore(gate.rerankScore, gate.score),
+        priority: visibleDecisionPriority(gate.rerankDecision || gate.decision),
       });
     }
   }
 
-  const visiblePriorArtResults = highConfidence
-    .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+  const visiblePriorArtResults = reviewable
+    .sort((a, b) => (a.priority - b.priority) || (b.score - a.score) || (a.index - b.index))
     .slice(0, visibleLimit)
     .map(entry => entry.item);
   return {
     gatedCandidates,
     visiblePriorArtResults,
     visiblePublicationNumbers: visiblePriorArtResults.map(getPriorArtPublicationNumber).filter(Boolean),
-    highConfidenceCount: highConfidence.length,
+    highConfidenceCount: reviewable.length,
     hiddenCandidateCount: Math.max(0, candidates.length - visiblePriorArtResults.length),
   };
 }

@@ -133,9 +133,28 @@ describe('novelty search guardrails', () => {
     expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
       '"feature_type": "core_technical|implementation|novelty_candidate|generic_weak"'
     );
-    expect(source).toContain('Score means invention-level relevance, not mere feature overlap');
-    expect(source).toContain('A component patent should be kept as component');
-    expect(source).toContain('If overlap is only a generic component with no concrete feature support');
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      'Do not prefix them with feature IDs such as "F1:"'
+    );
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).not.toContain('"feature_id"');
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      'Each invention_feature must be a standalone atomic technical phrase'
+    );
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      'If a phrase contains multiple independent mechanisms joined by "and", split it into separate features'
+    );
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      'Return 3-8 invention_features unless the disclosure truly contains fewer; use up to 10 only'
+    );
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      'core_technical: a baseline technical object'
+    );
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain(
+      'feature_details must include exactly one row for each invention_features item'
+    );
+    expect(source).toContain('Score means usefulness for deep novelty mapping');
+    expect(source).toContain('Component-salvage rule');
+    expect(source).toContain('Do not reject a concrete component disclosure merely because it lacks the full invention combination');
     expect(source).toContain('A patent is not relevant merely because it discloses one generic component');
     expect(PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3).toContain(
       'A feature marked Absent or Unknown in one patent is not automatically unique'
@@ -147,13 +166,27 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       '"novelty_threat": "high_overlap|moderate_overlap|related|low_overlap"'
     );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).not.toContain('"aiRelevance":');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      'Candidates have already passed Stage 1.5 relevance screening'
+    );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      'If no title/abstract quote supports the feature, use Absent or Unknown'
+    );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      'Use Absent when the Title/Abstract is adequate to compare'
+    );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      'Do not output aiRelevance, accepted, component, borderline, or rejected routing lists'
+    );
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"extent_score": 0.0');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Evaluate extent_score independently for every patent-feature pair');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, or none');
     expect(source).toContain('Relevance should reflect threat to the invention as a whole');
     expect(source).toContain("const stage0SearchQuery = String(stage0Data.searchQuery || '').trim()");
     expect(source).toContain('retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features)');
-    expect(source).toContain("const features = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : []");
+    expect(source).toContain('private isBroadStage15Feature(value: string): boolean');
+    expect(source).toContain('const features = this.buildStage15AtomicFeatures(stage0Data)');
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain(
       'Never output "No significant risks identified"'
     );

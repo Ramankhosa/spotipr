@@ -23,6 +23,7 @@ import {
 
 const PATENTNEST_APP_URL = 'https://patentnest.ai';
 const FEATURE_MAPPING_CACHE_VERSION = 'v1.2';
+const STAGE15_GATE_CACHE_VERSION = 'stage15-gate-v3';
 
 function escapeEmailHtml(value: unknown): string {
   return String(value ?? '')
@@ -153,7 +154,7 @@ OUTPUT JSON SHAPE:
 {
   "searchQuery": "plain-English patent search query, 12-35 words",
   "invention_features": ["mechanism-level feature"],
-      "feature_details": [
+  "feature_details": [
     {
       "feature": "copy one invention_features item exactly",
       "feature_type": "core_technical|implementation|novelty_candidate|generic_weak",
@@ -175,7 +176,42 @@ RULES:
 - JSON only. No markdown, comments, citations, or text before/after JSON.
 - Use ASCII only.
 - Do not invent technical facts not present in the disclosure.
+- Do not convert a hoped-for benefit into a technical feature unless the disclosure gives a concrete mechanism.
 - The search query is used as the single PQAI query and as the broad local-corpus concept query.
+
+FEATURE EXTRACTION DISCIPLINE:
+- Return 3-8 invention_features unless the disclosure truly contains fewer; use up to 10 only when the disclosure contains many distinct concrete mechanisms.
+- Keep invention_features as clean technical phrases. Do not prefix them with feature IDs such as "F1:" because retrieval and reports use these strings directly.
+- Each invention_feature must be a standalone atomic technical phrase.
+- Each invention_feature should capture only one technical object, mechanism, structure, material relationship, control relationship, process step, data flow, release mechanism, detection mechanism, verification mechanism, or algorithmic transformation.
+- Do not combine multiple independent ideas into one feature.
+- If a phrase contains multiple independent mechanisms joined by "and", split it into separate features unless the combined relationship itself is the invention.
+- Order invention_features from broad core mechanisms to narrower differentiators.
+- The first 2-4 features should describe baseline mechanisms likely to retrieve close prior art.
+- Later features may capture narrower improvements or differentiators.
+- Do not extract only the newest or most specific improvements; include the baseline mechanism that makes the invention searchable.
+- Do not make features depend on the title or searchQuery for meaning.
+- Do not repeat the full searchQuery or broad application field in every feature.
+- Do not use benefits as features, such as "improved efficiency", "real-time monitoring", or "secure access", unless paired with a concrete mechanism.
+- Do not extract only generic field labels such as device, system, composition, method, platform, app, server, controller, polymer, coating, sensor, module, or database.
+- Do not list generic components as standalone features: processor, memory, sensor, controller, module, database, server, app, battery, housing, network, or API.
+- Include generic components only when their specific interaction is material to novelty.
+
+FEATURE TYPE GUIDANCE:
+- core_technical: a baseline technical object, architecture, mechanism, process, material structure, or transformation without which the invention would not work.
+- novelty_candidate: a feature or feature interaction most likely to distinguish over prior art.
+- implementation: a concrete but secondary embodiment, material choice, parameter, sensor, module, interface, manufacturing step, or deployment detail.
+- generic_weak: a broad or field-common feature useful for context but not reliable alone for novelty or relevance gating.
+
+FEATURE DETAILS RULES:
+- feature_details must include exactly one row for each invention_features item.
+- The feature field inside feature_details must copy the corresponding invention_features item exactly.
+- user_disclosure must describe only what the user's disclosure actually says.
+- technical_role must explain the technical function of the feature, not a market benefit.
+- source_excerpt should quote or closely paraphrase the shortest available supporting phrase from the user disclosure.
+- If the feature is inferred from the disclosure rather than explicitly stated, keep source_excerpt empty and mention the inference in warnings.
+- Do not add materials, thresholds, ratios, dimensions, algorithms, sensors, biological targets, or data types unless disclosed.
+
 SEARCH QUERY DISCIPLINE:
 - The searchQuery is for retrieving the closest prior art, not for proving novelty.
 - Build searchQuery around the broad technical object, core operation, and baseline mechanism that older patents are likely to describe.
@@ -186,27 +222,28 @@ SEARCH QUERY DISCIPLINE:
 - The search query must describe what the invention is and how it works, not its market benefit.
 - Keep searchQuery broad and self-contained; do not stuff it with every feature.
 - Prefer recall-oriented technical terms and preserve only the most central operating mechanism needed to find close prior art; avoid packing searchQuery with secondary refinements that belong in novelty_focus.
-- Return 3-8 invention_features unless the disclosure truly contains fewer.
-- Each feature must be a claim-relevant mechanism, structure, material relationship, control loop, process step, data flow, or algorithmic transformation.
-- Each invention_feature is independently embedded for local Indian abstract search; write it as a standalone 3-10 word technical phrase.
-- Order invention_features from broad core mechanisms to narrower differentiators.
-- The first 2-4 features should describe baseline mechanisms likely to retrieve close prior art.
-- Later features may capture narrower improvements or differentiators.
-- Do not extract only the newest or most specific improvements; include the baseline mechanism that makes the invention searchable.
-- Do not make features depend on the title or searchQuery for meaning.
-- Do not repeat the full searchQuery or broad application field in every feature.
-- Do not use benefits as features, such as "improved efficiency", "real-time monitoring", or "secure access", unless paired with a concrete mechanism.
-- Do not list generic components as standalone features: processor, memory, sensor, controller, module, database, server, app, battery, housing, network, or API.
-- Include generic components only when their specific interaction is material to novelty.
+
+NOVELTY FOCUS RULES:
 - novelty_focus must contain 1-4 features from invention_features that are most likely to distinguish over prior art.
+- novelty_focus must copy feature strings exactly from invention_features.
+- novelty_focus should usually prefer novelty_candidate features, but may include a core_technical feature if the core architecture itself appears novel.
 - novelty_focus should hold differentiators that may be too narrow for the main searchQuery but important for later novelty assessment.
-- novelty_focus must not include ordinary field-common parts unless their specific interaction is the likely inventive contribution. Prefer features involving a control relationship, material relationship, formulation ratio, biological target interaction, structural geometry, process sequence, signal-processing transformation, or measurable technical effect.
-- feature_details must include one row for each invention_features item, copying the feature text exactly and grounding user_disclosure/source_excerpt in the user's supplied disclosure.
-- feature_type must classify each feature as core_technical, implementation, novelty_candidate, or generic_weak. Use generic_weak for broad field-common items that should not be relied on alone.
+- novelty_focus must not include ordinary field-common parts unless their specific interaction is the likely inventive contribution. Prefer features involving a control relationship, material relationship, formulation relationship, biological target interaction, structural geometry, process sequence, signal-processing transformation, release/detection/verification mechanism, or measurable technical effect.
+
+CLASSIFICATION:
+- inventionType may include more than one category when appropriate.
 - cpcCodes and ipcCodes should be empty arrays unless the class is strongly inferable from the disclosure.
+- Use broad class hints only when they are likely to improve retrieval.
+
+SEARCH EXCLUSIONS:
 - search_exclusions should contain incidental, business-oriented, user-context, brand, marketing, or overly narrow embodiment terms that may pull irrelevant references or suppress close prior art.
+- Do not exclude a term if it is necessary to identify the technical category of the invention.
+
+CONFIDENCE AND WARNINGS:
 - confidence reflects disclosure sufficiency for novelty search, not patentability.
-- warnings should call out missing mechanism detail, vague terms, missing materials/steps, or weak search coverage risks.
+- warnings should call out missing mechanism detail, vague terms, missing materials, missing steps, missing data flow, missing control logic, missing experimental parameters, or weak search coverage risks.
+- If the disclosure is mostly an idea or desired result without enough mechanism, extract only the disclosed mechanism and add a warning.
+- If several features are speculative or inferred, lower confidence.
 `;
 
 // Legacy prompts moved to bottom of file
@@ -388,44 +425,28 @@ INVENTION DISCLOSURE: {invention_disclosure}
 PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, Retrieval hints)
 
 TASK
+Candidates have already passed Stage 1.5 relevance screening. This stage is deep feature mapping and attorney-review evidence analysis, not a second routing gate.
 For each patent, do all of the following in one pass:
-1. Decide relevance: accept, component, borderline, or reject.
-2. Map every invention feature as Present, Partial, Absent, or Unknown.
-3. Provide per-patent overlap-risk remarks.
-4. Provide attorney-review comparison rows showing the user invention disclosure side-by-side with the patent disclosure.
-5. Summarize novelty signals across the candidate set.
+1. Map every invention feature as Present, Partial, Absent, or Unknown.
+2. Provide per-patent overlap-risk remarks.
+3. Provide attorney-review comparison rows showing the user invention disclosure side-by-side with the patent disclosure.
+4. Summarize novelty signals across the candidate set.
 
 EVIDENCE RULES
 - Use only the supplied Title and Abstract as evidence.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
 - Use Retrieval hints to focus review, but Present/Partial still require Title/Abstract support.
-- Present/Partial require a short quote from title or abstract when available.
+- Present/Partial require a short quote from title or abstract. If no title/abstract quote supports the feature, use Absent or Unknown.
 - user_invention_disclosure must be based only on FEATURE DETAILS or INVENTION DISCLOSURE, not on the prior-art patent.
 - patent_disclosure/evidence_quote must be based only on the supplied patent Title/Abstract.
-- If an abstract is thin, vague, unavailable, or does not support the feature, use Absent or Unknown.
+- Use Absent when the Title/Abstract is adequate to compare and the feature is not disclosed.
+- Use Unknown when the Title/Abstract is thin, vague, unavailable, translated poorly, or too generic to assess.
 - Do not treat missing evidence as novelty.
 - A feature marked Absent or Unknown in one patent is not automatically unique. It is only a potential differentiator if it is absent from the closest references and is not a generic field-common component.
 - Generic words like system, module, sensor, controller, AI, battery, app, or server are not enough unless the full mechanism is disclosed.
 
 OUTPUT JSON SHAPE:
 {
-  "aiRelevance": {
-    "accepted": ["PN"],
-    "component": ["PN"],
-    "borderline": ["PN"],
-    "rejected": ["PN"],
-    "byPn": {
-      "PN": {
-        "pn": "PN",
-        "score": 0.0,
-        "decision": "accept|component|borderline|reject",
-        "matched_features": ["feature"],
-        "missing_features": ["feature"],
-        "reason": "short reason",
-        "evidence_quality": "high|medium|low"
-      }
-    }
-  },
   "feature_map": [
     {
       "pn": "PN",
@@ -486,10 +507,8 @@ OUTPUT JSON SHAPE:
 
 RULES
 - Copy feature strings exactly.
-- Return every patent PN supplied in feature_map and byPn.
-- Use accept only for direct invention-level/core-combination overlap.
-- Use component when the patent discloses one or more concrete invention features/subsystems but not the overall invention or core combination.
-- Use borderline for weak, ambiguous, or adjacent references worth bounded attorney review.
+- Return every patent PN supplied in feature_map and per_patent_remarks.
+- Do not output aiRelevance, accepted, component, borderline, or rejected routing lists; Stage 1.5 already produced workflow routing.
 - Do not treat distributed component disclosures across multiple patents as one patent anticipating the full invention.
 - Return one comparison_rows item per invention feature for every patent.
 - comparison_rows must compare the submitted user idea against the patent feature by feature; do not collapse rows into a one-line summary.
@@ -3460,8 +3479,8 @@ RESPONSE:`;
       if (!pn) continue;
       const gate = this.getGateRecordForPublication(byPn, pn);
       if (!gate) continue;
-      if (gate.reviewStatus === 'gate_error') continue;
       const decision = normalizeRerankDecision(gate.rerankDecision || gate.decision);
+      if (gate.reviewStatus === 'gate_error' && decision === 'reject') continue;
       if (decision === 'accept') add(accepted, 'accepted', pn);
       else if (decision === 'component') add(component, 'component', pn);
       else if (decision === 'borderline') add(borderline, 'borderline', pn);
@@ -3479,10 +3498,10 @@ RESPONSE:`;
   private fallbackCandidatesForGateFailure(candidatePool: any[], limit: number) {
     return candidatePool.slice(0, Math.max(0, limit)).map(candidate => ({
       ...candidate,
-      rerankDecision: 'reject',
-      rerankScore: 0,
+      rerankDecision: 'borderline',
+      rerankScore: 0.2,
       evidence_quality: 'low',
-      rerankReason: 'AI relevance gate did not complete; candidate is retained only as a low-confidence fallback.',
+      rerankReason: 'AI relevance gate did not complete; candidate retained as low-confidence review fallback.',
     }));
   }
 
@@ -3546,12 +3565,6 @@ RESPONSE:`;
   private selectRelevantPatentsForDeepAnalysis(stage1Data: any, maxCandidates = 20): any[] {
     const gate = stage1Data?.aiRelevance;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
-    const minimumVisibleConfidence = Number(
-      gate?.minimumVisibleConfidence ||
-      stage1Data?.minimumVisibleConfidence ||
-      DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
-    );
-    const mediumConfidence = Number(gate?.thresholds?.medium ?? 0.4);
     const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0) => ({
       ...candidate,
       rerankScore: score,
@@ -3564,10 +3577,7 @@ RESPONSE:`;
       rerankReason: record?.reason,
     });
     const selectedKeys = new Set<string>();
-    const selectByDecision = (
-      decisionName: 'accept' | 'component' | 'borderline',
-      options: { requireHighConfidence?: boolean; requireNonLowEvidence?: boolean; minScore?: number } = {}
-    ) => {
+    const selectByDecision = (decisionName: 'accept' | 'component' | 'borderline') => {
       if (!(candidatePool.length > 0 && gate?.byPn && gate?.gateStatus !== 'failed')) return [];
       return candidatePool
         .map((candidate, index) => {
@@ -3578,18 +3588,10 @@ RESPONSE:`;
           return { candidate, index, record, score, key };
         })
         .filter(item => {
-          if (!item.record || item.record.reviewStatus === 'gate_error') return false;
+          if (!item.record) return false;
           const decision = normalizeRerankDecision(item.record.rerankDecision || item.record.decision);
+          if (item.record.reviewStatus === 'gate_error' && decision !== 'borderline') return false;
           if (decision !== decisionName) return false;
-          if (options.requireHighConfidence) {
-            const evidenceQuality = String(item.record.evidence_quality || '').toLowerCase();
-            return item.score >= minimumVisibleConfidence && evidenceQuality !== 'low';
-          }
-          if (typeof options.minScore === 'number' && item.score < options.minScore) return false;
-          if (options.requireNonLowEvidence) {
-            const evidenceQuality = String(item.record.evidence_quality || '').toLowerCase();
-            if (evidenceQuality === 'low') return false;
-          }
           return Boolean(item.key && !selectedKeys.has(item.key));
         })
         .sort((a, b) => (b.score - a.score) || (a.index - b.index))
@@ -3600,8 +3602,8 @@ RESPONSE:`;
         });
     };
 
-    const accepted = selectByDecision('accept', { requireHighConfidence: true });
-    const component = selectByDecision('component', { minScore: mediumConfidence, requireNonLowEvidence: true });
+    const accepted = selectByDecision('accept');
+    const component = selectByDecision('component');
     const borderline = selectByDecision('borderline');
     const categorySelected = [...accepted, ...component, ...borderline].slice(0, Math.max(0, maxCandidates));
     if (categorySelected.length > 0) return categorySelected;
@@ -4371,6 +4373,80 @@ RESPONSE:`;
     return batchMap;
   }
 
+  private isBroadStage15Feature(value: string): boolean {
+    const tokens = String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .split(/\s+/)
+      .map(token => token.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return true;
+
+    const genericTerms = new Set([
+      'app',
+      'algorithm',
+      'coating',
+      'composition',
+      'controller',
+      'device',
+      'film',
+      'layer',
+      'marker',
+      'method',
+      'module',
+      'platform',
+      'polymer',
+      'sensor',
+      'server',
+      'system',
+    ]);
+    const fillerTerms = new Set([
+      'a',
+      'an',
+      'and',
+      'based',
+      'for',
+      'in',
+      'of',
+      'optional',
+      'the',
+      'with',
+    ]);
+    const meaningful = tokens.filter(token => !genericTerms.has(token) && !fillerTerms.has(token));
+    return meaningful.length === 0;
+  }
+
+  private buildStage15AtomicFeatures(stage0Data: NormalizedIdea): string[] {
+    const seen = new Set<string>();
+    const features: Array<{ text: string; importance: 'core' | 'major' | 'peripheral' }> = [];
+    const add = (value: unknown, importance: 'core' | 'major' | 'peripheral' = 'major') => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      const key = text.toLowerCase();
+      if (!text || seen.has(key) || this.isBroadStage15Feature(text)) return false;
+      seen.add(key);
+      features.push({ text, importance });
+      return true;
+    };
+
+    (Array.isArray(stage0Data.featureDetails) ? stage0Data.featureDetails : []).forEach(detail => {
+      const featureType = String(detail?.feature_type || '').toLowerCase();
+      const importance = featureType === 'core_technical'
+        ? 'core'
+        : featureType === 'generic_weak'
+          ? 'peripheral'
+          : 'major';
+      add(detail?.feature, importance);
+    });
+    let acceptedFallbackFeatureCount = 0;
+    (Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : []).forEach(feature => {
+      const added = add(feature, acceptedFallbackFeatureCount < 2 ? 'core' : 'major');
+      if (added) acceptedFallbackFeatureCount += 1;
+    });
+    (Array.isArray(stage0Data.noveltyFocus) ? stage0Data.noveltyFocus : []).forEach(feature => add(feature, 'core'));
+
+    return features.slice(0, 12).map((feature, index) => `F${index + 1} [${feature.importance}]: ${feature.text}`);
+  }
+
   private async performStage15(
     searchId: string,
     stage0Data: NormalizedIdea,
@@ -4394,7 +4470,7 @@ RESPONSE:`;
         visibleLimit,
         minimumVisibleConfidence,
       } = config.stage15;
-      const features = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
+      const features = this.buildStage15AtomicFeatures(stage0Data);
       const existingGate = stage1Data?.aiRelevance || {};
       const existingByPn: Record<string, PriorArtGateRecord | undefined> = options?.appendNextBatch
         ? { ...(existingGate.byPn || {}) }
@@ -4431,7 +4507,7 @@ RESPONSE:`;
 
       // Build batch prompt (10-20 items) so the model returns an array of results
       const buildBatchPrompt = (batch: any[]) => {
-        const feats = JSON.stringify(features.slice(0, 8));
+        const feats = JSON.stringify(features);
         const norm = (v: any, max = 800) => String(v || '').replace(/\s+/g, ' ').substring(0, max);
         const items = batch.map((it, idx) => {
           const pn = it.publication_number || it.publicationNumber || it.pn || it.id || '';
@@ -4445,28 +4521,93 @@ RESPONSE:`;
           'You are a patent novelty relevance gate. Return ONLY a valid JSON array.',
           `Invention features: ${feats}`,
           '',
-          'For each patent, decide whether it should proceed to deep novelty mapping.',
-          'Decision policy:',
-          '- accept: direct invention-level overlap with the core mechanism or core feature combination.',
-          '- component: concrete disclosure of one or more meaningful invention features, subsystems, materials, process steps, or implementation details, but not the full invention/core combination.',
-          '- borderline: weak, adjacent, ambiguous, or partial relationship worth bounded attorney review.',
-          '- reject: remote, generic keyword hit, or no concrete technical overlap.',
-          '- Score means invention-level relevance, not mere feature overlap.',
-          `- Scores of ${minimumVisibleConfidence.toFixed(2)} or higher require concrete title/abstract evidence and non-low evidence quality.`,
-          '- A component patent should be kept as component even if it is not the same invention, provided the title/abstract concretely supports at least one extracted feature.',
-          '- If overlap is only a generic component with no concrete feature support, reject it or keep it borderline with low score.',
-          '- Do not label a component as accept unless the same technical purpose, same object/material/data target, and same operating mechanism are also present.',
+          'The invention features should be atomic, preferably with feature IDs and importance labels such as core, major, or peripheral.',
+          'Example structure:',
+          '- F1: core technical object/form factor',
+          '- F2: core mechanism',
+          '- F3: major subsystem/material/layer/module',
+          '- F4: control/process/release/detection/verification mechanism',
+          '- F5: optional or peripheral implementation detail',
           '',
+          'Your job is to decide whether each patent should proceed to deep novelty mapping. This is not a final patentability opinion. Keep references that may be useful for novelty, inventive-step, component mapping, or bounded attorney review.',
+          '',
+          'Decision policy:',
+          '- accept: the title/abstract discloses the same or very close invention-level combination, including substantially the same technical purpose, same object/material/data target, and same operating mechanism.',
+          '- component: the title/abstract concretely discloses at least one meaningful atomic invention feature, subsystem, material structure, layer arrangement, module, process step, release mechanism, detection mechanism, indicator mechanism, compliance mechanism, control mechanism, verification mechanism, manufacturing step, or implementation detail, even if the full invention combination is missing.',
+          '- borderline: the title/abstract has a weak, adjacent, ambiguous, partial, or transferable relationship that may still help bounded attorney review.',
+          '- reject: remote keyword hit, generic field reference, duplicate noise with no new useful detail, or no concrete technical overlap with any atomic invention feature.',
+          '',
+          'Score policy:',
+          '- Score means usefulness for deep novelty mapping, including full invention overlap, concrete component overlap, and bounded attorney-review relevance.',
+          '- Score does not mean only full-invention anticipation.',
+          '- Component references may receive moderate or high scores if the disclosed component is technically meaningful.',
+          '- Do not reject a concrete component disclosure merely because it lacks the full invention combination.',
+          '- Full invention overlap is not required for component.',
+          '- Same technical purpose, same object/material/data target, and same operating mechanism are required only for accept, not for component.',
+          '- If title/abstract concretely supports one or more atomic invention features, classify as component unless the overlap is merely generic.',
+          '- If the overlap is generic only, such as device, system, composition, layer, module, sensor, controller, polymer, marker, app, server, algorithm, coating, film, dosage form, platform, or method without meaningful technical role or mechanism, classify as borderline or reject.',
+          '',
+          'Suggested score calibration:',
+          '- accept: 0.70-1.00 for same or close full invention-level combination.',
+          '- component: 0.40-0.85 for concrete technical component overlap. Component can overlap with accept scores.',
+          '- borderline: 0.20-0.45 for adjacent, weak, ambiguous, or transferable overlap.',
+          '- reject: 0.00-0.25 for remote, generic, duplicate noise, or no concrete atomic feature support.',
+          '',
+          'Component-salvage rule:',
+          '- Keep as component if the title/abstract concretely discloses an atomic invention feature, subsystem, material structure, layer arrangement, module architecture, process step, release mechanism, detection mechanism, indicator mechanism, compliance mechanism, control mechanism, verification marker, manufacturing method, or implementation detail.',
+          '- A component decision means the reference is useful for mapping one part of the invention; it does not mean the full invention is disclosed or anticipated.',
+          '- A reference may be component even when it belongs to a different embodiment, product type, form factor, or application area, provided the disclosed technical mechanism clearly maps to an atomic invention feature.',
+          '- Do not keep as component merely because the reference shares a broad field, environment, purpose, or keyword.',
+          '',
+          'Form-factor and object-target rule:',
+          '- If the reference uses a different form factor, product type, material target, data target, biological target, or operating environment, downgrade by at least one level unless the title/abstract discloses a technical mechanism that directly maps to an atomic invention feature.',
+          '- A different form factor with the same component performing the same technical function may be component.',
+          '- A different form factor with only broad purpose similarity should be borderline or reject.',
+          '- Do not label a different-form-factor reference as accept unless the core feature combination and operating mechanism are still substantially the same.',
+          '',
+          'Generic example classifications:',
+          '- Reference discloses the same product/system/process with the same core feature combination and same operating mechanism: accept, because it may anticipate the invention-level concept.',
+          '- Reference discloses the same technical problem and same solution architecture, but misses one optional or peripheral feature: accept or high component, depending on how central the missing feature is.',
+          '- Reference discloses one major subsystem, layer, module, material, chemical composition, control step, sensor arrangement, release mechanism, detection mechanism, verification mechanism, or manufacturing step from the invention: component, even if the full invention is absent.',
+          '- Reference discloses a known implementation detail that could be combined with other references to challenge inventive step: component, provided the title/abstract concretely supports the detail.',
+          '- Reference discloses the same result or purpose but uses a different object, material target, data target, mechanism, or technical route: borderline, unless a concrete atomic feature is still present.',
+          '- Reference uses similar words from the same broad field but does not disclose any concrete atomic invention feature: reject.',
+          '- Reference discloses only a generic version of a term such as device, system, composition, layer, module, sensor, controller, polymer, marker, app, server, algorithm, or coating without technical role or mechanism: reject or borderline.',
+          '- Reference is from an adjacent field and has a transferable mechanism that maps to one atomic feature: borderline or component, depending on how clearly the mechanism is disclosed.',
+          '- Reference is from an adjacent field and only shares a broad purpose or keyword: reject.',
+          '- Reference discloses a diagnostic, testing, packaging, monitoring, or support tool related to the same environment but not the invention object or mechanism: borderline or reject.',
+          '- Reference discloses the same material or component but for a completely different function with no clear transferability: borderline or reject.',
+          '- Reference discloses the same component performing the same function in a different form factor: component, but not accept unless the invention-level combination is also present.',
+          '- Reference discloses a broad platform that could include the invention but does not concretely disclose the relevant features in the title/abstract: borderline or reject.',
+          '- Reference discloses a narrower embodiment of one invention feature with strong technical detail: component, even if its score is below accept range.',
+          '- Reference appears to be a duplicate family member of an already accepted/component reference: component or borderline, but assign lower score unless it adds new technical detail.',
+          '',
+          'Evidence quality:',
+          '- high: title/abstract explicitly names the matched atomic technical feature or a close technical synonym.',
+          '- medium: title/abstract clearly implies the matched feature through a described technical mechanism.',
+          '- low: broad field similarity, ambiguous wording, indirect relation, or weak transferable analogy only.',
+          '',
+          'Deep mapping rule:',
+          '- accept and component decisions should proceed to deep mapping.',
+          '- borderline decisions may proceed to bounded deep mapping, preferably capped by score, evidence quality, or top-N selection.',
+          '- reject decisions should not proceed to deep mapping.',
+          '- Decision should dominate score. Do not discard component references only because their score is below the accept range.',
+          '- Reject only when the title/abstract lacks concrete support for any atomic invention feature.',
+          '',
+          'Output requirements:',
           'Each array element must be:',
-          '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature"],"missing_features":["feature"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
+          '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature_id_or_exact_feature_label"],"missing_features":["feature_id_or_exact_feature_label"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
           '',
           'Rules:',
           '- Use title/abstract only.',
           '- Retrieval hints are not evidence; use them only to focus review.',
           '- Do not copy hinted matched features unless title/abstract supports them.',
-          '- Generic overlap such as sensor, AI, controller, module, app, or server is not enough.',
-          '- Prefer rejecting broad/remote references over inflating relevance.',
-          '- Keep JSON compact. Do not include prose outside the JSON array.',
+          '- matched_features must contain only feature IDs or exact feature labels from the provided invention feature list.',
+          '- Do not invent new feature names in matched_features.',
+          '- Use reasonable technical synonyms when matching features.',
+          '- Prefer rejecting remote keyword hits, but do not reject concrete component disclosures merely because they lack the full invention combination.',
+          '- Keep JSON compact.',
+          '- Do not include prose outside the JSON array.',
           '- Follow input order.',
           '',
           items
@@ -4492,9 +4633,9 @@ RESPONSE:`;
           const pnRaw = getPriorArtPublicationNumber(item) || 'Unknown';
           const record: PriorArtGateRecord = {
             pn: pnRaw,
-            score: 0,
-            rerankScore: 0,
-            decision: 'reject',
+            score: 0.2,
+            rerankScore: 0.2,
+            decision: 'borderline',
             matched_features: [],
             missing_features: features,
             reason,
@@ -4567,7 +4708,7 @@ RESPONSE:`;
         // Index parsed results by pn for quick lookup
         const batchMap = this.indexStage15ParsedRows(parsed);
 
-        // Consolidate each item. Missing or malformed LLM rows are rejected as low-confidence.
+        // Consolidate each item. Missing or malformed LLM rows are retained as low-confidence review items.
         for (const item of batch) {
           const pnRaw = getPriorArtPublicationNumber(item) || 'Unknown';
           const k = String(pnRaw).toUpperCase();
@@ -4575,12 +4716,12 @@ RESPONSE:`;
           if (!found) {
             const record: PriorArtGateRecord = {
               pn: String(pnRaw),
-              score: 0,
-              rerankScore: 0,
-              decision: 'reject',
+              score: 0.2,
+              rerankScore: 0.2,
+              decision: 'borderline',
               matched_features: [],
               missing_features: features,
-              reason: 'AI relevance gate did not return this candidate row.',
+              reason: 'AI relevance gate missed this row; retain for bounded review.',
               evidence_quality: 'low',
               reviewStatus: 'gate_error',
               gateError: 'missing_candidate_row',
@@ -4591,10 +4732,14 @@ RESPONSE:`;
             if (canonical) byPn[canonical] = record;
             continue;
           }
-          const score = found ? this.coerceGateScore(found) : 0;
-          const decision = typeof found.decision === 'string'
-            ? normalizeRerankDecision(found.decision)
-            : 'reject';
+          const rawDecision = typeof found?.decision === 'string' && found.decision.trim()
+            ? found.decision
+            : (typeof found?.rerankDecision === 'string' && found.rerankDecision.trim() ? found.rerankDecision : '');
+          const rawScore = found?.score ?? found?.rerankScore ?? found?.relevanceScore ?? found?.relevance;
+          const decision = rawDecision ? normalizeRerankDecision(rawDecision) : 'borderline';
+          const score = rawScore === undefined || rawScore === null || rawScore === ''
+            ? (decision === 'borderline' ? 0.2 : 0)
+            : this.coerceGateScore(found);
           const record: PriorArtGateRecord = {
             pn: String(pnRaw),
             score,
@@ -7138,7 +7283,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
   }
 
   private createStage15CacheKey(stage0Data: NormalizedIdea, candidates: any[]): string {
-    const features = Array.isArray(stage0Data?.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    const features = this.buildStage15AtomicFeatures(stage0Data);
     const candidateData = candidates.map(item => {
       const pn = item.publication_number || item.publicationNumber || item.pn || item.id || '';
       const score = item.relevanceScore || item.score || item.relevance || 0;
@@ -7146,7 +7291,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     }).join('|');
     return crypto
       .createHash('sha1')
-      .update(`stage15-gate-v2||${stage0Data?.searchQuery || ''}||${features.join('|')}||${candidateData}`)
+      .update(`${STAGE15_GATE_CACHE_VERSION}||${stage0Data?.searchQuery || ''}||${features.join('|')}||${candidateData}`)
       .digest('hex');
   }
 

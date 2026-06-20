@@ -103,6 +103,46 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     });
   });
 
+  test('keeps gate-error candidates as low-confidence borderline when the fallback decision is borderline', () => {
+    const svc = service();
+    const candidates = [
+      { publicationNumber: 'IN1' },
+      { publicationNumber: 'IN2' },
+    ];
+    const byPn = {
+      IN1: { pn: 'IN1', decision: 'borderline', score: 0.2, evidence_quality: 'low', reviewStatus: 'gate_error', gateError: 'parse_error' },
+      IN2: { pn: 'IN2', decision: 'reject', score: 0, evidence_quality: 'low', reviewStatus: 'gate_error', gateError: 'timeout' },
+    };
+
+    expect(svc.buildStage15DecisionLists(candidates, byPn, 5)).toEqual({
+      accepted: [],
+      component: [],
+      borderline: ['IN1'],
+      rejected: [],
+    });
+  });
+
+  test('formats Stage 1.5 features with stable IDs and importance labels', () => {
+    const svc = service();
+
+    expect(svc.buildStage15AtomicFeatures({
+      searchQuery: 'query',
+      inventionFeatures: ['controller', 'fallback core', 'fallback mechanism'],
+      featureDetails: [
+        { feature: 'film', feature_type: 'generic_weak' },
+        { feature: 'specific control loop', feature_type: 'core_technical' },
+        { feature: 'optional display marker', feature_type: 'generic_weak' },
+      ],
+      noveltyFocus: ['layer', 'novel release trigger'],
+    })).toEqual([
+      'F1 [core]: specific control loop',
+      'F2 [peripheral]: optional display marker',
+      'F3 [core]: fallback core',
+      'F4 [core]: fallback mechanism',
+      'F5 [core]: novel release trigger',
+    ]);
+  });
+
   test('builds a successful no-high-confidence deep-analysis payload', () => {
     const svc = service();
     const stage1Data = {
@@ -198,7 +238,7 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
         rejected: [],
         byPn: {
           IN_DIRECT: { pn: 'IN_DIRECT', decision: 'accept', score: 0.9, evidence_quality: 'high', reviewStatus: 'reviewed' },
-          IN_COMPONENT: { pn: 'IN_COMPONENT', decision: 'component', score: 0.55, evidence_quality: 'medium', reviewStatus: 'reviewed' },
+          IN_COMPONENT: { pn: 'IN_COMPONENT', decision: 'component', score: 0.25, evidence_quality: 'low', reviewStatus: 'reviewed' },
           IN_BORDERLINE: { pn: 'IN_BORDERLINE', decision: 'borderline', score: 0.45, evidence_quality: 'medium', reviewStatus: 'reviewed' },
         },
         gateStatus: 'complete',
@@ -238,5 +278,21 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
 
     expect(svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 10)).toHaveLength(0);
     expect(svc.hasNoHighConfidencePriorArt(stage1Data)).toBe(true);
+  });
+
+  test('uses low-confidence borderline fallback candidates when the whole gate fails', () => {
+    const svc = service();
+    const fallback = svc.fallbackCandidatesForGateFailure([
+      { publicationNumber: 'IN1' },
+    ], 5);
+
+    expect(fallback).toMatchObject([
+      {
+        publicationNumber: 'IN1',
+        rerankDecision: 'borderline',
+        rerankScore: 0.2,
+        evidence_quality: 'low',
+      },
+    ]);
   });
 });
