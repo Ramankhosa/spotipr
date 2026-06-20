@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExtractedPatentRecord } from '@/lib/patent-corpus-extractor'
 
 const mocks = vi.hoisted(() => ({
@@ -30,6 +30,8 @@ import {
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
   persistPqaiPatentResults,
+  requestOpenAIEmbeddings,
+  requestSearchQueryEmbedding,
 } from '@/lib/patent-corpus-service'
 
 function patentRecord(overrides: Partial<ExtractedPatentRecord> = {}): ExtractedPatentRecord {
@@ -63,6 +65,10 @@ function patentRecord(overrides: Partial<ExtractedPatentRecord> = {}): Extracted
 }
 
 describe('patent corpus service', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.prisma.$queryRaw.mockResolvedValue([])
@@ -96,6 +102,65 @@ describe('patent corpus service', () => {
         attemptCount: { increment: 1 },
       }),
     }))
+  })
+
+  it('sends search-query embeddings immediately with the dedicated search key', async () => {
+    const previousSearchKey = process.env.OPENAI_SEARCH_API_KEY
+    const previousFallbackKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_SEARCH_API_KEY = 'search-test-key'
+    process.env.OPENAI_API_KEY = 'fallback-test-key'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ index: 0, embedding: new Array(1536).fill(0.01) }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const vector = await requestSearchQueryEmbedding('independent search phrase')
+
+      expect(vector).toHaveLength(1536)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.openai.com/v1/embeddings',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer search-test-key' }),
+          body: expect.stringContaining('independent search phrase'),
+        })
+      )
+    } finally {
+      if (previousSearchKey === undefined) delete process.env.OPENAI_SEARCH_API_KEY
+      else process.env.OPENAI_SEARCH_API_KEY = previousSearchKey
+      if (previousFallbackKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousFallbackKey
+    }
+  })
+
+  it('keeps corpus indexing on the dedicated corpus key', async () => {
+    const previousCorpusKey = process.env.OPENAI_CORPUS_API_KEY
+    const previousFallbackKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_CORPUS_API_KEY = 'corpus-test-key'
+    process.env.OPENAI_API_KEY = 'fallback-test-key'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ index: 0, embedding: new Array(1536).fill(0.02) }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const vectors = await requestOpenAIEmbeddings(['newly extracted patent'])
+
+      expect(vectors).toHaveLength(1)
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.openai.com/v1/embeddings',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer corpus-test-key' }),
+          body: expect.stringContaining('newly extracted patent'),
+        })
+      )
+    } finally {
+      if (previousCorpusKey === undefined) delete process.env.OPENAI_CORPUS_API_KEY
+      else process.env.OPENAI_CORPUS_API_KEY = previousCorpusKey
+      if (previousFallbackKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousFallbackKey
+    }
   })
 
   it('preserves IP India enriched fields during journal import merge', () => {

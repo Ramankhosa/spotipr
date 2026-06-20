@@ -29,6 +29,12 @@ const PATENT_CORPUS_CANCELLED_PREFIX = 'Cancelled by user'
 const IMPORT_SAVE_CANCEL_CHECK_INTERVAL = 25
 const MAX_JOB_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_MAX_JOB_ATTEMPTS || '5') || 5)
 const OPENAI_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_CORPUS_OPENAI_MAX_ATTEMPTS || '3') || 3)
+const OPENAI_SEARCH_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.PATENT_SEARCH_OPENAI_MAX_ATTEMPTS || '2') || 2)
+const OPENAI_SEARCH_EMBEDDING_TIMEOUT_MS = Math.max(1000, Number(process.env.PATENT_SEARCH_EMBEDDING_TIMEOUT_MS || '15000') || 15_000)
+const OPENAI_CORPUS_EMBEDDING_TIMEOUT_MS = Math.max(1000, Number(process.env.PATENT_CORPUS_EMBEDDING_TIMEOUT_MS || '60000') || 60_000)
+const PATENT_SEARCH_DEBUG = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.PATENT_SEARCH_DEBUG || '').trim().toLowerCase()
+)
 export const PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE = Math.max(1, Number(process.env.PATENT_CORPUS_EMBEDDING_API_BATCH || '32') || 32)
 const JOB_BACKOFF_BASE_MS = 2 * 60 * 1000
 const JOB_BACKOFF_MAX_MS = 60 * 60 * 1000
@@ -1602,19 +1608,89 @@ export async function deletePatentImportFileExtractions(batchId: string, fileId:
   }
 }
 
-export async function requestOpenAIEmbeddings(texts: string[]) {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) throw new Error('OPENAI_API_KEY is not configured.')
+type EmbeddingRequestPurpose = 'search-query' | 'corpus-indexing' | 'diagnostic'
+
+type EmbeddingRequestOptions = {
+  purpose?: EmbeddingRequestPurpose
+  timeoutMs?: number
+  maxAttempts?: number
+  traceId?: string
+}
+
+function logOpenAISearchEmbedding(
+  level: 'info' | 'warn' | 'error',
+  event: string,
+  details: Record<string, unknown>,
+  force = false
+) {
+  if (!PATENT_SEARCH_DEBUG && !force) return
+  console[level](`[OpenAIQueryEmbedding] ${JSON.stringify({ event, ...details })}`)
+}
+
+export function hasSearchEmbeddingApiKey() {
+  return Boolean(process.env.OPENAI_SEARCH_API_KEY || process.env.OPENAI_API_KEY)
+}
+
+export function hasCorpusEmbeddingApiKey() {
+  return Boolean(process.env.OPENAI_CORPUS_API_KEY || process.env.OPENAI_API_KEY)
+}
+
+function embeddingApiKey(purpose: EmbeddingRequestPurpose) {
+  if (purpose === 'search-query' || purpose === 'diagnostic') {
+    return process.env.OPENAI_SEARCH_API_KEY || process.env.OPENAI_API_KEY
+  }
+  return process.env.OPENAI_CORPUS_API_KEY || process.env.OPENAI_API_KEY
+}
+
+export async function requestOpenAIEmbeddings(texts: string[], options: EmbeddingRequestOptions = {}) {
+  const purpose = options.purpose || 'corpus-indexing'
+  const traceId = options.traceId || (purpose === 'search-query'
+    ? `query-embedding-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    : undefined)
+  const apiKey = embeddingApiKey(purpose)
+  if (!apiKey) {
+    const expectedKey = purpose === 'corpus-indexing'
+      ? 'OPENAI_CORPUS_API_KEY or OPENAI_API_KEY'
+      : 'OPENAI_SEARCH_API_KEY or OPENAI_API_KEY'
+    throw new Error(`${expectedKey} is not configured.`)
+  }
 
   const inputs = texts.map(text => String(text || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
   if (!inputs.length) return []
 
+  const timeoutMs = Math.max(1000, options.timeoutMs || (
+    purpose === 'corpus-indexing' ? OPENAI_CORPUS_EMBEDDING_TIMEOUT_MS : OPENAI_SEARCH_EMBEDDING_TIMEOUT_MS
+  ))
+  const maxAttempts = Math.max(1, options.maxAttempts || (
+    purpose === 'corpus-indexing' ? OPENAI_EMBEDDING_MAX_ATTEMPTS : OPENAI_SEARCH_EMBEDDING_MAX_ATTEMPTS
+  ))
+  const inputFingerprints = purpose === 'search-query'
+    ? inputs.map(input => crypto.createHash('sha256').update(input).digest('hex').slice(0, 12))
+    : []
   let lastError: Error | null = null
-  for (let attempt = 0; attempt < OPENAI_EMBEDDING_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     let response: Response | null = null
+    const requestStartedAt = Date.now()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
     try {
+      if (purpose === 'search-query') {
+        logOpenAISearchEmbedding('info', 'request_dispatched', {
+          traceId,
+          attempt: attempt + 1,
+          maxAttempts,
+          model: PATENT_CORPUS_EMBEDDING_MODEL,
+          requestedDimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+          inputCount: inputs.length,
+          inputLengths: inputs.map(input => input.length),
+          inputFingerprints,
+          timeoutMs,
+          keySource: process.env.OPENAI_SEARCH_API_KEY ? 'OPENAI_SEARCH_API_KEY' : 'OPENAI_API_KEY',
+        })
+      }
       response = await fetch('https://api.openai.com/v1/embeddings', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
@@ -1626,11 +1702,23 @@ export async function requestOpenAIEmbeddings(texts: string[]) {
         }),
       })
 
+      if (purpose === 'search-query') {
+        logOpenAISearchEmbedding(response.ok ? 'info' : 'warn', 'response_received', {
+          traceId,
+          attempt: attempt + 1,
+          status: response.status,
+          ok: response.ok,
+          durationMs: Date.now() - requestStartedAt,
+          openAIRequestId: response.headers.get('x-request-id'),
+          openAIProcessingMs: response.headers.get('openai-processing-ms'),
+        }, !response.ok)
+      }
+
       if (!response.ok) {
         const body = await response.text()
         const message = `OpenAI embedding request failed: ${response.status} ${body}`
         lastError = Object.assign(new Error(message), { retryable: shouldRetryOpenAIEmbedding(response.status) })
-        if (attempt < OPENAI_EMBEDDING_MAX_ATTEMPTS - 1 && shouldRetryOpenAIEmbedding(response.status)) {
+        if (attempt < maxAttempts - 1 && shouldRetryOpenAIEmbedding(response.status)) {
           await sleep(openAiBackoffMs(attempt, response))
           continue
         }
@@ -1648,24 +1736,59 @@ export async function requestOpenAIEmbeddings(texts: string[]) {
       ) {
         throw new Error('OpenAI embedding response did not contain the expected vectors.')
       }
+      if (purpose === 'search-query') {
+        logOpenAISearchEmbedding('info', 'vectors_received', {
+          traceId,
+          attempt: attempt + 1,
+          vectorCount: embeddings.length,
+          vectorDimensions: embeddings[0]?.length || 0,
+          totalDurationMs: Date.now() - requestStartedAt,
+          openAIRequestId: response.headers.get('x-request-id'),
+        })
+      }
       return embeddings as number[][]
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      if (attempt < OPENAI_EMBEDDING_MAX_ATTEMPTS - 1 && (lastError as any).retryable !== false) {
+      lastError = controller.signal.aborted
+        ? Object.assign(new Error(`OpenAI ${purpose} embedding request timed out after ${timeoutMs}ms.`), { retryable: true, code: 'ETIMEDOUT' })
+        : error instanceof Error ? error : new Error(String(error))
+      if (purpose === 'search-query') {
+        logOpenAISearchEmbedding('error', 'request_failed', {
+          traceId,
+          attempt: attempt + 1,
+          maxAttempts,
+          durationMs: Date.now() - requestStartedAt,
+          status: response?.status || null,
+          errorName: lastError.name,
+          errorMessage: lastError.message.slice(0, 500),
+          errorCode: typeof (lastError as any).code === 'string' ? (lastError as any).code : undefined,
+          willRetry: attempt < maxAttempts - 1 && (lastError as any).retryable !== false,
+        }, true)
+      }
+      if (attempt < maxAttempts - 1 && (lastError as any).retryable !== false) {
         await sleep(openAiBackoffMs(attempt, response || undefined))
         continue
       }
       throw lastError
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
   throw lastError || new Error('OpenAI embedding request failed.')
 }
 
-export async function requestOpenAIEmbedding(text: string) {
-  const [embedding] = await requestOpenAIEmbeddings([text])
+export async function requestOpenAIEmbedding(text: string, options: EmbeddingRequestOptions = {}) {
+  const [embedding] = await requestOpenAIEmbeddings([text], options)
   if (!embedding) throw new Error('OpenAI embedding response did not contain the expected vector.')
   return embedding
+}
+
+export function requestSearchQueryEmbeddings(texts: string[], context: { traceId?: string } = {}) {
+  return requestOpenAIEmbeddings(texts, { purpose: 'search-query', traceId: context.traceId })
+}
+
+export function requestSearchQueryEmbedding(text: string, context: { traceId?: string } = {}) {
+  return requestOpenAIEmbedding(text, { purpose: 'search-query', traceId: context.traceId })
 }
 
 export async function claimNextPatentEmbeddings(workerId: string, limit = 1) {
@@ -1838,7 +1961,7 @@ export async function processPatentEmbeddingById(embeddingId: string, workerId =
     if (isCancelledBatch(batch)) throw new PatentCorpusCancelledError(batch?.errorMessage || undefined)
     const text = embedding.patent?.embeddingText || embedding.patent?.ragText || embedding.patent?.abstract || embedding.patent?.title
     if (!text) throw new Error('Patent has no text available for embedding.')
-    const vector = await requestOpenAIEmbedding(text)
+    const vector = await requestOpenAIEmbedding(text, { purpose: 'corpus-indexing' })
     await setEmbeddingVector(embedding.id, vector)
     return (prisma as any).localPatentEmbedding.findUnique({ where: { id: embedding.id } })
   } catch (error) {
@@ -1868,7 +1991,10 @@ export async function processPatentEmbeddingBatch(workerId = `patent-corpus-${pr
   for (let start = 0; start < valid.length; start += PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE) {
     const chunk = valid.slice(start, start + PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE)
     try {
-      const vectors = await requestOpenAIEmbeddings(chunk.map((item: PatentEmbeddingWorkItem) => item.text))
+      const vectors = await requestOpenAIEmbeddings(
+        chunk.map((item: PatentEmbeddingWorkItem) => item.text),
+        { purpose: 'corpus-indexing' }
+      )
       for (let index = 0; index < chunk.length; index += 1) {
         const vector = vectors[index]
         if (!vector) {
@@ -1951,9 +2077,9 @@ export async function searchPatentCorpus(query: string, limit = 20) {
 
   textRows.forEach((row, index) => merge(row, 'textRank', index + 1, 1))
 
-  if (process.env.OPENAI_API_KEY) {
+  if (hasSearchEmbeddingApiKey()) {
     try {
-      const vector = await requestOpenAIEmbedding(query)
+      const vector = await requestSearchQueryEmbedding(query)
       const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
       const vectorRows = await prisma.$queryRaw<any[]>`
         SELECT

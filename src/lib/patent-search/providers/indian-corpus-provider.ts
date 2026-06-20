@@ -4,7 +4,8 @@ import {
   PATENT_CORPUS_EMBEDDING_MODEL,
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
-  requestOpenAIEmbeddings,
+  hasSearchEmbeddingApiKey,
+  requestSearchQueryEmbeddings,
 } from '@/lib/patent-corpus-service'
 import type {
   NormalizedPatentResult,
@@ -51,6 +52,70 @@ const SEARCH_STATEMENT_TIMEOUT_MS = Math.max(
 const TRIGRAM_SIMILARITY_THRESHOLD = String(
   Math.max(0.05, Math.min(0.5, Number(process.env.PATENT_SEARCH_TRIGRAM_THRESHOLD || '0.18') || 0.18))
 )
+const PATENT_SEARCH_DEBUG = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.PATENT_SEARCH_DEBUG || '').trim().toLowerCase()
+)
+let missingOpenAiKeyWarningReported = false
+
+type SearchLogLevel = 'info' | 'warn' | 'error'
+
+function searchErrorDetails(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+      errorCode: typeof (error as any).code === 'string' ? (error as any).code : undefined,
+    }
+  }
+  return { errorMessage: String(error) }
+}
+
+function logEmbeddingSearch(
+  level: SearchLogLevel,
+  event: string,
+  details: Record<string, unknown>,
+  force = false
+) {
+  if (!PATENT_SEARCH_DEBUG && !force) return
+  console[level](`[PatentEmbeddingSearch] ${JSON.stringify({ event, ...details })}`)
+}
+
+async function getVectorInventorySnapshot(corpusSource: string) {
+  const sourceCondition = corpusSourceCondition(corpusSource)
+  const [currentModel, anyCompleted] = await Promise.all([
+    queryRawWithStatementTimeout<any>(Prisma.sql`
+      SELECT e."model", e."status", e."dimensions", e."embeddedAt"
+      FROM "local_patent_embeddings" e
+      JOIN "local_patents" p ON p."id" = e."localPatentId"
+      ${whereSql([
+        sourceCondition,
+        Prisma.sql`e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}`,
+        Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
+        Prisma.sql`e."embedding" IS NOT NULL`,
+      ])}
+      LIMIT 1
+    `, 3000),
+    queryRawWithStatementTimeout<any>(Prisma.sql`
+      SELECT e."model", e."status", e."dimensions", e."embeddedAt"
+      FROM "local_patent_embeddings" e
+      JOIN "local_patents" p ON p."id" = e."localPatentId"
+      ${whereSql([
+        sourceCondition,
+        Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
+        Prisma.sql`e."embedding" IS NOT NULL`,
+      ])}
+      ORDER BY e."embeddedAt" DESC NULLS LAST
+      LIMIT 1
+    `, 3000),
+  ])
+
+  return {
+    currentModelVectorAvailable: currentModel.length > 0,
+    currentModelSample: currentModel[0] || null,
+    anyCompletedVectorAvailable: anyCompleted.length > 0,
+    latestCompletedVector: anyCompleted[0] || null,
+  }
+}
 
 function corpusSourceCondition(corpusSource: string) {
   if (corpusSource === PATENT_CORPUS_SOURCE_INDIAN) {
@@ -469,6 +534,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
+    const searchStartedAt = Date.now()
+    const traceId = request.requestHeaders?.['x-request-id'] ||
+      `patent-search-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const safeLimit = clampLimit(request.limit, 20, 300)
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
@@ -480,6 +548,8 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const manualMode = request.searchMode === 'manual'
     const rows = new Map<string, NormalizedPatentResult>()
     const ranks = new Map<string, IndianRankAccumulator>()
+    let vectorRowsTotal = 0
+    let vectorQueriesCompleted = 0
 
     const merge = (
       row: any,
@@ -622,16 +692,47 @@ export class IndianCorpusProvider implements PatentSearchProvider {
 
     const retrievalQueries = buildFallbackRetrievalQueries(queryPlan, request.title)
     const vectorRetrievalQueries = retrievalQueries.slice(0, MAX_VECTOR_RETRIEVAL_QUERIES)
-    if (vectorRetrievalQueries.length > 0 && process.env.OPENAI_API_KEY && !manualMode) {
+    logEmbeddingSearch('info', 'search_start', {
+      traceId,
+      providerId: this.id,
+      corpusSource: this.corpusSource,
+      searchMode: request.searchMode || 'intelligent',
+      embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
+      hasOpenAIKey: hasSearchEmbeddingApiKey(),
+      hasDedicatedSearchOpenAIKey: Boolean(process.env.OPENAI_SEARCH_API_KEY),
+      textQueryLength: textQuery.length,
+      retrievalQueryCount: retrievalQueries.length,
+      vectorRetrievalQueryCount: vectorRetrievalQueries.length,
+      safeLimit,
+      candidateLimit,
+    })
+
+    if (vectorRetrievalQueries.length > 0 && hasSearchEmbeddingApiKey() && !manualMode) {
+      let vectorStage = 'openai_embedding_request'
       try {
-        const vectors = await requestOpenAIEmbeddings(vectorRetrievalQueries.map(query => query.text))
+        const embeddingStartedAt = Date.now()
+        const vectors = await requestSearchQueryEmbeddings(
+          vectorRetrievalQueries.map(query => query.text),
+          { traceId }
+        )
+        logEmbeddingSearch('info', 'query_embeddings_created', {
+          traceId,
+          vectorCount: vectors.length,
+          vectorDimensions: vectors[0]?.length || 0,
+          durationMs: Date.now() - embeddingStartedAt,
+        })
+        vectorStage = 'postgres_vector_query'
         for (let queryIndex = 0; queryIndex < vectorRetrievalQueries.length; queryIndex += 1) {
           const retrievalQuery = vectorRetrievalQueries[queryIndex]
           const vector = vectors[queryIndex]
-          if (!vector) continue
+          if (!vector) {
+            logEmbeddingSearch('warn', 'query_vector_missing', { traceId, queryIndex, queryType: retrievalQuery.type })
+            continue
+          }
           const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
           if (limit <= 0) continue
           const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
+          const queryStartedAt = Date.now()
           const vectorRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
             SELECT ${commonSelectSql(Prisma.sql`,
               1 - (e."embedding" <=> ${vectorLiteral}::vector) AS "vectorScore"`)}
@@ -646,11 +747,56 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             ORDER BY e."embedding" <=> ${vectorLiteral}::vector
             LIMIT ${limit}
           `)
+          vectorQueriesCompleted += 1
+          vectorRowsTotal += vectorRows.length
+          logEmbeddingSearch('info', 'vector_query_completed', {
+            traceId,
+            queryIndex,
+            queryType: retrievalQuery.type,
+            requestedLimit: limit,
+            resultCount: vectorRows.length,
+            durationMs: Date.now() - queryStartedAt,
+          })
           vectorRows.forEach((row, index) => merge(row, 'vectorRank', index + 1, retrievalQuery.weight, retrievalQuery))
         }
+
+        if (vectorRowsTotal === 0) {
+          let inventory: Record<string, unknown> = {}
+          try {
+            inventory = await getVectorInventorySnapshot(this.corpusSource)
+          } catch (inventoryError) {
+            inventory = { inventoryError: searchErrorDetails(inventoryError) }
+          }
+          logEmbeddingSearch('warn', 'vector_search_returned_no_rows', {
+            traceId,
+            embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
+            vectorQueriesCompleted,
+            ...inventory,
+          })
+        }
       } catch (error) {
-        console.warn('[IndianCorpusProvider] Vector search skipped:', error)
+        logEmbeddingSearch('error', 'vector_search_failed', {
+          traceId,
+          stage: vectorStage,
+          embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
+          ...searchErrorDetails(error),
+        }, true)
       }
+    } else {
+      const skipReason = manualMode
+        ? 'manual_mode'
+        : !hasSearchEmbeddingApiKey()
+          ? 'missing_openai_api_key'
+          : 'no_retrieval_queries'
+      const forceWarning = skipReason === 'missing_openai_api_key' && !missingOpenAiKeyWarningReported
+      if (forceWarning) missingOpenAiKeyWarningReported = true
+      logEmbeddingSearch(forceWarning ? 'warn' : 'info', 'vector_search_skipped', {
+        traceId,
+        reason: skipReason,
+        searchMode: request.searchMode || 'intelligent',
+        retrievalQueryCount: vectorRetrievalQueries.length,
+        hasOpenAIKey: hasSearchEmbeddingApiKey(),
+      }, forceWarning)
     }
 
     if (textQuery.length >= 3 && !manualMode) {
@@ -763,7 +909,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       .sort((a, b) => (b.hybridScore || 0) - (a.hybridScore || 0))
 
     const maxScore = sorted[0]?.hybridScore || 1
-    return sorted.slice(0, safeLimit).map(result => {
+    const finalResults = sorted.slice(0, safeLimit).map(result => {
       const normalizedScore = Math.max(0.01, Math.min(0.99, (result.hybridScore || 0) / maxScore))
       return {
         ...result,
@@ -774,5 +920,16 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         },
       }
     })
+    logEmbeddingSearch('info', 'search_completed', {
+      traceId,
+      providerId: this.id,
+      resultCount: finalResults.length,
+      resultsWithVectorRank: finalResults.filter(result => typeof result.vectorRank === 'number').length,
+      resultsWithTextRank: finalResults.filter(result => typeof result.textRank === 'number').length,
+      vectorQueriesCompleted,
+      vectorRowsTotal,
+      durationMs: Date.now() - searchStartedAt,
+    })
+    return finalResults
   }
 }

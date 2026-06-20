@@ -28,6 +28,7 @@
     "patent-corpus:reembed": "tsx scripts/reembed-patent-corpus.ts",
     "pqai-corpus:backfill": "tsx scripts/backfill-pqai-corpus-from-novelty-runs.ts",
     "patent-corpus:eval": "tsx scripts/eval-patent-retrieval.ts",
+    "patent-corpus:diagnose-search": "tsx scripts/diagnose-patent-embedding-search.ts",
     "test": "vitest run"
   },
   "dependencies": {

@@ -698,6 +698,15 @@ async function runOnce(options: BatchEmbedOptions) {
 
 async function main() {
   const options = parseOptions()
+  const embeddingMode = String(process.env.PATENT_CORPUS_EMBEDDING_MODE || 'realtime').trim().toLowerCase()
+  const allowBatchSubmissions = embeddingMode === 'batch' ||
+    hasArg('--force-submit') ||
+    envBoolean('PATENT_CORPUS_OPENAI_BATCH_SUBMIT_ENABLED', false)
+
+  if (options.shouldSubmit && !allowBatchSubmissions) {
+    options.shouldSubmit = false
+    console.warn('[PatentCorpusBatchEmbed] New OpenAI batch submissions are disabled in realtime embedding mode. Existing batch jobs will only be polled. Set PATENT_CORPUS_EMBEDDING_MODE=batch or pass --force-submit for an intentional historical backfill.')
+  }
 
   if (!options.watch) {
     await runOnce(options)

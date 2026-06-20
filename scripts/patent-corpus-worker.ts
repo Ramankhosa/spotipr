@@ -1,5 +1,6 @@
 import './load-env'
 import {
+  hasCorpusEmbeddingApiKey,
   processPendingPatentEmbeddings,
   processPendingPatentImportFiles,
 } from '../src/lib/patent-corpus-service'
@@ -43,7 +44,7 @@ async function main() {
   const embeddingClaimMax = Math.max(1, envNumber('PATENT_CORPUS_EMBEDDING_CLAIM_MAX', 512))
   const realtimeEmbeddings = realtimeEmbeddingsEnabled()
   const embeddingBatch = realtimeEmbeddings
-    ? Math.max(0, Math.min(envNumber('PATENT_CORPUS_EMBEDDING_BATCH', 128), embeddingClaimMax))
+    ? Math.max(0, Math.min(envNumber('PATENT_CORPUS_EMBEDDING_BATCH', 32), embeddingClaimMax))
     : 0
   let lastDailyLatestCheckAt = 0
 
@@ -53,7 +54,12 @@ async function main() {
     journalBatch,
     realtimeEmbeddings,
     embeddingBatch,
+    hasOpenAIKey: hasCorpusEmbeddingApiKey(),
+    hasDedicatedCorpusOpenAIKey: Boolean(process.env.OPENAI_CORPUS_API_KEY),
   })
+  if (embeddingBatch > 0 && !hasCorpusEmbeddingApiKey()) {
+    console.warn('[PatentCorpusWorker] Embedding processing is enabled but OPENAI_CORPUS_API_KEY and OPENAI_API_KEY are missing in this PM2 process.')
+  }
 
   async function maybeQueueLatestJournals() {
     if (once || !dailyLatestCheck) return null
@@ -77,9 +83,28 @@ async function main() {
       ? await processPendingIpIndiaJournalArchive(workerId, journalBatch)
       : []
     const imported = await processPendingPatentImportFiles(workerId, fileBatch)
-    const embedded = embeddingBatch > 0
+    const embedded = embeddingBatch > 0 && hasCorpusEmbeddingApiKey()
       ? await processPendingPatentEmbeddings(workerId, embeddingBatch)
       : []
+    if (embedded.length > 0) {
+      const completed = embedded.filter((embedding: any) => embedding?.status === 'COMPLETED').length
+      const failedRows = embedded.filter((embedding: any) => embedding?.status === 'FAILED')
+      const details = {
+        event: 'embedding_batch_processed',
+        workerId,
+        processed: embedded.length,
+        completed,
+        failed: failedRows.length,
+        failedSamples: failedRows.slice(0, 3).map((embedding: any) => ({
+          id: embedding.id,
+          attemptCount: embedding.attemptCount,
+          errorMessage: String(embedding.errorMessage || '').slice(0, 500),
+          nextAttemptAt: embedding.nextAttemptAt,
+        })),
+      }
+      if (failedRows.length) console.warn('[PatentCorpusWorker]', JSON.stringify(details))
+      else console.log('[PatentCorpusWorker]', JSON.stringify(details))
+    }
 
     if (once) {
       console.log(`[PatentCorpusWorker] Downloaded/imported ${journals.length} IP India PDF(s), extracted ${imported.length} file(s), processed ${embedded.length} embedding(s).`)

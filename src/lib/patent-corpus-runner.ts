@@ -1,5 +1,6 @@
 import {
   getNextPatentCorpusQueueAttemptAt,
+  hasCorpusEmbeddingApiKey,
   processPendingPatentEmbeddings,
   processPendingPatentImportFiles,
 } from '@/lib/patent-corpus-service'
@@ -52,6 +53,11 @@ const REALTIME_EMBEDDINGS_ENABLED = realtimeEmbeddingsEnabled()
 const EMBEDDINGS_PER_TICK = REALTIME_EMBEDDINGS_ENABLED
   ? Math.max(0, Math.min(envNumber('PATENT_CORPUS_AUTO_EMBEDDING_BATCH', 32), EMBEDDING_CLAIM_MAX))
   : 0
+const PATENT_SEARCH_DEBUG = envBoolean('PATENT_SEARCH_DEBUG', false)
+
+function logRunnerEvent(level: 'info' | 'warn' | 'error', event: string, details: Record<string, unknown> = {}) {
+  console[level](`[PatentCorpusWorker] ${JSON.stringify({ event, ...details })}`)
+}
 
 function getMutableState(): PatentCorpusRunnerState {
   const globalStore = globalThis as any
@@ -94,10 +100,26 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
       state.processedFiles += fileCount
 
       let embeddingCount = 0
-      if (EMBEDDINGS_PER_TICK > 0 && process.env.OPENAI_API_KEY) {
+      if (EMBEDDINGS_PER_TICK > 0 && hasCorpusEmbeddingApiKey()) {
         const processedEmbeddings = await processPendingPatentEmbeddings(workerId, EMBEDDINGS_PER_TICK)
         embeddingCount = processedEmbeddings.filter(Boolean).length
         state.processedEmbeddings += embeddingCount
+        if (embeddingCount > 0) {
+          const completed = processedEmbeddings.filter((embedding: any) => embedding?.status === 'COMPLETED').length
+          const failedRows = processedEmbeddings.filter((embedding: any) => embedding?.status === 'FAILED')
+          logRunnerEvent(failedRows.length ? 'warn' : 'info', 'embedding_batch_processed', {
+            workerId,
+            processed: embeddingCount,
+            completed,
+            failed: failedRows.length,
+            failedSamples: failedRows.slice(0, 3).map((embedding: any) => ({
+              id: embedding.id,
+              attemptCount: embedding.attemptCount,
+              errorMessage: String(embedding.errorMessage || '').slice(0, 500),
+              nextAttemptAt: embedding.nextAttemptAt,
+            })),
+          })
+        }
       }
 
       state.lastRunAt = new Date().toISOString()
@@ -122,11 +144,25 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
         state.active = false
         state.lastStoppedAt = new Date().toISOString()
         state.workerId = null
+        if (PATENT_SEARCH_DEBUG) {
+          logRunnerEvent('info', 'runner_idle', {
+            workerId,
+            nextAttemptAt: nextAttemptAt?.toISOString() || null,
+            processedJournalFiles: state.processedJournalFiles,
+            processedFiles: state.processedFiles,
+            processedEmbeddings: state.processedEmbeddings,
+          })
+        }
         return
       }
     }
   } catch (error) {
     state.lastError = error instanceof Error ? error.message : String(error)
+    logRunnerEvent('error', 'runner_failed', {
+      workerId,
+      errorName: error instanceof Error ? error.name : undefined,
+      errorMessage: state.lastError,
+    })
     setTimeout(() => {
       if (!state.active && AUTO_RUNNER_ENABLED) {
         kickPatentCorpusRunner('error-retry')
@@ -155,6 +191,27 @@ export function kickPatentCorpusRunner(reason = 'manual') {
   state.lastStartedAt = new Date().toISOString()
   state.lastStoppedAt = null
   state.lastError = null
+
+  logRunnerEvent('info', 'runner_started', {
+    workerId: state.workerId,
+    reason,
+    autoRunnerEnabled: AUTO_RUNNER_ENABLED,
+    realtimeEmbeddingsEnabled: REALTIME_EMBEDDINGS_ENABLED,
+    embeddingsPerTick: EMBEDDINGS_PER_TICK,
+    hasOpenAIKey: hasCorpusEmbeddingApiKey(),
+    hasDedicatedCorpusOpenAIKey: Boolean(process.env.OPENAI_CORPUS_API_KEY),
+  })
+  if (!hasCorpusEmbeddingApiKey()) {
+    logRunnerEvent('warn', 'embedding_processing_disabled', {
+      workerId: state.workerId,
+      reason: 'missing_corpus_openai_api_key',
+    })
+  } else if (EMBEDDINGS_PER_TICK === 0) {
+    logRunnerEvent('warn', 'embedding_processing_disabled', {
+      workerId: state.workerId,
+      reason: REALTIME_EMBEDDINGS_ENABLED ? 'zero_batch_size' : 'embedding_mode_disabled',
+    })
+  }
 
   void runPatentCorpusQueue(state)
   return getPatentCorpusRunnerState()
