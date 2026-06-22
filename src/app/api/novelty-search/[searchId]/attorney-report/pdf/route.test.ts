@@ -1,0 +1,252 @@
+import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { NextRequest } from 'next/server'
+import { verifyJWT } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { buildNoveltyAttorneyReportModel } from '@/lib/novelty-attorney-report'
+import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata'
+import { GET } from './route'
+
+vi.mock('@/lib/auth', () => ({ verifyJWT: vi.fn() }))
+vi.mock('@/lib/prisma', () => ({
+  prisma: { noveltySearchRun: { findFirst: vi.fn() } },
+}))
+vi.mock('@/lib/novelty-report-metadata', () => ({ hydrateNoveltyReportPatentMetadata: vi.fn() }))
+vi.mock('@/lib/novelty-attorney-report', () => ({ buildNoveltyAttorneyReportModel: vi.fn() }))
+
+const pdfParse = require('pdf-parse-fork') as (buffer: Buffer) => Promise<{ text: string; numpages: number }>
+const mockedVerifyJWT = vi.mocked(verifyJWT)
+const mockedFindFirst = vi.mocked(prisma.noveltySearchRun.findFirst)
+const mockedHydrate = vi.mocked(hydrateNoveltyReportPatentMetadata)
+const mockedBuildReport = vi.mocked(buildNoveltyAttorneyReportModel)
+
+function longText(prefix: string, marker: string) {
+  return `${prefix} ${Array.from({ length: 850 }, (_, index) => `evidence-${index}`).join(' ')} ${marker}`
+}
+
+function featureRow(index: number, overrides: Record<string, unknown> = {}) {
+  return {
+    featureNumber: `KF${index + 1}`,
+    userFeature: `Submitted feature ${index + 1}`,
+    userDisclosure: `Complete submitted disclosure for feature ${index + 1}.`,
+    patentDisclosure: `Mapped patent disclosure for feature ${index + 1}.`,
+    status: index % 3 === 0 ? 'Present' : index % 3 === 1 ? 'Partial' : 'Absent',
+    statusLabel: index % 3 === 0 ? 'Present' : index % 3 === 1 ? 'Partial' : 'Absent',
+    evidenceQuote: `Evidence quotation for feature ${index + 1}.`,
+    evidenceSource: 'abstract',
+    extentScore: index % 3 === 2 ? 0 : 0.72,
+    crispRemark: `Attorney remark for feature ${index + 1}.`,
+    confidence: 0.82,
+    ...overrides,
+  }
+}
+
+function citation(rows: ReturnType<typeof featureRow>[], overrides: Record<string, unknown> = {}) {
+  return {
+    publicationNumber: 'US-2026-000001-A1',
+    applicationNumber: 'US18/000001',
+    title: 'Adaptive evidence-driven control system with a complete descriptive citation title',
+    publicationDate: '2026-01-10',
+    filingDate: '2025-03-01',
+    priorityDate: '2024-03-01',
+    assignees: 'Example Research Corporation',
+    inventors: 'A. Inventor; B. Inventor',
+    cpcCodes: 'G06F 16/00',
+    ipcCodes: 'G06F 16/00',
+    link: 'https://example.test/patent/1',
+    matchCategoryLabel: 'Direct match',
+    evidenceQuality: 'Mapped evidence',
+    relevanceScore: 0.91,
+    noveltyThreat: 'High mapped-overlap risk',
+    overlapRiskLevel: 'High',
+    coverage: { score: 0.74, present: 5, partial: 2, absent: 2 },
+    abstract: 'Patent abstract.',
+    technicalDisclosure: 'Technical disclosure.',
+    summary: 'Reference summary.',
+    claimImpactSummary: 'Claim impact summary.',
+    rows,
+    ...overrides,
+  }
+}
+
+function reportModel(overrides: Record<string, unknown> = {}) {
+  const rows = Array.from({ length: 9 }, (_, index) => featureRow(index))
+  const comparison = citation(rows)
+  return {
+    reportNumber: 'PN-NOV-IN-20260622-TEST001',
+    reportTitle: 'Novelty Search Attorney Report',
+    inventionTitle: 'Evidence-driven adaptive control platform',
+    jurisdiction: 'India',
+    sourceMode: 'PQAI_ONLY',
+    generatedDate: '22 June 2026',
+    confidentiality: 'Confidential — prepared for review',
+    preparedBy: 'PatentNest.ai',
+    searchQuery: 'adaptive evidence control',
+    inventionFeatures: rows.map(row => row.userFeature),
+    evidenceBasis: 'Automated patent intelligence with mapped evidence',
+    methodology: {
+      corpus: 'International patent corpus',
+      retrievalMode: 'Semantic and textual retrieval',
+      searchedEvidence: 'Available patent data',
+      preliminaryStatus: 'Review required',
+      techniques: ['Semantic retrieval', 'Feature mapping'],
+    },
+    counts: { searched: 40, found: 7, directlyRelevant: 1, retrieved: 40, reviewed: 20, visible: 7, analyzed: 1 },
+    countLabels: [
+      { label: 'Candidate records retrieved/ranked', value: 40 },
+      { label: 'Shortlisted citations', value: 7 },
+    ],
+    scoringLegend: [
+      { label: 'Present', meaning: 'Mapped evidence supports the feature.' },
+      { label: 'Partial', meaning: 'Mapped evidence supports part of the feature.' },
+      { label: 'Absent', meaning: 'The feature was not mapped.' },
+    ],
+    tableOfContents: [],
+    featureSummaries: rows.map(row => ({
+      featureNumber: row.featureNumber,
+      feature: row.userFeature,
+      type: 'core_technical',
+      typeLabel: 'Core technical',
+      genericWarning: '',
+    })),
+    genericFeatureRisk: { features: [], summary: 'No standalone generic feature risk was detected.' },
+    citations: [comparison],
+    componentCitations: [],
+    directCitations: [comparison],
+    borderlineCitations: [],
+    otherShortlistedCitations: [],
+    assignees: ['Example Research Corporation'],
+    inventors: ['A. Inventor', 'B. Inventor'],
+    assigneeLandscape: { summary: 'One assignee was mapped.', groups: [], repeated: [] },
+    inventorSignals: { summary: 'Two inventors were mapped.', groups: [], repeated: [] },
+    comparisons: [comparison],
+    finalAssessment: {
+      decision: 'High mapped-overlap risk',
+      confidence: 'Medium',
+      summary: 'Mapped evidence indicates material overlap. Full records still require attorney review.',
+      risks: ['Claim scope may overlap the mapped reference.'],
+      recommendations: ['Review the complete claims.'],
+    },
+    reportConfidence: {
+      automatedReportConfidence: 'Medium',
+      retrievalConfidence: 'Medium',
+      featureMappingConfidence: 'Medium',
+      legalConclusion: 'Not provided; requires review.',
+    },
+    overallDraftingDirection: 'Focus drafting on features that remain unmapped.',
+    limitations: 'This automated report is not a legal opinion.',
+    nextSteps: ['Review the highest-overlap citation at claim level.'],
+    ...overrides,
+  }
+}
+
+function request(disposition = 'inline') {
+  return new NextRequest(`http://localhost/api/novelty-search/search-1/attorney-report/pdf?disposition=${disposition}`, {
+    headers: { authorization: 'Bearer valid-token' },
+  })
+}
+
+async function responseBuffer(response: Response) {
+  return Buffer.from(await response.arrayBuffer())
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockedVerifyJWT.mockReturnValue({ sub: 'user-1' } as any)
+  mockedFindFirst.mockResolvedValue({ id: 'search-1', userId: 'user-1' } as any)
+  mockedHydrate.mockImplementation(async value => value as any)
+})
+
+describe('GET attorney report PDF', () => {
+  test('embeds Inter, renders the grouped hierarchy, and preserves long substantive content', async () => {
+    const rows = Array.from({ length: 9 }, (_, index) => featureRow(index))
+    rows[0] = featureRow(0, {
+      patentDisclosure: longText('Long patent disclosure', 'DISCLOSURE_TAIL_MARKER'),
+      evidenceQuote: longText('Long mapped evidence', 'EVIDENCE_TAIL_MARKER'),
+      crispRemark: longText('Long attorney remark', 'REMARK_TAIL_MARKER'),
+    })
+    const comparison = citation(rows, {
+      abstract: longText('Long patent abstract', 'ABSTRACT_TAIL_MARKER'),
+      technicalDisclosure: longText('Long technical disclosure', 'TECHNICAL_TAIL_MARKER'),
+      summary: longText('Long reference summary', 'REFERENCE_TAIL_MARKER'),
+      claimImpactSummary: longText('Long claim impact summary', 'CLAIM_TAIL_MARKER'),
+    })
+    mockedBuildReport.mockReturnValue(reportModel({
+      inventionFeatures: rows.map(row => row.userFeature),
+      featureSummaries: rows.map(row => ({
+        featureNumber: row.featureNumber,
+        feature: row.userFeature,
+        type: 'core_technical',
+        typeLabel: 'Core technical',
+        genericWarning: '',
+      })),
+      citations: [comparison],
+      directCitations: [comparison],
+      comparisons: [comparison],
+    }) as any)
+
+    const response = await GET(request(), { params: { searchId: 'search-1' } })
+    const buffer = await responseBuffer(response)
+    const parsed = await pdfParse(buffer)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/pdf')
+    expect(response.headers.get('content-disposition')).toContain('inline;')
+    expect(buffer.toString('latin1')).toContain('Inter-Regular')
+    expect(parsed.numpages).toBeGreaterThan(6)
+    expect(parsed.text).toContain('High mapped-overlap risk')
+    expect(parsed.text).toContain('1 Search Overview')
+    expect(parsed.text).toContain('2 Citation Analysis')
+    expect(parsed.text).toContain('2.2 List of Other Shortlisted Citations')
+    expect(parsed.text).not.toContain('2.3 List of Other Shortlisted Citations')
+    for (const marker of [
+      'ABSTRACT_TAIL_MARKER',
+      'TECHNICAL_TAIL_MARKER',
+      'DISCLOSURE_TAIL_MARKER',
+      'EVIDENCE_TAIL_MARKER',
+      'REMARK_TAIL_MARKER',
+      'REFERENCE_TAIL_MARKER',
+      'CLAIM_TAIL_MARKER',
+    ]) expect(parsed.text).toContain(marker)
+  }, 30_000)
+
+  test('handles identical disclosure text, missing evidence, and no additional shortlisted citations', async () => {
+    const rows = [featureRow(0, { evidenceQuote: '', evidenceSource: 'none' })]
+    const comparison = citation(rows, {
+      abstract: 'Shared source disclosure text.',
+      technicalDisclosure: 'Shared source disclosure text.',
+    })
+    mockedBuildReport.mockReturnValue(reportModel({
+      inventionFeatures: [rows[0].userFeature],
+      comparisons: [comparison],
+      citations: [comparison],
+      directCitations: [comparison],
+      otherShortlistedCitations: [],
+    }) as any)
+
+    const response = await GET(request('attachment'), { params: { searchId: 'search-1' } })
+    const parsed = await pdfParse(await responseBuffer(response))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-disposition')).toContain('attachment;')
+    expect(parsed.text).toContain('No supporting quotation was mapped')
+    expect(parsed.text).toContain('No additional shortlisted citations remained')
+    expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
+  }, 20_000)
+
+  test('renders empty comparison and matrix states without changing endpoint behavior', async () => {
+    mockedBuildReport.mockReturnValue(reportModel({
+      inventionFeatures: [],
+      featureSummaries: [],
+      citations: [],
+      directCitations: [],
+      comparisons: [],
+    }) as any)
+
+    const response = await GET(request(), { params: { searchId: 'search-1' } })
+    const parsed = await pdfParse(await responseBuffer(response))
+
+    expect(response.status).toBe(200)
+    expect(parsed.text).toContain('Feature matrix will appear after citation mapping')
+    expect(parsed.text).toContain('2.2 List of Other Shortlisted Citations')
+  }, 20_000)
+})

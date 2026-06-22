@@ -19,6 +19,26 @@ const FONTS = {
   bold: 'Helvetica-Bold',
 };
 
+const TYPE = {
+  display: 28,
+  h1: 20,
+  h2: 14,
+  h3: 11,
+  body: 9.5,
+  small: 8.5,
+  caption: 7.5,
+  micro: 7,
+} as const;
+
+const SPACE = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  section: 32,
+} as const;
+
 const COLORS = {
   navy: '#0B1220',
   navy2: '#0F1B33',
@@ -28,7 +48,6 @@ const COLORS = {
   paleBlue: '#EFF6FF',
   text: '#0F172A',
   muted: '#64748B',
-  mutedLight: '#94A3B8',
   border: '#CBD5E1',
   tableHeader: '#2563EB',
   tableAlt: '#F8FAFC',
@@ -37,22 +56,23 @@ const COLORS = {
   amber: '#D97706',
   slate: '#475569',
   white: '#FFFFFF',
-  presentBg: '#ECFDF5',
-  presentText: '#047857',
-  partialBg: '#FEF9C3',
-  partialText: '#A16207',
-  absentBg: '#FEF2F2',
-  absentText: '#B91C1C',
   surface: '#F8FAFC',
   success: '#16A34A',
   warning: '#F59E0B',
 };
 
+const STATUS = {
+  Present: { fill: '#ECFDF5', text: '#047857', stroke: '#A7F3D0' },
+  Partial: { fill: '#FFFBEB', text: '#A16207', stroke: '#FDE68A' },
+  Absent: { fill: '#FEF2F2', text: '#B91C1C', stroke: '#FECACA' },
+  Review: { fill: '#EFF6FF', text: '#1D4ED8', stroke: '#BFDBFE' },
+} as const;
+
 const PAGE = {
-  left: 50,
-  right: 50,
-  top: 58,
-  bottom: 58,
+  left: 60,
+  right: 60,
+  top: 64,
+  bottom: 64,
 };
 
 function registerReportFonts(doc: PdfDoc) {
@@ -91,17 +111,14 @@ function pct(value: number | null | undefined) {
 }
 
 function statusColor(status: string) {
-  if (status === 'Present') return COLORS.presentText;
-  if (status === 'Partial') return COLORS.partialText;
-  if (status === 'Absent') return COLORS.absentText;
-  return COLORS.slate;
+  return statusPalette(status).text;
 }
 
-function statusFill(status: string) {
-  if (status === 'Present') return COLORS.presentBg;
-  if (status === 'Partial') return COLORS.partialBg;
-  if (status === 'Absent') return COLORS.absentBg;
-  return COLORS.paleBlue;
+function statusPalette(status: string) {
+  if (status === 'Present') return STATUS.Present;
+  if (status === 'Partial') return STATUS.Partial;
+  if (status === 'Absent') return STATUS.Absent;
+  return STATUS.Review;
 }
 
 function featureCoverageText(row: AttorneyReportFeatureRow) {
@@ -122,6 +139,84 @@ function ensureSpace(doc: PdfDoc, needed: number) {
   return false;
 }
 
+function pageBottom(doc: PdfDoc) {
+  return doc.page.height - PAGE.bottom;
+}
+
+function firstSentence(value: unknown) {
+  const text = cleanText(value, 'Review the detailed findings and mapped evidence.');
+  const match = text.match(/^.*?[.!?](?:\s|$)/);
+  return match?.[0]?.trim() || text;
+}
+
+function verdictPalette(decision: string) {
+  const normalized = decision.toLowerCase();
+  if (/high mapped-overlap|not novel|anticipat|obvious/.test(normalized)) {
+    return { fill: '#FFF1F2', text: '#9F1239', stroke: '#FECDD3', accent: COLORS.red };
+  }
+  if (/with mapped overlap|partial|moderate/.test(normalized)) {
+    return { fill: '#FFFBEB', text: '#92400E', stroke: '#FDE68A', accent: COLORS.amber };
+  }
+  if (/potential novelty space|novel/.test(normalized)) {
+    return { fill: '#ECFDF5', text: '#065F46', stroke: '#A7F3D0', accent: COLORS.green };
+  }
+  return { fill: '#EFF6FF', text: '#1E40AF', stroke: '#BFDBFE', accent: COLORS.blue };
+}
+
+function fitTextToHeight(doc: PdfDoc, value: string, width: number, height: number, lineGap: number) {
+  if (doc.heightOfString(value, { width, lineGap }) <= height) return [value, ''] as const;
+
+  let low = 1;
+  let high = value.length;
+  let best = 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = value.slice(0, mid);
+    if (doc.heightOfString(candidate, { width, lineGap }) <= height) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  const whitespace = value.lastIndexOf(' ', best);
+  const splitAt = whitespace > Math.max(0, best - 80) ? whitespace : best;
+  return [value.slice(0, splitAt).trimEnd(), value.slice(splitAt).trimStart()] as const;
+}
+
+function drawFlowingLabeledText(
+  doc: PdfDoc,
+  label: string,
+  value: string,
+  options: { indent?: number; color?: string; labelColor?: string; fontSize?: number } = {},
+) {
+  let remaining = cleanText(value);
+  let continued = false;
+  const indent = options.indent ?? 0;
+  const x = PAGE.left + indent;
+  const width = contentWidth(doc) - indent;
+  const fontSize = options.fontSize ?? TYPE.body;
+  const lineGap = 2;
+
+  while (remaining) {
+    ensureSpace(doc, 56);
+    doc.fillColor(options.labelColor || COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
+      .text(`${label}${continued ? ' (continued)' : ''}`.toUpperCase(), x, doc.y, { width, lineBreak: false });
+    doc.y += SPACE.sm;
+    doc.fillColor(options.color || '#334155').font(FONTS.regular).fontSize(fontSize);
+    const available = Math.max(24, pageBottom(doc) - doc.y);
+    const [chunk, rest] = fitTextToHeight(doc, remaining, width, available, lineGap);
+    doc.text(chunk, x, doc.y, { width, align: 'left', lineGap });
+    remaining = rest;
+    if (remaining) {
+      addPage(doc);
+      continued = true;
+    }
+  }
+  doc.y += SPACE.md;
+}
+
 function drawHeaderFooter(doc: PdfDoc, reportNumber: string, title: string) {
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i++) {
@@ -133,12 +228,12 @@ function drawHeaderFooter(doc: PdfDoc, reportNumber: string, title: string) {
     const height = doc.page.height;
     const headerY = 24;
     const footerY = height - 35;
-    doc.font(FONTS.regular).fontSize(8).fillColor(COLORS.muted)
+    doc.font(FONTS.regular).fontSize(TYPE.small).fillColor(COLORS.muted)
       .text(reportNumber, PAGE.left, headerY, { width: 210, height: 10, lineBreak: false })
       .text(truncate(title, 86), width - PAGE.right - 240, headerY, { width: 240, height: 10, align: 'right', lineBreak: false });
     doc.moveTo(PAGE.left, 41).lineTo(width - PAGE.right, 41).lineWidth(0.6).strokeColor(COLORS.border).stroke();
     doc.moveTo(PAGE.left, height - 46).lineTo(width - PAGE.right, height - 46).lineWidth(0.6).strokeColor(COLORS.border).stroke();
-    doc.font(FONTS.regular).fontSize(8).fillColor(COLORS.muted)
+    doc.font(FONTS.regular).fontSize(TYPE.small).fillColor(COLORS.muted)
       .text('PatentNest.ai - Confidential review draft', PAGE.left, footerY, { width: 330, height: 10, lineBreak: false })
       .text(`Page ${pageNo}`, width - PAGE.right - 70, footerY, { width: 70, height: 10, align: 'right', lineBreak: false });
   }
@@ -186,40 +281,41 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
   const height = doc.page.height;
 
   doc.rect(0, 0, width, height).fill(COLORS.navy);
-  doc.rect(0, height - 190, width, 190).fill(COLORS.navy2);
+  doc.rect(0, height - 176, width, 176).fill(COLORS.navy2);
 
+  const motifX = width - 226;
+  const motifY = 76;
   const nodes = [
-    [70, 132], [178, 78], [302, 126], [438, 72], [530, 142],
-    [112, 642], [230, 706], [362, 626], [496, 710],
+    [0, 48], [48, 16], [96, 64], [144, 24], [192, 72],
+    [48, 112], [96, 144], [144, 104], [192, 152],
   ] as Array<[number, number]>;
-  const edges = [[0, 1], [1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [1, 7], [2, 6]] as Array<[number, number]>;
+  const edges = [[0, 1], [0, 5], [1, 2], [2, 3], [2, 6], [3, 4], [3, 7], [5, 6], [6, 7], [7, 8]] as Array<[number, number]>;
   edges.forEach(([a, b]) => {
     const start = nodes[a];
     const end = nodes[b];
-    doc.moveTo(start[0], start[1]).lineTo(end[0], end[1]).lineWidth(0.8).strokeColor('#1E40AF').stroke();
+    doc.moveTo(motifX + start[0], motifY + start[1])
+      .lineTo(motifX + end[0], motifY + end[1])
+      .lineWidth(0.65)
+      .strokeColor('#1E3A8A')
+      .stroke();
   });
   nodes.forEach(([x, y], index) => {
-    doc.circle(x, y, index % 3 === 0 ? 5 : 3.5).fill(index % 2 === 0 ? COLORS.cyan : COLORS.blue);
+    doc.circle(motifX + x, motifY + y, index % 3 === 0 ? 4 : 2.8)
+      .fill(index % 2 === 0 ? '#2563EB' : '#38BDF8');
   });
 
-  for (let i = 0; i < 7; i += 1) {
-    const x = 355 + i * 23;
-    const y = 238 + i * 29;
-    doc.roundedRect(x, y, 128, 18, 9).lineWidth(0.9).strokeColor(i % 2 === 0 ? COLORS.blue : COLORS.cyan).stroke();
-  }
-
   doc.rect(PAGE.left, 76, 82, 5).fill(COLORS.cyan);
-  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(32).text('PatentNest.ai', PAGE.left, 96, { width: 360 });
-  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(11).text('Patent Intelligence Report', PAGE.left + 2, 139, { width: 300 });
+  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text('PatentNest.ai', PAGE.left, 96, { width: 300 });
+  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3).text('Patent Intelligence Report', PAGE.left, 128, { width: 300 });
 
-  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(30)
-    .text(report.reportTitle, PAGE.left, 255, { width: 410, lineGap: 2 });
-  doc.moveDown(0.8);
-  doc.fillColor('#DBEAFE').font(FONTS.regular).fontSize(15)
-    .text(truncate(report.inventionTitle, 180), { width: 420, lineGap: 3 });
+  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.display)
+    .text(report.reportTitle, PAGE.left, 254, { width: 405, lineGap: SPACE.xs });
+  doc.y += SPACE.lg;
+  doc.fillColor('#E0F2FE').font(FONTS.medium).fontSize(TYPE.h2)
+    .text(report.inventionTitle, PAGE.left, doc.y, { width: 420, lineGap: SPACE.xs });
 
-  const cardY = 492;
-  doc.roundedRect(PAGE.left, cardY, width - PAGE.left - PAGE.right, 126, 10).fill('#111C36');
+  const cardY = 500;
+  doc.roundedRect(PAGE.left, cardY, width - PAGE.left - PAGE.right, 128, 8).fill('#111C36');
   const meta = [
     ['Report No.', report.reportNumber],
     ['Generated', report.generatedDate],
@@ -227,14 +323,14 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
     ['Source Mode', report.methodology.corpus],
     ['Prepared By', report.preparedBy],
   ];
-  let y = cardY + 20;
+  let y = cardY + SPACE.lg;
   meta.forEach(([label, value]) => {
-    doc.fillColor('#93C5FD').font(FONTS.semibold).fontSize(8).text(label.toUpperCase(), PAGE.left + 22, y, { width: 110 });
-    doc.fillColor(COLORS.white).font(FONTS.regular).fontSize(9).text(truncate(value, 96), PAGE.left + 136, y, { width: 300 });
-    y += 19;
+    doc.fillColor('#93C5FD').font(FONTS.semibold).fontSize(TYPE.caption).text(label.toUpperCase(), PAGE.left + SPACE.lg, y, { width: 112 });
+    doc.fillColor(COLORS.white).font(FONTS.regular).fontSize(TYPE.small).text(truncate(value, 96), PAGE.left + 140, y, { width: 290 });
+    y += SPACE.xl - SPACE.xs;
   });
 
-  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(8)
+  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.caption)
     .text(report.confidentiality, PAGE.left, height - 74, { width: contentWidth(doc), align: 'center' });
 }
 
@@ -252,20 +348,20 @@ function drawSnapshotMetric(
   label: string,
   accent = COLORS.blue,
 ) {
-  drawCard(doc, x, y, width, 72, 6);
-  doc.rect(x, y, 3, 72).fill(accent);
-  doc.fillColor(accent).font(FONTS.bold).fontSize(value.length > 12 ? 12 : 17)
-    .text(value, x + 12, y + 14, { width: width - 20, height: 21, ellipsis: true });
-  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(6.8)
-    .text(label, x + 12, y + 43, { width: width - 20, height: 22, lineGap: 1 });
+  drawCard(doc, x, y, width, 68, 6);
+  doc.rect(x, y, 3, 68).fill(accent);
+  doc.fillColor(accent).font(FONTS.bold).fontSize(value.length > 12 ? TYPE.h3 : TYPE.h2)
+    .text(value, x + SPACE.md, y + SPACE.md, { width: width - 20, height: 21, ellipsis: true });
+  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
+    .text(label, x + SPACE.md, y + 41, { width: width - 20, height: 18, lineGap: 1 });
 }
 
 function drawSnapshotInfoItem(doc: PdfDoc, x: number, y: number, width: number, label: string, value: string) {
   doc.circle(x + 6, y + 7, 5).fill(COLORS.paleBlue);
   doc.circle(x + 6, y + 7, 1.7).fill(COLORS.blue);
-  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(6.2)
+  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(label.toUpperCase(), x + 17, y, { width: width - 17, height: 9, lineBreak: false, ellipsis: true });
-  doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(7)
+  doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.caption)
     .text(truncate(value, 90), x + 17, y + 12, { width: width - 17, height: 27, ellipsis: true, lineGap: 1 });
 }
 
@@ -275,66 +371,83 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   ), report.comparisons[0]);
   const strongestCoverage = strongest ? pct(strongest.coverage.score) : '0%';
   const signal = cleanText(report.finalAssessment.decision, 'Review required');
+  const palette = verdictPalette(signal);
 
   doc.addNamedDestination('executive-snapshot', 'XYZ', PAGE.left, PAGE.top, null);
   doc.rect(PAGE.left, PAGE.top + 2, 72, 4).fill(COLORS.cyan);
-  doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(21)
+  doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(TYPE.h1)
     .text('Executive Snapshot', PAGE.left, PAGE.top + 18, { width: contentWidth(doc) });
-  doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(8)
+  doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.small)
     .text('A concise view of retrieval volume, mapped evidence, and the automated overlap signal.', PAGE.left, PAGE.top + 49, { width: contentWidth(doc) });
 
-  const metricsY = PAGE.top + 82;
-  const gap = 7;
+  const verdictY = PAGE.top + 76;
+  const rationale = firstSentence(report.finalAssessment.summary);
+  doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), 72, 7).fillAndStroke(palette.fill, palette.stroke);
+  doc.rect(PAGE.left, verdictY, 4, 72).fill(palette.accent);
+  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .text('AUTOMATED OVERLAP VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: 180, lineBreak: false });
+  doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
+    .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: 180, height: 30, ellipsis: true });
+  doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
+    .text(rationale, PAGE.left + 210, verdictY + SPACE.md, {
+      width: contentWidth(doc) - 226,
+      height: 49,
+      lineGap: 1.5,
+      ellipsis: true,
+    });
+
+  const metricsY = verdictY + 84;
+  const gap = SPACE.sm;
   const metricWidth = (contentWidth(doc) - gap * 4) / 5;
   const metrics = [
-    [String(report.counts.retrieved), 'Candidate records', COLORS.blue],
-    [String(report.counts.found), 'Shortlisted citations', COLORS.blue2],
-    [strongestCoverage, 'Highest feature coverage', COLORS.success],
-    [String(report.directCitations.length), 'Direct invention-level matches', COLORS.red],
-    [signal, 'Automated overlap signal', COLORS.warning],
+    [String(report.counts.retrieved), 'Candidates', COLORS.blue],
+    [String(report.counts.found), 'Shortlisted', COLORS.blue2],
+    [strongestCoverage, 'Top coverage', COLORS.success],
+    [String(report.directCitations.length), 'Direct matches', COLORS.red],
+    [signal, 'Signal', palette.accent],
   ] as Array<[string, string, string]>;
   metrics.forEach(([value, label, accent], index) => {
     drawSnapshotMetric(doc, PAGE.left + index * (metricWidth + gap), metricsY, metricWidth, value, label, accent);
   });
 
-  const detailY = metricsY + 94;
-  const detailGap = 12;
+  const detailY = metricsY + 80;
+  const detailGap = SPACE.md;
   const detailWidth = (contentWidth(doc) - detailGap) / 2;
-  drawCard(doc, PAGE.left, detailY, detailWidth, 165);
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(9.5)
-    .text('Closest Mapped Citation', PAGE.left + 15, detailY + 16, { width: detailWidth - 30 });
-  doc.rect(PAGE.left + 15, detailY + 35, 28, 2).fill(COLORS.blue);
+  drawCard(doc, PAGE.left, detailY, detailWidth, 145);
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.body)
+    .text('Closest Mapped Citation', PAGE.left + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
+  doc.rect(PAGE.left + SPACE.md, detailY + 31, 28, 2).fill(COLORS.blue);
   if (strongest) {
-    doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(12)
-      .text(strongest.publicationNumber, PAGE.left + 15, detailY + 49, { width: detailWidth - 30, height: 17, ellipsis: true });
-    doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(8)
-      .text(truncate(strongest.title, 170), PAGE.left + 15, detailY + 72, { width: detailWidth - 30, height: 48, ellipsis: true, lineGap: 2 });
-    doc.roundedRect(PAGE.left + 15, detailY + 127, 104, 23, 5).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
-    doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(7.5)
-      .text(`Feature coverage: ${strongestCoverage}`, PAGE.left + 23, detailY + 135, { width: 90, height: 9, lineBreak: false });
+    doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
+      .text(strongest.publicationNumber, PAGE.left + SPACE.md, detailY + 42, { width: detailWidth - 24, height: 16, ellipsis: true });
+    doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
+      .text(strongest.title, PAGE.left + SPACE.md, detailY + 64, { width: detailWidth - 24, height: 42, ellipsis: true, lineGap: 2 });
+    doc.roundedRect(PAGE.left + SPACE.md, detailY + 112, 112, 21, 5).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
+    doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
+      .text(`Feature coverage: ${strongestCoverage}`, PAGE.left + 18, detailY + 119, { width: 100, height: 9, lineBreak: false });
   } else {
-    doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(8)
-      .text('No citation was mapped for detailed comparison.', PAGE.left + 15, detailY + 54, { width: detailWidth - 30 });
+    doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.small)
+      .text('No citation was mapped for detailed comparison.', PAGE.left + SPACE.md, detailY + 48, { width: detailWidth - 24 });
   }
 
   const takeawayX = PAGE.left + detailWidth + detailGap;
-  drawCard(doc, takeawayX, detailY, detailWidth, 165);
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(9.5)
-    .text('Key Takeaway', takeawayX + 15, detailY + 16, { width: detailWidth - 30 });
-  doc.rect(takeawayX + 15, detailY + 35, 28, 2).fill(COLORS.success);
-  doc.fillColor('#334155').font(FONTS.regular).fontSize(8.1)
-    .text(truncate(report.finalAssessment.summary, 520), takeawayX + 15, detailY + 50, {
-      width: detailWidth - 30,
-      height: 100,
-      lineGap: 2.1,
+  drawCard(doc, takeawayX, detailY, detailWidth, 145);
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.body)
+    .text('Key Takeaway', takeawayX + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
+  doc.rect(takeawayX + SPACE.md, detailY + 31, 28, 2).fill(COLORS.success);
+  doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
+    .text(rationale, takeawayX + SPACE.md, detailY + 44, {
+      width: detailWidth - 24,
+      height: 88,
+      lineGap: 2,
       ellipsis: true,
     });
 
-  const methodY = detailY + 188;
-  drawCard(doc, PAGE.left, methodY, contentWidth(doc), 92);
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(8.5)
-    .text('Report Basis', PAGE.left + 15, methodY + 13, { width: 110 });
-  const infoWidth = (contentWidth(doc) - 30) / 4;
+  const methodY = detailY + 157;
+  drawCard(doc, PAGE.left, methodY, contentWidth(doc), 86);
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
+    .text('Report Basis', PAGE.left + SPACE.md, methodY + SPACE.md, { width: 110 });
+  const infoWidth = (contentWidth(doc) - 24) / 4;
   const infoItems = [
     ['Corpus', report.methodology.corpus],
     ['Search method', report.methodology.retrievalMode],
@@ -342,47 +455,48 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     ['Report type', 'AI-assisted patent intelligence'],
   ];
   infoItems.forEach(([label, value], index) => {
-    const x = PAGE.left + 15 + index * infoWidth;
-    if (index > 0) doc.moveTo(x - 8, methodY + 38).lineTo(x - 8, methodY + 78).lineWidth(0.5).strokeColor('#E2E8F0').stroke();
-    drawSnapshotInfoItem(doc, x, methodY + 39, infoWidth - 12, label, value);
+    const x = PAGE.left + SPACE.md + index * infoWidth;
+    drawSnapshotInfoItem(doc, x, methodY + 36, infoWidth - 10, label, value);
   });
 
-  doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(6.8)
-    .text('Automated mapping is preliminary and should be validated against complete patent records and claims.', PAGE.left, doc.page.height - PAGE.bottom - 16, { width: contentWidth(doc), align: 'center' });
-  doc.y = doc.page.height - PAGE.bottom;
+  doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.micro)
+    .text('Automated mapping should be validated against complete patent records and claims.', PAGE.left, pageBottom(doc) - 14, { width: contentWidth(doc), align: 'center' });
+  doc.y = pageBottom(doc);
 }
 
 function drawSectionHeading(doc: PdfDoc, title: string) {
-  doc.font(FONTS.bold).fontSize(14);
+  doc.font(FONTS.bold).fontSize(TYPE.h2);
   const headingHeight = doc.heightOfString(title, { width: contentWidth(doc) });
-  ensureSpace(doc, headingHeight + 32);
-  doc.moveDown(0.45);
-  doc.font(FONTS.bold).fontSize(14).fillColor(COLORS.text).text(title, PAGE.left, doc.y, { width: contentWidth(doc) });
-  doc.moveTo(PAGE.left, doc.y + 5).lineTo(doc.page.width - PAGE.right, doc.y + 5).lineWidth(1.2).strokeColor(COLORS.blue).stroke();
-  doc.moveDown(0.65);
+  ensureSpace(doc, headingHeight + SPACE.section);
+  doc.y += SPACE.sm;
+  doc.font(FONTS.bold).fontSize(TYPE.h2).fillColor(COLORS.text).text(title, PAGE.left, doc.y, { width: contentWidth(doc) });
+  doc.moveTo(PAGE.left, doc.y + SPACE.xs).lineTo(doc.page.width - PAGE.right, doc.y + SPACE.xs).lineWidth(1).strokeColor(COLORS.blue).stroke();
+  doc.y += SPACE.md;
+}
+
+function drawGroupHeading(doc: PdfDoc, number: string, title: string) {
+  ensureSpace(doc, 54);
+  const y = doc.y + SPACE.sm;
+  doc.roundedRect(PAGE.left, y, contentWidth(doc), 38, 5).fill(COLORS.navy2);
+  doc.fillColor(COLORS.cyan).font(FONTS.bold).fontSize(TYPE.h3)
+    .text(number, PAGE.left + SPACE.md, y + SPACE.md, { width: 24, lineBreak: false });
+  doc.fillColor(COLORS.white).font(FONTS.semibold).fontSize(TYPE.h3)
+    .text(title, PAGE.left + 44, y + SPACE.md, { width: contentWidth(doc) - 56, lineBreak: false });
+  doc.y = y + 38 + SPACE.md;
 }
 
 function drawParagraph(doc: PdfDoc, text: string) {
   const value = cleanText(text);
-  doc.font(FONTS.regular).fontSize(8.7);
-  const height = doc.heightOfString(value, { width: contentWidth(doc), align: 'justify', lineGap: 1.3 });
-  ensureSpace(doc, Math.min(height + 14, doc.page.height - PAGE.top - PAGE.bottom));
+  doc.font(FONTS.regular).fontSize(TYPE.body);
+  const height = doc.heightOfString(value, { width: contentWidth(doc), align: 'left', lineGap: 2 });
+  ensureSpace(doc, Math.min(height + SPACE.md, doc.page.height - PAGE.top - PAGE.bottom));
   doc.fillColor('#334155')
-    .text(value, PAGE.left, doc.y, { width: contentWidth(doc), align: 'justify', lineGap: 1.3 });
-  doc.moveDown(0.7);
+    .text(value, PAGE.left, doc.y, { width: contentWidth(doc), align: 'left', lineGap: 2 });
+  doc.y += SPACE.md;
 }
 
 function keyValueRow(doc: PdfDoc, label: string, value: string) {
-  const text = truncate(value, 700);
-  doc.font(FONTS.regular).fontSize(7.5);
-  const rowHeight = Math.max(21, doc.heightOfString(text || '-', { width: contentWidth(doc) - 154 }) + 10);
-  ensureSpace(doc, rowHeight + 2);
-  const y = doc.y;
-  doc.rect(PAGE.left, y, 142, rowHeight).fillAndStroke(COLORS.paleBlue, COLORS.border);
-  doc.rect(PAGE.left + 142, y, contentWidth(doc) - 142, rowHeight).fillAndStroke(COLORS.white, COLORS.border);
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(7.6).text(label, PAGE.left + 7, y + 7, { width: 128 });
-  doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(7.6).text(text || '-', PAGE.left + 150, y + 7, { width: contentWidth(doc) - 158, height: rowHeight - 12, ellipsis: true });
-  doc.y = y + rowHeight;
+  drawFlowingLabeledText(doc, label, value, { indent: SPACE.sm });
 }
 
 function drawFlowLabel(doc: PdfDoc, label: string) {
@@ -391,7 +505,7 @@ function drawFlowLabel(doc: PdfDoc, label: string) {
   doc.roundedRect(PAGE.left, y, contentWidth(doc), 20, 3).fill(COLORS.paleBlue);
   doc.fillColor(COLORS.text)
     .font(FONTS.semibold)
-    .fontSize(8.5)
+    .fontSize(TYPE.small)
     .text(label, PAGE.left + 8, y + 6, { width: contentWidth(doc) - 16, lineBreak: false });
   doc.y = y + 25;
 }
@@ -401,13 +515,13 @@ function drawFlowTextBlock(doc: PdfDoc, label: string, value: string) {
   drawFlowLabel(doc, label);
   doc.fillColor(COLORS.text)
     .font(FONTS.regular)
-    .fontSize(8.4)
+    .fontSize(TYPE.body)
     .text(text, PAGE.left + 8, doc.y, {
       width: contentWidth(doc) - 16,
       align: 'left',
       lineGap: 1.4,
     });
-  doc.moveDown(0.85);
+  doc.y += SPACE.md;
 }
 
 function drawFlowBulletList(doc: PdfDoc, label: string, items: string[]) {
@@ -418,17 +532,17 @@ function drawFlowBulletList(doc: PdfDoc, label: string, items: string[]) {
     ensureSpace(doc, 26);
     const y = doc.y;
     doc.circle(PAGE.left + 12, y + 5, 2).fill(COLORS.blue);
-    doc.fillColor(COLORS.text)
+      doc.fillColor(COLORS.text)
       .font(FONTS.regular)
-      .fontSize(8.4)
+      .fontSize(TYPE.body)
       .text(item, PAGE.left + 22, y, {
         width: contentWidth(doc) - 30,
         align: 'left',
         lineGap: 1.4,
       });
-    doc.moveDown(0.45);
+    doc.y += SPACE.xs;
   });
-  doc.moveDown(0.45);
+  doc.y += SPACE.sm;
 }
 
 function drawMetadataGrid(doc: PdfDoc, items: Array<[string, string]>) {
@@ -436,22 +550,22 @@ function drawMetadataGrid(doc: PdfDoc, items: Array<[string, string]>) {
     const pair = items.slice(index, index + 2);
     const cellWidth = contentWidth(doc) / 2;
     const labelWidth = 78;
-    const valueWidths = pair.map(() => cellWidth - labelWidth - 12);
-    doc.font(FONTS.regular).fontSize(7.3);
-    const rowHeight = Math.max(22, ...pair.map(([_, value], i) => doc.heightOfString(truncate(value, 240), { width: valueWidths[i] }) + 10));
+    const padding = 7;
+    const valueWidths = pair.map(() => cellWidth - labelWidth - padding * 2);
+    doc.font(FONTS.regular).fontSize(TYPE.small);
+    const rowHeight = Math.max(28, ...pair.map(([_, value], i) => doc.heightOfString(truncate(value, 240), { width: valueWidths[i], lineGap: 1.5 }) + padding * 2));
     ensureSpace(doc, rowHeight + 2);
     const y = doc.y;
+    doc.rect(PAGE.left, y, contentWidth(doc), rowHeight).fill(index % 4 === 2 ? COLORS.surface : COLORS.white);
     pair.forEach(([label, value], i) => {
       const x = PAGE.left + i * cellWidth;
-      doc.rect(x, y, labelWidth, rowHeight).fillAndStroke(COLORS.paleBlue, COLORS.border);
-      doc.rect(x + labelWidth, y, cellWidth - labelWidth, rowHeight).fillAndStroke(COLORS.white, COLORS.border);
-      doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(7.2).text(label, x + 6, y + 7, { width: labelWidth - 10, height: rowHeight - 12, ellipsis: true });
-      doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(7.2).text(truncate(value, 240) || '-', x + labelWidth + 6, y + 7, { width: cellWidth - labelWidth - 12, height: rowHeight - 12, ellipsis: true });
+      doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.caption)
+        .text(label, x + padding, y + padding, { width: labelWidth - padding, height: rowHeight - padding * 2, ellipsis: true });
+      doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.small)
+        .text(truncate(value, 240) || '-', x + labelWidth, y + padding, { width: cellWidth - labelWidth - padding, height: rowHeight - padding * 2, ellipsis: true, lineGap: 1.5 });
     });
-    if (pair.length === 1) {
-      const x = PAGE.left + cellWidth;
-      doc.rect(x, y, cellWidth, rowHeight).fillAndStroke(COLORS.white, COLORS.border);
-    }
+    doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + contentWidth(doc), y + rowHeight)
+      .lineWidth(0.45).strokeColor(COLORS.border).stroke();
     doc.y = y + rowHeight;
   }
 }
@@ -463,7 +577,6 @@ function drawTableRow(
   opts: {
     header?: boolean;
     fills?: string[];
-    maxHeight?: number;
     fontSize?: number;
     textColors?: string[];
     aligns?: Array<'left' | 'center' | 'right'>;
@@ -472,12 +585,12 @@ function drawTableRow(
     repeatHeader?: { cells: string[]; widths: number[] };
   } = {}
 ) {
-  const padding = 4.5;
-  const fontSize = opts.fontSize || (opts.header ? 7.5 : 7);
-  const prepared = cells.map(cell => truncate(cell, opts.header ? 120 : 720));
+  const padding = 6;
+  const fontSize = opts.fontSize || (opts.header ? TYPE.caption : TYPE.small);
+  const prepared = cells.map(cell => opts.header ? truncate(cell, 120) : cleanText(cell));
   doc.font(opts.header ? FONTS.semibold : FONTS.regular).fontSize(fontSize);
-  const heights = prepared.map((cell, index) => doc.heightOfString(cell || '-', { width: widths[index] - padding * 2 }) + padding * 2);
-  const rowHeight = Math.min(Math.max(opts.header ? 20 : 22, ...heights), opts.maxHeight || 118);
+  const heights = prepared.map((cell, index) => doc.heightOfString(cell || '-', { width: widths[index] - padding * 2, lineGap: 1.5 }) + padding * 2);
+  const rowHeight = Math.max(opts.header ? 26 : 28, ...heights);
   const pageChanged = ensureSpace(doc, rowHeight + 2);
   if (pageChanged && opts.repeatHeader && !opts.header) {
     drawTableRow(doc, opts.repeatHeader.cells, opts.repeatHeader.widths, { header: true });
@@ -486,17 +599,18 @@ function drawTableRow(
 
   const y = doc.y;
   let x = PAGE.left;
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+  const rowFill = opts.header ? COLORS.tableHeader : (opts.fills?.[0] || COLORS.white);
+  doc.rect(PAGE.left, y, totalWidth, rowHeight).fill(rowFill);
   prepared.forEach((cell, index) => {
-    const fill = opts.header ? COLORS.tableHeader : (opts.fills?.[index] || COLORS.white);
     const text = cell || '-';
     const textWidth = widths[index] - padding * 2;
     const align = opts.aligns?.[index] || 'left';
     const font = opts.header || opts.boldCells?.includes(index) ? FONTS.semibold : FONTS.regular;
-    const textHeight = doc.heightOfString(text, { width: textWidth, align });
+    const textHeight = doc.heightOfString(text, { width: textWidth, align, lineGap: 1.5 });
     const textY = opts.verticalAligns?.[index] === 'center'
       ? y + Math.max(padding, (rowHeight - textHeight) / 2)
       : y + padding;
-    doc.rect(x, y, widths[index], rowHeight).fillAndStroke(fill, COLORS.border);
     doc.fillColor(opts.header ? COLORS.white : (opts.textColors?.[index] || COLORS.text))
       .font(font)
       .fontSize(fontSize)
@@ -504,72 +618,87 @@ function drawTableRow(
         width: textWidth,
         height: rowHeight - padding * 2,
         align,
+        lineGap: 1.5,
       });
     x += widths[index];
   });
+  doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + totalWidth, y + rowHeight)
+    .lineWidth(opts.header ? 0.8 : 0.4).strokeColor(opts.header ? COLORS.blue2 : COLORS.border).stroke();
   doc.y = y + rowHeight;
 }
 
 function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
-  const widths = [32, 104, 136, 48, 170];
-  const headers = ['KF', 'User idea', 'Patent disclosure', 'Status', 'Remark'];
-  drawTableRow(doc, headers, widths, { header: true });
   rows.forEach((row, index) => {
-    drawDetailedFeatureRow(doc, row, widths, index, headers);
+    drawDetailedFeatureRow(doc, row, index);
   });
 }
 
-function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, widths: number[], index: number, headers: string[]) {
-  const padding = 4.5;
-  const fontSize = 7;
-  const normalFill = index % 2 ? COLORS.tableAlt : COLORS.white;
-  const disclosure = truncate(row.patentDisclosure, 420);
-  const coverage = featureCoverageText(row);
-  const evidence = row.evidenceQuote ? `Evidence (${row.evidenceSource}): ${truncate(row.evidenceQuote, 140)}` : 'Evidence: No supporting quotation mapped.';
-  const cells = [row.featureNumber, `${truncate(row.userFeature, 140)}\n${truncate(row.userDisclosure, 260)}`, '', row.statusLabel, truncate(row.crispRemark, 430)];
-
-  doc.font(FONTS.regular).fontSize(fontSize);
-  const plainHeights = cells.map((cell, cellIndex) => cellIndex === 2 ? 0 : doc.heightOfString(cell || '-', { width: widths[cellIndex] - padding * 2 }) + padding * 2);
-  const disclosureWidth = widths[2] - padding * 2;
-  const disclosureHeight = doc.heightOfString(disclosure || '-', { width: disclosureWidth });
-  const coverageHeight = coverage ? doc.heightOfString(coverage, { width: disclosureWidth }) : 0;
-  doc.fontSize(6.5);
-  const evidenceHeight = doc.heightOfString(evidence, { width: disclosureWidth });
-  const richHeight = disclosureHeight + (coverage ? coverageHeight + 5 : 0) + evidenceHeight + padding * 2 + 6;
-  const rowHeight = Math.min(Math.max(30, richHeight, ...plainHeights), 150);
-  const pageChanged = ensureSpace(doc, rowHeight + 2);
-  if (pageChanged) drawTableRow(doc, headers, widths, { header: true });
-  ensureSpace(doc, rowHeight + 2);
-
+function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, index: number) {
+  ensureSpace(doc, 94);
+  const x = PAGE.left;
   const y = doc.y;
-  let x = PAGE.left;
-  const fills = [normalFill, normalFill, normalFill, statusFill(row.status), normalFill];
-  cells.forEach((cell, cellIndex) => {
-    doc.rect(x, y, widths[cellIndex], rowHeight).fillAndStroke(fills[cellIndex], COLORS.border);
-    if (cellIndex !== 2) {
-      const centered = cellIndex === 3;
-      doc.fillColor(cellIndex === 3 ? statusColor(row.status) : COLORS.text)
-        .font(cellIndex === 3 ? FONTS.semibold : FONTS.regular).fontSize(fontSize)
-        .text(cell || '-', x + padding, centered ? y + Math.max(padding, (rowHeight - doc.heightOfString(cell || '-', { width: widths[cellIndex] - padding * 2 })) / 2) : y + padding, {
-          width: widths[cellIndex] - padding * 2, height: rowHeight - padding * 2, align: centered ? 'center' : 'left', ellipsis: true,
-        });
-    } else {
-      let textY = y + padding;
-      doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(fontSize).text(disclosure || '-', x + padding, textY, { width: disclosureWidth, height: disclosureHeight + 1, ellipsis: true });
-      textY += disclosureHeight + 4;
-      if (coverage) {
-        doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(fontSize).text(coverage, x + padding, textY, { width: disclosureWidth, height: coverageHeight + 1 });
-        textY += coverageHeight + 4;
-      }
-      doc.fillColor(COLORS.mutedLight).font(FONTS.regular).fontSize(6.5).text(evidence, x + padding, textY, { width: disclosureWidth, height: Math.max(8, rowHeight - (textY - y) - padding), ellipsis: true });
-    }
-    x += widths[cellIndex];
+  const width = contentWidth(doc);
+  const padding = SPACE.md;
+  const featureNumberWidth = 54;
+  const statusWidth = 94;
+  const featureWidth = width - featureNumberWidth - statusWidth;
+  doc.font(FONTS.medium).fontSize(TYPE.body);
+  const featureHeight = doc.heightOfString(cleanText(row.userFeature), { width: featureWidth - padding * 2, lineGap: 1.5 });
+  const rowHeight = Math.max(48, featureHeight + padding * 2);
+  const fill = index % 2 ? COLORS.surface : COLORS.white;
+  const palette = statusPalette(row.status);
+
+  doc.roundedRect(x, y, width, rowHeight, 5).fill(fill);
+  doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
+    .text(row.featureNumber, x + padding, y + padding, { width: featureNumberWidth - padding, lineBreak: false });
+  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.body)
+    .text(cleanText(row.userFeature), x + featureNumberWidth, y + padding, {
+      width: featureWidth - padding * 2,
+      lineGap: 1.5,
+    });
+
+  const badgeWidth = statusWidth - 20;
+  const badgeY = y + (rowHeight - 24) / 2;
+  doc.roundedRect(x + width - statusWidth + 8, badgeY, badgeWidth, 24, 5).fillAndStroke(palette.fill, palette.stroke);
+  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .text(row.statusLabel, x + width - statusWidth + 12, badgeY + 8, {
+      width: badgeWidth - 8,
+      height: 10,
+      align: 'center',
+      lineBreak: false,
+      ellipsis: true,
+    });
+  doc.moveTo(x, y + rowHeight).lineTo(x + width, y + rowHeight).lineWidth(0.5).strokeColor(COLORS.border).stroke();
+  doc.y = y + rowHeight + SPACE.md;
+
+  const userDisclosure = cleanText(row.userDisclosure, '');
+  if (userDisclosure && userDisclosure !== cleanText(row.userFeature, '')) {
+    drawFlowingLabeledText(doc, 'Submitted disclosure', userDisclosure, { indent: SPACE.md });
+  }
+  drawFlowingLabeledText(doc, 'Patent disclosure', row.patentDisclosure, { indent: SPACE.md });
+
+  const evidence = row.evidenceQuote
+    ? row.evidenceQuote
+    : 'No supporting quotation was mapped in the available patent data.';
+  drawFlowingLabeledText(doc, `Evidence · ${cleanText(row.evidenceSource, 'none')}`, evidence, {
+    indent: SPACE.xl,
+    color: COLORS.muted,
+    labelColor: statusColor(row.status),
+    fontSize: TYPE.small,
   });
-  doc.y = y + rowHeight;
+
+  const coverage = featureCoverageText(row);
+  if (coverage) drawFlowingLabeledText(doc, 'Mapped coverage', coverage, { indent: SPACE.md, fontSize: TYPE.small });
+  drawFlowingLabeledText(doc, 'Attorney remark', row.crispRemark, { indent: SPACE.md });
+
+  ensureSpace(doc, SPACE.lg);
+  doc.moveTo(PAGE.left, doc.y).lineTo(PAGE.left + contentWidth(doc), doc.y)
+    .lineWidth(0.8).strokeColor('#E2E8F0').stroke();
+  doc.y += SPACE.lg;
 }
 
 function drawCitationTable(doc: PdfDoc, citations: AttorneyReportCitation[]) {
-  const widths = [34, 86, 184, 82, 58, 46];
+  const widths = [34, 82, contentWidth(doc) - 292, 76, 52, 48];
   const headers = ['S.No.', 'Citation No.', 'Title', 'Match Category', 'Retrieval', 'Evidence'];
   drawTableRow(doc, headers, widths, { header: true });
   citations.forEach((citation, index) => {
@@ -580,14 +709,14 @@ function drawCitationTable(doc: PdfDoc, citations: AttorneyReportCitation[]) {
       citation.matchCategoryLabel,
       pct(citation.relevanceScore),
       citation.evidenceQuality,
-    ], widths, { fills: index % 2 ? widths.map(() => COLORS.tableAlt) : undefined, maxHeight: 70, repeatHeader: { cells: headers, widths } });
+    ], widths, { fills: index % 2 ? widths.map(() => COLORS.tableAlt) : undefined, repeatHeader: { cells: headers, widths } });
   });
 }
 
 function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
   const features = report.inventionFeatures;
   if (!features.length || !report.comparisons.length) {
-    doc.font(FONTS.regular).fontSize(8.5).fillColor(COLORS.muted).text('Feature matrix will appear after citation mapping.', PAGE.left, doc.y, { width: contentWidth(doc) });
+    doc.font(FONTS.regular).fontSize(TYPE.small).fillColor(COLORS.muted).text('Feature matrix will appear after citation mapping.', PAGE.left, doc.y, { width: contentWidth(doc) });
     return;
   }
 
@@ -595,11 +724,11 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
     Number(item.coverage?.score || 0) > Number(best?.coverage?.score || 0) ? item : best
   ), report.comparisons[0]);
   ensureSpace(doc, 42);
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(10)
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.h3)
     .text('Key Feature Coverage Across Relevant Citations', PAGE.left, doc.y, { width: contentWidth(doc) });
-  doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(7.2)
+  doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.caption)
     .text('Cell percentages represent feature-level mapped coverage; dashes indicate no mapped evidence.', PAGE.left, doc.y + 4, { width: contentWidth(doc) });
-  doc.moveDown(0.7);
+  doc.y += SPACE.sm;
 
   const chunkSize = 8;
   for (let start = 0; start < features.length; start += chunkSize) {
@@ -628,18 +757,18 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
     });
     drawFeatureMatrixLegend(doc);
     if (start + chunkSize >= features.length) drawFeatureMatrixInsight(doc, strongestReference);
-    doc.moveDown(0.7);
+    doc.y += SPACE.sm;
   }
 }
 
 function drawFeatureMatrixHeader(doc: PdfDoc, headers: string[], widths: number[]) {
-  const rowHeight = 24;
+  const rowHeight = 26;
   ensureSpace(doc, rowHeight + 2);
   const y = doc.y;
   let x = PAGE.left;
+  doc.rect(PAGE.left, y, widths.reduce((sum, width) => sum + width, 0), rowHeight).fill('#F4F7FB');
   headers.forEach((header, index) => {
-    doc.rect(x, y, widths[index], rowHeight).fillAndStroke('#F4F7FB', '#D9E2EC');
-    doc.fillColor('#162033').font(FONTS.semibold).fontSize(index === 0 ? 7.4 : 6.7)
+    doc.fillColor('#162033').font(FONTS.semibold).fontSize(index === 0 ? TYPE.caption : TYPE.micro)
       .text(header, x + 5, y + 8, {
         width: widths[index] - 10,
         height: 10,
@@ -648,6 +777,7 @@ function drawFeatureMatrixHeader(doc: PdfDoc, headers: string[], widths: number[
       });
     x += widths[index];
   });
+  doc.moveTo(PAGE.left, y + rowHeight).lineTo(x, y + rowHeight).lineWidth(0.7).strokeColor(COLORS.border).stroke();
   doc.y = y + rowHeight;
 }
 
@@ -665,13 +795,13 @@ function drawFeatureMatrixRow(
   const y = doc.y;
   const rowFill = strongest ? '#F7FAFF' : rowIndex % 2 ? '#FCFDFE' : COLORS.white;
   let x = PAGE.left;
+  doc.rect(PAGE.left, y, widths.reduce((sum, width) => sum + width, 0), rowHeight).fill(rowFill);
 
   widths.forEach((width, index) => {
-    doc.rect(x, y, width, rowHeight).fillAndStroke(rowFill, '#E1E7EF');
     if (index === 0) {
       doc.fillColor(strongest ? COLORS.blue2 : '#334155')
         .font(strongest ? FONTS.semibold : FONTS.regular)
-        .fontSize(7.2)
+        .fontSize(TYPE.caption)
         .text(publicationNumber, x + 8, y + 10, {
           width: width - 16,
           height: 10,
@@ -683,7 +813,7 @@ function drawFeatureMatrixRow(
       const badgeWidth = Math.min(38, width - 10);
       const badgeX = x + (width - badgeWidth) / 2;
       doc.roundedRect(badgeX, y + 7.5, badgeWidth, 15, 4).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
-      doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(6.7)
+      doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.micro)
         .text(label, badgeX + 2, y + 11.5, { width: badgeWidth - 4, height: 8, align: 'center', lineBreak: false });
     } else if (index === widths.length - 1) {
       drawOverlapSignal(doc, overlapSignal, x, y, width, rowHeight);
@@ -692,6 +822,7 @@ function drawFeatureMatrixRow(
     }
     x += width;
   });
+  doc.moveTo(PAGE.left, y + rowHeight).lineTo(x, y + rowHeight).lineWidth(0.35).strokeColor(COLORS.border).stroke();
   doc.y = y + rowHeight;
 }
 
@@ -711,19 +842,12 @@ function drawFeatureMatrixBadge(
   const score = typeof row?.extentScore === 'number' ? `${Math.round(row.extentScore * 100)}%` : null;
   const label = status === 'Absent' ? '—' : score || status;
 
-  if (status === 'Present') {
-    doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fillAndStroke('#E1F4D9', '#B9DDAA');
-    doc.fillColor('#387A32');
-  } else if (status === 'Partial') {
-    doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fillAndStroke('#FFF4D6', '#F4CF6A');
-    doc.fillColor('#9A6500');
-  } else {
-    doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fill('#F7F8FA');
-    doc.fillColor('#64748B');
-  }
+  const palette = statusPalette(status);
+  doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fillAndStroke(palette.fill, palette.stroke);
+  doc.fillColor(palette.text);
 
   doc.font(status === 'Absent' ? FONTS.regular : FONTS.semibold)
-    .fontSize(score ? 6.7 : 6.2)
+    .fontSize(TYPE.micro)
     .text(label, x + 2, y + 4.2, {
       width: badgeWidth - 4,
       height: 8,
@@ -746,10 +870,10 @@ function drawOverlapSignal(doc: PdfDoc, value: string, x: number, y: number, wid
     : compact === 'Moderate'
       ? COLORS.warning
       : compact === 'Low'
-        ? COLORS.mutedLight
+        ? COLORS.muted
         : COLORS.blue;
   doc.circle(x + 9, y + height / 2, 2.5).fill(color);
-  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(6.2)
+  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.micro)
     .text(compact, x + 15, y + 11, { width: width - 19, height: 9, lineBreak: false, ellipsis: true });
 }
 
@@ -757,15 +881,15 @@ function drawFeatureMatrixLegend(doc: PdfDoc) {
   ensureSpace(doc, 27);
   const y = doc.y + 9;
   const items = [
-    { label: 'No evidence (Absent)', fill: '#F7F8FA', stroke: '#D9DEE5' },
-    { label: 'Partial overlap', fill: '#FFF4D6', stroke: '#F4CF6A' },
-    { label: 'Strong overlap', fill: '#E1F4D9', stroke: '#B9DDAA' },
+    { label: 'No evidence (Absent)', fill: STATUS.Absent.fill, stroke: STATUS.Absent.stroke },
+    { label: 'Partial overlap', fill: STATUS.Partial.fill, stroke: STATUS.Partial.stroke },
+    { label: 'Strong overlap', fill: STATUS.Present.fill, stroke: STATUS.Present.stroke },
   ];
   const itemWidths = [138, 110, 110];
   let x = PAGE.left + 2;
   items.forEach((item, index) => {
     doc.roundedRect(x, y, 17, 11, 3).fillAndStroke(item.fill, item.stroke);
-    doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(7)
+    doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.micro)
       .text(item.label, x + 25, y + 2, { width: itemWidths[index] - 25, height: 9, lineBreak: false });
     x += itemWidths[index];
   });
@@ -786,11 +910,11 @@ function drawFeatureMatrixInsight(
   const y = doc.y + 7;
   doc.roundedRect(PAGE.left, y, contentWidth(doc), 43, 6).fillAndStroke('#EEF5FF', '#D6E6FF');
   doc.circle(PAGE.left + 18, y + 16, 7).fill(COLORS.blue);
-  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(8)
+  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.small)
     .text('i', PAGE.left + 15.5, y + 11.5, { width: 5, height: 9, align: 'center' });
-  doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(7.5)
+  doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
     .text('Insight', PAGE.left + 31, y + 9, { width: 45, height: 10, lineBreak: false });
-  doc.fillColor('#334155').font(FONTS.regular).fontSize(7.1)
+  doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.caption)
     .text(insight, PAGE.left + 70, y + 8, { width: contentWidth(doc) - 82, height: 29, lineGap: 1.2, ellipsis: true });
   doc.y = y + 48;
 }
@@ -807,7 +931,7 @@ function drawEvidenceBadge(doc: PdfDoc, label: string, x: number, y: number) {
   const width = Math.max(43, Math.min(76, doc.widthOfString(label) + 19));
   doc.roundedRect(x, y, width, 17, 4).fillAndStroke(palette.fill, palette.stroke);
   doc.circle(x + 8, y + 8.5, 2).fill(palette.text);
-  doc.fillColor(palette.text).font(FONTS.medium).fontSize(6.4)
+  doc.fillColor(palette.text).font(FONTS.medium).fontSize(TYPE.micro)
     .text(label, x + 13, y + 5, { width: width - 17, height: 8, lineBreak: false, ellipsis: true });
   return width;
 }
@@ -819,29 +943,30 @@ function drawCitationCardHeader(
   total: number,
   jurisdiction: string,
 ) {
-  ensureSpace(doc, 170);
   const x = PAGE.left;
-  const y = doc.y;
   const width = contentWidth(doc);
-  const height = 154;
+  doc.font(FONTS.semibold).fontSize(TYPE.small);
+  const titleHeight = doc.heightOfString(cleanText(item.title), { width: width - 28, lineGap: 1.5 });
+  const height = Math.max(166, 137 + titleHeight);
+  ensureSpace(doc, height + SPACE.lg);
+  const y = doc.y;
   drawCard(doc, x, y, width, height, 7);
 
-  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(6.8)
+  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(`REFERENCE ${index + 1} OF ${total}`, x + 14, y + 13, { width: 110, height: 9, lineBreak: false });
   const coverage = pct(item.coverage.score);
-  const coverageFill = item.coverage.score >= 0.7 ? COLORS.presentBg : COLORS.partialBg;
-  const coverageStroke = item.coverage.score >= 0.7 ? '#BBE4C7' : '#F4CF6A';
-  const coverageText = item.coverage.score >= 0.7 ? COLORS.presentText : COLORS.partialText;
-  doc.roundedRect(x + width - 112, y + 9, 98, 21, 5).fillAndStroke(coverageFill, coverageStroke);
-  doc.fillColor(coverageText).font(FONTS.semibold).fontSize(6.8)
+  const coveragePalette = item.coverage.score >= 0.7 ? STATUS.Present : STATUS.Partial;
+  doc.roundedRect(x + width - 120, y + 9, 106, 23, 5).fillAndStroke(coveragePalette.fill, coveragePalette.stroke);
+  doc.fillColor(coveragePalette.text).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(`Feature coverage: ${coverage}`, x + width - 106, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false });
 
-  doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(12)
+  doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
     .text(item.publicationNumber, x + 14, y + 38, { width: width - 28, height: 16, lineBreak: false, ellipsis: true });
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(8)
-    .text(truncate(item.title, 220), x + 14, y + 59, { width: width - 28, height: 29, ellipsis: true, lineGap: 1.5 });
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
+    .text(cleanText(item.title), x + 14, y + 59, { width: width - 28, lineGap: 1.5 });
 
-  doc.moveTo(x + 14, y + 92).lineTo(x + width - 14, y + 92).lineWidth(0.5).strokeColor('#E2E8F0').stroke();
+  const separatorY = y + 67 + titleHeight;
+  doc.moveTo(x + 14, separatorY).lineTo(x + width - 14, separatorY).lineWidth(0.5).strokeColor('#E2E8F0').stroke();
   const meta = [
     ['Type', item.matchCategoryLabel],
     ['Publication date', item.publicationDate],
@@ -851,34 +976,34 @@ function drawCitationCardHeader(
   const cellWidth = (width - 28) / 4;
   meta.forEach(([label, value], metaIndex) => {
     const metaX = x + 14 + metaIndex * cellWidth;
-    if (metaIndex > 0) doc.moveTo(metaX - 7, y + 101).lineTo(metaX - 7, y + 124).lineWidth(0.4).strokeColor('#E2E8F0').stroke();
-    doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(5.8)
-      .text(label.toUpperCase(), metaX, y + 101, { width: cellWidth - 12, height: 7, lineBreak: false, ellipsis: true });
-    doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(6.5)
-      .text(truncate(value, 70), metaX, y + 113, { width: cellWidth - 12, height: 13, ellipsis: true });
+    doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
+      .text(label.toUpperCase(), metaX, separatorY + 10, { width: cellWidth - 12, height: 9, lineBreak: false, ellipsis: true });
+    doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.caption)
+      .text(truncate(value, 70), metaX, separatorY + 23, { width: cellWidth - 12, height: 20, ellipsis: true });
   });
 
   const evidenceSources = Array.from(new Set(item.rows.map(row => cleanText(row.evidenceSource, 'Not found'))));
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(6.5)
-    .text('Evidence sources', x + 14, y + 135, { width: 76, height: 8, lineBreak: false });
+  const evidenceY = separatorY + 52;
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .text('Evidence sources', x + 14, evidenceY + 5, { width: 80, height: 9, lineBreak: false });
   let badgeX = x + 94;
   evidenceSources.slice(0, 4).forEach(source => {
-    badgeX += drawEvidenceBadge(doc, source, badgeX, y + 130) + 5;
+    badgeX += drawEvidenceBadge(doc, source, badgeX, evidenceY) + 5;
   });
-  doc.y = y + height + 10;
+  doc.y = y + height + SPACE.md;
 }
 
 function drawNameList(doc: PdfDoc, names: string[], emptyText: string) {
   if (!names.length) {
-    doc.font(FONTS.regular).fontSize(8.8).fillColor(COLORS.muted).text(emptyText, PAGE.left + 18, doc.y, { width: contentWidth(doc) - 36 });
-    doc.moveDown(0.8);
+    doc.font(FONTS.regular).fontSize(TYPE.small).fillColor(COLORS.muted).text(emptyText, PAGE.left + 18, doc.y, { width: contentWidth(doc) - 36 });
+    doc.y += SPACE.sm;
     return;
   }
   names.forEach(name => {
     ensureSpace(doc, 18);
     doc.circle(PAGE.left + 8, doc.y + 5, 2).fill(COLORS.blue);
-    doc.font(FONTS.regular).fontSize(9).fillColor(COLORS.text).text(name, PAGE.left + 18, doc.y, { width: contentWidth(doc) - 28 });
-    doc.moveDown(0.55);
+    doc.font(FONTS.regular).fontSize(TYPE.body).fillColor(COLORS.text).text(name, PAGE.left + 18, doc.y, { width: contentWidth(doc) - 28 });
+    doc.y += SPACE.xs;
   });
 }
 
@@ -934,7 +1059,7 @@ export async function GET(
       info: { Title: report.reportTitle, Author: report.preparedBy, Subject: report.inventionTitle },
     });
     registerReportFonts(doc);
-    const sectionPages: Array<{ number: string; title: string; page: number; destination: string }> = [];
+    const sectionPages: Array<{ number: string; title: string; page: number; destination: string; level: 1 | 2 }> = [];
 
     drawCover(doc, report);
 
@@ -943,18 +1068,26 @@ export async function GET(
 
     addPage(doc);
     drawExecutiveSnapshot(doc, report);
-    sectionPages.push({ number: '', title: 'Executive Snapshot', page: doc.bufferedPageRange().count, destination: 'executive-snapshot' });
+    sectionPages.push({ number: '', title: 'Executive Snapshot', page: doc.bufferedPageRange().count, destination: 'executive-snapshot', level: 1 });
 
     addPage(doc);
-    const startSection = (number: string, title: string) => {
+    const startGroup = (number: string, title: string) => {
+      ensureSpace(doc, 60);
+      const destination = `section-${sectionPages.length + 1}`;
+      doc.addNamedDestination(destination, 'XYZ', PAGE.left, Math.max(PAGE.top, doc.y - 8), null);
+      sectionPages.push({ number, title, page: doc.bufferedPageRange().count, destination, level: 1 });
+      drawGroupHeading(doc, number, title);
+    };
+    const startSection = (number: string, title: string, level: 1 | 2 = 1) => {
       ensureSpace(doc, 54);
       const destination = `section-${sectionPages.length + 1}`;
       doc.addNamedDestination(destination, 'XYZ', PAGE.left, Math.max(PAGE.top, doc.y - 8), null);
-      sectionPages.push({ number, title, page: doc.bufferedPageRange().count, destination });
+      sectionPages.push({ number, title, page: doc.bufferedPageRange().count, destination, level });
       drawSectionHeading(doc, `${number} ${title}`);
     };
 
-    startSection('1.1', 'Objective');
+    startGroup('1', 'Search Overview');
+    startSection('1.1', 'Objective', 2);
     drawParagraph(
       doc,
       'The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for review.'
@@ -965,7 +1098,7 @@ export async function GET(
     ]);
     drawMetadataGrid(doc, report.countLabels.map(item => [item.label, String(item.value)]));
 
-    startSection('1.2', 'Search Scope and Methodology');
+    startSection('1.2', 'Search Scope and Methodology', 2);
     drawMetadataGrid(doc, [
       ['Corpus + retrieval mode', report.methodology.corpus],
       ['Retrieval / mapping mode', report.methodology.retrievalMode],
@@ -974,7 +1107,7 @@ export async function GET(
     ]);
     drawFlowBulletList(doc, 'Techniques Used', report.methodology.techniques);
 
-    startSection('1.3', 'Key Features');
+    startSection('1.3', 'Key Features', 2);
     drawParagraph(doc, 'The key features are extracted from the submitted disclosure and classified to separate core mechanisms, implementation details, novelty-candidate features, and generic features that should not be relied on alone.');
     drawTableRow(doc, ['Key Feature', 'Type', 'Feature Description'], [58, 92, contentWidth(doc) - 150], { header: true });
     report.featureSummaries.forEach((feature, index) => {
@@ -982,20 +1115,20 @@ export async function GET(
         feature.featureNumber,
         feature.typeLabel,
         `${feature.feature}${feature.genericWarning ? `\n${feature.genericWarning}` : ''}`,
-      ], [58, 92, contentWidth(doc) - 150], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined, maxHeight: 82 });
+      ], [58, 92, contentWidth(doc) - 150], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined });
     });
     drawFlowTextBlock(doc, 'Generic Feature Risk', report.genericFeatureRisk.summary);
 
-    startSection('1.4', 'Scoring Legend');
+    startSection('1.4', 'Scoring Legend', 2);
     drawTableRow(doc, ['Score / Status', 'Meaning'], [128, contentWidth(doc) - 128], { header: true });
     report.scoringLegend.forEach((item, index) => {
-      drawTableRow(doc, [item.label, item.meaning], [128, contentWidth(doc) - 128], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt] : undefined, maxHeight: 54 });
+      drawTableRow(doc, [item.label, item.meaning], [128, contentWidth(doc) - 128], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt] : undefined });
     });
 
-    startSection('1.5', 'Summary of Relevant Citations');
+    startSection('1.5', 'Summary of Relevant Citations', 2);
     drawCitationTable(doc, report.citations);
 
-    startSection('1.6', 'Component / Feature-Level Prior Art');
+    startSection('1.6', 'Component / Feature-Level Prior Art', 2);
     drawParagraph(
       doc,
       'These citations disclose one or more relevant invention features, subsystems, materials, process steps, or implementation details, but are not treated as full invention-level matches by themselves.'
@@ -1006,10 +1139,11 @@ export async function GET(
       drawParagraph(doc, 'No separate component / feature-level references were classified in this run.');
     }
 
-    startSection('1.7', 'Key Feature Analysis Matrix');
+    startSection('1.7', 'Key Feature Analysis Matrix', 2);
     drawFeatureStatusMatrix(doc, report);
 
-    startSection('2.1', 'Details of Relevant Patent Citations');
+    startGroup('2', 'Citation Analysis');
+    startSection('2.1', 'Details of Relevant Patent Citations', 2);
     for (let itemIndex = 0; itemIndex < report.comparisons.length; itemIndex += 1) {
       const item = report.comparisons[itemIndex];
       drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction);
@@ -1023,9 +1157,8 @@ export async function GET(
         ['CPC / IPC', `${item.cpcCodes} / ${item.ipcCodes}`],
         ['Source', item.link],
       ]);
-      doc.moveDown(0.4);
-      drawFlowLabel(doc, 'Patent Abstract');
-      drawParagraph(doc, item.abstract);
+      doc.y += SPACE.sm;
+      drawFlowingLabeledText(doc, 'Patent Abstract', item.abstract);
       const normalizedAbstract = cleanText(item.abstract, '');
       const normalizedTechnicalDisclosure = cleanText(item.technicalDisclosure, '');
       if (
@@ -1033,23 +1166,24 @@ export async function GET(
         normalizedTechnicalDisclosure !== normalizedAbstract &&
         !normalizedAbstract.includes(normalizedTechnicalDisclosure)
       ) {
-        doc.font(FONTS.semibold).fontSize(9.5).fillColor(COLORS.text).text('Technical Disclosure', PAGE.left, doc.y, { width: contentWidth(doc) });
-        doc.moveDown(0.25);
-        drawParagraph(doc, truncate(item.technicalDisclosure, 1100));
+        drawFlowingLabeledText(doc, 'Technical Disclosure', item.technicalDisclosure);
       }
-      doc.font(FONTS.semibold).fontSize(9.5).fillColor(COLORS.text).text('Feature-by-Feature Comparison', PAGE.left, doc.y, { width: contentWidth(doc) });
-      doc.moveDown(0.35);
-      drawFeatureTable(doc, item.rows);
-      doc.moveDown(0.5);
+      doc.font(FONTS.semibold).fontSize(TYPE.h3).fillColor(COLORS.text).text('Feature-by-Feature Comparison', PAGE.left, doc.y, { width: contentWidth(doc) });
+      doc.y += SPACE.md;
+      if (item.rows.length > 0) drawFeatureTable(doc, item.rows);
+      else drawParagraph(doc, 'No feature comparison rows were available for this citation.');
+      doc.y += SPACE.sm;
       keyValueRow(doc, 'Reference Summary', item.summary);
       keyValueRow(doc, 'Claim Impact Summary', item.claimImpactSummary);
-      doc.moveDown(0.6);
+      doc.y += SPACE.md;
     }
 
+    startSection('2.2', 'List of Other Shortlisted Citations', 2);
     if (report.otherShortlistedCitations.length > 0) {
-      startSection('2.3', 'List of Other Shortlisted Citations');
       drawParagraph(doc, 'The below citations were shortlisted but not mapped in citation detail because the final report focuses on the most relevant mapped references.');
       drawCitationTable(doc, report.otherShortlistedCitations);
+    } else {
+      drawParagraph(doc, 'No additional shortlisted citations remained after the detailed mapped references were selected.');
     }
 
     startSection('3', 'Applicant / Assignee Landscape');
@@ -1078,19 +1212,20 @@ export async function GET(
     doc.switchToPage(tocPageIndex);
     doc.y = PAGE.top + 10;
     doc.rect(PAGE.left, doc.y, 82, 5).fill(COLORS.cyan);
-    doc.moveDown(1.3);
-    doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(22).text('Table of Contents', PAGE.left, doc.y, { width: contentWidth(doc) });
-    doc.moveDown(1);
+    doc.y += SPACE.xl;
+    doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(TYPE.h1).text('Table of Contents', PAGE.left, doc.y, { width: contentWidth(doc) });
+    doc.y += SPACE.lg;
     sectionPages.forEach(item => {
       const y = doc.y;
-      const rowHeight = 17;
-      doc.font(FONTS.regular).fontSize(9.5).fillColor(COLORS.text)
-        .text(`${item.number} ${item.title}`.trim(), PAGE.left, y, { width: contentWidth(doc) - 58 });
-      doc.font(FONTS.semibold).fontSize(9.5).fillColor(COLORS.blue)
+      const rowHeight = item.level === 1 ? 22 : 18;
+      const indent = item.level === 2 ? SPACE.lg : 0;
+      doc.font(item.level === 1 ? FONTS.semibold : FONTS.regular).fontSize(item.level === 1 ? TYPE.body : TYPE.small).fillColor(COLORS.text)
+        .text(`${item.number} ${item.title}`.trim(), PAGE.left + indent, y, { width: contentWidth(doc) - 58 - indent });
+      doc.font(FONTS.semibold).fontSize(TYPE.small).fillColor(COLORS.blue)
         .text(String(item.page), doc.page.width - PAGE.right - 42, y, { width: 42, align: 'right' });
       doc.goTo(PAGE.left, y - 2, contentWidth(doc), rowHeight, item.destination, { Border: [0, 0, 0] });
-      doc.moveTo(PAGE.left, doc.y + 4).lineTo(doc.page.width - PAGE.right, doc.y + 4).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
-      doc.moveDown(0.6);
+      doc.moveTo(PAGE.left, y + rowHeight - 4).lineTo(doc.page.width - PAGE.right, y + rowHeight - 4).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
+      doc.y = y + rowHeight;
     });
 
     trimTrailingBlankPages(doc);

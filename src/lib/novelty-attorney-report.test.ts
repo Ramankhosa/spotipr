@@ -183,6 +183,10 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.reportNumber).toMatch(/^PN-NOV-IN-\d{8}-SEARCH12$/);
     expect(model.tableOfContents.map(item => item.title)).toContain('Search Scope and Methodology');
     expect(model.tableOfContents.map(item => item.title)).toContain('Claim-Positioning Observations');
+    expect(model.tableOfContents).toContainEqual({ number: '1', title: 'Search Overview' });
+    expect(model.tableOfContents).toContainEqual({ number: '2', title: 'Citation Analysis' });
+    expect(model.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
+    expect(model.tableOfContents.some(item => item.number === '2.3')).toBe(false);
     expect(model.evidenceBasis).toContain('Automated patent intelligence');
     expect(model.methodology.searchedEvidence).toContain('limited available patent data');
     expect(model.methodology.searchedEvidence).toContain('full patent documents');

@@ -1,9 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Use dist directory for build output to avoid caching issues
+  distDir: 'dist',
+
   // Minimal config for development
   experimental: {
     webpackBuildWorker: false,
     optimizeCss: true, // Optimize CSS loading and preloading
+    outputFileTracingIncludes: {
+      '/api/novelty-search/[searchId]/attorney-report/pdf': ['./src/fonts/inter/*.ttf'],
+    },
   },
 
   // Webpack configuration to handle offline scenarios
@@ -29,4 +35,3 @@ const nextConfig = {
 }
 
 module.exports = nextConfig
-

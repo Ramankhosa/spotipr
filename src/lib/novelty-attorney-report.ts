@@ -825,6 +825,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { label: 'Evidence Source', meaning: 'Mapped support is limited to title, abstract, inference, or none in this report version.' },
     ],
     tableOfContents: [
+      { number: '1', title: 'Search Overview' },
       { number: '1.1', title: 'Objective' },
       { number: '1.2', title: 'Search Scope and Methodology' },
       { number: '1.3', title: 'Key Features' },
@@ -832,8 +833,9 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '1.5', title: 'Summary of Relevant Citations' },
       { number: '1.6', title: 'Component / Feature-Level Prior Art' },
       { number: '1.7', title: 'Key Feature Analysis Matrix' },
+      { number: '2', title: 'Citation Analysis' },
       { number: '2.1', title: 'Details of Relevant Patent Citations' },
-      { number: '2.3', title: 'List of Other Shortlisted Citations' },
+      { number: '2.2', title: 'List of Other Shortlisted Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
       { number: '4', title: 'Repeated Inventor / Entity Signals' },
       { number: '5', title: 'Claim-Positioning Observations' },
