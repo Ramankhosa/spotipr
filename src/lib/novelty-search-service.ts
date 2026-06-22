@@ -1005,6 +1005,7 @@ export interface NoveltySearchRequest {
   title: string;
   jurisdiction?: string;
   config?: Partial<NoveltySearchConfig>;
+  approvedStage0?: NormalizedIdea;
 }
 
 export interface NoveltySearchResponse {
@@ -1597,6 +1598,38 @@ export class NoveltySearchService extends BasePatentService {
   }
 
   /**
+   * Generate the proposed retrieval query and invention features without
+   * creating a novelty-search run. The caller must present these values to the
+   * user and send the approved version when enqueueing the search.
+   */
+  async prepareNoveltySearch(request: NoveltySearchRequest): Promise<NoveltySearchResponse> {
+    try {
+      const user = await this.validateUser(request.jwtToken);
+      if (user.tenantId) {
+        const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+        if (!serviceAccess.allowed) {
+          return { success: false, error: serviceAccess.reason || 'Novelty search access denied.' };
+        }
+      }
+      const config = this.mergeConfig(request.config);
+      const result = await this.performStage0(
+        `preview-${user.id}`,
+        request,
+        config,
+        user,
+        request.jwtToken ? { authorization: `Bearer ${request.jwtToken}` } : {},
+      );
+      if (!result.success || !result.data) {
+        return { success: false, error: result.error || 'Failed to generate search terms.' };
+      }
+      return { success: true, results: result.data };
+    } catch (error) {
+      console.error('Novelty search preparation error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to generate search terms' };
+    }
+  }
+
+  /**
    * Validate and enqueue a novelty search without executing any LLM stage in
    * the request process. A NoveltySearchJob is the opt-in marker consumed by
    * the standalone background worker; legacy runs have no job row.
@@ -1615,6 +1648,47 @@ export class NoveltySearchService extends BasePatentService {
       }
 
       const config = this.mergeConfig(request.config);
+      const intelligentSearch = config.searchSource?.searchMode !== 'manual';
+      const approvedQuery = String(request.approvedStage0?.searchQuery || '').trim();
+      const approvedFeatures = Array.isArray(request.approvedStage0?.inventionFeatures)
+        ? Array.from(new Set(request.approvedStage0.inventionFeatures.map(feature => String(feature || '').trim()).filter(Boolean)))
+        : [];
+      if (intelligentSearch && (!approvedQuery || approvedFeatures.length === 0)) {
+        return { success: false, error: 'Review and approve the generated search query and invention features before queueing the novelty search.' };
+      }
+
+      const suppliedDetails = Array.isArray(request.approvedStage0?.featureDetails)
+        ? request.approvedStage0.featureDetails
+        : [];
+      const approvedStage0: NormalizedIdea | undefined = intelligentSearch
+        ? {
+            ...request.approvedStage0,
+            searchQuery: approvedQuery.slice(0, 1000),
+            inventionFeatures: approvedFeatures.slice(0, 30).map(feature => feature.slice(0, 1000)),
+            featureDetails: approvedFeatures.slice(0, 30).map((feature, index) => {
+              const exactMatch = suppliedDetails.find(detail => String(detail?.feature || '').trim() === feature);
+              const existing = exactMatch || suppliedDetails[index];
+              return existing
+                ? {
+                    ...existing,
+                    feature,
+                    // An edited feature is the user's approved disclosure. Do not
+                    // retain stale generated wording as the comparison input.
+                    user_disclosure: exactMatch
+                      ? String(existing.user_disclosure || feature).trim()
+                      : feature,
+                  }
+                : {
+                    feature,
+                    user_disclosure: feature,
+                    technical_role: 'Technical feature reviewed and approved by the user.',
+                    source_excerpt: '',
+                  };
+            }),
+            title: request.title,
+            inventionText: request.inventionDescription,
+          }
+        : undefined;
 
       if (request.patentId) await this.validatePatentAccess(request.patentId, user.id);
 
@@ -1661,17 +1735,21 @@ export class NoveltySearchService extends BasePatentService {
             projectId: request.projectId,
             groupId: request.groupId,
             userId: user.id,
-            status: NoveltySearchStatus.PENDING,
-            currentStage: NoveltySearchStage.STAGE_0,
+            status: approvedStage0 ? NoveltySearchStatus.STAGE_0_COMPLETED : NoveltySearchStatus.PENDING,
+            currentStage: approvedStage0 ? NoveltySearchStage.STAGE_1 : NoveltySearchStage.STAGE_0,
             config: config as any,
             inventionDescription: request.inventionDescription,
             title: request.title,
             jurisdiction: config.jurisdiction,
             filingType: config.filingType,
+            ...(approvedStage0 ? {
+              stage0Results: approvedStage0 as any,
+              stage0CompletedAt: new Date(),
+            } : {}),
           } as any,
         });
         await (tx as any).noveltySearchJob.create({
-          data: { searchId: created.id, status: 'QUEUED', currentStep: 'STAGE_0' },
+          data: { searchId: created.id, status: 'QUEUED', currentStep: approvedStage0 ? 'STAGE_1' : 'STAGE_0' },
         });
         return created;
       });
@@ -1679,8 +1757,8 @@ export class NoveltySearchService extends BasePatentService {
       return {
         success: true,
         searchId: searchRun.id,
-        status: NoveltySearchStatus.PENDING,
-        currentStage: NoveltySearchStage.STAGE_0,
+        status: approvedStage0 ? NoveltySearchStatus.STAGE_0_COMPLETED : NoveltySearchStatus.PENDING,
+        currentStage: approvedStage0 ? NoveltySearchStage.STAGE_1 : NoveltySearchStage.STAGE_0,
       };
     } catch (error) {
       console.error('Novelty search enqueue error:', error);

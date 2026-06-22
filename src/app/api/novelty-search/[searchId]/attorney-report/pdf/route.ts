@@ -1024,9 +1024,19 @@ export async function GET(
         ['Source', item.link],
       ]);
       doc.moveDown(0.4);
-      doc.font(FONTS.semibold).fontSize(9.5).fillColor(COLORS.text).text('Technical Disclosure', PAGE.left, doc.y, { width: contentWidth(doc) });
-      doc.moveDown(0.25);
-      drawParagraph(doc, truncate(item.technicalDisclosure, 1100));
+      drawFlowLabel(doc, 'Patent Abstract');
+      drawParagraph(doc, item.abstract);
+      const normalizedAbstract = cleanText(item.abstract, '');
+      const normalizedTechnicalDisclosure = cleanText(item.technicalDisclosure, '');
+      if (
+        normalizedTechnicalDisclosure &&
+        normalizedTechnicalDisclosure !== normalizedAbstract &&
+        !normalizedAbstract.includes(normalizedTechnicalDisclosure)
+      ) {
+        doc.font(FONTS.semibold).fontSize(9.5).fillColor(COLORS.text).text('Technical Disclosure', PAGE.left, doc.y, { width: contentWidth(doc) });
+        doc.moveDown(0.25);
+        drawParagraph(doc, truncate(item.technicalDisclosure, 1100));
+      }
       doc.font(FONTS.semibold).fontSize(9.5).fillColor(COLORS.text).text('Feature-by-Feature Comparison', PAGE.left, doc.y, { width: contentWidth(doc) });
       doc.moveDown(0.35);
       drawFeatureTable(doc, item.rows);

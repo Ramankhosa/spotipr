@@ -21,8 +21,9 @@ function statusWhere(status: string) {
   switch (status.toUpperCase()) {
     case 'QUEUED': return { backgroundJob: { is: { status: 'QUEUED' } } }
     case 'PROCESSING': return { OR: [{ backgroundJob: { is: { status: 'PROCESSING' } } }, { backgroundJob: { is: null }, status: { in: ['STAGE_0_COMPLETED', 'STAGE_1_COMPLETED', 'STAGE_3_5_COMPLETED'] } }] }
-    case 'COMPLETE': return { status: 'COMPLETED' }
-    case 'FAILED': return { status: 'FAILED' }
+    case 'COMPLETE': return { OR: [{ backgroundJob: { is: { status: 'COMPLETED' } } }, { backgroundJob: { is: null }, status: 'COMPLETED' }] }
+    case 'FAILED': return { OR: [{ backgroundJob: { is: { status: 'FAILED' } } }, { backgroundJob: { is: null }, status: 'FAILED' }] }
+    case 'CANCELLED': return { backgroundJob: { is: { status: 'CANCELLED' } } }
     default: return {}
   }
 }

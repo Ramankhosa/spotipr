@@ -11,6 +11,13 @@ const LOCK_MINUTES = Math.max(5, Number(process.env.NOVELTY_SEARCH_LOCK_MINUTES 
 const EMAIL_MAX_ATTEMPTS = 5
 const noveltySearchService = new NoveltySearchService()
 
+class NoveltySearchJobLeaseLostError extends Error {
+  constructor() {
+    super('Novelty search job was cancelled or its worker lease was lost')
+    this.name = 'NoveltySearchJobLeaseLostError'
+  }
+}
+
 function lockExpiry() {
   return new Date(Date.now() + LOCK_MINUTES * 60 * 1000)
 }
@@ -43,15 +50,16 @@ function hasDeepAnalysis(run: any) {
 }
 
 async function setStep(jobId: string, workerId: string, currentStep: string) {
-  await (prisma as any).noveltySearchJob.updateMany({
-    where: { id: jobId, lockedBy: workerId },
+  const updated = await (prisma as any).noveltySearchJob.updateMany({
+    where: { id: jobId, status: 'PROCESSING', lockedBy: workerId },
     data: { currentStep, heartbeatAt: new Date(), lockedUntil: lockExpiry() },
   })
+  if (updated.count !== 1) throw new NoveltySearchJobLeaseLostError()
 }
 
 async function heartbeat(jobId: string, workerId: string) {
   await (prisma as any).noveltySearchJob.updateMany({
-    where: { id: jobId, lockedBy: workerId },
+    where: { id: jobId, status: 'PROCESSING', lockedBy: workerId },
     data: { heartbeatAt: new Date(), lockedUntil: lockExpiry() },
   })
 }
@@ -249,8 +257,8 @@ export async function processNoveltySearchJob(job: any, workerId: string) {
     const run = await runPipeline(job, workerId)
     if (!run || run.status !== NoveltySearchStatus.COMPLETED) throw new Error('Pipeline ended without a completed report')
 
-    const completedJob = await (prisma as any).noveltySearchJob.update({
-      where: { id: job.id },
+    const completed = await (prisma as any).noveltySearchJob.updateMany({
+      where: { id: job.id, status: 'PROCESSING', lockedBy: workerId },
       data: {
         status: 'COMPLETED',
         currentStep: 'COMPLETED',
@@ -261,6 +269,9 @@ export async function processNoveltySearchJob(job: any, workerId: string) {
         lastError: null,
       },
     })
+    if (completed.count !== 1) return null
+    const completedJob = await (prisma as any).noveltySearchJob.findUnique({ where: { id: job.id } })
+    if (!completedJob) return null
     await recordCompletion(completedJob, run)
     await deliverCompletionEmail(completedJob.id)
     return completedJob
@@ -268,6 +279,8 @@ export async function processNoveltySearchJob(job: any, workerId: string) {
     const message = error instanceof Error ? error.message : 'Novelty search processing failed'
     const freshJob = await (prisma as any).noveltySearchJob.findUnique({ where: { id: job.id }, include: { search: true } })
     if (!freshJob) throw error
+    if (freshJob.status === 'CANCELLED') return null
+    if (freshJob.status !== 'PROCESSING' || freshJob.lockedBy !== workerId) return null
     const attempt = freshJob.attemptCount + 1
     const exhausted = attempt >= freshJob.maxAttempts
     const run = await prisma.noveltySearchRun.findUnique({ where: { id: freshJob.searchId } })
@@ -279,8 +292,8 @@ export async function processNoveltySearchJob(job: any, workerId: string) {
       await prisma.noveltySearchRun.update({ where: { id: run.id }, data: { status: NoveltySearchStatus.FAILED } })
     }
 
-    await (prisma as any).noveltySearchJob.update({
-      where: { id: freshJob.id },
+    await (prisma as any).noveltySearchJob.updateMany({
+      where: { id: freshJob.id, status: 'PROCESSING', lockedBy: workerId },
       data: {
         status: exhausted ? 'FAILED' : 'QUEUED',
         attemptCount: attempt,
@@ -335,4 +348,36 @@ export async function requeueNoveltySearch(searchId: string, userId: string) {
     }),
   ])
   return { searchId, status: 'QUEUED' }
+}
+
+export async function cancelNoveltySearch(searchId: string, userId: string) {
+  const job = await (prisma as any).noveltySearchJob.findFirst({
+    where: { searchId, search: { userId } },
+    select: { id: true, status: true },
+  })
+  if (!job) return { outcome: 'not_found' as const }
+  if (job.status === 'CANCELLED') return { outcome: 'cancelled' as const, searchId, status: 'CANCELLED' as const }
+  if (!['QUEUED', 'PROCESSING'].includes(job.status)) {
+    return { outcome: 'not_cancellable' as const, status: job.status }
+  }
+
+  const cancelledAt = new Date()
+  const updated = await (prisma as any).noveltySearchJob.updateMany({
+    where: { id: job.id, status: { in: ['QUEUED', 'PROCESSING'] } },
+    data: {
+      status: 'CANCELLED',
+      currentStep: 'CANCELLED',
+      cancelledAt,
+      cancelledById: userId,
+      lockedBy: null,
+      lockedUntil: null,
+      lastError: null,
+    },
+  })
+  if (updated.count === 1) return { outcome: 'cancelled' as const, searchId, status: 'CANCELLED' as const }
+
+  const current = await (prisma as any).noveltySearchJob.findUnique({ where: { id: job.id }, select: { status: true } })
+  return current?.status === 'CANCELLED'
+    ? { outcome: 'cancelled' as const, searchId, status: 'CANCELLED' as const }
+    : { outcome: 'not_cancellable' as const, status: current?.status || 'UNKNOWN' }
 }

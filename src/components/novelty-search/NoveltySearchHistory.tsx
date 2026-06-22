@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { Archive, Calendar, ChevronLeft, ChevronRight, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search } from 'lucide-react'
+import { Archive, Calendar, ChevronLeft, ChevronRight, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search, XCircle } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 
 type Client = { id: string; name: string; groups: MatterGroup[] }
 type MatterGroup = { id: string; name: string; referenceCode?: string | null; description?: string | null; archivedAt?: string | null; client?: { id: string; name: string }; _count?: { searchRuns: number } }
 type Project = { id: string; name: string }
 type HistoryItem = {
-  id: string; title: string; inventionDescription: string; status: 'QUEUED' | 'PROCESSING' | 'COMPLETE' | 'FAILED';
+  id: string; title: string; inventionDescription: string; status: 'QUEUED' | 'PROCESSING' | 'COMPLETE' | 'FAILED' | 'CANCELLED';
   createdAt: string; completedAt?: string | null; jurisdiction: string; patentCount: number; error?: string | null;
   project?: Project | null; group?: { id: string; name: string; referenceCode?: string | null; client: { id: string; name: string } } | null;
 }
@@ -20,6 +20,7 @@ const statusClasses: Record<HistoryItem['status'], string> = {
   PROCESSING: 'border-blue-200 bg-blue-50 text-blue-800',
   COMPLETE: 'border-emerald-200 bg-emerald-50 text-emerald-800',
   FAILED: 'border-red-200 bg-red-50 text-red-800',
+  CANCELLED: 'border-slate-200 bg-slate-100 text-slate-700',
 }
 
 export default function NoveltySearchHistory() {
@@ -48,6 +49,7 @@ export default function NoveltySearchHistory() {
   const [newReference, setNewReference] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [savingGroup, setSavingGroup] = useState(false)
+  const [cancellingId, setCancellingId] = useState('')
 
   const groups = useMemo(() => clients.flatMap(client => (client.groups || []).map(group => ({ ...group, client: { id: client.id, name: client.name } }))), [clients])
   const selectedClientGroups = clientId ? groups.filter(group => group.client?.id === clientId) : groups
@@ -139,6 +141,22 @@ export default function NoveltySearchHistory() {
     await loadHistory(true)
   }
 
+  const cancel = async (item: HistoryItem) => {
+    if (!window.confirm(`Cancel the novelty search “${item.title}”? Completed processing cannot be restored.`)) return
+    setCancellingId(item.id)
+    setError('')
+    try {
+      const response = await authFetch(`/api/novelty-search/${item.id}/cancel`, { method: 'POST' })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to cancel search.')
+      await loadHistory(true)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Failed to cancel search.')
+    } finally {
+      setCancellingId('')
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -165,7 +183,7 @@ export default function NoveltySearchHistory() {
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           <label className="relative"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={q} onChange={event => resetPage(() => setQ(event.target.value))} placeholder="Search invention titles" className="h-10 w-full rounded-lg border border-slate-300 pl-9 pr-3 text-sm" /></label>
-          <select value={status} onChange={event => resetPage(() => setStatus(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All statuses</option><option value="QUEUED">Queued</option><option value="PROCESSING">Processing</option><option value="COMPLETE">Complete</option><option value="FAILED">Failed</option></select>
+          <select value={status} onChange={event => resetPage(() => setStatus(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All statuses</option><option value="QUEUED">Queued</option><option value="PROCESSING">Processing</option><option value="COMPLETE">Complete</option><option value="FAILED">Failed</option><option value="CANCELLED">Cancelled</option></select>
           <select value={clientId} onChange={event => resetPage(() => { setClientId(event.target.value); setGroupId('') })} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All clients</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
           <select value={groupId} onChange={event => resetPage(() => setGroupId(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All matter groups</option>{selectedClientGroups.map(group => <option key={group.id} value={group.id}>{group.client?.name} — {group.name}</option>)}</select>
           <select value={projectId} onChange={event => resetPage(() => setProjectId(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
@@ -182,7 +200,19 @@ export default function NoveltySearchHistory() {
         {loading ? <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Loading history…</div> : history.length === 0 ? <div className="py-16 text-center text-slate-500"><Search className="mx-auto mb-3 h-9 w-9 text-slate-300" /><p>No novelty searches match these filters.</p></div> : <div className="divide-y divide-slate-100">{history.map(item => <article key={item.id} className={`p-5 transition-colors ${highlight === item.id ? 'bg-indigo-50 ring-1 ring-inset ring-indigo-200' : 'hover:bg-slate-50'}`}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-900">{item.title}</h3><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusClasses[item.status]}`}>{item.status === 'COMPLETE' ? 'Complete' : item.status.charAt(0) + item.status.slice(1).toLowerCase()}</span>{(item.status === 'QUEUED' || item.status === 'PROCESSING') && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}</div><p className="mt-2 line-clamp-2 text-sm leading-5 text-slate-600">{item.inventionDescription}</p><div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500"><span>{new Date(item.createdAt).toLocaleString()}</span><span>{item.jurisdiction}</span>{item.project && <span>Project: {item.project.name}</span>}<span>{item.patentCount} candidates</span></div>{item.error && <p className="mt-2 text-xs text-red-600">{item.error}</p>}</div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end"><select value={item.group?.id || ''} onChange={event => void moveSearch(item.id, event.target.value)} className="h-9 max-w-56 rounded-lg border border-slate-300 bg-white px-2 text-xs"><option value="">Ungrouped</option>{groups.map(group => <option key={group.id} value={group.id}>{group.client?.name} — {group.name}</option>)}</select>{item.status === 'COMPLETE' && <Link href={`/novelty-search/${item.id}/pdf`} className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-medium text-white hover:bg-indigo-700"><FileText className="h-4 w-4" /> View PDF</Link>}{item.status === 'FAILED' && <button onClick={() => void retry(item.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-300 bg-white px-3 text-xs font-medium text-red-700 hover:bg-red-50"><RefreshCw className="h-4 w-4" /> Retry</button>}</div>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <select value={item.group?.id || ''} onChange={event => void moveSearch(item.id, event.target.value)} className="h-9 max-w-56 rounded-lg border border-slate-300 bg-white px-2 text-xs">
+                <option value="">Ungrouped</option>
+                {groups.map(group => <option key={group.id} value={group.id}>{group.client?.name} — {group.name}</option>)}
+              </select>
+              {item.status === 'COMPLETE' && <Link href={`/novelty-search/${item.id}/pdf`} className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-medium text-white hover:bg-indigo-700"><FileText className="h-4 w-4" /> View PDF</Link>}
+              {item.status === 'FAILED' && <button onClick={() => void retry(item.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-300 bg-white px-3 text-xs font-medium text-red-700 hover:bg-red-50"><RefreshCw className="h-4 w-4" /> Retry</button>}
+              {(item.status === 'QUEUED' || item.status === 'PROCESSING') && (
+                <button onClick={() => void cancel(item)} disabled={cancellingId === item.id} className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:border-red-300 hover:bg-red-50 hover:text-red-700 disabled:opacity-50">
+                  {cancellingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />} Cancel
+                </button>
+              )}
+            </div>
           </div>
           {item.group && <div className="mt-3 inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600"><FolderOpen className="h-3 w-3" /> {item.group.client.name} / {item.group.name}{item.group.referenceCode ? ` / ${item.group.referenceCode}` : ''}</div>}
         </article>)}</div>}

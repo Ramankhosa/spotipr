@@ -155,6 +155,20 @@ describe('buildNoveltyAttorneyReportModel', () => {
                 novelty_impact: 'This feature is materially overlapping.',
                 claim_review_note: 'Do not rely on this loop alone for novelty.',
               },
+              {
+                feature_id: 'KF2',
+                feature: 'threshold-based irrigation decision rule',
+                user_invention_disclosure: 'The controller uses threshold logic to decide irrigation delivery.',
+                patent_disclosure: 'The patent controls irrigation without disclosing the submitted threshold decision rule.',
+                status: 'Absent',
+                evidence_quote: '',
+                evidence_source: 'none',
+                extent_score: 0.08,
+                confidence: 0.84,
+                attorney_remark: 'The reference lacks the threshold-triggered decision sequence required by this feature.',
+                novelty_impact: 'The threshold sequence is a mapped technical difference from this reference.',
+                claim_review_note: 'State the threshold inputs and resulting control transition expressly.',
+              },
             ],
           },
           {
@@ -197,6 +211,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
     });
     expect(model.componentCitations.map(item => item.publicationNumber)).toEqual(['IN456A']);
     expect(model.comparisons[0].technicalDisclosure).toContain('soil moisture sensor');
+    expect(model.comparisons[0].abstract).toBe('A soil moisture sensor controls irrigation.');
     expect(model.comparisons[0].rows).toHaveLength(4);
     expect(model.comparisons[0].noveltyThreat).toBe('Related / moderate-overlap');
     expect(model.comparisons[0].claimImpactSummary).toContain('Mapped overlap: 2 Present, 0 Partial, 2 Absent.');
@@ -209,7 +224,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       evidenceSource: 'abstract',
       extentScore: 0.88,
       confidence: 0.91,
-      crispRemark: 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.',
+      crispRemark: 'This is a direct overlap in the abstract.',
       attorneyRemark: 'This is a direct overlap in the abstract.',
       claimReviewNote: 'Do not rely on this loop alone for novelty.',
     });
@@ -217,10 +232,10 @@ describe('buildNoveltyAttorneyReportModel', () => {
       featureNumber: 'KF2',
       status: 'Absent',
       statusLabel: 'Absent',
-      patentDisclosure: 'No threshold rule disclosed in the abstract.',
+      patentDisclosure: 'The patent controls irrigation without disclosing the submitted threshold decision rule.',
       evidenceSource: 'none',
       extentScore: null,
-      crispRemark: 'This feature is absent from the available patent data and may support differentiation against this reference.',
+      crispRemark: 'The reference lacks the threshold-triggered decision sequence required by this feature.',
     });
     expect(model.comparisons[0].rows[3]).toMatchObject({
       featureNumber: 'KF4',
@@ -228,8 +243,8 @@ describe('buildNoveltyAttorneyReportModel', () => {
       statusLabel: 'Absent',
       evidenceSource: 'none',
       extentScore: null,
-      crispRemark: 'This feature is absent from the available patent data and may support differentiation against this reference.',
     });
+    expect(model.comparisons[0].rows[3].crispRemark).toContain('unsupported dosing signal');
 
     expect(model.featureSummaries[2]).toMatchObject({
       featureNumber: 'KF3',

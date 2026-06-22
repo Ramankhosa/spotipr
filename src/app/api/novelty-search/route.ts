@@ -19,6 +19,7 @@ export async function POST(request: NextRequest) {
       inventionDescription,
       title,
       groupId,
+      approvedStage0,
       executionMode,
       jurisdiction = 'IN',
       config
@@ -33,6 +34,21 @@ export async function POST(request: NextRequest) {
     if (searchMode === 'intelligent' && (!inventionDescription || !title)) {
       return NextResponse.json(
         { error: 'inventionDescription and title are required' },
+        { status: 400 }
+      );
+    }
+
+    if (
+      executionMode !== 'legacy' &&
+      searchMode === 'intelligent' &&
+      (
+        !String(approvedStage0?.searchQuery || '').trim() ||
+        !Array.isArray(approvedStage0?.inventionFeatures) ||
+        !approvedStage0.inventionFeatures.some((feature: unknown) => String(feature || '').trim())
+      )
+    ) {
+      return NextResponse.json(
+        { error: 'Generate, review, and approve the search query and invention features before queueing the novelty search.' },
         { status: 400 }
       );
     }
@@ -90,7 +106,8 @@ export async function POST(request: NextRequest) {
       inventionDescription: resolvedDescription,
       title: resolvedTitle,
       jurisdiction,
-      config
+      config,
+      approvedStage0,
     };
 
     const result = executionMode === 'legacy'

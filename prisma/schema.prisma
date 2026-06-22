@@ -1782,6 +1782,7 @@ enum NoveltySearchJobStatus {
   PROCESSING
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 model NoveltySearchClient {
@@ -1887,6 +1888,8 @@ model NoveltySearchJob {
   lastError             String?
   startedAt             DateTime?
   completedAt           DateTime?
+  cancelledAt           DateTime?
+  cancelledById         String?
   completionEmailSentAt DateTime?
   emailAttemptCount     Int                    @default(0)
   emailNextAttemptAt    DateTime               @default(now())

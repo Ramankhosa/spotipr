@@ -1,0 +1,5 @@
+ALTER TYPE "NoveltySearchJobStatus" ADD VALUE IF NOT EXISTS 'CANCELLED';
+
+ALTER TABLE "novelty_search_jobs"
+  ADD COLUMN IF NOT EXISTS "cancelledAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "cancelledById" TEXT;

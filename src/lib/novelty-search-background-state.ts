@@ -1,6 +1,7 @@
-export type NoveltyPublicStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETE' | 'FAILED'
+export type NoveltyPublicStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETE' | 'FAILED' | 'CANCELLED'
 
 export function getNoveltyPublicStatus(run: { status?: string | null; backgroundJob?: { status?: string | null } | null }): NoveltyPublicStatus {
+  if (run.backgroundJob?.status === 'CANCELLED') return 'CANCELLED'
   if (run.backgroundJob?.status === 'QUEUED') return 'QUEUED'
   if (run.backgroundJob?.status === 'PROCESSING') return 'PROCESSING'
   if (run.backgroundJob?.status === 'FAILED' || run.status === 'FAILED') return 'FAILED'

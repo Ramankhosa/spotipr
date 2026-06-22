@@ -53,6 +53,7 @@ export interface AttorneyReportEntityLandscape {
 
 export interface AttorneyReportPatentComparison extends AttorneyReportCitation {
   link: string;
+  abstract: string;
   technicalDisclosure: string;
   publicationDate: string;
   applicationNumber: string;
@@ -197,6 +198,20 @@ function sourceDisclosureTerm(): string {
 function sourceDisclosureFields(value: any): unknown[] {
   const term = sourceDisclosureTerm();
   return [value?.[term], value?.[`${term}Original`], value?.title, value?.snippet];
+}
+
+function sourceAbstractFields(value: any): unknown[] {
+  const term = sourceDisclosureTerm();
+  return [
+    value?.[term],
+    value?.[`${term}Original`],
+    value?.[`${term}_text`],
+    value?.[`${term}Text`],
+    value?.[`${term}_en`],
+    value?.[`${term}English`],
+    value?.snippet,
+    value?.description,
+  ];
 }
 
 function displayEvidenceSource(value: unknown, fallback = 'citation record'): string {
@@ -505,14 +520,18 @@ function defaultClaimReviewNote(status: FeatureMapCell['status'], feature: strin
   return `Request more evidence before relying on this feature in claim strategy.`;
 }
 
-function defaultCrispRemark(status: FeatureMapCell['status']): string {
+function defaultCrispRemark(status: FeatureMapCell['status'], feature: string, patentDisclosure: string): string {
+  const disclosure = cleanText(patentDisclosure, 'No supporting disclosure was mapped');
   if (status === 'Present') {
-    return 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.';
+    return `Mapped overlap for ${feature}: ${disclosure} Review whether the claimed implementation contains a narrower technical distinction.`;
   }
   if (status === 'Partial') {
-    return 'Related disclosure exists, but the full feature is not mapped; differentiate using the missing element.';
+    return `Partial mapping for ${feature}: ${disclosure} The unmapped elements should be stated explicitly when distinguishing this reference.`;
   }
-  return 'This feature is absent from the available patent data and may support differentiation against this reference.';
+  if (status === 'Absent') {
+    return `No supporting disclosure was mapped for ${feature} in this reference; assess whether the specific missing mechanism is a defensible distinction.`;
+  }
+  return `The available evidence does not support a reliable assessment of ${feature}; review the complete patent record before relying on this distinction.`;
 }
 
 function buildClaimImpactSummary(rows: AttorneyReportFeatureRow[], riskLabel: string): string {
@@ -629,7 +648,13 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       patentDisclosure,
       status,
       statusLabel: statusLabel(status),
-      crispRemark: defaultCrispRemark(status),
+      crispRemark: reportSafeText(
+        supplied.attorney_remark ||
+        cell?.attorney_remark ||
+        supplied.novelty_impact ||
+        cell?.novelty_impact ||
+        defaultCrispRemark(status, feature, patentDisclosure)
+      ),
       evidenceQuote,
       evidenceSource: evidenceQuote ? evidenceSource : 'none',
       extentScore: status === 'Absent' ? null : extentScore,
@@ -682,6 +707,14 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       matchCategory: category,
       matchCategoryLabel: matchCategoryLabel(gateDecision),
       link: firstText(map.link, meta.link, meta.url, `https://patents.google.com/patent/${pn}`),
+      abstract: firstText(
+        ...sourceAbstractFields(meta),
+        ...sourceAbstractFields(rawMeta),
+        ...sourceAbstractFields(ipIndiaDetails),
+        ...sourceAbstractFields(map),
+        remark?.abstract,
+        'No abstract was available in the retrieved patent record.'
+      ),
       technicalDisclosure: reportSafeText(firstText(...sourceDisclosureFields(remark), ...sourceDisclosureFields(meta), ...sourceDisclosureFields(rawMeta), ...sourceDisclosureFields(map), 'Citation disclosure reviewed.')),
       publicationDate: formatDate(firstText(meta.publicationDate, meta.publication_date, meta.date, (rawMeta as any).publicationDate, (rawMeta as any).publication_date, (ipIndiaDetails as any).publicationDate, (ipIndiaDetails as any).publication_date)),
       applicationNumber: firstText(meta.applicationNumber, meta.application_number, meta.applicationNumberRaw, meta.application_number_raw, (rawMeta as any).applicationNumberRaw, (rawMeta as any).application_number, (ipIndiaDetails as any).applicationNumber, (ipIndiaDetails as any).application_number, '-'),

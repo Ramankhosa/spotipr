@@ -2,11 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { FileText, FolderOpen, History, Loader2, Search, Upload } from 'lucide-react'
+import { CheckCircle2, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 
 type Project = { id: string; name: string }
 type MatterGroup = { id: string; name: string; referenceCode?: string | null; client: { id: string; name: string } }
+type Stage0Review = {
+  searchQuery: string
+  inventionFeatures: string[]
+  featureDetails?: Array<{ feature: string; [key: string]: unknown }>
+  [key: string]: unknown
+}
 
 export default function NoveltySearchSubmission(props: {
   initialProjectId?: string
@@ -24,6 +30,11 @@ export default function NoveltySearchSubmission(props: {
   const [sourceMode, setSourceMode] = useState('INDIAN_ONLY')
   const [projects, setProjects] = useState<Project[]>([])
   const [groups, setGroups] = useState<MatterGroup[]>([])
+  const [review, setReview] = useState<Stage0Review | null>(null)
+  const [editedSearchQuery, setEditedSearchQuery] = useState('')
+  const [editedFeatures, setEditedFeatures] = useState<string[]>([])
+  const [newFeature, setNewFeature] = useState('')
+  const [isPreparing, setIsPreparing] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isExtracting, setIsExtracting] = useState(false)
   const [uploadedName, setUploadedName] = useState('')
@@ -62,6 +73,7 @@ export default function NoveltySearchSubmission(props: {
       const body = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(body.error || 'Failed to extract text from the file.')
       setDescription(body.textContent || '')
+      setReview(null)
       setUploadedName(body.fileName || file.name)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Failed to extract text from the file.')
@@ -71,9 +83,48 @@ export default function NoveltySearchSubmission(props: {
     }
   }
 
-  const submit = async () => {
+  const prepareReview = async () => {
     if (!title.trim() || !description.trim()) {
       setError('Invention title and description are required.')
+      return
+    }
+    setIsPreparing(true)
+    setError('')
+    try {
+      const response = await authFetch('/api/novelty-search/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          inventionDescription: description.trim(),
+          jurisdiction,
+          config: {
+            jurisdiction,
+            searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
+          },
+        }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to generate search terms.')
+      const proposed = body.stage0 as Stage0Review
+      const features = Array.isArray(proposed?.inventionFeatures) ? proposed.inventionFeatures.map(String).filter(Boolean) : []
+      if (!proposed?.searchQuery || features.length === 0) throw new Error('The generated search plan was incomplete. Please regenerate it.')
+      setReview(proposed)
+      setEditedSearchQuery(String(proposed.searchQuery))
+      setEditedFeatures(features)
+      setNewFeature('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Failed to generate search terms.')
+    } finally {
+      setIsPreparing(false)
+    }
+  }
+
+  const submit = async () => {
+    const approvedQuery = editedSearchQuery.trim()
+    const approvedFeatures = editedFeatures.map(feature => feature.trim()).filter(Boolean)
+    if (!review || !approvedQuery || approvedFeatures.length === 0) {
+      setError('Review and approve a search query and at least one invention feature.')
       return
     }
     setIsSubmitting(true)
@@ -92,6 +143,11 @@ export default function NoveltySearchSubmission(props: {
             jurisdiction,
             searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
           },
+          approvedStage0: {
+            ...review,
+            searchQuery: approvedQuery,
+            inventionFeatures: approvedFeatures,
+          },
         }),
       })
       const body = await response.json().catch(() => ({}))
@@ -103,12 +159,23 @@ export default function NoveltySearchSubmission(props: {
     }
   }
 
+  const updateFeature = (index: number, value: string) => {
+    setEditedFeatures(current => current.map((feature, featureIndex) => featureIndex === index ? value : feature))
+  }
+
+  const addFeature = () => {
+    const value = newFeature.trim()
+    if (!value || editedFeatures.some(feature => feature.trim().toLowerCase() === value.toLowerCase())) return
+    setEditedFeatures(current => [...current, value])
+    setNewFeature('')
+  }
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">New Novelty Search</h1>
-          <p className="mt-1 text-sm text-slate-600">Submit the invention once. Processing continues securely on the server and the final PDF is emailed to you.</p>
+          <p className="mt-1 text-sm text-slate-600">Review and approve the proposed search query and invention features before the server begins the novelty search.</p>
         </div>
         <button onClick={() => router.push('/novelty-search/history')} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
           <History className="h-4 w-4" /> Search History
@@ -136,12 +203,12 @@ export default function NoveltySearchSubmission(props: {
 
         <label className="block space-y-2 text-sm font-medium text-slate-700">
           <span>Invention Title</span>
-          <input value={title} onChange={event => setTitle(event.target.value)} maxLength={300} className="h-11 w-full rounded-lg border border-slate-300 px-3 font-normal" placeholder="Enter a clear invention title" />
+          <input value={title} onChange={event => { setTitle(event.target.value); setReview(null) }} disabled={isPreparing || isSubmitting} maxLength={300} className="h-11 w-full rounded-lg border border-slate-300 px-3 font-normal disabled:bg-slate-50" placeholder="Enter a clear invention title" />
         </label>
 
         <label className="block space-y-2 text-sm font-medium text-slate-700">
           <span>Invention Description</span>
-          <textarea value={description} onChange={event => setDescription(event.target.value)} rows={10} className="w-full rounded-lg border border-slate-300 px-3 py-3 font-normal leading-6" placeholder="Describe the problem, core mechanism, operating steps, and key technical features." />
+          <textarea value={description} onChange={event => { setDescription(event.target.value); setReview(null) }} disabled={isPreparing || isSubmitting} rows={10} className="w-full rounded-lg border border-slate-300 px-3 py-3 font-normal leading-6 disabled:bg-slate-50" placeholder="Describe the problem, core mechanism, operating steps, and key technical features." />
         </label>
 
         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
@@ -150,7 +217,7 @@ export default function NoveltySearchSubmission(props: {
               <Upload className="h-5 w-5 text-slate-500" />
               <div><div className="text-sm font-medium text-slate-800">Upload disclosure</div><div className="text-xs text-slate-500">Extracted text replaces the description above. Maximum 5 MB.</div></div>
             </div>
-            <input ref={fileRef} type="file" disabled={isExtracting} onChange={event => event.target.files?.[0] && void extractFile(event.target.files[0])} className="max-w-xs text-sm" />
+            <input ref={fileRef} type="file" disabled={isExtracting || isPreparing || isSubmitting} onChange={event => event.target.files?.[0] && void extractFile(event.target.files[0])} className="max-w-xs text-sm" />
           </div>
           {isExtracting && <p className="mt-2 text-xs text-blue-600">Extracting readable text…</p>}
           {uploadedName && <p className="mt-2 text-xs text-emerald-700">Loaded {uploadedName}</p>}
@@ -159,19 +226,66 @@ export default function NoveltySearchSubmission(props: {
         <div>
           <label className="space-y-2 text-sm font-medium text-slate-700">
             <span>Search Source</span>
-            <select value={sourceMode} onChange={event => setSourceMode(event.target.value)} className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 font-normal">
+            <select value={sourceMode} onChange={event => { setSourceMode(event.target.value); setReview(null) }} disabled={isPreparing || isSubmitting} className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 font-normal disabled:bg-slate-50">
               <option value="INDIAN_ONLY">Indian database only</option><option value="PQAI_ONLY">International patents only</option><option value="PQAI_PLUS_INDIAN">International + Indian database</option>
             </select>
           </label>
         </div>
 
+        {review && (
+          <section className="space-y-5 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><CheckCircle2 className="h-5 w-5 text-indigo-600" /> Review Search Plan</h2>
+                <p className="mt-1 text-sm text-slate-600">Edit the proposed query and features. The patent search will use exactly what you approve below.</p>
+              </div>
+              <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isSubmitting} className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">
+                {isPreparing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate
+              </button>
+            </div>
+
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              <span>Patent Search Query</span>
+              <textarea value={editedSearchQuery} onChange={event => setEditedSearchQuery(event.target.value)} rows={3} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-3 font-normal leading-6" />
+            </label>
+
+            <div className="space-y-3">
+              <div className="text-sm font-medium text-slate-700">Key Invention Features ({editedFeatures.length})</div>
+              {editedFeatures.map((feature, index) => (
+                <div key={index} className="flex items-start gap-2">
+                  <div className="mt-3 w-8 shrink-0 text-xs font-semibold text-slate-500">KF{index + 1}</div>
+                  <textarea value={feature} onChange={event => updateFeature(index, event.target.value)} rows={2} className="min-h-11 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-5" />
+                  <button type="button" onClick={() => setEditedFeatures(current => current.filter((_, featureIndex) => featureIndex !== index))} aria-label={`Remove feature ${index + 1}`} className="mt-1 rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <div className="flex gap-2 pl-10">
+                <input value={newFeature} onChange={event => setNewFeature(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFeature() } }} className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm" placeholder="Add another technical feature" />
+                <button type="button" onClick={addFeature} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
+              Approval is required because these terms control patent retrieval and feature-by-feature comparison. Internal processing begins only after you approve and queue this plan.
+            </div>
+          </section>
+        )}
+
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-        <button onClick={submit} disabled={isSubmitting || isExtracting} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
-          {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
-          {isSubmitting ? 'Queueing search…' : 'Submit Novelty Search'}
-        </button>
-        <div className="flex items-center justify-center gap-2 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" /> You can close this page after submission.</div>
+        {!review ? (
+          <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+            {isPreparing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
+            {isPreparing ? 'Generating search plan…' : 'Generate Search Query & Features'}
+          </button>
+        ) : (
+          <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+            {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
+            {isSubmitting ? 'Queueing approved search…' : 'Approve & Queue Novelty Search'}
+          </button>
+        )}
+        <div className="flex items-center justify-center gap-2 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" /> After approval, processing continues in the background.</div>
       </div>
     </div>
   )

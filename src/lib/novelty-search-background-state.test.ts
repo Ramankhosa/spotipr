@@ -7,6 +7,7 @@ describe('novelty background state', () => {
     expect(getNoveltyPublicStatus({ status: 'COMPLETED', backgroundJob: { status: 'COMPLETED' } })).toBe('COMPLETE')
     expect(getNoveltyPublicStatus({ status: 'FAILED', backgroundJob: { status: 'FAILED' } })).toBe('FAILED')
     expect(getNoveltyPublicStatus({ status: 'PENDING', backgroundJob: { status: 'QUEUED' } })).toBe('QUEUED')
+    expect(getNoveltyPublicStatus({ status: 'STAGE_1_COMPLETED', backgroundJob: { status: 'CANCELLED' } })).toBe('CANCELLED')
   })
 
   it('detects relevance gates and visible routing decisions', () => {
