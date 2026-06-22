@@ -449,29 +449,141 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
     return;
   }
 
-  const chunkSize = 6;
+  const strongestReference = report.comparisons.reduce((best, item) => (
+    Number(item.coverage?.score || 0) > Number(best?.coverage?.score || 0) ? item : best
+  ), report.comparisons[0]);
+  const chunkSize = 8;
   for (let start = 0; start < features.length; start += chunkSize) {
     const featureChunk = features.slice(start, start + chunkSize);
-    const widths = [112, ...featureChunk.map(() => Math.floor((contentWidth(doc) - 112) / featureChunk.length))];
+    const citationWidth = 108;
+    const featureWidth = (contentWidth(doc) - citationWidth) / featureChunk.length;
+    const widths = [citationWidth, ...featureChunk.map(() => featureWidth)];
     const headers = ['Citation No.', ...featureChunk.map((_, index) => `KF${start + index + 1}`)];
-    drawTableRow(doc, headers, widths, { header: true });
+    drawFeatureMatrixHeader(doc, headers, widths);
     report.comparisons.forEach((item, itemIndex) => {
       const statusRows = featureChunk.map((_, index) => item.rows[start + index]);
-      drawTableRow(doc, [
+      const needed = itemIndex === report.comparisons.length - 1 ? 59 : 32;
+      if (ensureSpace(doc, needed)) drawFeatureMatrixHeader(doc, headers, widths);
+      drawFeatureMatrixRow(
+        doc,
         item.publicationNumber,
-        ...statusRows.map((row) => {
-          return row ? `${row.statusLabel}${typeof row.extentScore === 'number' ? `\n${Math.round(row.extentScore * 100)}% coverage` : ''}` : '-';
-        }),
-      ], widths, {
-        fills: [itemIndex % 2 ? COLORS.tableAlt : COLORS.white, ...statusRows.map(row => row ? statusFill(row.status) : COLORS.white)],
-        textColors: [COLORS.text, ...statusRows.map(row => row ? statusColor(row.status) : COLORS.text)],
-        boldCells: statusRows.map((_, index) => index + 1),
-        maxHeight: 46,
-        repeatHeader: { cells: headers, widths },
-      });
+        statusRows,
+        widths,
+        item.publicationNumber === strongestReference.publicationNumber,
+        itemIndex,
+      );
     });
-    doc.moveDown(0.5);
+    drawFeatureMatrixLegend(doc);
+    doc.moveDown(0.7);
   }
+}
+
+function drawFeatureMatrixHeader(doc: PdfDoc, headers: string[], widths: number[]) {
+  const rowHeight = 24;
+  ensureSpace(doc, rowHeight + 2);
+  const y = doc.y;
+  let x = PAGE.left;
+  headers.forEach((header, index) => {
+    doc.rect(x, y, widths[index], rowHeight).fillAndStroke('#F4F7FB', '#D9E2EC');
+    doc.fillColor('#162033').font('Helvetica-Bold').fontSize(index === 0 ? 7.4 : 7.2)
+      .text(header, x + 5, y + 8, {
+        width: widths[index] - 10,
+        height: 10,
+        align: index === 0 ? 'left' : 'center',
+        lineBreak: false,
+      });
+    x += widths[index];
+  });
+  doc.y = y + rowHeight;
+}
+
+function drawFeatureMatrixRow(
+  doc: PdfDoc,
+  publicationNumber: string,
+  rows: Array<AttorneyReportFeatureRow | undefined>,
+  widths: number[],
+  strongest: boolean,
+  rowIndex: number,
+) {
+  const rowHeight = 30;
+  const y = doc.y;
+  const rowFill = strongest ? '#F7FAFF' : rowIndex % 2 ? '#FCFDFE' : COLORS.white;
+  let x = PAGE.left;
+
+  widths.forEach((width, index) => {
+    doc.rect(x, y, width, rowHeight).fillAndStroke(rowFill, '#E1E7EF');
+    if (index === 0) {
+      doc.fillColor(strongest ? COLORS.blue2 : '#334155')
+        .font(strongest ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(7.2)
+        .text(publicationNumber, x + 8, y + 10, {
+          width: width - 16,
+          height: 10,
+          lineBreak: false,
+          ellipsis: true,
+        });
+    } else {
+      drawFeatureMatrixBadge(doc, rows[index - 1], x, y, width, rowHeight);
+    }
+    x += width;
+  });
+  doc.y = y + rowHeight;
+}
+
+function drawFeatureMatrixBadge(
+  doc: PdfDoc,
+  row: AttorneyReportFeatureRow | undefined,
+  cellX: number,
+  cellY: number,
+  cellWidth: number,
+  cellHeight: number,
+) {
+  const status = row?.status === 'Present' ? 'Present' : row?.status === 'Partial' ? 'Partial' : 'Absent';
+  const badgeWidth = Math.min(38, Math.max(25, cellWidth - 13));
+  const badgeHeight = 15;
+  const x = cellX + (cellWidth - badgeWidth) / 2;
+  const y = cellY + (cellHeight - badgeHeight) / 2;
+  const score = typeof row?.extentScore === 'number' ? `${Math.round(row.extentScore * 100)}%` : null;
+  const label = status === 'Absent' ? '—' : score || status;
+
+  if (status === 'Present') {
+    doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fillAndStroke('#E1F4D9', '#B9DDAA');
+    doc.fillColor('#387A32');
+  } else if (status === 'Partial') {
+    doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fillAndStroke('#FFF4D6', '#F4CF6A');
+    doc.fillColor('#9A6500');
+  } else {
+    doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fill('#F7F8FA');
+    doc.fillColor('#64748B');
+  }
+
+  doc.font(status === 'Absent' ? 'Helvetica' : 'Helvetica-Bold')
+    .fontSize(score ? 6.7 : 6.2)
+    .text(label, x + 2, y + 4.2, {
+      width: badgeWidth - 4,
+      height: 8,
+      align: 'center',
+      lineBreak: false,
+    });
+}
+
+function drawFeatureMatrixLegend(doc: PdfDoc) {
+  ensureSpace(doc, 27);
+  const y = doc.y + 9;
+  const items = [
+    { label: 'No evidence (Absent)', fill: '#F7F8FA', stroke: '#D9DEE5' },
+    { label: 'Partial overlap', fill: '#FFF4D6', stroke: '#F4CF6A' },
+    { label: 'Strong overlap', fill: '#E1F4D9', stroke: '#B9DDAA' },
+  ];
+  const itemWidths = [138, 110, 110];
+  let x = PAGE.left + 2;
+  items.forEach((item, index) => {
+    doc.roundedRect(x, y, 17, 11, 3).fillAndStroke(item.fill, item.stroke);
+    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7)
+      .text(item.label, x + 25, y + 2, { width: itemWidths[index] - 25, height: 9, lineBreak: false });
+    x += itemWidths[index];
+  });
+  doc.y = y + 15;
 }
 
 function drawReferenceBanner(doc: PdfDoc, label: string, rightText: string) {

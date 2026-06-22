@@ -20,7 +20,7 @@ export default function NoveltySearchSubmission(props: {
   const [description, setDescription] = useState(props.initialDescription || '')
   const [projectId, setProjectId] = useState(props.initialProjectId || '')
   const [groupId, setGroupId] = useState('')
-  const [jurisdiction, setJurisdiction] = useState('IN')
+  const jurisdiction = 'IN'
   const [sourceMode, setSourceMode] = useState('INDIAN_ONLY')
   const [projects, setProjects] = useState<Project[]>([])
   const [groups, setGroups] = useState<MatterGroup[]>([])
@@ -156,13 +156,7 @@ export default function NoveltySearchSubmission(props: {
           {uploadedName && <p className="mt-2 text-xs text-emerald-700">Loaded {uploadedName}</p>}
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="space-y-2 text-sm font-medium text-slate-700">
-            <span>Jurisdiction</span>
-            <select value={jurisdiction} onChange={event => { const value = event.target.value; setJurisdiction(value); setSourceMode(value === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY') }} className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 font-normal">
-              <option value="IN">India</option><option value="US">United States</option><option value="EP">European Patent</option><option value="WO">PCT / WO</option><option value="AU">Australia</option><option value="*">Global</option>
-            </select>
-          </label>
+        <div>
           <label className="space-y-2 text-sm font-medium text-slate-700">
             <span>Search Source</span>
             <select value={sourceMode} onChange={event => setSourceMode(event.target.value)} className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 font-normal">
