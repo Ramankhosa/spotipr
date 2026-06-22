@@ -104,6 +104,7 @@ describe('novelty search guardrails', () => {
         explanation: 'Patent P1 maps to a majority of extracted features',
       },
       novelty_score: 0.6,
+      distributed_component_risks: ['Separate references collectively map important features'],
       decision: 'Partially Novel',
       confidence: 'Medium',
       risk_factors: ['Closest reference P1 maps to a majority of extracted features'],
@@ -121,6 +122,7 @@ describe('novelty search guardrails', () => {
     );
 
     expect(remarks.key_risks).toContain('Closest reference P1 maps to a majority of extracted features');
+    expect(remarks.key_risks).toContain('Separate references collectively map important features');
     expect(remarks.key_risks).not.toContain('No significant risks identified.');
   });
 
@@ -179,6 +181,9 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       'Do not output aiRelevance, accepted, component, borderline, or rejected routing lists'
     );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"potential_differentiators"');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"closest_mapped_references"');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Unknown evidence lowers confidence');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"extent_score": 0.0');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Evaluate extent_score independently for every patent-feature pair');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, or none');
@@ -194,6 +199,9 @@ describe('novelty search guardrails', () => {
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain(
       'Never output "No significant risks identified"'
     );
+    expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain('"Potential Differentiators"');
+    expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain('distributed_component_risks');
+    expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain('legacy novelty_points');
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain('Use comparison_rows as the source for feature-level remarks');
   });
 
@@ -301,13 +309,93 @@ describe('novelty search guardrails', () => {
       { pn: 'IN2', feature_analysis: [{ feature: 'feature A', status: 'Absent' }] },
     ], ['feature A']);
 
-    expect(result).toEqual([{
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
       feature: 'feature A',
       present_in: 0,
       partial_in: 0,
       absent_in: 1,
       uniqueness: 0.5,
-    }]);
+      unknown_in: 1,
+      mapped_in: 0,
+      feature_seen_anywhere: false,
+    });
+  });
+
+  test('weak remote mapping does not erase closest-reference differentiation gap', () => {
+    const service = new NoveltySearchService() as any;
+    const features = ['multilayer oral film', 'saliva-triggered compliance marker'];
+    const featureTypes = new Map([
+      ['multilayer oral film', 'core_technical'],
+      ['saliva-triggered compliance marker', 'novelty_candidate'],
+    ]);
+    const featureMaps: PatentFeatureMap[] = [
+      {
+        pn: 'CLOSEST_FILM',
+        feature_analysis: [
+          { feature: 'multilayer oral film', status: 'Present' },
+          { feature: 'saliva-triggered compliance marker', status: 'Absent' },
+        ],
+      },
+      {
+        pn: 'REMOTE_MARKER',
+        feature_analysis: [
+          { feature: 'multilayer oral film', status: 'Absent' },
+          { feature: 'saliva-triggered compliance marker', status: 'Present' },
+        ],
+      },
+    ];
+
+    const rows = service.computePerFeatureUniqueness(featureMaps, features, featureTypes, ['CLOSEST_FILM']);
+    const marker = rows.find((row: any) => row.feature === 'saliva-triggered compliance marker');
+
+    expect(marker).toMatchObject({
+      feature_seen_anywhere: true,
+      feature_gap_against_closest_refs: true,
+      combination_sensitive_differentiator: true,
+    });
+    expect(service.computeNoveltyScore(rows, [])).toBeGreaterThan(0);
+  });
+
+  test('high mapped-overlap requires novelty-candidate or nearly-all core coverage', () => {
+    const service = new NoveltySearchService() as any;
+    const features = [
+      'core feature 1',
+      'core feature 2',
+      'core feature 3',
+      'core feature 4',
+      'core feature 5',
+      'core feature 6',
+      'distinctive release trigger',
+    ];
+    const featureTypes = new Map(features.map(feature => [
+      feature,
+      feature === 'distinctive release trigger' ? 'novelty_candidate' : 'core_technical',
+    ]));
+    const broadOnly: PatentFeatureMap = {
+      pn: 'BROAD_ONLY',
+      feature_analysis: [
+        { feature: 'core feature 1', status: 'Present' },
+        { feature: 'core feature 2', status: 'Present' },
+        { feature: 'core feature 3', status: 'Present' },
+        { feature: 'core feature 4', status: 'Present' },
+        { feature: 'core feature 5', status: 'Partial', extent_score: 0.4 },
+        { feature: 'core feature 6', status: 'Partial', extent_score: 0.4 },
+        { feature: 'distinctive release trigger', status: 'Absent' },
+      ],
+    };
+    const withNoveltyCandidate: PatentFeatureMap = {
+      pn: 'NOVELTY_MAPPED',
+      feature_analysis: [
+        ...broadOnly.feature_analysis.filter(cell => cell.feature !== 'distinctive release trigger'),
+        { feature: 'distinctive release trigger', status: 'Present' },
+      ],
+    };
+
+    expect(service.findHighMappedOverlapReference([broadOnly], features, featureTypes)).toBeNull();
+    expect(service.findHighMappedOverlapReference([broadOnly, withNoveltyCandidate], features, featureTypes)).toMatchObject({
+      pn: 'NOVELTY_MAPPED',
+    });
   });
 
   test('feature-map cache hash changes with evidence or model', () => {

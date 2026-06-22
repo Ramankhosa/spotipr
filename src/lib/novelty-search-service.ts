@@ -486,7 +486,7 @@ OUTPUT JSON SHAPE:
       ],
       "overlap_features": ["feature"],
       "missing_features": ["feature"],
-      "novelty_points": ["feature or distinction"],
+      "potential_differentiators": ["feature or distinction not mapped in closest references"],
       "confidence": 0.0,
       "detailedAnalysis": {
         "relevant_parts": ["specific overlap"],
@@ -496,9 +496,9 @@ OUTPUT JSON SHAPE:
     }
   ],
   "novelty_signals": {
-    "closest_blocking_references": ["PN"],
+    "closest_mapped_references": ["PN"],
     "features_fully_covered": ["feature"],
-    "features_still_unique": ["feature"],
+    "potential_differentiators": ["feature"],
     "weak_evidence_areas": ["feature or data gap"],
     "recommended_next_actions": ["action"]
   },
@@ -511,6 +511,8 @@ RULES
 - Return every patent PN supplied in feature_map and per_patent_remarks.
 - Do not output aiRelevance, accepted, component, borderline, or rejected routing lists; Stage 1.5 already produced workflow routing.
 - Do not treat distributed component disclosures across multiple patents as one patent anticipating the full invention.
+- Report potential_differentiators only for features not mapped in closest references; do not call them unique.
+- Unknown evidence lowers confidence and belongs in weak_evidence_areas, not potential_differentiators.
 - Return one comparison_rows item per invention feature for every patent.
 - comparison_rows must compare the submitted user idea against the patent feature by feature; do not collapse rows into a one-line summary.
 - extent_score must be the actual disclosure extent for that feature in that specific patent: Present usually 0.75-1.00, Partial 0.35-0.74, Absent 0.00-0.20, Unknown 0.00-0.35.
@@ -527,15 +529,15 @@ RULES
 export const PR_35B_NOVELTY_RATIONALE_PROMPT = `You are drafting the analytical narrative for a novelty assessment report.
 
 INPUTS:
-- Deterministic metrics (novelty_score, coverage_ratios, uniqueness_per_feature)
+- Deterministic metrics (mapped_differentiation_score, coverage_ratios, coverage_gap_per_feature)
 - Integration_check (true/false + top_pn)
 - Confidence_level
-- Invention_features with uniqueness %
+- Invention_features with mapped coverage gaps
 
 STRUCTURE your response:
-1ï¸âƒ£ Integration Analysis â€“ whether any patent integrates most features
-2ï¸âƒ£ Feature Insights â€“ which features remain unique or partially known
-3ï¸âƒ£ Verdict Explanation â€“ how the data supports the decision ("Novel", "Partially Novel", or "Not Novel")
+1. Integration Analysis - whether any patent integrates most features
+2. Feature Insights - which features remain potential differentiators or weakly evidenced
+3. Verdict Explanation - how the data supports the decision ("Novel", "Partially Novel", or "Not Novel")
 
 TONE:
 - Analytical but concise (3 short paragraphs)
@@ -732,7 +734,7 @@ Output JSON shape (exact keys):
     "visual_cards": {
       "Novelty Score": "..%",
       "Patents Analyzed": "N",
-      "Unique Features": "X of Y",
+      "Potential Differentiators": "X of Y",
       "Confidence": "High|Medium|Low"
     }
   },
@@ -804,7 +806,7 @@ Output JSON shape (exact keys):
     "visual_cards": {
       "Novelty Score": "..%",
       "Patents Analyzed": "N",
-      "Unique Features": "X of Y",
+      "Potential Differentiators": "X of Y",
       "Confidence": "High|Medium|Low"
     }
   },
@@ -865,7 +867,10 @@ STRICT RULES
 - Keep executive summary under 220 words and bullets under 18 words.
 - If the closest reference discloses most broad structural/process/composition/data-flow elements, state that broad claim positioning is weak even if a narrower differentiator remains.
 - Do not list as key_strengths any feature that is Present or Partial in the closest high-overlap reference.
+- Do not list Unknown evidence, generic gaps, or legacy novelty_points as key_strengths.
 - key_risks must reflect any risk stated in the executive summary, evidence basis, or filing advice. Never output "No significant risks identified" if any high-overlap, majority-overlap, or weak-evidence risk is discussed elsewhere.
+- If distributed_component_risks is non-empty in metrics, include at least one distributed component risk in key_risks.
+- idea_bank_suggestions are optional strengthening ideas, not features already proven in the submitted invention.
 - Do not describe the analysis by naming the source-field limitation, by saying it is based on only available data, or by calling it an early-stage review/report. If noting limitations, say it is based on limited available patent data and recommend review of full patent documents including claims, detailed description/specification, drawings, legal status, and family data.
 
 OUTPUT JSON SHAPE:
@@ -888,14 +893,16 @@ OUTPUT JSON SHAPE:
     "visual_cards": {
       "Novelty Score": "..%",
       "Patents Analyzed": "N",
-      "Unique Features": "X of Y",
+      "Potential Differentiators": "X of Y",
       "Confidence": "High|Medium|Low"
     }
   },
   "concluding_remarks": {
     "overall_novelty_assessment": "High Overlap | Moderate Overlap | Lower Mapped Overlap | Low Evidence",
     "honest_assessment": "2-3 sentence observation based on closest mapped-overlap risks and evidence quality",
-    "closest_blocking_references": ["PN"],
+    "closest_mapped_references": ["PN"],
+    "distributed_component_risks": ["component-combination risk"],
+    "potential_differentiators": ["feature not mapped in closest references"],
     "confidence_drivers": ["searched/mapped counts, evidence quality, feature coverage"],
     "weak_evidence_areas": ["feature or corpus gap"],
     "key_strengths": ["potential technical differentiator"],
@@ -1200,6 +1207,8 @@ export interface PerPatentCoverage {
   partial_count: number;
   absent_count: number;
   coverage_ratio: number;
+  present_only_ratio?: number;
+  important_coverage_ratio?: number;
 }
 
 export interface PerFeatureUniqueness {
@@ -1208,6 +1217,14 @@ export interface PerFeatureUniqueness {
   partial_in: number;
   absent_in: number;
   uniqueness: number;
+  unknown_in?: number;
+  mapped_in?: number;
+  coverage_gap?: number;
+  feature_seen_anywhere?: boolean;
+  feature_gap_against_closest_refs?: boolean;
+  combination_sensitive_differentiator?: boolean;
+  feature_type?: InventionFeatureDetail['feature_type'];
+  weight?: number;
 }
 
 export interface IntegrationCheck {
@@ -1243,12 +1260,19 @@ export interface AggregationResult {
   idea_id: string;
   per_patent_coverage: PerPatentCoverage[];
   per_feature_uniqueness: PerFeatureUniqueness[];
+  per_feature_coverage_gap?: PerFeatureUniqueness[];
   integration_check: IntegrationCheck;
   novelty_score: number;
+  mapped_differentiation_score?: number;
   single_reference_max_coverage?: number;
   distributed_component_coverage?: number;
   distributed_component_features?: string[];
+  distributed_component_risk_ratio?: number;
+  distributed_component_risks?: string[];
+  closest_mapped_references?: string[];
+  combination_sensitive_differentiators?: string[];
   decision: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence';
+  mapped_overlap_assessment?: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence';
   confidence: 'High' | 'Medium' | 'Low';
   risk_factors: string[];
   feature_matrix?: FeatureMatrix;
@@ -1268,6 +1292,7 @@ export interface PerPatentRemark {
   overlap_features?: string[];
   missing_features?: string[];
   novelty_points?: string[];
+  potential_differentiators?: string[];
   confidence?: number; // 0..1
   decision?: 'potential_novelty_space' | 'mapped_overlap' | 'high_overlap' | 'novel' | 'partial_novelty' | 'obvious';
   // Enhanced detailed analysis fields (for Stage 3.5c)
@@ -1517,6 +1542,10 @@ export class NoveltySearchService extends BasePatentService {
   }
 
   private getPotentialDifferentiatorsFromAggregation(aggregationResult: AggregationResult): string[] {
+    const fromRows = (aggregationResult.per_feature_uniqueness || [])
+      .filter(entry => Boolean(entry.feature_gap_against_closest_refs ?? (entry.present_in === 0 && entry.partial_in === 0)) && !this.isGenericNoveltyFeature(entry.feature))
+      .map(entry => entry.feature);
+    if (fromRows.length > 0) return fromRows;
     const features = (aggregationResult.per_feature_uniqueness || []).map(entry => entry.feature).filter(Boolean);
     const qualityFlags = { low_evidence: aggregationResult.decision === 'Low Evidence' };
     const featureMaps = this.featureMapsFromFeatureMatrix(aggregationResult.feature_matrix);
@@ -2264,7 +2293,7 @@ export class NoveltySearchService extends BasePatentService {
             '{',
             '  "pn": "patent number",',
             '  "title": "patent title",',
-            '  "relevance": 0.0-1.0 (how relevant/threatening is this patent to the invention),',
+            '  "relevance": 0.0-1.0 (mapped relevance based on supplied feature data),',
             '  "novelty_threat": "high_overlap|moderate_overlap|related|low_overlap",',
             '  "summary": "2-3 sentence analysis summary",',
             '  "detailedAnalysis": {',
@@ -2274,7 +2303,7 @@ export class NoveltySearchService extends BasePatentService {
             '  },',
             '  "overlap_features": ["features present in both"],',
             '  "missing_features": ["features absent from patent"],',
-            '  "novelty_points": ["short phrases of unique aspects"],',
+            '  "potential_differentiators": ["features or distinctions not mapped in available patent data"],',
             '  "confidence": 0.0-1.0',
             '}',
             '',
@@ -2285,6 +2314,12 @@ export class NoveltySearchService extends BasePatentService {
             '- low_overlap: Minimal available-patent-data overlap',
             '',
             'Relevance should reflect threat to the invention as a whole. A patent that only teaches a component, material, sensor, clamp, UI, generic algorithm, carrier, excipient, circuit element, or standard process step should be described as a component-level or background reference and should not receive high relevance unless it also shares the same core mechanism.',
+            'Use the supplied feature mapping as the main evidence basis; do not re-map features from scratch unless the supplied mapping is internally inconsistent.',
+            'Do not describe a missing feature as unique. Use potential differentiator or not mapped in available patent data.',
+            'Unknown features should reduce confidence, not increase novelty strength.',
+            'A component-level reference can be important for inventive-step review even when it is not a full invention-level overlap.',
+            'If a patent maps only implementation or generic_weak features, keep threat level related or low_overlap unless the mapped feature is central to the invention.',
+            'If a patent maps multiple core_technical or novelty_candidate features, mark moderate_overlap or high_overlap as appropriate.',
             'Be HONEST and STRAIGHTFORWARD. If a patent is highly relevant, say so clearly.',
             'Focus on actionable insights for attorney review and claim positioning.',
             'JSON only; follow input PN order.',
@@ -2334,7 +2369,8 @@ export class NoveltySearchService extends BasePatentService {
                   remarks: fromParsed.remarks || fromParsed.summary || '',
                   overlap_features: Array.isArray(fromParsed.overlap_features) ? fromParsed.overlap_features : present,
                   missing_features: Array.isArray(fromParsed.missing_features) ? fromParsed.missing_features : absent,
-                  novelty_points: Array.isArray(fromParsed.novelty_points) ? fromParsed.novelty_points : [],
+                  potential_differentiators: Array.isArray(fromParsed.potential_differentiators) ? fromParsed.potential_differentiators : (Array.isArray(fromParsed.novelty_points) ? fromParsed.novelty_points : []),
+                  novelty_points: Array.isArray(fromParsed.novelty_points) ? fromParsed.novelty_points : (Array.isArray(fromParsed.potential_differentiators) ? fromParsed.potential_differentiators : []),
                   confidence: typeof fromParsed.confidence === 'number' ? fromParsed.confidence : undefined,
                   // Enhanced detailed analysis fields
                   relevance: typeof fromParsed.relevance === 'number' ? fromParsed.relevance : undefined,
@@ -2368,7 +2404,8 @@ export class NoveltySearchService extends BasePatentService {
                 remarks: lines.join(' '), 
                 overlap_features: present, 
                 missing_features: absent, 
-                novelty_points: absent.slice(0, 3), // Use absent features as novelty points
+                potential_differentiators: absent.filter((feature: string) => !this.isGenericNoveltyFeature(feature)).slice(0, 3),
+                novelty_points: absent.filter((feature: string) => !this.isGenericNoveltyFeature(feature)).slice(0, 3),
                 confidence: undefined,
                 relevance: relevanceScore,
                 novelty_threat: threatLevel,
@@ -2423,7 +2460,7 @@ export class NoveltySearchService extends BasePatentService {
           '{',
           '  "pn": "patent number",',
           '  "title": "patent title",',
-          '  "relevance": 0.0-1.0,',
+          '  "relevance": 0.0-1.0 (mapped relevance based on supplied feature data),',
           '  "novelty_threat": "high_overlap|moderate_overlap|related|low_overlap",',
           '  "summary": "2-3 sentence analysis",',
           '  "detailedAnalysis": {',
@@ -2433,11 +2470,17 @@ export class NoveltySearchService extends BasePatentService {
           '  },',
           '  "overlap_features": ["features in both"],',
           '  "missing_features": ["features absent"],',
-          '  "novelty_points": ["unique aspects"],',
+          '  "potential_differentiators": ["features or distinctions not mapped in available patent data"],',
           '  "confidence": 0.0-1.0',
           '}',
           '',
           'Relevance should reflect threat to the invention as a whole. A patent that only teaches a component, material, sensor, clamp, UI, generic algorithm, carrier, excipient, circuit element, or standard process step should be described as a component-level or background reference and should not receive high relevance unless it also shares the same core mechanism.',
+          'Use the supplied feature mapping as the main evidence basis; do not re-map features from scratch unless the supplied mapping is internally inconsistent.',
+          'Do not describe a missing feature as unique. Use potential differentiator or not mapped in available patent data.',
+          'Unknown features should reduce confidence, not increase novelty strength.',
+          'A component-level reference can be important for inventive-step review even when it is not a full invention-level overlap.',
+          'If a patent maps only implementation or generic_weak features, keep threat level related or low_overlap unless the mapped feature is central to the invention.',
+          'If a patent maps multiple core_technical or novelty_candidate features, mark moderate_overlap or high_overlap as appropriate.',
           'Be evidence-driven. If the patent has high mapped overlap, say so clearly.',
           '',
           `PN: ${pn}`,
@@ -2470,7 +2513,8 @@ export class NoveltySearchService extends BasePatentService {
                 remarks: parsed.remarks || parsed.summary || '',
                 overlap_features: Array.isArray(parsed.overlap_features) ? parsed.overlap_features : present,
                 missing_features: Array.isArray(parsed.missing_features) ? parsed.missing_features : absent,
-                novelty_points: Array.isArray(parsed.novelty_points) ? parsed.novelty_points : [],
+                potential_differentiators: Array.isArray(parsed.potential_differentiators) ? parsed.potential_differentiators : (Array.isArray(parsed.novelty_points) ? parsed.novelty_points : []),
+                novelty_points: Array.isArray(parsed.novelty_points) ? parsed.novelty_points : (Array.isArray(parsed.potential_differentiators) ? parsed.potential_differentiators : []),
                 confidence: typeof parsed.confidence === 'number' ? parsed.confidence : undefined,
                 // Enhanced detailed analysis fields
                 relevance: typeof parsed.relevance === 'number' ? parsed.relevance : undefined,
@@ -2511,14 +2555,15 @@ export class NoveltySearchService extends BasePatentService {
             remarks: lines.join(' '),
             overlap_features: present,
             missing_features: absent,
-            novelty_points: absent.slice(0, 3),
+            potential_differentiators: absent.filter((feature: string) => !this.isGenericNoveltyFeature(feature)).slice(0, 3),
+            novelty_points: absent.filter((feature: string) => !this.isGenericNoveltyFeature(feature)).slice(0, 3),
             confidence: undefined,
             relevance: relevanceScore,
             novelty_threat: threatLevel,
             summary: lines.join(' '),
             detailedAnalysis: {
-              relevant_parts: present.map((f: string) => `Title/abstract maps to: ${f}`),
-              irrelevant_parts: absent.map((f: string) => `Title/abstract does not map: ${f}`),
+              relevant_parts: present.map((f: string) => `Available patent data maps to: ${f}`),
+              irrelevant_parts: absent.map((f: string) => `Available patent data does not map: ${f}`),
                   novelty_comparison: `This citation ${present.length > 0 ? `has available-patent-data overlap on ${present.length} feature(s)` : 'has minimal available-patent-data overlap'} with the invention. ${absent.length > 0 ? `${absent.length} potential differentiator(s) need full patent document review.` : ''}`
             }
           };
@@ -3664,7 +3709,7 @@ RESPONSE:`;
     const covered = inventionFeatures.filter(feature => featureMaps.some(map =>
       (map.feature_analysis || []).some(cell => cell.feature === feature && cell.status === 'Present')
     ));
-    const unique = inventionFeatures.filter(feature => !featureMaps.some(map =>
+    const potentialDifferentiators = inventionFeatures.filter(feature => !this.isGenericNoveltyFeature(feature) && !featureMaps.some(map =>
       (map.feature_analysis || []).some(cell => cell.feature === feature && (cell.status === 'Present' || cell.status === 'Partial'))
     ));
     const weak = inventionFeatures.filter(feature => featureMaps.some(map =>
@@ -3672,13 +3717,15 @@ RESPONSE:`;
     ));
 
     return {
+      closest_mapped_references: closest,
       closest_blocking_references: closest,
       features_fully_covered: covered,
-      features_still_unique: unique,
+      potential_differentiators: potentialDifferentiators,
+      features_still_unique: potentialDifferentiators,
       weak_evidence_areas: weak,
       recommended_next_actions: [
-        closest.length ? 'Review closest blocking references in detail before drafting claims.' : 'Broaden the search corpus before relying on novelty.',
-        unique.length ? 'Emphasize features not found in abstract evidence.' : 'Identify additional technical differentiators before filing.'
+        closest.length ? 'Review closest mapped references in detail before drafting claims.' : 'Broaden the search corpus before relying on novelty.',
+        potentialDifferentiators.length ? 'Focus attorney review on potential differentiators not mapped in closest references.' : 'Identify additional technical differentiators before filing.'
       ]
     };
   }
@@ -3693,6 +3740,7 @@ RESPONSE:`;
       if (!feature) continue;
       byFeature.set(feature, {
         feature,
+        feature_type: detail.feature_type,
         user_disclosure: String(detail.user_disclosure || feature).trim(),
         technical_role: String(detail.technical_role || 'Technical feature extracted from the user disclosure.').trim(),
         source_excerpt: String(detail.source_excerpt || '').trim(),
@@ -3781,8 +3829,10 @@ RESPONSE:`;
       feature_map: [] as any[],
       per_patent_remarks: [] as any[],
       novelty_signals: {
+        closest_mapped_references: [] as string[],
         closest_blocking_references: [] as string[],
         features_fully_covered: [] as string[],
+        potential_differentiators: [] as string[],
         features_still_unique: [] as string[],
         weak_evidence_areas: [] as string[],
         recommended_next_actions: [] as string[],
@@ -3811,9 +3861,19 @@ RESPONSE:`;
       Object.assign(merged.aiRelevance.byPn, parsed.aiRelevance?.byPn || {});
       if (Array.isArray(parsed.feature_map)) merged.feature_map.push(...parsed.feature_map);
       if (Array.isArray(parsed.per_patent_remarks)) merged.per_patent_remarks.push(...parsed.per_patent_remarks);
-      uniquePush(merged.novelty_signals.closest_blocking_references, parsed.novelty_signals?.closest_blocking_references || []);
+      const closestMapped = [
+        ...(Array.isArray(parsed.novelty_signals?.closest_mapped_references) ? parsed.novelty_signals.closest_mapped_references : []),
+        ...(Array.isArray(parsed.novelty_signals?.closest_blocking_references) ? parsed.novelty_signals.closest_blocking_references : [])
+      ];
+      const potentialDifferentiators = [
+        ...(Array.isArray(parsed.novelty_signals?.potential_differentiators) ? parsed.novelty_signals.potential_differentiators : []),
+        ...(Array.isArray(parsed.novelty_signals?.features_still_unique) ? parsed.novelty_signals.features_still_unique : [])
+      ];
+      uniquePush(merged.novelty_signals.closest_mapped_references, closestMapped);
+      uniquePush(merged.novelty_signals.closest_blocking_references, closestMapped);
       uniquePush(merged.novelty_signals.features_fully_covered, parsed.novelty_signals?.features_fully_covered || []);
-      uniquePush(merged.novelty_signals.features_still_unique, parsed.novelty_signals?.features_still_unique || []);
+      uniquePush(merged.novelty_signals.potential_differentiators, potentialDifferentiators);
+      uniquePush(merged.novelty_signals.features_still_unique, potentialDifferentiators);
       uniquePush(merged.novelty_signals.weak_evidence_areas, parsed.novelty_signals?.weak_evidence_areas || []);
       uniquePush(merged.novelty_signals.recommended_next_actions, parsed.novelty_signals?.recommended_next_actions || []);
       merged.quality_flags.low_evidence = merged.quality_flags.low_evidence || Boolean(parsed.quality_flags?.low_evidence);
@@ -4180,7 +4240,12 @@ RESPONSE:`;
           remarks: parsedRemark.remarks || parsedRemark.summary || '',
           overlap_features: Array.isArray(parsedRemark.overlap_features) ? parsedRemark.overlap_features : [],
           missing_features: Array.isArray(parsedRemark.missing_features) ? parsedRemark.missing_features : [],
-          novelty_points: Array.isArray(parsedRemark.novelty_points) ? parsedRemark.novelty_points : [],
+          potential_differentiators: Array.isArray(parsedRemark.potential_differentiators)
+            ? parsedRemark.potential_differentiators
+            : (Array.isArray(parsedRemark.novelty_points) ? parsedRemark.novelty_points : []),
+          novelty_points: Array.isArray(parsedRemark.novelty_points)
+            ? parsedRemark.novelty_points
+            : (Array.isArray(parsedRemark.potential_differentiators) ? parsedRemark.potential_differentiators : []),
           confidence: typeof parsedRemark.confidence === 'number' ? parsedRemark.confidence : undefined,
           relevance: typeof parsedRemark.relevance === 'number' ? parsedRemark.relevance : undefined,
           novelty_threat: ['high_overlap', 'moderate_overlap', 'related', 'low_overlap', 'anticipates', 'obvious', 'adjacent', 'remote'].includes(parsedRemark.novelty_threat)
@@ -5014,22 +5079,6 @@ RESPONSE:`;
 
       const inventionFeatures = stage0Data.inventionFeatures || [];
       const featureMaps = stage35aData.feature_map;
-      const totalFeatureCells = featureMaps.reduce(
-        (count, map) => count + (Array.isArray(map.feature_analysis) ? map.feature_analysis.length : 0),
-        0
-      );
-      const unknownFeatureCells = featureMaps.reduce(
-        (count, map) => count + (map.feature_analysis || []).filter(cell => cell.status === 'Unknown').length,
-        0
-      );
-      const qualityFlags = {
-        ...stage35aData.quality_flags,
-        low_evidence: Boolean(
-          stage35aData.quality_flags?.low_evidence ||
-          (totalFeatureCells > 0 && unknownFeatureCells / totalFeatureCells >= 0.25)
-        ),
-      };
-
       if (featureMaps.length === 0) {
         if (stage35aData.noHighConfidencePriorArt) {
           const retrievedCount = Number(stage35aData.retrievedCount || 0) || 0;
@@ -5049,14 +5098,29 @@ RESPONSE:`;
         return { success: false, error: 'No feature mapping data available for aggregation' };
       }
 
+      const featureTypes = this.buildFeatureTypeMap(stage0Data, inventionFeatures);
+
       // Compute per-patent coverage
-      const perPatentCoverage = this.computePerPatentCoverage(featureMaps, inventionFeatures);
+      const perPatentCoverage = this.computePerPatentCoverage(featureMaps, inventionFeatures, featureTypes);
+      const closestMappedReferences = this.closestMappedPatentPns(perPatentCoverage, 3);
 
       // Compute per-feature uniqueness
-      const perFeatureUniqueness = this.computePerFeatureUniqueness(featureMaps, inventionFeatures);
+      const perFeatureUniqueness = this.computePerFeatureUniqueness(featureMaps, inventionFeatures, featureTypes, closestMappedReferences);
+
+      const unknownStats = this.unknownEvidenceStats(featureMaps, inventionFeatures, featureTypes, closestMappedReferences);
+      const qualityFlags = {
+        ...stage35aData.quality_flags,
+        low_evidence: Boolean(
+          stage35aData.quality_flags?.low_evidence ||
+          unknownStats.overallUnknownRatio >= 0.4 ||
+          unknownStats.importantUnknownRatio >= 0.25 ||
+          unknownStats.closestImportantUnknownRatio >= 0.25
+        ),
+      };
 
       // Integration check
       const integrationCheck = this.performIntegrationCheck(featureMaps, inventionFeatures, config.stage35a.criticalFeatures);
+      const highMappedOverlap = this.findHighMappedOverlapReference(featureMaps, inventionFeatures, featureTypes);
 
       // Compute novelty score
       const noveltyScore = this.computeNoveltyScore(perFeatureUniqueness, config.stage35a.criticalFeatures);
@@ -5064,12 +5128,22 @@ RESPONSE:`;
         (max, row) => Math.max(max, Number(row.coverage_ratio || 0)),
         0
       );
+      const importantFeatures = inventionFeatures.filter(feature => this.isImportantFeature(feature, featureTypes));
       const distributedComponentFeatures = perFeatureUniqueness
-        .filter(row => (row.present_in || 0) + (row.partial_in || 0) > 0)
+        .filter(row => this.isImportantFeature(row.feature, featureTypes) && (row.present_in || 0) + (row.partial_in || 0) > 0)
         .map(row => row.feature);
-      const distributedComponentCoverage = inventionFeatures.length
-        ? Math.round((distributedComponentFeatures.length / inventionFeatures.length) * 100) / 100
+      const distributedComponentCoverage = importantFeatures.length
+        ? Math.round((distributedComponentFeatures.length / importantFeatures.length) * 100) / 100
         : 0;
+      const combinationSensitiveDifferentiators = perFeatureUniqueness
+        .filter(row => row.combination_sensitive_differentiator && !this.isGenericNoveltyFeature(row.feature))
+        .map(row => row.feature);
+      const mappedImportantPatentCount = featureMaps.filter(patentMap =>
+        importantFeatures.some(feature => this.isMappedCell(this.cellForFeature(patentMap, feature)))
+      ).length;
+      const distributedComponentRisks = (!highMappedOverlap && mappedImportantPatentCount >= 2 && distributedComponentCoverage >= 0.5)
+        ? [`Separate references collectively map ${distributedComponentFeatures.length}/${Math.max(importantFeatures.length, 1)} important feature(s), creating component-combination risk for claim drafting.`]
+        : [];
 
       // Determine decision and confidence
       const { decision, confidence } = this.computeDecisionAndConfidence(
@@ -5078,7 +5152,12 @@ RESPONSE:`;
         perFeatureUniqueness,
         featureMaps.length,
         qualityFlags,
-        config.stage35a.criticalFeatures
+        config.stage35a.criticalFeatures,
+        {
+          highMappedOverlap,
+          featureTypes,
+          noveltyScore
+        }
       );
 
       // Identify risk factors
@@ -5088,12 +5167,15 @@ RESPONSE:`;
         qualityFlags,
         inventionFeatures,
         integrationCheck,
-        decision
+        decision,
+        {
+          highMappedOverlap,
+          distributedComponentRisks,
+          featureTypes
+        }
       );
-      if (!integrationCheck.any_single_patent_covers_majority && distributedComponentCoverage >= 0.5) {
-        riskFactors.push(
-          `Distributed component coverage: ${distributedComponentFeatures.length}/${inventionFeatures.length} features appear across multiple references; treat as combination/landscape risk, not one-reference anticipation.`
-        );
+      for (const risk of distributedComponentRisks) {
+        if (!riskFactors.includes(risk)) riskFactors.push(risk);
       }
 
       // Build per-patent remarks from Stage 3.5a maps so Stage 4 and the UI
@@ -5144,6 +5226,7 @@ RESPONSE:`;
           remarks: remarks || '',
           overlap_features: present,
           missing_features: absent,
+          potential_differentiators: absent.filter((feature: string) => !this.isGenericNoveltyFeature(feature)).slice(0, 4),
           novelty_points: [],
           confidence: confidenceValue,
           decision: decisionLabel
@@ -5155,12 +5238,19 @@ RESPONSE:`;
         idea_id: searchId,
         per_patent_coverage: perPatentCoverage,
         per_feature_uniqueness: perFeatureUniqueness,
+        per_feature_coverage_gap: perFeatureUniqueness,
         integration_check: integrationCheck,
         novelty_score: noveltyScore,
+        mapped_differentiation_score: noveltyScore,
         single_reference_max_coverage: Math.round(singleReferenceMaxCoverage * 100) / 100,
         distributed_component_coverage: distributedComponentCoverage,
         distributed_component_features: distributedComponentFeatures,
+        distributed_component_risk_ratio: distributedComponentCoverage,
+        distributed_component_risks: distributedComponentRisks,
+        closest_mapped_references: closestMappedReferences,
+        combination_sensitive_differentiators: combinationSensitiveDifferentiators,
         decision,
+        mapped_overlap_assessment: decision,
         confidence,
         risk_factors: riskFactors,
         per_patent_remarks: perPatentRemarks,
@@ -5292,7 +5382,7 @@ RESPONSE:`;
     decision: string
   ): any {
     const score = (aggregationResult.novelty_score * 100).toFixed(1);
-    const uniqueFeatures = perFeatureUniqueness.filter(f => f.uniqueness > 0.8).length;
+    const potentialDifferentiators = this.getPotentialDifferentiatorsFromAggregation(aggregationResult);
     const totalFeatures = perFeatureUniqueness.length;
 
     return {
@@ -5300,7 +5390,7 @@ RESPONSE:`;
         ? "No reviewed patent record maps a majority of the identified features; this is an evidence-limited differentiation signal, not a novelty conclusion."
         : "At least one reviewed patent record maps a majority of the identified features, creating elevated overlap risk.",
 
-      feature_insights: `Analysis reveals ${uniqueFeatures} of ${totalFeatures} features with high uniqueness (>80%). Features related to core functionality show ${(uniqueFeatures/totalFeatures * 100).toFixed(0)}% uniqueness across the patent landscape.`,
+      feature_insights: `Analysis identifies ${potentialDifferentiators.length} of ${totalFeatures} potential differentiator(s) after closest-reference and generic-component filters.`,
 
       verdict: `The mapped differentiation indicator is ${score}% with ${aggregationResult.confidence.toLowerCase()} confidence. Review the cited patent records and full patent documents before drawing filing conclusions.`
     };
@@ -5351,7 +5441,7 @@ RESPONSE:`;
     selectedPatents?: any[]
   ): any {
     const score = (aggregationResult.novelty_score * 100).toFixed(1);
-    const uniqueFeatures = aggregationResult.per_feature_uniqueness.filter(f => f.uniqueness > 0.8).length;
+    const potentialDifferentiators = this.getPotentialDifferentiatorsFromAggregation(aggregationResult);
     const totalFeatures = aggregationResult.per_feature_uniqueness.length;
     const selectedCount = selectedPatents?.length || 0;
 
@@ -5471,12 +5561,13 @@ RESPONSE:`;
         title: "Claim-Positioning Observations",
         overall_novelty_assessment: aggregationResult.decision,
         key_strengths: [
-          `Potential novelty-space score: ${score}%`,
-          `${uniqueFeatures} out of ${totalFeatures} features were flagged as possible differentiators in fallback mode`
+          `Mapped differentiation score: ${score}%`,
+          `${potentialDifferentiators.length} out of ${totalFeatures} features were flagged as possible differentiators in fallback mode`
         ],
         key_risks: [
           "Limited patent details in fallback mode",
-          "Detailed analysis not available"
+          "Detailed analysis not available",
+          ...(aggregationResult.distributed_component_risks || [])
         ],
         strategic_recommendations: aggregationResult.decision === 'Novel' ?
           ["Prepare attorney review around mapped differentiators", "Validate with full patent documents, including claims and detailed description/specification"] :
@@ -5520,15 +5611,23 @@ RESPONSE:`;
     );
 
     const existingExec = llmReport?.executive_summary || {};
+    const existingCards = existingExec.visual_cards && typeof existingExec.visual_cards === 'object'
+      ? { ...existingExec.visual_cards }
+      : {};
+    if (existingCards["Unique Features"] && !existingCards["Potential Differentiators"]) {
+      existingCards["Potential Differentiators"] = existingCards["Unique Features"];
+    }
+    delete existingCards["Unique Features"];
     const finalExec = {
       ...existingExec,
       summary: existingExec.summary || existingExec.text || deterministicSummary,
       novelty_score: (score * 100).toFixed(1) + "%",
       confidence: aggregationResult.confidence,
       visual_cards: {
+        ...existingCards,
         "Mapped Differentiation": (score * 100).toFixed(1) + "%",
         "Patents Analyzed": aggregationResult.per_patent_coverage.length.toString(),
-        "Unique Features": `${potentialDifferentiators.length} of ${totalFeatures}`,
+        "Potential Differentiators": `${potentialDifferentiators.length} of ${totalFeatures}`,
         "Confidence": aggregationResult.confidence
       }
     };
@@ -5546,6 +5645,13 @@ RESPONSE:`;
       // Include search query from stage 0 data
       search_query: reportInputs.stage0_data?.searchQuery || '',
       executive_summary: finalExec,
+      feature_differentiation_table: aggregationResult.per_feature_uniqueness.map(f => ({
+        feature: f.feature,
+        mapped_differentiation: ((f.coverage_gap ?? f.uniqueness) * 100).toFixed(1) + "%",
+        feature_seen_anywhere: Boolean(f.feature_seen_anywhere),
+        feature_gap_against_closest_refs: Boolean(f.feature_gap_against_closest_refs),
+        color: (f.coverage_gap ?? f.uniqueness) > 0.8 ? "#4CAF50" : (f.coverage_gap ?? f.uniqueness) > 0.6 ? "#FFC107" : "#E53935"
+      })),
       feature_uniqueness_table: aggregationResult.per_feature_uniqueness.map(f => ({
         feature: f.feature,
         uniqueness: (f.uniqueness * 100).toFixed(1) + "%",
@@ -5640,7 +5746,7 @@ RESPONSE:`;
     // Build professional key risks
     const keyRisks: string[] = [];
     if (lowUnique.length > 0) {
-      keyRisks.push(`${lowUnique.length} feature(s) have substantial prior art overlap (≤50% uniqueness) - consider claim narrowing`);
+      keyRisks.push(`${lowUnique.length} feature(s) have substantial mapped overlap - consider narrower claim positioning`);
       const riskFeatures = lowUnique.slice(0, 2).map(f => f.feature);
       if (riskFeatures.length > 0) {
         keyRisks.push(`Features requiring attention: ${riskFeatures.join(', ')}`);
@@ -5654,6 +5760,9 @@ RESPONSE:`;
     }
     if (aggregationResult.per_patent_coverage.some(p => p.coverage_ratio > 0.7)) {
       keyRisks.push('One or more references show high feature coverage (>70%) - review for potential anticipation');
+    }
+    for (const risk of aggregationResult.distributed_component_risks || []) {
+      if (risk) keyRisks.push(risk);
     }
     const deterministicRisks = this.mergeRiskLists(keyRisks, aggregationResult.risk_factors);
     const existingRisks = Array.isArray(existingRemarks.key_risks)
@@ -5700,6 +5809,21 @@ RESPONSE:`;
       ? `The apparent differentiation window is primarily supported by ${potentialDifferentiators.length} potential differentiator(s): ${uniqueFeaturesText}. ${integrationLine} Attorney review should validate whether the specific configuration and technical integration remain distinct in full records.`
       : `The assessment is based on overall feature mapping from limited available patent data. ${integrationLine}`;
 
+    const closestMappedReferences = Array.isArray(aggregationResult.closest_mapped_references)
+      ? aggregationResult.closest_mapped_references
+      : (Array.isArray(existingRemarks.closest_mapped_references)
+        ? existingRemarks.closest_mapped_references
+        : (Array.isArray(existingRemarks.closest_blocking_references) ? existingRemarks.closest_blocking_references : []));
+    const distributedComponentRisks = Array.isArray(aggregationResult.distributed_component_risks)
+      ? aggregationResult.distributed_component_risks
+      : (Array.isArray(existingRemarks.distributed_component_risks) ? existingRemarks.distributed_component_risks : []);
+    const safeExistingStrengths = Array.isArray(existingRemarks.key_strengths)
+      ? existingRemarks.key_strengths.filter((strength: any) => {
+        const text = String(strength || '');
+        return text && !/unknown|novelty_points|unique/i.test(text);
+      })
+      : [];
+
     // Build inventor action items
     const inventorActions: string[] = [];
     if (lowUnique.length > 0) {
@@ -5718,7 +5842,10 @@ RESPONSE:`;
       overall_novelty_assessment: existingRemarks.overall_novelty_assessment || decision,
       novelty_score_summary: `${(score * 100).toFixed(1)}% mapped-differentiation score with ${confidence.toLowerCase()} confidence`,
       why_novelty_exists: existingRemarks.why_novelty_exists || visibleWhyNovel,
-      key_strengths: keyStrengths.length > 0 ? keyStrengths : (Array.isArray(existingRemarks.key_strengths) ? existingRemarks.key_strengths : []),
+      closest_mapped_references: closestMappedReferences,
+      distributed_component_risks: distributedComponentRisks,
+      potential_differentiators: potentialDifferentiators,
+      key_strengths: keyStrengths.length > 0 ? keyStrengths : safeExistingStrengths,
       key_risks: finalRisks,
       strategic_recommendations: existingRemarks.strategic_recommendations?.length > 0 ? existingRemarks.strategic_recommendations : recommendations,
       filing_advice: existingRemarks.filing_advice || filingAdvice,
@@ -6138,40 +6265,229 @@ OUTPUT JSON:
 
   // Stage 3.5b Helper Methods
 
-  private computePerPatentCoverage(featureMaps: PatentFeatureMap[], inventionFeatures: string[]): PerPatentCoverage[] {
+  private normalizeAggregationFeatureType(value: unknown): InventionFeatureDetail['feature_type'] | undefined {
+    const text = String(value || '').toLowerCase();
+    if (text === 'novelty_candidate' || text === 'core_technical' || text === 'implementation' || text === 'generic_weak') {
+      return text as InventionFeatureDetail['feature_type'];
+    }
+    return undefined;
+  }
+
+  private buildFeatureTypeMap(stage0Data: NormalizedIdea, inventionFeatures: string[]): Map<string, InventionFeatureDetail['feature_type']> {
+    const details = Array.isArray(stage0Data.featureDetails) ? stage0Data.featureDetails : [];
+    const typeByFeature = new Map<string, InventionFeatureDetail['feature_type']>();
+    for (const detail of details) {
+      const feature = String(detail?.feature || '').trim();
+      if (!feature) continue;
+      const type = this.normalizeAggregationFeatureType(detail?.feature_type);
+      if (type) typeByFeature.set(feature, type);
+    }
+    for (const feature of inventionFeatures) {
+      if (!typeByFeature.has(feature)) {
+        typeByFeature.set(feature, this.isGenericNoveltyFeature(feature) ? 'generic_weak' : 'core_technical');
+      }
+    }
+    return typeByFeature;
+  }
+
+  private featureWeight(feature: string, featureTypes?: Map<string, InventionFeatureDetail['feature_type']>): number {
+    const type = featureTypes?.get(feature) || (this.isGenericNoveltyFeature(feature) ? 'generic_weak' : 'core_technical');
+    if (type === 'novelty_candidate') return 1.25;
+    if (type === 'core_technical') return 1.0;
+    if (type === 'implementation') return 0.6;
+    return 0.15;
+  }
+
+  private isImportantFeature(feature: string, featureTypes?: Map<string, InventionFeatureDetail['feature_type']>): boolean {
+    const type = featureTypes?.get(feature) || (this.isGenericNoveltyFeature(feature) ? 'generic_weak' : 'core_technical');
+    return type === 'novelty_candidate' || type === 'core_technical';
+  }
+
+  private isStrongPartial(cell?: FeatureMapCell): boolean {
+    if (!cell || cell.status !== 'Partial') return false;
+    return Number(cell.extent_score || 0) >= 0.55 || Number(cell.confidence || 0) >= 0.65;
+  }
+
+  private isMappedCell(cell?: FeatureMapCell): boolean {
+    return !!cell && (cell.status === 'Present' || cell.status === 'Partial');
+  }
+
+  private isStrongMappedCell(cell?: FeatureMapCell): boolean {
+    return !!cell && (cell.status === 'Present' || this.isStrongPartial(cell));
+  }
+
+  private cellForFeature(patentMap: PatentFeatureMap, feature: string): FeatureMapCell | undefined {
+    return (patentMap.feature_analysis || []).find(cell => cell.feature === feature);
+  }
+
+  private mappedFactor(cell?: FeatureMapCell): number {
+    if (!cell) return 0;
+    if (cell.status === 'Present') return 1;
+    if (cell.status === 'Partial') return 0.5;
+    return 0;
+  }
+
+  private weightedCoverageForPatent(
+    patentMap: PatentFeatureMap,
+    inventionFeatures: string[],
+    featureTypes?: Map<string, InventionFeatureDetail['feature_type']>,
+    importantOnly = false
+  ): number {
+    let totalWeight = 0;
+    let mappedWeight = 0;
+    for (const feature of inventionFeatures) {
+      if (importantOnly && !this.isImportantFeature(feature, featureTypes)) continue;
+      const weight = this.featureWeight(feature, featureTypes);
+      totalWeight += weight;
+      mappedWeight += weight * this.mappedFactor(this.cellForFeature(patentMap, feature));
+    }
+    return totalWeight > 0 ? this.roundScore(mappedWeight / totalWeight) : 0;
+  }
+
+  private closestMappedPatentPns(
+    perPatentCoverage: PerPatentCoverage[],
+    limit = 3
+  ): string[] {
+    return [...perPatentCoverage]
+      .sort((a, b) => (
+        Number(b.important_coverage_ratio ?? b.coverage_ratio ?? 0) - Number(a.important_coverage_ratio ?? a.coverage_ratio ?? 0)
+      ) || (Number(b.coverage_ratio || 0) - Number(a.coverage_ratio || 0)))
+      .slice(0, Math.max(0, limit))
+      .map(row => row.pn)
+      .filter(Boolean);
+  }
+
+  private findHighMappedOverlapReference(
+    featureMaps: PatentFeatureMap[],
+    inventionFeatures: string[],
+    featureTypes?: Map<string, InventionFeatureDetail['feature_type']>
+  ): { pn: string; importantCoverage: number; noveltyMapped: boolean; coreCoverage: number } | null {
+    const importantFeatures = inventionFeatures.filter(feature => this.isImportantFeature(feature, featureTypes));
+    const noveltyFeatures = inventionFeatures.filter(feature => featureTypes?.get(feature) === 'novelty_candidate');
+    const coreFeatures = inventionFeatures.filter(feature => (featureTypes?.get(feature) || 'core_technical') === 'core_technical');
+    let best: { pn: string; importantCoverage: number; noveltyMapped: boolean; coreCoverage: number } | null = null;
+    for (const patentMap of featureMaps) {
+      const importantCoverage = this.weightedCoverageForPatent(patentMap, inventionFeatures, featureTypes, true);
+      const noveltyMapped = noveltyFeatures.some(feature => this.isStrongMappedCell(this.cellForFeature(patentMap, feature)));
+      const coreCoverage = coreFeatures.length > 0
+        ? this.roundScore(coreFeatures.filter(feature => this.isStrongMappedCell(this.cellForFeature(patentMap, feature))).length / coreFeatures.length)
+        : 0;
+      const allImportantFallback = importantFeatures.length === 0 && this.weightedCoverageForPatent(patentMap, inventionFeatures, featureTypes) >= 0.65;
+      if (
+        (importantCoverage >= 0.65 && (noveltyMapped || coreCoverage >= 0.8)) ||
+        allImportantFallback
+      ) {
+        const candidate = { pn: patentMap.pn, importantCoverage, noveltyMapped, coreCoverage };
+        if (!best || candidate.importantCoverage > best.importantCoverage) {
+          best = candidate;
+        }
+      }
+    }
+    return best;
+  }
+
+  private unknownEvidenceStats(
+    featureMaps: PatentFeatureMap[],
+    inventionFeatures: string[],
+    featureTypes?: Map<string, InventionFeatureDetail['feature_type']>,
+    closestPns: string[] = []
+  ): { overallUnknownRatio: number; importantUnknownRatio: number; closestImportantUnknownRatio: number } {
+    let total = 0;
+    let unknown = 0;
+    let importantTotal = 0;
+    let importantUnknown = 0;
+    let closestImportantTotal = 0;
+    let closestImportantUnknown = 0;
+    const closest = new Set(closestPns);
+    for (const patentMap of featureMaps) {
+      const isClosest = closest.has(patentMap.pn);
+      for (const feature of inventionFeatures) {
+        const cell = this.cellForFeature(patentMap, feature);
+        total += 1;
+        if (!cell || cell.status === 'Unknown') unknown += 1;
+        if (this.isImportantFeature(feature, featureTypes)) {
+          importantTotal += 1;
+          if (!cell || cell.status === 'Unknown') importantUnknown += 1;
+          if (isClosest) {
+            closestImportantTotal += 1;
+            if (!cell || cell.status === 'Unknown') closestImportantUnknown += 1;
+          }
+        }
+      }
+    }
+    return {
+      overallUnknownRatio: total > 0 ? unknown / total : 0,
+      importantUnknownRatio: importantTotal > 0 ? importantUnknown / importantTotal : 0,
+      closestImportantUnknownRatio: closestImportantTotal > 0 ? closestImportantUnknown / closestImportantTotal : 0,
+    };
+  }
+
+  private computePerPatentCoverage(
+    featureMaps: PatentFeatureMap[],
+    inventionFeatures: string[],
+    featureTypes?: Map<string, InventionFeatureDetail['feature_type']>
+  ): PerPatentCoverage[] {
     return featureMaps.map(patentMap => {
       const cells = patentMap.feature_analysis;
       const presentCount = cells.filter(c => c.status === 'Present').length;
       const partialCount = cells.filter(c => c.status === 'Partial').length;
       const absentCount = cells.filter(c => c.status === 'Absent').length;
-      const coverageRatio = inventionFeatures.length > 0 ? presentCount / inventionFeatures.length : 0;
+      const coverageRatio = this.weightedCoverageForPatent(patentMap, inventionFeatures, featureTypes);
+      const importantCoverageRatio = this.weightedCoverageForPatent(patentMap, inventionFeatures, featureTypes, true);
+      const presentOnlyRatio = inventionFeatures.length > 0 ? presentCount / inventionFeatures.length : 0;
 
       return {
         pn: patentMap.pn,
         present_count: presentCount,
         partial_count: partialCount,
         absent_count: absentCount,
-        coverage_ratio: Math.round(coverageRatio * 100) / 100
+        coverage_ratio: Math.round(coverageRatio * 100) / 100,
+        present_only_ratio: Math.round(presentOnlyRatio * 100) / 100,
+        important_coverage_ratio: importantCoverageRatio
       };
     });
   }
 
-  private computePerFeatureUniqueness(featureMaps: PatentFeatureMap[], inventionFeatures: string[]): PerFeatureUniqueness[] {
+  private computePerFeatureUniqueness(
+    featureMaps: PatentFeatureMap[],
+    inventionFeatures: string[],
+    featureTypes?: Map<string, InventionFeatureDetail['feature_type']>,
+    closestMappedPns: string[] = []
+  ): PerFeatureUniqueness[] {
+    const closestSet = new Set(closestMappedPns);
     return inventionFeatures.map(feature => {
       const totalPatents = featureMaps.length;
-      const presentIn = featureMaps.filter(p => p.feature_analysis.find(c => c.feature === feature)?.status === 'Present').length;
-      const partialIn = featureMaps.filter(p => p.feature_analysis.find(c => c.feature === feature)?.status === 'Partial').length;
-      const absentIn = featureMaps.filter(p => p.feature_analysis.find(c => c.feature === feature)?.status === 'Absent').length;
+      const presentIn = featureMaps.filter(p => this.cellForFeature(p, feature)?.status === 'Present').length;
+      const partialIn = featureMaps.filter(p => this.cellForFeature(p, feature)?.status === 'Partial').length;
+      const absentIn = featureMaps.filter(p => this.cellForFeature(p, feature)?.status === 'Absent').length;
+      const unknownIn = featureMaps.filter(p => {
+        const status = this.cellForFeature(p, feature)?.status;
+        return !status || status === 'Unknown';
+      }).length;
+      const mappedIn = presentIn + partialIn;
+      const closestMaps = featureMaps.filter(p => closestSet.has(p.pn));
+      const closestStrongMapped = closestMaps.some(p => this.isStrongMappedCell(this.cellForFeature(p, feature)));
 
       // Unknown evidence must not increase apparent uniqueness.
-      const uniqueness = totalPatents > 0 ? absentIn / totalPatents : 0;
+      const coverageGap = totalPatents > 0 ? absentIn / totalPatents : 0;
+      const featureSeenAnywhere = mappedIn > 0;
+      const featureGapAgainstClosestRefs = closestMaps.length > 0 && !closestStrongMapped;
+      const combinationSensitive = featureGapAgainstClosestRefs && featureSeenAnywhere;
 
       return {
         feature,
         present_in: presentIn,
         partial_in: partialIn,
         absent_in: absentIn,
-        uniqueness: Math.round(uniqueness * 100) / 100
+        uniqueness: Math.round(coverageGap * 100) / 100,
+        unknown_in: unknownIn,
+        mapped_in: mappedIn,
+        coverage_gap: Math.round(coverageGap * 100) / 100,
+        feature_seen_anywhere: featureSeenAnywhere,
+        feature_gap_against_closest_refs: featureGapAgainstClosestRefs,
+        combination_sensitive_differentiator: combinationSensitive,
+        feature_type: featureTypes?.get(feature),
+        weight: this.featureWeight(feature, featureTypes)
       };
     });
   }
@@ -6215,14 +6531,6 @@ OUTPUT JSON:
   }
 
   private computeNoveltyScore(perFeatureUniqueness: PerFeatureUniqueness[], criticalFeatures: string[]): number {
-    // New definition (column-wise / feature-wise):
-    // - Treat each feature as a fixed-weight slice of novelty.
-    // - If a feature appears as Present in any prior-art patent, its novelty contribution is 0.
-    // - If it appears only as Partial (and never Present), it keeps 50% of its novelty weight.
-    // - Only features with no Present or Partial hits across all patents contribute with 100% of their weight.
-    //
-    // Critical features (if configured) are given double weight, but still follow the same all-or-nothing rule.
-
     if (!Array.isArray(perFeatureUniqueness) || perFeatureUniqueness.length === 0) {
       return 1;
     }
@@ -6232,20 +6540,26 @@ OUTPUT JSON:
 
     for (const u of perFeatureUniqueness) {
       const isCritical = criticalFeatures.includes(u.feature);
-      const weight = isCritical ? 2 : 1;
+      const weight = Math.max(Number(u.weight || 1), isCritical ? 1.25 : 0);
       totalWeight += weight;
 
-      let noveltyFactor = 1;
-      if (u.present_in > 0) {
-        // Any Present evidence kills novelty for this feature
+      let noveltyFactor = 0;
+      if (u.feature_gap_against_closest_refs === true) {
+        if (u.feature_seen_anywhere) {
+          // Seen in weaker/component references: still a closest-reference gap,
+          // but not a "unique" feature. Treat as combination-sensitive.
+          noveltyFactor = 0.35;
+        } else {
+          noveltyFactor = Number(u.coverage_gap ?? u.uniqueness ?? 0);
+        }
+      } else if (u.feature_gap_against_closest_refs === false) {
+        noveltyFactor = 0;
+      } else if (u.present_in > 0) {
         noveltyFactor = 0;
       } else if (u.partial_in > 0) {
-        // Only Partial evidence: retain 50% novelty
         noveltyFactor = 0.5;
       } else {
-        // Only explicit Absent assessments contribute here. Unknown evidence must
-        // not be converted into positive novelty.
-        noveltyFactor = u.uniqueness;
+        noveltyFactor = Number(u.coverage_gap ?? u.uniqueness ?? 0);
       }
 
       novelWeight += weight * noveltyFactor;
@@ -6263,7 +6577,12 @@ OUTPUT JSON:
     perFeatureUniqueness: PerFeatureUniqueness[],
     patentsAnalyzed: number,
     qualityFlags: any,
-    criticalFeatures: string[]
+    criticalFeatures: string[],
+    context?: {
+      highMappedOverlap?: { pn: string; importantCoverage: number; noveltyMapped: boolean; coreCoverage: number } | null;
+      featureTypes?: Map<string, InventionFeatureDetail['feature_type']>;
+      noveltyScore?: number;
+    }
   ): { decision: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence'; confidence: 'High' | 'Medium' | 'Low' } {
 
     // Low Evidence takes precedence
@@ -6272,33 +6591,39 @@ OUTPUT JSON:
     }
 
     let decision: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence';
+    const importantRows = perFeatureUniqueness.filter(row => {
+      const type = row.feature_type || context?.featureTypes?.get(row.feature);
+      return type === 'novelty_candidate' || type === 'core_technical' || (!type && !this.isGenericNoveltyFeature(row.feature));
+    });
+    const importantScore = this.computeNoveltyScore(
+      importantRows.length > 0 ? importantRows : perFeatureUniqueness,
+      criticalFeatures
+    );
 
-    if (integrationCheck.any_single_patent_covers_majority) {
+    if (context?.highMappedOverlap) {
+      decision = 'Not Novel';
+    } else if (integrationCheck.any_single_patent_covers_majority) {
       // Integration passes - check if coverage is dense
       const denseCoverage = this.checkDenseCoverage(perFeatureUniqueness);
       decision = denseCoverage ? 'Not Novel' : 'Partially Novel';
     } else {
-      // Integration fails - check for high uniqueness on critical features
-      const hasHighUniquenessCritical = criticalFeatures.some(feature => {
-        const uniqueness = perFeatureUniqueness.find(u => u.feature === feature)?.uniqueness || 0;
-        return uniqueness >= 0.7;
-      });
-
-      const hasAnyHighUniqueness = perFeatureUniqueness.some(u => u.uniqueness >= 0.6);
-
-      if (hasHighUniquenessCritical) {
+      if (importantScore >= 0.7) {
         decision = 'Novel';
-      } else if (hasAnyHighUniqueness) {
+      } else if (importantScore >= 0.35) {
         decision = 'Partially Novel';
       } else {
         decision = 'Not Novel';
+      }
+
+      if (decision === 'Not Novel' && noveltyScore >= 0.65) {
+        decision = 'Partially Novel';
       }
     }
 
     // Compute confidence
     let confidence: 'High' | 'Medium' | 'Low' = 'Medium';
 
-    if (patentsAnalyzed >= 20 && perFeatureUniqueness.filter(u => u.partial_in > 0).length <= patentsAnalyzed * 0.1) {
+    if (patentsAnalyzed >= 20 && !qualityFlags.low_evidence && perFeatureUniqueness.filter(u => u.partial_in > 0).length <= Math.max(1, perFeatureUniqueness.length * 0.25)) {
       confidence = 'High';
     } else if (qualityFlags.ambiguous_abstracts || qualityFlags.language_mismatch) {
       confidence = 'Low';
@@ -6323,7 +6648,12 @@ OUTPUT JSON:
     qualityFlags: any,
     inventionFeatures: string[],
     integrationCheck?: IntegrationCheck,
-    decision?: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence'
+    decision?: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence',
+    context?: {
+      highMappedOverlap?: { pn: string; importantCoverage: number; noveltyMapped: boolean; coreCoverage: number } | null;
+      distributedComponentRisks?: string[];
+      featureTypes?: Map<string, InventionFeatureDetail['feature_type']>;
+    }
   ): string[] {
     const risks: string[] = [];
 
@@ -6345,11 +6675,15 @@ OUTPUT JSON:
     }
 
     if (qualityFlags.low_evidence || featureMaps.length < 5) {
-      risks.push('Low evidence coverage limits confidence in novelty conclusions');
+      risks.push('Limited available patent data lowers confidence in the mapped-differentiation assessment');
     }
 
     if (qualityFlags.language_mismatch) {
       risks.push('Multiple references appear to be in non-English languages');
+    }
+
+    if (context?.highMappedOverlap) {
+      risks.push(`Closest mapped reference ${context.highMappedOverlap.pn} covers important features at ${(context.highMappedOverlap.importantCoverage * 100).toFixed(0)}% weighted coverage`);
     }
 
     if (integrationCheck?.any_single_patent_covers_majority && integrationCheck.integration_pn) {
@@ -6361,7 +6695,7 @@ OUTPUT JSON:
       const total = Math.max(1, inventionFeatures.length);
       const present = closestMap.feature_analysis.filter(cell => cell.status === 'Present').length;
       const partial = closestMap.feature_analysis.filter(cell => cell.status === 'Partial').length;
-      const closestCoverage = (present + partial * 0.5) / total;
+      const closestCoverage = this.weightedCoverageForPatent(closestMap, inventionFeatures, context?.featureTypes);
       if (closestCoverage >= 0.7) {
         risks.push(`Closest reference ${closestMap.pn} has high feature overlap (${present} Present, ${partial} Partial)`);
       }
@@ -6375,6 +6709,10 @@ OUTPUT JSON:
 
     if (risks.length === 0 && (decision === 'Partially Novel' || decision === 'Not Novel')) {
       risks.push(`${decision} determination indicates material prior-art overlap requiring claim narrowing or technical differentiation`);
+    }
+
+    for (const risk of context?.distributedComponentRisks || []) {
+      if (risk && !risks.includes(risk)) risks.push(risk);
     }
 
     return risks;
@@ -6666,7 +7004,7 @@ OUTPUT JSON:
 
       // If no intersecting patents, add explicit instruction for the report
       if (!selectedPatents || selectedPatents.length === 0) {
-        basePrompt += `\n\nNOTE_TO_MODEL: No prior art with intersecting features (Present/Partial) was found in Stage 3.5. Generate the report focusing on Stage 0 features, uniqueness rationale, and explain that no overlapping evidence was identified.`;
+        basePrompt += `\n\nNOTE_TO_MODEL: No prior art with intersecting features (Present/Partial) was found in Stage 3.5. Generate the report focusing on Stage 0 features, mapped-differentiation rationale, and explain that no overlapping evidence was identified.`;
       }
 
       // If Stage 3.5c (or 3.5a/3.5b) produced per-patent remarks, replace prompt with lightweight remarks-based prompt
@@ -6677,7 +7015,10 @@ OUTPUT JSON:
           const metrics = {
             novelty_score: aggRes.novelty_score,
             decision: aggRes.decision,
-            confidence: aggRes.confidence
+            confidence: aggRes.confidence,
+            closest_mapped_references: (aggRes as any).closest_mapped_references || [],
+            distributed_component_risks: (aggRes as any).distributed_component_risks || [],
+            potential_differentiators: this.getPotentialDifferentiatorsFromAggregation(aggRes)
           } as any;
           basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
             + "\ninvention_features=" + JSON.stringify(stage0Data.inventionFeatures || [])
@@ -6694,6 +7035,9 @@ OUTPUT JSON:
         novelty_score: aggRes.novelty_score,
         decision: aggRes.decision,
         confidence: aggRes.confidence,
+        closest_mapped_references: (aggRes as any).closest_mapped_references || [],
+        distributed_component_risks: (aggRes as any).distributed_component_risks || [],
+        potential_differentiators: this.getPotentialDifferentiatorsFromAggregation(aggRes),
         coverage_summary: (aggRes as any).feature_coverage_summary || null
       };
       basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
@@ -7509,6 +7853,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
         const missing: string[] = cells
           .filter((cell: FeatureMapCell) => cell.status === 'Absent')
           .map((cell: FeatureMapCell) => cell.feature);
+        const potentialDifferentiators = missing
+          .filter((feature: string) => !this.isGenericNoveltyFeature(feature))
+          .slice(0, 4);
         const relevance = (present.length + partial.length * 0.5) / Math.max(1, features.length);
         const noveltyThreat = relevance >= 0.7 ? 'high_overlap' : relevance >= 0.5 ? 'moderate_overlap' : relevance >= 0.3 ? 'related' : 'low_overlap';
         const evidenceNote = unknown.length > 0 ? ` ${unknown.length} feature(s) had weak evidence.` : '';
@@ -7519,12 +7866,13 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           remarks: [
             present.length ? `Overlaps on ${present.slice(0, 4).join(', ')}.` : 'No fully overlapping features were found.',
             partial.length ? `Partial overlap on ${partial.slice(0, 3).join(', ')}.` : '',
-            missing.length ? `Differentiators include ${missing.slice(0, 4).join(', ')}.` : 'No clear differentiators were identified from mapped features.',
+            potentialDifferentiators.length ? `Potential differentiators include ${potentialDifferentiators.join(', ')}.` : 'No clear differentiators were identified from mapped features.',
             evidenceNote
           ].filter(Boolean).join(' '),
           overlap_features: [...present, ...partial],
           missing_features: missing,
-          novelty_points: missing.slice(0, 4),
+          potential_differentiators: potentialDifferentiators,
+          novelty_points: potentialDifferentiators,
           confidence: unknown.length > 0 ? 0.45 : 0.6,
           relevance,
           novelty_threat: noveltyThreat,
