@@ -23,6 +23,7 @@ const COLORS = {
   tableHeader: '#2563EB',
   tableAlt: '#F8FAFC',
   green: '#047857',
+  red: '#BE123C',
   amber: '#D97706',
   slate: '#475569',
   white: '#FFFFFF',
@@ -55,7 +56,7 @@ function pct(value: number | null | undefined) {
 }
 
 function statusColor(status: string) {
-  if (status === 'Present') return COLORS.blue2;
+  if (status === 'Present') return COLORS.red;
   if (status === 'Partial') return COLORS.amber;
   if (status === 'Absent') return COLORS.green;
   return COLORS.slate;
@@ -92,7 +93,7 @@ function drawHeaderFooter(doc: PdfDoc, reportNumber: string, title: string) {
     doc.moveTo(PAGE.left, 41).lineTo(width - PAGE.right, 41).lineWidth(0.6).strokeColor(COLORS.border).stroke();
     doc.moveTo(PAGE.left, height - 46).lineTo(width - PAGE.right, height - 46).lineWidth(0.6).strokeColor(COLORS.border).stroke();
     doc.font('Helvetica').fontSize(8).fillColor(COLORS.muted)
-      .text('PatentNest.ai - Confidential attorney-review draft', PAGE.left, footerY, { width: 330, height: 10, lineBreak: false })
+      .text('PatentNest.ai - Confidential review draft', PAGE.left, footerY, { width: 330, height: 10, lineBreak: false })
       .text(`Page ${pageNo}`, width - PAGE.right - 70, footerY, { width: 70, height: 10, align: 'right', lineBreak: false });
   }
 }
@@ -340,14 +341,13 @@ function drawTableRow(
 }
 
 function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
-  const widths = [32, 92, 108, 42, 112, 104];
-  drawTableRow(doc, ['KF', 'User idea', 'Patent disclosure', 'Status', 'Feature observation', 'Claim review note'], widths, { header: true });
+  const widths = [32, 104, 136, 48, 170];
+  drawTableRow(doc, ['KF', 'User idea', 'Patent disclosure', 'Status', 'Remark'], widths, { header: true });
   rows.forEach((row, index) => {
     const patentDisclosure = [
       truncate(row.patentDisclosure, 420),
-      row.evidenceQuote ? `Evidence (${row.evidenceSource}): ${truncate(row.evidenceQuote, 140)}` : `Evidence source: ${row.evidenceSource}`,
+      row.evidenceQuote ? `Evidence (${row.evidenceSource}): ${truncate(row.evidenceQuote, 140)}` : '',
       featureCoverageText(row),
-      typeof row.confidence === 'number' ? `Evidence Confidence: ${Math.round(row.confidence * 100)}%` : '',
     ].filter(Boolean).join('\n');
     drawTableRow(
       doc,
@@ -356,8 +356,7 @@ function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
         `${truncate(row.userFeature, 140)}\n${truncate(row.userDisclosure, 260)}`,
         patentDisclosure,
         row.statusLabel,
-        `${truncate(row.attorneyRemark, 360)}\n${truncate(row.noveltyImpact, 240)}`,
-        truncate(row.claimReviewNote, 300),
+        truncate(row.crispRemark, 430),
       ],
       widths,
       {
@@ -368,7 +367,6 @@ function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
           index % 2 ? COLORS.tableAlt : COLORS.white,
           COLORS.paleBlue,
           index % 2 ? COLORS.tableAlt : COLORS.white,
-          index % 2 ? COLORS.tableAlt : COLORS.white,
         ],
         textColors: [
           COLORS.text,
@@ -376,10 +374,9 @@ function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
           COLORS.text,
           statusColor(row.status),
           COLORS.text,
-          COLORS.text,
         ],
-        aligns: ['left', 'left', 'left', 'center', 'left', 'left'],
-        verticalAligns: ['top', 'top', 'top', 'center', 'top', 'top'],
+        aligns: ['left', 'left', 'left', 'center', 'left'],
+        verticalAligns: ['top', 'top', 'top', 'center', 'top'],
         boldCells: [3],
       }
     );
@@ -521,7 +518,7 @@ export async function GET(
     startSection('1.1', 'Objective');
     drawParagraph(
       doc,
-      'The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for attorney review.'
+      'The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for review.'
     );
     drawMetadataGrid(doc, [
       ['Search Query', report.searchQuery],

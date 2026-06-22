@@ -36,6 +36,7 @@ interface FeatureComparisonRow {
   patent_disclosure: string;
   status: FeatureStatus;
   status_label?: string;
+  crisp_remark?: string;
   evidence_quote?: string;
   evidence_source: string;
   extent_score?: number;
@@ -134,15 +135,15 @@ function reportSafeText(value: unknown, fallback = '') {
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
-    .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'attorney review recommended')
-    .replace(/\btoo limited\b/gi, 'marked for attorney review')
+    .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'review recommended')
+    .replace(/\btoo limited\b/gi, 'marked for review')
     .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'limited available patent data')
     .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
-    .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'attorney review item')
-    .replace(/\bevidence (?:is|was) too thin\b/gi, 'attorney review is recommended')
+    .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'review item')
+    .replace(/\bevidence (?:is|was) too thin\b/gi, 'review is recommended')
     .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the limited available patent data')
     .replace(/\bcitation record only\b/gi, 'limited available patent data')
-    .replace(/\binsufficient\b/gi, 'marked for attorney review')
+    .replace(/\binsufficient\b/gi, 'marked for review')
     .replace(/\blow evidence\b/gi, 'Limited Available Data')
     .replace(/\bavailable patent record\b/gi, 'reviewed patent record')
     .replace(/\bavailable citation record\b/gi, 'limited available patent data')
@@ -153,7 +154,8 @@ function reportSafeText(value: unknown, fallback = '') {
     .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
     .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
     .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence')
-    .replace(/\bfinal attorney opinion\b/gi, 'attorney review required')
+    .replace(/\bfinal attorney opinion\b/gi, 'review required')
+    .replace(/\battorney review\b/gi, 'review')
     .replace(/\bnon-patentable\b/gi, 'high mapped-overlap risk')
     .replace(/\bpatentable\b/gi, 'potential novelty space')
     .replace(/\binvalidating prior art\b/gi, 'potentially material prior art')
@@ -198,7 +200,7 @@ function normalizeStatus(value: unknown): FeatureStatus {
 }
 
 function statusClass(status: FeatureStatus) {
-  if (status === 'Present') return 'border-blue-200 bg-blue-50 text-blue-700';
+  if (status === 'Present') return 'border-rose-200 bg-rose-50 text-rose-700';
   if (status === 'Partial') return 'border-amber-200 bg-amber-50 text-amber-700';
   if (status === 'Absent') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   return 'border-slate-200 bg-slate-50 text-slate-600';
@@ -213,9 +215,13 @@ function threatClass(threat: string) {
 }
 
 function statusLabel(status: FeatureStatus) {
-  if (status === 'Absent') return 'Absent / weak signal';
-  if (status === 'Unknown') return 'Mapped, needs review';
+  if (status === 'Absent' || status === 'Unknown') return 'Absent';
   return status;
+}
+
+function visibleStatusForReport(status: FeatureStatus, evidenceQuote: string): FeatureStatus {
+  if ((status === 'Present' || status === 'Partial') && evidenceQuote) return status;
+  return status === 'Present' || status === 'Partial' || status === 'Unknown' ? 'Absent' : status;
 }
 
 function featureDetailsMap(stage0: any, inventionDescription: string) {
@@ -263,14 +269,14 @@ function defaultAttorneyRemark(status: FeatureStatus, feature: string, pn: strin
   if (status === 'Present') return `${pn} appears to disclose this feature in the reviewed patent record.`;
   if (status === 'Partial') return `${pn} is related to this feature, but the available patent data does not show all required elements.`;
   if (status === 'Absent') return `${pn} does not show support for this feature in the reviewed disclosure. Treat as a potential distinction, not confirmed novelty.`;
-  return `${pn} should be checked by counsel for this feature before final claim positioning.`;
+  return `${pn} should be reviewed for this feature before final claim positioning.`;
 }
 
 function defaultNoveltyImpact(status: FeatureStatus, feature: string) {
   if (status === 'Present') return `Overlap risk: ${feature} is mapped to this citation.`;
   if (status === 'Partial') return `Partial overlap: a narrower distinction may exist for ${feature}.`;
   if (status === 'Absent') return `Potential differentiator: ${feature} is not shown in the reviewed patent disclosure.`;
-  return `Review focus: attorney review should confirm how ${feature} is treated in the full patent documents.`;
+  return `Review focus: confirm how ${feature} is treated in the full patent documents.`;
 }
 
 function defaultClaimReviewNote(status: FeatureStatus, feature: string) {
@@ -278,6 +284,16 @@ function defaultClaimReviewNote(status: FeatureStatus, feature: string) {
   if (status === 'Partial') return `Emphasize the missing element of ${feature} and verify the full patent documents before filing.`;
   if (status === 'Absent') return `Consider claiming ${feature} if supported by the disclosure and after full patent document review.`;
   return `Request full patent documents or additional inventor detail before relying on ${feature}.`;
+}
+
+function defaultCrispRemark(status: FeatureStatus): string {
+  if (status === 'Present') {
+    return 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.';
+  }
+  if (status === 'Partial') {
+    return 'Related disclosure exists, but the full feature is not mapped; differentiate using the missing element.';
+  }
+  return 'This feature is absent from the available patent data and may support differentiation against this reference.';
 }
 
 function textSpecificityScore(value: string) {
@@ -327,8 +343,13 @@ function buildRows(features: string[], stage0: any, inventionDescription: string
   return features.map((feature, index) => {
     const supplied = suppliedRows.get(feature) || {};
     const cell = cells.find((item: any) => cleanText(item?.feature).toLowerCase() === feature.toLowerCase()) || {};
-    const status = normalizeStatus(supplied.status || cell.status);
-    const evidenceQuote = cleanText(supplied.evidence_quote || cell.quote || '');
+    const rawStatus = normalizeStatus(supplied.status || cell.status);
+    const evidenceQuote = cleanText(
+      supplied.evidence_quote ||
+      cell.quote ||
+      (typeof cell.evidence === 'string' ? cell.evidence : '')
+    );
+    const status = visibleStatusForReport(rawStatus, evidenceQuote);
     const evidenceSource = displayEvidenceSource(supplied.evidence_source || cell.evidence_source || cell.field || (evidenceQuote ? 'citation disclosure' : 'none'), 'none');
     const confidence = scoreOrNull(supplied.confidence ?? cell.confidence) ?? undefined;
     const patentDisclosure = reportSafeText(
@@ -338,7 +359,7 @@ function buildRows(features: string[], stage0: any, inventionDescription: string
         cell.reason ||
         (status === 'Present' || status === 'Partial'
           ? 'Related patent disclosure identified.'
-          : 'Supporting disclosure is not shown in this citation.')
+          : 'This feature is absent from the available patent data.')
       );
     const extentScore = scoreOrNull(supplied.extent_score ?? supplied.extentScore ?? cell.extent_score ?? cell.extentScore)
       ?? defaultExtentScore(status, feature, patentDisclosure, evidenceQuote, confidence);
@@ -350,9 +371,10 @@ function buildRows(features: string[], stage0: any, inventionDescription: string
       patent_disclosure: patentDisclosure,
       status,
       status_label: statusLabel(status),
+      crisp_remark: defaultCrispRemark(status),
       evidence_quote: evidenceQuote || undefined,
-      evidence_source: evidenceQuote ? evidenceSource : (status === 'Present' || status === 'Partial' ? 'inference' : 'none'),
-      extent_score: status === 'Absent' || status === 'Unknown' ? undefined : extentScore,
+      evidence_source: evidenceQuote ? evidenceSource : 'none',
+      extent_score: status === 'Absent' ? undefined : extentScore,
       confidence,
       attorney_remark: reportSafeText(supplied.attorney_remark || cell.attorney_remark || defaultAttorneyRemark(status, feature, cleanText(patentMap?.pn, 'This citation'))),
       novelty_impact: reportSafeText(supplied.novelty_impact || cell.novelty_impact || defaultNoveltyImpact(status, feature)),
@@ -443,6 +465,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
         patent_disclosure: row.patentDisclosure,
         status: row.status,
         status_label: row.statusLabel,
+        crisp_remark: row.crispRemark,
         evidence_quote: row.evidenceQuote || undefined,
         evidence_source: row.evidenceSource,
         extent_score: row.extentScore ?? undefined,
@@ -551,7 +574,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
           <header className="mb-10 border-b-4 border-blue-700 pb-8">
             <div className="flex flex-col justify-between gap-6 md:flex-row md:items-start">
               <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Confidential attorney-review draft</div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Confidential review draft</div>
                 <h1 className="max-w-4xl text-3xl font-bold tracking-tight text-slate-950">{title}</h1>
                 <p className="mt-2 text-sm text-slate-600">Automated Novelty Report</p>
               </div>
@@ -592,7 +615,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
 
           <Section id="section-1-1" title="1.1 Objective">
             <p className="max-w-4xl text-sm leading-6 text-slate-700">
-              The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for attorney review.
+              The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for review.
             </p>
             <div className="mt-5 grid gap-3 text-sm md:grid-cols-2">
               <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Search query: </span>{cleanText(stage0?.searchQuery, '-')}</div>
@@ -790,7 +813,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                           <HeaderCell className="w-16">S.No.</HeaderCell>
                           <HeaderCell className="min-w-64">Key Features</HeaderCell>
                           <HeaderCell className="min-w-80">Identified Patent Number: {citation.publicationNumber}</HeaderCell>
-                          <HeaderCell className="min-w-64">Attorney Remark / Claim Note</HeaderCell>
+                          <HeaderCell className="min-w-64">Remark</HeaderCell>
                         </tr>
                       </thead>
                       <tbody>
@@ -805,17 +828,10 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                               <div className={`mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>{row.status_label || statusLabel(row.status)}</div>
                               <div>{row.patent_disclosure}</div>
                               {row.evidence_quote && <div className="mt-2 text-slate-500">Evidence ({row.evidence_source}): {row.evidence_quote}</div>}
-                              {!row.evidence_quote && <div className="mt-2 text-slate-500">Evidence source: {row.evidence_source}</div>}
                               {typeof row.extent_score === 'number' && <div className="mt-1 text-slate-500">Feature Coverage: {pct(row.extent_score)}</div>}
-                              {typeof row.confidence === 'number' && <div className="mt-1 text-slate-500">Evidence Confidence: {pct(row.confidence)}</div>}
                             </Cell>
                             <Cell>
-                              <div className="font-semibold text-slate-950">Remark</div>
-                              <div>{row.attorney_remark}</div>
-                              <div className="mt-2 font-semibold text-slate-950">Mapped impact</div>
-                              <div>{row.novelty_impact}</div>
-                              <div className="mt-2 font-semibold text-slate-950">Claim review note</div>
-                              <div>{row.claim_review_note}</div>
+                              {row.crisp_remark || defaultCrispRemark(row.status)}
                             </Cell>
                           </tr>
                         ))}
@@ -949,7 +965,7 @@ function ListBlock({ title, items }: { title: string; items: any[] }) {
           {list.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
         </ul>
       ) : (
-        <p className="mt-3 text-sm text-slate-500">Items to be confirmed during attorney review.</p>
+        <p className="mt-3 text-sm text-slate-500">Items to be confirmed during review.</p>
       )}
     </div>
   );

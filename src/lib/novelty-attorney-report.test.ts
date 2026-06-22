@@ -11,7 +11,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       config: { searchSource: { mode: 'PQAI_PLUS_INDIAN' } },
       stage0Results: {
         searchQuery: 'soil moisture irrigation controller',
-        inventionFeatures: ['soil moisture measurement loop', 'threshold-based irrigation decision rule', 'sensor'],
+        inventionFeatures: ['soil moisture measurement loop', 'threshold-based irrigation decision rule', 'sensor', 'unsupported dosing signal'],
         noveltyFocus: ['threshold-based irrigation decision rule'],
         featureDetails: [
           {
@@ -96,6 +96,10 @@ describe('buildNoveltyAttorneyReportModel', () => {
                 quote: 'soil moisture sensor',
                 field: 'abstract',
               },
+              {
+                feature: 'unsupported dosing signal',
+                status: 'Present',
+              },
             ],
           },
           {
@@ -117,6 +121,11 @@ describe('buildNoveltyAttorneyReportModel', () => {
                 feature: 'sensor',
                 status: 'Absent',
                 reason: 'No sensor disclosed in the abstract.',
+              },
+              {
+                feature: 'unsupported dosing signal',
+                status: 'Unknown',
+                reason: 'Evidence is too thin.',
               },
             ],
           },
@@ -176,9 +185,10 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.scoringLegend.map(item => item.label)).toEqual(expect.arrayContaining([
       'Retrieval Relevance',
       'Feature Coverage',
-      'Evidence Confidence',
-      'Absent / weak signal',
+      'Absent',
     ]));
+    expect(model.scoringLegend.map(item => item.label)).not.toContain('Evidence Confidence');
+    expect(model.scoringLegend.map(item => item.label)).not.toContain('Absent / weak signal');
 
     expect(model.citations[0]).toMatchObject({ citationNo: 'D1', publicationNumber: 'IN123A' });
     expect(model.citations[0]).toMatchObject({
@@ -187,9 +197,9 @@ describe('buildNoveltyAttorneyReportModel', () => {
     });
     expect(model.componentCitations.map(item => item.publicationNumber)).toEqual(['IN456A']);
     expect(model.comparisons[0].technicalDisclosure).toContain('soil moisture sensor');
-    expect(model.comparisons[0].rows).toHaveLength(3);
+    expect(model.comparisons[0].rows).toHaveLength(4);
     expect(model.comparisons[0].noveltyThreat).toBe('Related / moderate-overlap');
-    expect(model.comparisons[0].claimImpactSummary).toContain('Absent / weak-signal');
+    expect(model.comparisons[0].claimImpactSummary).toContain('Mapped overlap: 2 Present, 0 Partial, 2 Absent.');
     expect(model.comparisons[0].rows[0]).toMatchObject({
       featureNumber: 'KF1',
       userDisclosure: 'The invention measures soil moisture in a feedback loop.',
@@ -199,16 +209,26 @@ describe('buildNoveltyAttorneyReportModel', () => {
       evidenceSource: 'abstract',
       extentScore: 0.88,
       confidence: 0.91,
+      crispRemark: 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.',
       attorneyRemark: 'This is a direct overlap in the abstract.',
       claimReviewNote: 'Do not rely on this loop alone for novelty.',
     });
     expect(model.comparisons[0].rows[1]).toMatchObject({
       featureNumber: 'KF2',
       status: 'Absent',
-      statusLabel: 'Absent / weak signal',
+      statusLabel: 'Absent',
       patentDisclosure: 'No threshold rule disclosed in the abstract.',
       evidenceSource: 'none',
       extentScore: null,
+      crispRemark: 'This feature is absent from the available patent data and may support differentiation against this reference.',
+    });
+    expect(model.comparisons[0].rows[3]).toMatchObject({
+      featureNumber: 'KF4',
+      status: 'Absent',
+      statusLabel: 'Absent',
+      evidenceSource: 'none',
+      extentScore: null,
+      crispRemark: 'This feature is absent from the available patent data and may support differentiation against this reference.',
     });
 
     expect(model.featureSummaries[2]).toMatchObject({
@@ -218,7 +238,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.genericFeatureRisk.features).toContain('sensor');
     expect(model.assigneeLandscape.summary).toContain('repeated entity signal');
     expect(model.inventorSignals.repeated).toEqual([{ name: 'Asha Kumar', count: 2 }]);
-    expect(model.reportConfidence.legalConclusion).toBe('Not provided; requires attorney review.');
+    expect(model.reportConfidence.legalConclusion).toBe('Not provided; requires review.');
     expect(model.limitations).toContain('not a legal opinion');
     expect(model.nextSteps).toEqual(expect.arrayContaining([
       'Review the highest-overlap mapped citations at claim level.',
@@ -229,5 +249,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       directlyRelevant: 1,
       analyzed: 2,
     });
+    const renderedModelText = JSON.stringify(model);
+    expect(renderedModelText).not.toMatch(/Mapped, needs review|Absent \/ weak signal|Evidence Confidence|attorney review/i);
   });
 });

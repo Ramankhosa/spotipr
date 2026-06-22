@@ -1184,6 +1184,19 @@ export interface PatentFeatureMap {
   decision?: 'potential_novelty_space' | 'mapped_overlap' | 'high_overlap' | 'novel' | 'partial_novelty' | 'obvious'; // deterministic server computation
 }
 
+type NoveltyStageProgress = {
+  stage: 'relevance_review' | 'deep_analysis';
+  status: 'running' | 'complete' | 'failed';
+  analyzedPatents: number;
+  totalPatents: number;
+  processedBatches?: number;
+  batchCount?: number;
+  failedBatches?: number;
+  percent: number;
+  message: string;
+  updatedAt: string;
+};
+
 export interface FeatureMapBatchResult {
   feature_map: PatentFeatureMap[];
   quality_flags: {
@@ -1199,6 +1212,7 @@ export interface FeatureMapBatchResult {
   message?: string;
   retrievedCount?: number;
   reviewedCount?: number;
+  progress?: NoveltyStageProgress;
 }
 
 export interface PerPatentCoverage {
@@ -4095,6 +4109,131 @@ RESPONSE:`;
     return { stage35Data, stage4Data };
   }
 
+  private buildStageProgressSnapshot(input: {
+    stage: NoveltyStageProgress['stage'];
+    status?: NoveltyStageProgress['status'];
+    analyzedPatents?: number;
+    totalPatents?: number;
+    processedBatches?: number;
+    batchCount?: number;
+    failedBatches?: number;
+  }): NoveltyStageProgress {
+    const status = input.status || 'running';
+    const totalPatents = Math.max(0, Math.trunc(Number(input.totalPatents || 0)));
+    const analyzedPatents = Math.min(
+      totalPatents,
+      Math.max(0, Math.trunc(Number(input.analyzedPatents || 0)))
+    );
+    const rawPercent = totalPatents > 0 ? Math.round((analyzedPatents / totalPatents) * 100) : 0;
+    const percent = status === 'complete'
+      ? 100
+      : status === 'failed'
+        ? rawPercent
+        : Math.min(99, rawPercent);
+    const label = input.stage === 'relevance_review' ? 'Relevance review' : 'Deep Analysis';
+
+    return {
+      stage: input.stage,
+      status,
+      analyzedPatents,
+      totalPatents,
+      processedBatches: input.processedBatches,
+      batchCount: input.batchCount,
+      failedBatches: input.failedBatches,
+      percent,
+      message: totalPatents > 0
+        ? `${label}: ${analyzedPatents} of ${totalPatents} patents analyzed.`
+        : `${label}: preparing patents for analysis.`,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private async persistStage15Progress(
+    searchId: string,
+    stage1Data: any,
+    candidatePool: any[],
+    activeCandidates: any[],
+    byPn: Record<string, PriorArtGateRecord | undefined>,
+    config: NoveltySearchConfig,
+    progressMeta: {
+      processedBatches: number;
+      batchCount: number;
+      failedBatches: number;
+      status?: NoveltyStageProgress['status'];
+    }
+  ) {
+    try {
+      const activeCounts = this.summarizeStage15GateCounts(activeCandidates, byPn);
+      const overallCounts = this.summarizeStage15GateCounts(candidatePool, byPn);
+      const progress = this.buildStageProgressSnapshot({
+        stage: 'relevance_review',
+        status: progressMeta.status || 'running',
+        analyzedPatents: activeCounts.attemptedGateCount,
+        totalPatents: activeCandidates.length,
+        processedBatches: progressMeta.processedBatches,
+        batchCount: progressMeta.batchCount,
+        failedBatches: progressMeta.failedBatches,
+      });
+      const existingGate = stage1Data?.aiRelevance || {};
+      const progressGate = {
+        ...existingGate,
+        byPn,
+        gateStatus: progress.status === 'running' ? 'running' : existingGate.gateStatus,
+        consideredCount: overallCounts.reviewedCount,
+        reviewedCandidateCount: overallCounts.reviewedCount,
+        retrievedCount: overallCounts.retrievedCount,
+        attemptedGateCount: overallCounts.attemptedGateCount,
+        reviewedCount: overallCounts.reviewedCount,
+        gateErrorCount: overallCounts.gateErrorCount,
+        unreviewedCount: overallCounts.unreviewedCount,
+        totalCandidates: overallCounts.retrievedCount,
+        progress,
+      };
+      const merged = this.mergeStage15Visibility(stage1Data, progressGate, config);
+      await prisma.noveltySearchRun.update({
+        where: { id: searchId },
+        data: { stage1Results: merged as any }
+      });
+    } catch (error) {
+      console.warn('[NoveltyProgress] Failed to persist Stage 1.5 progress:', error);
+    }
+  }
+
+  private async persistDeepAnalysisProgress(
+    searchId: string,
+    progress: NoveltyStageProgress,
+    options: {
+      featureMaps?: PatentFeatureMap[];
+      qualityFlags?: FeatureMapBatchResult['quality_flags'];
+      extra?: Record<string, any>;
+    } = {}
+  ) {
+    try {
+      const featureMaps = Array.isArray(options.featureMaps) ? options.featureMaps : [];
+      await prisma.noveltySearchRun.update({
+        where: { id: searchId },
+        data: {
+          stage35Results: {
+            feature_map: featureMaps,
+            quality_flags: options.qualityFlags || {
+              low_evidence: false,
+              ambiguous_abstracts: false,
+              language_mismatch: false,
+            },
+            stats: {
+              patents_analyzed: progress.analyzedPatents,
+              avg_abstract_length_words: 0,
+            },
+            ...(options.extra || {}),
+            progress,
+          } as any,
+        }
+      });
+    } catch (error) {
+      console.warn('[NoveltyProgress] Failed to persist Deep Analysis progress:', error);
+    }
+  }
+
   private async performConsolidatedDeepAnalysis(
     searchId: string,
     stage0Data: NormalizedIdea,
@@ -4135,6 +4274,24 @@ RESPONSE:`;
     const parsedBatches: any[] = [];
     let totalOutputTokens = 0;
     let modelClass = '';
+
+    await this.persistDeepAnalysisProgress(
+      searchId,
+      this.buildStageProgressSnapshot({
+        stage: 'deep_analysis',
+        analyzedPatents: 0,
+        totalPatents: normalizedPatents.length,
+        processedBatches: 0,
+        batchCount: batches.length,
+        failedBatches: 0,
+      }),
+      {
+        extra: {
+          attorneyReportPatentLimit: maxCandidates,
+          consolidatedBatchCount: batches.length,
+        }
+      }
+    );
 
     const buildPrompt = (batch: any[]) => {
       const patentBatchText = batch.map((patent, index) => {
@@ -4202,14 +4359,53 @@ RESPONSE:`;
 
       totalOutputTokens += Number(response.outputTokens || 0);
       modelClass = modelClass || response.modelClass || '';
-      parsedBatches[batchIndex] = { parsed, prompt };
+      parsedBatches[batchIndex] = { parsed, prompt, patentCount: batch.length };
     };
 
     try {
       for (let index = 0; index < batches.length; index += concurrency) {
         await Promise.all(batches.slice(index, index + concurrency).map((batch, offset) => processBatch(batch, index + offset)));
+        const processedBatchCount = parsedBatches.filter(Boolean).length;
+        const analyzedPatents = parsedBatches.reduce((sum, item) => sum + Number(item?.patentCount || 0), 0);
+        await this.persistDeepAnalysisProgress(
+          searchId,
+          this.buildStageProgressSnapshot({
+            stage: 'deep_analysis',
+            analyzedPatents,
+            totalPatents: normalizedPatents.length,
+            processedBatches: processedBatchCount,
+            batchCount: batches.length,
+            failedBatches: 0,
+          }),
+          {
+            extra: {
+              attorneyReportPatentLimit: maxCandidates,
+              consolidatedBatchCount: batches.length,
+            }
+          }
+        );
       }
     } catch (error) {
+      const processedBatchCount = parsedBatches.filter(Boolean).length;
+      const analyzedPatents = parsedBatches.reduce((sum, item) => sum + Number(item?.patentCount || 0), 0);
+      await this.persistDeepAnalysisProgress(
+        searchId,
+        this.buildStageProgressSnapshot({
+          stage: 'deep_analysis',
+          status: 'failed',
+          analyzedPatents,
+          totalPatents: normalizedPatents.length,
+          processedBatches: processedBatchCount,
+          batchCount: batches.length,
+          failedBatches: Math.max(1, batches.length - processedBatchCount),
+        }),
+        {
+          extra: {
+            attorneyReportPatentLimit: maxCandidates,
+            consolidatedBatchCount: batches.length,
+          }
+        }
+      );
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error)
@@ -4287,7 +4483,16 @@ RESPONSE:`;
       quality_flags: qualityFlags,
       stats,
       attorneyReportPatentLimit: maxCandidates,
-      consolidatedBatchCount: batches.length
+      consolidatedBatchCount: batches.length,
+      progress: this.buildStageProgressSnapshot({
+        stage: 'deep_analysis',
+        status: 'complete',
+        analyzedPatents: featureMaps.length,
+        totalPatents: normalizedPatents.length,
+        processedBatches: batches.length,
+        batchCount: batches.length,
+        failedBatches: 0,
+      })
     } as FeatureMapBatchResult & Record<string, any>;
 
     const aggregation = await this.performStage35b(searchId, stage0Data, stage35Data, config, requestHeaders);
@@ -4696,6 +4901,12 @@ RESPONSE:`;
       let processedBatches = 0;
       let timedOut = false;
 
+      await this.persistStage15Progress(searchId, stage1Data, candidatePool, candidates, byPn, config, {
+        processedBatches,
+        batchCount: batches.length,
+        failedBatches,
+      });
+
       const markBatchGateError = (
         batch: any[],
         gateError: NonNullable<PriorArtGateRecord['gateError']>,
@@ -4842,6 +5053,11 @@ RESPONSE:`;
           break;
         }
         await Promise.all(batches.slice(index, index + safeConcurrency).map(processBatch));
+        await this.persistStage15Progress(searchId, stage1Data, candidatePool, candidates, byPn, config, {
+          processedBatches,
+          batchCount: batches.length,
+          failedBatches,
+        });
       }
 
       const nextBatchCursor = Math.min(candidatePool.length, startIndex + candidates.length);
@@ -4858,6 +5074,7 @@ RESPONSE:`;
         : (failedBatches > 0 || timedOut ? 'partial' : 'complete');
       const hasMoreCandidates = nextBatchCursor < candidatePool.length || visibility.highConfidenceCount > visibility.visiblePriorArtResults.length;
       const gateCounts = this.summarizeStage15GateCounts(candidatePool, byPn);
+      const activeCounts = this.summarizeStage15GateCounts(candidates, byPn);
 
       return {
         success: true,
@@ -4890,6 +5107,15 @@ RESPONSE:`;
           visibleCount: visibility.visiblePriorArtResults.length,
           highConfidenceCount: visibility.highConfidenceCount,
           hiddenCandidateCount: visibility.hiddenCandidateCount,
+          progress: this.buildStageProgressSnapshot({
+            stage: 'relevance_review',
+            status: 'complete',
+            analyzedPatents: activeCounts.attemptedGateCount,
+            totalPatents: candidates.length,
+            processedBatches,
+            batchCount: totalBatches,
+            failedBatches,
+          }),
         }
       };
     } catch (error) {
@@ -4988,6 +5214,19 @@ RESPONSE:`;
 
       const allFeatureMaps: PatentFeatureMap[] = [];
       const concurrencyLimit = Math.max(1, Math.min(4, Math.trunc(config.stage35a.concurrency || 3)));
+      let failedBatches = 0;
+
+      await this.persistDeepAnalysisProgress(
+        searchId,
+        this.buildStageProgressSnapshot({
+          stage: 'deep_analysis',
+          analyzedPatents: 0,
+          totalPatents: normalizedPatents.length,
+          processedBatches: 0,
+          batchCount: batches.length,
+          failedBatches,
+        })
+      );
 
       // Process batches with controlled concurrency
       for (let i = 0; i < batches.length; i += concurrencyLimit) {
@@ -5012,8 +5251,23 @@ RESPONSE:`;
         for (const result of batchResults) {
           if (result.success && result.featureMaps) {
             allFeatureMaps.push(...result.featureMaps);
+          } else {
+            failedBatches += 1;
           }
         }
+
+        await this.persistDeepAnalysisProgress(
+          searchId,
+          this.buildStageProgressSnapshot({
+            stage: 'deep_analysis',
+            analyzedPatents: allFeatureMaps.length,
+            totalPatents: normalizedPatents.length,
+            processedBatches: Math.min(batches.length, i + batchSlice.length),
+            batchCount: batches.length,
+            failedBatches,
+          }),
+          { featureMaps: allFeatureMaps }
+        );
       }
 
       // Preserve the LLM's semantic decision. Deterministic code supplies only a
@@ -5052,7 +5306,16 @@ RESPONSE:`;
       const result: FeatureMapBatchResult = {
         feature_map: allFeatureMaps,
         quality_flags: qualityFlags,
-        stats: stats
+        stats: stats,
+        progress: this.buildStageProgressSnapshot({
+          stage: 'deep_analysis',
+          status: 'complete',
+          analyzedPatents: allFeatureMaps.length,
+          totalPatents: normalizedPatents.length,
+          processedBatches: batches.length,
+          batchCount: batches.length,
+          failedBatches,
+        })
       };
 
       console.log(` Stage 3.5a completed: mapped ${allFeatureMaps.length} patents to ${inventionFeatures.length} features`);

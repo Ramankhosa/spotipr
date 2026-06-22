@@ -20,6 +20,7 @@ export interface AttorneyReportFeatureRow {
   patentDisclosure: string;
   status: FeatureMapCell['status'];
   statusLabel: string;
+  crispRemark: string;
   evidenceQuote: string;
   evidenceSource: string;
   extentScore: number | null;
@@ -220,15 +221,15 @@ function reportSafeText(value: unknown, fallback = ''): string {
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
-    .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'attorney review recommended')
-    .replace(/\btoo limited\b/gi, 'marked for attorney review')
+    .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'review recommended')
+    .replace(/\btoo limited\b/gi, 'marked for review')
     .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'limited available patent data')
     .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
-    .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'attorney review item')
-    .replace(/\bevidence (?:is|was) too thin\b/gi, 'attorney review is recommended')
+    .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'review item')
+    .replace(/\bevidence (?:is|was) too thin\b/gi, 'review is recommended')
     .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the limited available patent data')
     .replace(/\bcitation record only\b/gi, 'limited available patent data')
-    .replace(/\binsufficient\b/gi, 'marked for attorney review')
+    .replace(/\binsufficient\b/gi, 'marked for review')
     .replace(/\blow evidence\b/gi, 'Limited Available Data')
     .replace(/\bavailable patent record\b/gi, 'reviewed patent record')
     .replace(/\bavailable citation record\b/gi, 'limited available patent data')
@@ -239,7 +240,8 @@ function reportSafeText(value: unknown, fallback = ''): string {
     .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
     .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
     .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence')
-    .replace(/\bfinal attorney opinion\b/gi, 'attorney review required')
+    .replace(/\bfinal attorney opinion\b/gi, 'review required')
+    .replace(/\battorney review\b/gi, 'review')
     .replace(/\bnon-patentable\b/gi, 'high mapped-overlap risk')
     .replace(/\bpatentable\b/gi, 'potential novelty space')
     .replace(/\binvalidating prior art\b/gi, 'potentially material prior art')
@@ -278,9 +280,13 @@ function normalizeStatus(value: unknown): FeatureMapCell['status'] {
 }
 
 function statusLabel(status: FeatureMapCell['status']): string {
-  if (status === 'Absent') return 'Absent / weak signal';
-  if (status === 'Unknown') return 'Mapped, needs review';
+  if (status === 'Absent' || status === 'Unknown') return 'Absent';
   return status;
+}
+
+function visibleStatusForReport(status: FeatureMapCell['status'], evidenceQuote: string): FeatureMapCell['status'] {
+  if ((status === 'Present' || status === 'Partial') && evidenceQuote) return status;
+  return status === 'Present' || status === 'Partial' ? 'Absent' : status === 'Unknown' ? 'Absent' : status;
 }
 
 function safeOverlapLabel(value: unknown): { label: string; level: AttorneyReportPatentComparison['overlapRiskLevel'] } {
@@ -289,7 +295,7 @@ function safeOverlapLabel(value: unknown): { label: string; level: AttorneyRepor
   if (/(obvious|partial novelty|partially novel|medium|moderate)/.test(text)) return { label: 'Related / moderate-overlap', level: 'Medium' };
   if (/(adjacent|related)/.test(text)) return { label: 'Related / moderate-overlap', level: 'Medium' };
   if (/(remote|novel|low)/.test(text)) return { label: 'Low mapped-overlap', level: 'Low' };
-  return { label: 'Mapped, needs review', level: 'Needs Review' };
+  return { label: 'Needs review', level: 'Needs Review' };
 }
 
 function safeAssessmentDecision(value: unknown): string {
@@ -480,16 +486,16 @@ function cellFor(map: PatentFeatureMap, feature: string): FeatureMapCell | undef
 
 function defaultNoveltyImpact(status: FeatureMapCell['status'], feature: string): string {
   if (status === 'Present') return `Overlap risk: the reviewed patent evidence appears to cover ${feature}.`;
-  if (status === 'Partial') return `Partial overlap: attorney review should distinguish the missing element of ${feature}.`;
+  if (status === 'Partial') return `Partial overlap: review should distinguish the missing element of ${feature}.`;
   if (status === 'Absent') return `Potential differentiator: ${feature} is not shown in the reviewed patent disclosure.`;
-  return `Review focus: attorney review should confirm how ${feature} is treated in the full patent documents.`;
+  return `Review focus: confirm how ${feature} is treated in the full patent documents.`;
 }
 
 function defaultAttorneyRemark(status: FeatureMapCell['status'], feature: string): string {
   if (status === 'Present') return `The reference appears to disclose this feature in the reviewed patent record.`;
   if (status === 'Partial') return `The reference is technically related to this feature but does not show all required elements in the available patent data.`;
   if (status === 'Absent') return `This reference does not show supporting disclosure for this feature.`;
-  return `Attorney review should confirm the treatment of this feature in the source record.`;
+  return `Review should confirm the treatment of this feature in the source record.`;
 }
 
 function defaultClaimReviewNote(status: FeatureMapCell['status'], feature: string): string {
@@ -499,13 +505,22 @@ function defaultClaimReviewNote(status: FeatureMapCell['status'], feature: strin
   return `Request more evidence before relying on this feature in claim strategy.`;
 }
 
+function defaultCrispRemark(status: FeatureMapCell['status']): string {
+  if (status === 'Present') {
+    return 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.';
+  }
+  if (status === 'Partial') {
+    return 'Related disclosure exists, but the full feature is not mapped; differentiate using the missing element.';
+  }
+  return 'This feature is absent from the available patent data and may support differentiation against this reference.';
+}
+
 function buildClaimImpactSummary(rows: AttorneyReportFeatureRow[], riskLabel: string): string {
   const present = rows.filter(row => row.status === 'Present').length;
   const partial = rows.filter(row => row.status === 'Partial').length;
   const absent = rows.filter(row => row.status === 'Absent').length;
-  const weak = rows.filter(row => row.status === 'Unknown' || !row.evidenceQuote).length;
   return reportSafeText(
-    `This citation has ${present} Present and ${partial} Partial mapped feature(s), with ${absent} Absent / weak-signal feature(s). ${riskLabel}. Use full patent document review to confirm claim-level treatment${weak ? `, especially for ${weak} weak-evidence row(s)` : ''}.`
+    `Mapped overlap: ${present} Present, ${partial} Partial, ${absent} Absent. ${riskLabel}.`
   );
 }
 
@@ -585,8 +600,13 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
   return (stage0.inventionFeatures || []).map((feature, index) => {
     const supplied = suppliedRows.get(feature) || {};
     const cell = cellFor(patentMap, feature);
-    const status = normalizeStatus(supplied.status || cell?.status);
-    const evidenceQuote = cleanText(supplied.evidence_quote || cell?.quote);
+    const rawStatus = normalizeStatus(supplied.status || cell?.status);
+    const evidenceQuote = cleanText(
+      supplied.evidence_quote ||
+      cell?.quote ||
+      (typeof (cell as any)?.evidence === 'string' ? (cell as any).evidence : '')
+    );
+    const status = visibleStatusForReport(rawStatus, evidenceQuote);
     const rawEvidenceSource = supplied.evidence_source || cell?.evidence_source || cell?.field || (evidenceQuote ? 'inference' : 'none');
     const evidenceSource = displayEvidenceSource(rawEvidenceSource, 'none');
     const patentDisclosure = reportSafeText(
@@ -594,10 +614,10 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       cell?.patent_disclosure ||
       cell?.quote ||
       cell?.reason ||
-      (status === 'Present' || status === 'Partial' ? 'Related patent disclosure identified.' : 'Supporting disclosure is not shown in this citation.')
+      (status === 'Present' || status === 'Partial' ? 'Related patent disclosure identified.' : 'This feature is absent from the available patent data.')
     );
     const rawConfidence = numberScore(supplied.confidence ?? cell?.confidence);
-    const confidence = (status === 'Present' || status === 'Partial') && !evidenceQuote
+    const confidence = (rawStatus === 'Present' || rawStatus === 'Partial') && !evidenceQuote
       ? Math.min(rawConfidence ?? 0.45, 0.45)
       : rawConfidence;
     const extentScore = numberScore(supplied.extent_score ?? supplied.extentScore ?? cell?.extent_score ?? (cell as any)?.extentScore)
@@ -609,9 +629,10 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       patentDisclosure,
       status,
       statusLabel: statusLabel(status),
+      crispRemark: defaultCrispRemark(status),
       evidenceQuote,
-      evidenceSource: evidenceQuote ? evidenceSource : (status === 'Present' || status === 'Partial' ? 'inference' : 'none'),
-      extentScore: status === 'Absent' || status === 'Unknown' ? null : extentScore,
+      evidenceSource: evidenceQuote ? evidenceSource : 'none',
+      extentScore: status === 'Absent' ? null : extentScore,
       confidence,
       attorneyRemark: reportSafeText(supplied.attorney_remark || cell?.attorney_remark || defaultAttorneyRemark(status, feature)),
       noveltyImpact: reportSafeText(supplied.novelty_impact || defaultNoveltyImpact(status, feature)),
@@ -726,11 +747,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     jurisdiction: cleanText(searchRun.jurisdiction, 'IN'),
     sourceMode,
     generatedDate,
-    confidentiality: 'Confidential attorney-review draft',
+    confidentiality: 'Confidential review draft',
     preparedBy: 'PatentNest.ai Patent Intelligence',
     searchQuery: cleanText(stage0.searchQuery, '-'),
     inventionFeatures: stage0.inventionFeatures || [],
-    evidenceBasis: 'Automated patent intelligence prepared for attorney review and claim-positioning strategy.',
+    evidenceBasis: 'Automated patent intelligence prepared for review and claim-positioning strategy.',
     methodology: {
       corpus: sourceModeLabel(sourceMode),
       retrievalMode: 'Hybrid retrieval/ranking with AI relevance gating and feature mapping',
@@ -741,7 +762,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
         'AI relevance gating before detailed mapping',
         'Feature-by-feature evidence mapping using explicit source labels',
       ],
-      preliminaryStatus: 'AI-generated patent intelligence output for attorney review; not a legal opinion unless separately reviewed by qualified counsel.',
+      preliminaryStatus: 'AI-generated patent intelligence output for review; not a legal opinion unless separately reviewed by qualified counsel.',
     },
     counts: {
       searched: counts.patentsSearched,
@@ -760,15 +781,14 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { label: 'Citations selected for detailed feature mapping', value: counts.detailedCitations },
     ],
     scoringLegend: [
-      { label: 'Present', meaning: 'Strong textual support for the feature in the reviewed record.' },
-      { label: 'Partial', meaning: 'Related concept found, but one or more elements are missing.' },
-      { label: 'Absent / weak signal', meaning: 'No reliable support found in the reviewed citation text.' },
+      { label: 'Present', meaning: 'Feature is disclosed in the available patent data.' },
+      { label: 'Partial', meaning: 'Related disclosure exists, but the full feature is not mapped.' },
+      { label: 'Absent', meaning: 'Feature was not identified in the available patent data.' },
       { label: 'Retrieval Relevance', meaning: 'Ranking score based on semantic and textual overlap, not a legal conclusion.' },
       { label: 'Direct match', meaning: 'Citation appears to overlap the invention-level core mechanism or core feature combination.' },
       { label: 'Component / feature-level match', meaning: 'Citation discloses one or more relevant features or subsystems, but not the full invention as a whole.' },
       { label: 'Distributed component coverage', meaning: 'Features found across multiple references indicate landscape/obviousness-style risk, not one-reference anticipation by itself.' },
       { label: 'Feature Coverage', meaning: 'Share of extracted features mapped as Present or Partial for one citation.' },
-      { label: 'Evidence Confidence', meaning: 'Automated evidence confidence for the mapped source text.' },
       { label: 'Evidence Source', meaning: 'Mapped support is limited to title, abstract, inference, or none in this report version.' },
     ],
     tableOfContents: [
@@ -822,13 +842,13 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       })),
       retrievalConfidence: counts.patentsSearched >= 20 ? 'Medium' : 'Low',
       featureMappingConfidence: counts.detailedCitations >= 5 ? 'Medium' : 'Low',
-      legalConclusion: 'Not provided; requires attorney review.',
+      legalConclusion: 'Not provided; requires review.',
     },
     overallDraftingDirection: 'Focus any claim drafting discussion on concrete features that remain unmapped or only partially mapped in the available patent data, and verify all mapped references with full patent documents, including claims, detailed description/specification, drawings, family data, and legal status.',
     limitations: 'This report is based on automated retrieval, ranking, and feature mapping from limited available patent data. For the highest-confidence analysis, review the full patent documents, including claims, detailed description/specification, drawings, prosecution history, legal status, family members, and non-patent literature with a qualified patent professional. This report is not a legal opinion and should not be used alone for filing, validity, enforcement, or freedom-to-operate decisions.',
     nextSteps: [
       'Review the highest-overlap mapped citations at claim level.',
-      'Narrow invention disclosure around technical differentiators that are Absent / weak signal or only partially mapped.',
+      'Narrow invention disclosure around technical differentiators that are Absent or only partially mapped.',
       'Validate results with full patent documents and non-patent literature searching.',
       'Ask the inventor for implementation details where features are generic, weak, or inferred.',
     ],

@@ -96,6 +96,23 @@ const STAGE_PROGRESS = {
 
 const STAGE_ORDER = ['PENDING', 'STAGE_0_COMPLETED', 'STAGE_1_COMPLETED', 'STAGE_3_5_COMPLETED', 'COMPLETED'];
 
+const visibleStatusForReport = (status: string | undefined, quote?: string) => {
+  if ((status === 'Present' || status === 'Partial') && quote) return status;
+  return 'Absent';
+};
+
+const crispRemarkForStatus = (status: string | undefined) => {
+  if (status === 'Present') {
+    return 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.';
+  }
+  if (status === 'Partial') {
+    return 'Related disclosure exists, but the full feature is not mapped; differentiate using the missing element.';
+  }
+  return 'This feature is absent from the available patent data and may support differentiation against this reference.';
+};
+
+const cleanReviewText = (value: any) => String(value || '').replace(/\battorney review\b/gi, 'review').trim();
+
 interface Project {
   id: string;
   name: string;
@@ -312,6 +329,43 @@ function displayPatentProviderLabel(value: unknown) {
   return displayInternationalPatentText(raw);
 }
 
+type LiveStageProgress = {
+  stage?: string;
+  status?: string;
+  analyzedPatents?: number;
+  totalPatents?: number;
+  processedBatches?: number;
+  batchCount?: number;
+  failedBatches?: number;
+  percent?: number;
+  message?: string;
+};
+
+function getLiveStageProgress(results: any, stageNumber?: string | null): LiveStageProgress | null {
+  if (!results || !stageNumber) return null;
+  if (stageNumber === '1.5' || stageNumber === '2') {
+    const gate = results?.aiRelevance || results?.stage1?.aiRelevance;
+    return gate?.progress || null;
+  }
+  if (stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5a' || stageNumber === '3.5b' || stageNumber === '3.5c') {
+    return results?.stage35?.progress || results?.stage3_5?.progress || results?.progress || null;
+  }
+  return null;
+}
+
+function formatLiveProgressMessage(progress: LiveStageProgress | null, fallback: string) {
+  if (!progress) return fallback;
+  const analyzed = Number(progress.analyzedPatents || 0);
+  const total = Number(progress.totalPatents || 0);
+  const batches = Number(progress.batchCount || 0);
+  const processedBatches = Number(progress.processedBatches || 0);
+  const batchSuffix = batches > 0 ? ` Batch ${Math.min(processedBatches, batches)} of ${batches}.` : '';
+  if (total > 0) {
+    return `${progress.message || `${analyzed} of ${total} patents analyzed.`}${batchSuffix}`;
+  }
+  return progress.message || fallback;
+}
+
 export default function NoveltySearchWorkflow({
   patentId,
   projectId: initialProjectId,
@@ -401,6 +455,7 @@ export default function NoveltySearchWorkflow({
     attorneyRemark?: string;
     noveltyImpact?: string;
     claimReviewNote?: string;
+    crispRemark?: string;
     link?: string;
   }>(null);
 
@@ -1138,6 +1193,64 @@ export default function NoveltySearchWorkflow({
       setStage35Message('Generating patent-by-patent remarks...');
     }
 
+    const stageKey = (stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5a' || stageNumber === '3.5b' || stageNumber === '3.5c')
+      ? 'stage3_5'
+      : (stageNumber === '2' || stageNumber === '1' || stageNumber === '1.5')
+        ? 'stage1'
+        : `stage${stageNumber}`;
+    const shouldPollLiveProgress = stageNumber === '1.5' || stageNumber === '2' || stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5a';
+    let progressPollTimer: number | null = null;
+
+    const applyLiveProgress = (results: any) => {
+      const progress = getLiveStageProgress(results, stageNumber);
+      if (!progress) return;
+      const percent = typeof progress.percent === 'number' ? progress.percent : undefined;
+      if (typeof percent === 'number') {
+        setStageProgress(prev => ({ ...prev, [stageKey]: Math.max(0, Math.min(99, percent)) }));
+      }
+      const message = formatLiveProgressMessage(progress, '');
+      if (!message) return;
+      if (stageNumber === '1.5' || stageNumber === '2') {
+        setStage1Message(message);
+      } else {
+        setStage35Message(message);
+        setStage35aMessage(message);
+      }
+    };
+
+    const pollLiveProgress = async () => {
+      try {
+        const response = await fetch(`/api/novelty-search/${searchId}`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` },
+          cache: 'no-store'
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok || !body?.search) return;
+        const nextSearchState = {
+          ...(latestSearchStateRef.current || searchState),
+          status: body.search.status,
+          currentStage: body.search.currentStage,
+          results: body.search.results,
+          isLoading: true,
+          error: null
+        };
+        latestSearchStateRef.current = nextSearchState;
+        autoStageStateRef.current = buildNoveltyAutoStageState(nextSearchState, stage0ApprovedRef.current);
+        setSearchState(prev => ({
+          ...prev,
+          ...nextSearchState
+        }));
+        applyLiveProgress(body.search.results);
+      } catch {
+        // Progress polling is best-effort; the stage POST remains the source of truth.
+      }
+    };
+
+    if (shouldPollLiveProgress) {
+      progressPollTimer = window.setInterval(pollLiveProgress, 2500);
+      window.setTimeout(pollLiveProgress, 800);
+    }
+
     try {
       let fetchOptions: RequestInit = {
         method: 'POST',
@@ -1182,11 +1295,6 @@ export default function NoveltySearchWorkflow({
         await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
-      const stageKey = (stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5a' || stageNumber === '3.5b' || stageNumber === '3.5c')
-        ? 'stage3_5'
-        : (stageNumber === '2' || stageNumber === '1' || stageNumber === '1.5')
-          ? 'stage1'
-          : `stage${stageNumber}`;
       setStageProgress(prev => ({ ...prev, [stageKey]: 100 }));
 
       // Refresh full aggregated results
@@ -1246,6 +1354,9 @@ export default function NoveltySearchWorkflow({
       }));
       return false;
     } finally {
+      if (progressPollTimer !== null) {
+        window.clearInterval(progressPollTimer);
+      }
       if (stageNumber === '1' || stageNumber === '1.5' || stageNumber === '2') {
         setIsStage1Simulating(false);
       } else if (stageNumber === '3' || stageNumber === '3.5' || stageNumber === '3.5b' || stageNumber === '3.5c') {
@@ -2096,122 +2207,130 @@ export default function NoveltySearchWorkflow({
   // ============================================================================
   // RENDER PROGRESS (Active State)
   // ============================================================================
-  const renderProgress = () => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="space-y-4"
-    >
-      {/* Status Card */}
-      <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
-        <div className="h-1 bg-indigo-500" />
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                searchState.status === NoveltySearchStatus.COMPLETED 
-                  ? 'bg-emerald-500'
-                  : searchState.status === NoveltySearchStatus.FAILED
-                  ? 'bg-rose-500'
-                  : 'bg-indigo-600'
-              }`}>
-                {searchState.status === NoveltySearchStatus.COMPLETED ? (
-                  <CheckCircle className="h-5 w-5 text-white" />
-                ) : searchState.status === NoveltySearchStatus.FAILED ? (
-                  <XCircle className="h-5 w-5 text-white" />
-                ) : searchState.isLoading ? (
-                  <Loader2 className="h-5 w-5 text-white animate-spin" />
-                ) : (
-                  <Search className="h-5 w-5 text-white" />
-                )}
-              </div>
-              <div>
-                <div className="text-sm font-semibold text-slate-900">{STAGE_TAB_LABELS[selectedStageTab]}</div>
-                <div className="text-xs text-slate-500">Search ID: {searchState.searchId?.slice(0, 12)}...</div>
-              </div>
-            </div>
+  const renderProgress = () => {
+    const liveProgress = getLiveStageProgress(searchState.results, activeExecutionStage);
+    const fallbackMessage = stage1Message || stage35Message || stage35aMessage;
+    const progressMessage = formatLiveProgressMessage(liveProgress, fallbackMessage);
+    const hasLiveProgress = typeof liveProgress?.percent === 'number';
+    const progressWidth = Math.max(6, Math.min(100, Number(liveProgress?.percent ?? 35)));
 
-            <div className="flex items-center gap-4">
-              {stage0ApprovedForUi && (selectedStageTab !== '1' || hasStage1Results || isAutoRunning) && (
-                <Badge variant="outline" className="text-xs border-slate-200 bg-white text-slate-600">
-                  {isAutoRunning ? 'Auto running' : autoMode ? 'Auto mode' : 'Manual mode'}
-                </Badge>
-              )}
-              <Badge 
-                variant="outline" 
-                className={`text-xs ${
-                  searchState.status === NoveltySearchStatus.COMPLETED 
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : searchState.status === NoveltySearchStatus.FAILED
-                    ? 'bg-rose-50 text-rose-700 border-rose-200'
-                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                }`}
-              >
-                {currentStageInfo.progress}% Complete
-              </Badge>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Processing Messages */}
-      <AnimatePresence>
-        {(isStage1Simulating || isStage35Simulating || isStage35aSimulating) && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-          >
-            <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
-              <div className="p-4">
-                <div className="flex items-center gap-4">
-                  <div className="flex-shrink-0">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    </div>
+    return (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="space-y-4"
+        >
+          {/* Status Card */}
+          <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
+            <div className="h-1 bg-indigo-500" />
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    searchState.status === NoveltySearchStatus.COMPLETED
+                      ? 'bg-emerald-500'
+                      : searchState.status === NoveltySearchStatus.FAILED
+                      ? 'bg-rose-500'
+                      : 'bg-indigo-600'
+                  }`}>
+                    {searchState.status === NoveltySearchStatus.COMPLETED ? (
+                      <CheckCircle className="h-5 w-5 text-white" />
+                    ) : searchState.status === NoveltySearchStatus.FAILED ? (
+                      <XCircle className="h-5 w-5 text-white" />
+                    ) : searchState.isLoading ? (
+                      <Loader2 className="h-5 w-5 text-white animate-spin" />
+                    ) : (
+                      <Search className="h-5 w-5 text-white" />
+                    )}
                   </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold text-slate-900 mb-1">
-                      {activeExecutionStage === '1' ? 'Patent Search' :
-                       activeExecutionStage === '1.5' || activeExecutionStage === '2' ? 'LLM Relevance Analysis' :
-                       isStage35aSimulating ? 'Feature Mapping' : 'Deep Analysis'}
-                    </div>
-                    <div className="text-sm text-slate-700">
-                      {stage1Message || stage35Message || stage35aMessage}
-                    </div>
-                    <div className="mt-3 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                      <motion.div 
-                        className="h-full rounded-full bg-indigo-500"
-                        initial={{ width: '0%' }}
-                        animate={{ width: '100%' }}
-                        transition={{ duration: 10, ease: 'linear' }}
-                      />
-                    </div>
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{STAGE_TAB_LABELS[selectedStageTab]}</div>
+                    <div className="text-xs text-slate-500">Search ID: {searchState.searchId?.slice(0, 12)}...</div>
                   </div>
                 </div>
-              </div>
-            </Card>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {/* Error Display */}
-      <AnimatePresence>
-        {searchState.error && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-          >
-            <Alert variant="destructive" className="rounded-lg border-rose-200 bg-rose-50">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{displayInternationalPatentText(searchState.error)}</AlertDescription>
-            </Alert>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
+                <div className="flex items-center gap-4">
+                  {stage0ApprovedForUi && (selectedStageTab !== '1' || hasStage1Results || isAutoRunning) && (
+                    <Badge variant="outline" className="text-xs border-slate-200 bg-white text-slate-600">
+                      {isAutoRunning ? 'Auto running' : autoMode ? 'Auto mode' : 'Manual mode'}
+                    </Badge>
+                  )}
+                  <Badge
+                    variant="outline"
+                    className={`text-xs ${
+                      searchState.status === NoveltySearchStatus.COMPLETED
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : searchState.status === NoveltySearchStatus.FAILED
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                    }`}
+                  >
+                    {currentStageInfo.progress}% Complete
+                  </Badge>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Processing Messages */}
+          <AnimatePresence>
+            {(isStage1Simulating || isStage35Simulating || isStage35aSimulating) && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
+                  <div className="p-4">
+                    <div className="flex items-center gap-4">
+                      <div className="flex-shrink-0">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm font-semibold text-slate-900 mb-1">
+                          {activeExecutionStage === '1' ? 'Patent Search' :
+                           activeExecutionStage === '1.5' || activeExecutionStage === '2' ? 'LLM Relevance Analysis' :
+                           isStage35aSimulating ? 'Feature Mapping' : 'Deep Analysis'}
+                        </div>
+                        <div className="text-sm text-slate-700">
+                          {progressMessage}
+                        </div>
+                        <div className="mt-3 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                          <motion.div
+                            className="h-full rounded-full bg-indigo-500"
+                            initial={{ width: hasLiveProgress ? '6%' : '0%' }}
+                            animate={{ width: hasLiveProgress ? `${progressWidth}%` : '100%' }}
+                            transition={hasLiveProgress ? { duration: 0.35, ease: 'easeOut' } : { duration: 10, ease: 'linear' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Error Display */}
+          <AnimatePresence>
+            {searchState.error && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+              >
+                <Alert variant="destructive" className="rounded-lg border-rose-200 bg-rose-50">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{displayInternationalPatentText(searchState.error)}</AlertDescription>
+                </Alert>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+    );
+  };
 
   // ============================================================================
   // RENDER STAGE CONTENT
@@ -3203,9 +3322,9 @@ export default function NoveltySearchWorkflow({
 
     const getStatusClass = (status: string | undefined) => {
       switch (status) {
-        case 'Present': return 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100';
+        case 'Present': return 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100';
         case 'Partial': return 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100';
-        case 'Absent': return 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100';
+        case 'Absent': return 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100';
         default: return 'bg-slate-50 text-slate-600 border-slate-200';
       }
     };
@@ -3397,7 +3516,7 @@ export default function NoveltySearchWorkflow({
                               </div>
                             </td>
                             {visibleFeatures.map((f: string, colIdx: number) => {
-                              const status = featureToStatus.get(f) || 'Unknown';
+                              const rawStatus = featureToStatus.get(f) || 'Absent';
                               // Find full cell object for tooltip/details
                               const cellObj = (() => {
                                 const byExact = cellsArray.find((c: any) => c && typeof c.feature === 'string' && c.feature === f);
@@ -3410,6 +3529,7 @@ export default function NoveltySearchWorkflow({
                               const quote = comparisonRow?.evidence_quote
                                 ? String(comparisonRow.evidence_quote)
                                 : ((cellObj && (cellObj.quote || cellObj.evidence)) ? String(cellObj.quote || cellObj.evidence) : '');
+                              const status = visibleStatusForReport(rawStatus, quote);
                               const reason = cellObj && cellObj.reason ? String(cellObj.reason) : '';
                               const field = comparisonRow?.evidence_source
                                 ? String(comparisonRow.evidence_source)
@@ -3423,11 +3543,12 @@ export default function NoveltySearchWorkflow({
                               const attorneyRemark = comparisonRow?.attorney_remark || cellObj?.attorney_remark;
                               const noveltyImpact = comparisonRow?.novelty_impact || cellObj?.novelty_impact;
                               const claimReviewNote = comparisonRow?.claim_review_note || cellObj?.claim_review_note;
+                              const crispRemark = cleanReviewText(comparisonRow?.crisp_remark || cellObj?.crisp_remark) || crispRemarkForStatus(status);
                               const link = (patent.link || (pn && `https://patents.google.com/patent/${pn}`)) as string | undefined;
 
                               const tooltip = (() => {
-                                if (attorneyRemark) {
-                                  return attorneyRemark.length > 180 ? attorneyRemark.slice(0, 177) + '...' : attorneyRemark;
+                                if (crispRemark) {
+                                  return crispRemark.length > 180 ? crispRemark.slice(0, 177) + '...' : crispRemark;
                                 }
                                  if (status === 'Present' || status === 'Partial') {
                                   const snip = quote ? (quote.length > 160 ? quote.slice(0, 157) + '...' : quote) : 'No evidence provided';
@@ -3464,6 +3585,7 @@ export default function NoveltySearchWorkflow({
                                       attorneyRemark,
                                       noveltyImpact,
                                       claimReviewNote,
+                                      crispRemark,
                                       link
                                     })}
                                     className={`
@@ -3475,7 +3597,7 @@ export default function NoveltySearchWorkflow({
                                     <span className="block">
                                       {status === 'Present' ? 'Present' :
                                        status === 'Partial' ? 'Partial' :
-                                       status === 'Absent' ? 'Absent' : 'Unknown'}
+                                       'Absent'}
                                     </span>
                                     {typeof extentScore === 'number' && (
                                       <span className="mt-0.5 block text-[9px] font-semibold opacity-80">
@@ -3501,7 +3623,7 @@ export default function NoveltySearchWorkflow({
                   <div className="p-3 text-xs text-slate-600 flex items-center gap-4 border-t bg-white">
                     <span className="font-medium text-slate-700">Legend:</span>
                     <span className="flex items-center gap-1">
-                      <span className="inline-block w-3 h-3 rounded bg-emerald-500"></span>
+                      <span className="inline-block w-3 h-3 rounded bg-rose-500"></span>
                       Present
                     </span>
                     <span className="flex items-center gap-1">
@@ -3509,12 +3631,8 @@ export default function NoveltySearchWorkflow({
                       Partial
                     </span>
                     <span className="flex items-center gap-1">
-                      <span className="inline-block w-3 h-3 rounded bg-rose-500"></span>
+                      <span className="inline-block w-3 h-3 rounded bg-emerald-500"></span>
                       Absent
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span className="inline-block w-3 h-3 rounded bg-slate-400"></span>
-                      Unknown
                     </span>
                   </div>
                 </div>
@@ -3785,32 +3903,35 @@ export default function NoveltySearchWorkflow({
                                       <th className="px-3 py-2 text-left font-semibold">Feature</th>
                                       <th className="px-3 py-2 text-left font-semibold">Patent disclosure</th>
                                       <th className="px-3 py-2 text-left font-semibold">Status</th>
-                                      <th className="px-3 py-2 text-left font-semibold">Attorney remark</th>
-                                      <th className="px-3 py-2 text-left font-semibold">Claim review note</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Remark</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-100">
-                                    {comparisonRows.map((row: any, rowIndex: number) => (
-                                      <tr key={`${row.feature || rowIndex}-${rowIndex}`}>
-                                        <td className="px-3 py-2 align-top font-semibold text-indigo-700">{row.feature_id || `KF${rowIndex + 1}`}</td>
-                                        <td className="px-3 py-2 align-top text-slate-700">{row.feature}</td>
-                                        <td className="px-3 py-2 align-top text-slate-700">
-                                          <div>{row.patent_disclosure || '-'}</div>
-                                          {row.evidence_quote && (
-                                            <div className="mt-1 text-[11px] text-slate-500">
-                                              Evidence ({String(row.evidence_source || 'citation record').replace(/title\s*\/\s*abstract|abstract/gi, 'citation record')}): {row.evidence_quote}
-                                            </div>
-                                          )}
-                                        </td>
-                                        <td className="px-3 py-2 align-top">
-                                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getThreatLabel(row.status === 'Present' ? 'anticipates' : row.status === 'Partial' ? 'partial_novelty' : 'remote').color}`}>
-                                            {row.status || 'Unknown'}
-                                          </span>
-                                        </td>
-                                        <td className="px-3 py-2 align-top text-slate-700">{row.attorney_remark || row.novelty_impact || '-'}</td>
-                                        <td className="px-3 py-2 align-top text-slate-700">{row.claim_review_note || '-'}</td>
-                                      </tr>
-                                    ))}
+                                    {comparisonRows.map((row: any, rowIndex: number) => {
+                                      const quote = String(row.evidence_quote || row.quote || '').trim();
+                                      const status = visibleStatusForReport(row.status, quote);
+                                      const crispRemark = cleanReviewText(row.crisp_remark) || crispRemarkForStatus(status);
+                                      return (
+                                        <tr key={`${row.feature || rowIndex}-${rowIndex}`}>
+                                          <td className="px-3 py-2 align-top font-semibold text-indigo-700">{row.feature_id || `KF${rowIndex + 1}`}</td>
+                                          <td className="px-3 py-2 align-top text-slate-700">{row.feature}</td>
+                                          <td className="px-3 py-2 align-top text-slate-700">
+                                            <div>{row.patent_disclosure || '-'}</div>
+                                            {quote && (
+                                              <div className="mt-1 text-[11px] text-slate-500">
+                                                Evidence ({String(row.evidence_source || 'citation record').replace(/title\s*\/\s*abstract|abstract/gi, 'citation record')}): {quote}
+                                              </div>
+                                            )}
+                                          </td>
+                                          <td className="px-3 py-2 align-top">
+                                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${getThreatLabel(status === 'Present' ? 'anticipates' : status === 'Partial' ? 'partial_novelty' : 'remote').color}`}>
+                                              {status}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 align-top text-slate-700">{crispRemark}</td>
+                                        </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>
@@ -4115,65 +4236,24 @@ export default function NoveltySearchWorkflow({
                 </section>
               )}
 
-              {typeof selectedEvidence.confidence === 'number' && (
-                <section>
-                  <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-                    <span className="font-medium uppercase tracking-wide">Confidence</span>
-                    <span>{Math.round(selectedEvidence.confidence * 100)}%</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.round(selectedEvidence.confidence * 100)}%` }} />
-                  </div>
-                </section>
-              )}
-
               {(selectedEvidence.status === 'Present' || selectedEvidence.status === 'Partial') && selectedEvidence.quote && (
                 <section>
                   <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Evidence Quote</div>
                   <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
                     "{selectedEvidence.quote}"
                   </div>
-                  {selectedEvidence.field && (
+                  {selectedEvidence.field && selectedEvidence.field !== 'none' && (
                     <div className="mt-2 text-xs text-slate-500">Evidence source: {selectedEvidence.field}</div>
                   )}
                 </section>
               )}
 
-              {selectedEvidence.status === 'Absent' && selectedEvidence.reason && (
+              {selectedEvidence.crispRemark && (
                 <section>
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Reason</div>
-                  <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
-                    {selectedEvidence.reason}
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Remark</div>
+                  <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
+                    {selectedEvidence.crispRemark}
                   </div>
-                </section>
-              )}
-
-              {(selectedEvidence.attorneyRemark || selectedEvidence.noveltyImpact || selectedEvidence.claimReviewNote) && (
-                <section className="space-y-3">
-                  {selectedEvidence.attorneyRemark && (
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Attorney Remark</div>
-                      <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
-                        {selectedEvidence.attorneyRemark}
-                      </div>
-                    </div>
-                  )}
-                  {selectedEvidence.noveltyImpact && (
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Novelty Impact</div>
-                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
-                        {selectedEvidence.noveltyImpact}
-                      </div>
-                    </div>
-                  )}
-                  {selectedEvidence.claimReviewNote && (
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Claim Review Note</div>
-                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
-                        {selectedEvidence.claimReviewNote}
-                      </div>
-                    </div>
-                  )}
                 </section>
               )}
 

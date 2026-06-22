@@ -295,4 +295,37 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
       },
     ]);
   });
+
+  test('builds bounded live patent-analysis progress snapshots', () => {
+    const svc = service();
+
+    expect(svc.buildStageProgressSnapshot({
+      stage: 'relevance_review',
+      analyzedPatents: 3,
+      totalPatents: 10,
+      processedBatches: 1,
+      batchCount: 4,
+    })).toMatchObject({
+      stage: 'relevance_review',
+      status: 'running',
+      analyzedPatents: 3,
+      totalPatents: 10,
+      percent: 30,
+      message: 'Relevance review: 3 of 10 patents analyzed.',
+    });
+
+    expect(svc.buildStageProgressSnapshot({
+      stage: 'deep_analysis',
+      status: 'running',
+      analyzedPatents: 10,
+      totalPatents: 10,
+    }).percent).toBe(99);
+
+    expect(svc.buildStageProgressSnapshot({
+      stage: 'deep_analysis',
+      status: 'complete',
+      analyzedPatents: 10,
+      totalPatents: 10,
+    }).percent).toBe(100);
+  });
 });

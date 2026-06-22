@@ -521,8 +521,9 @@ export async function listIpIndiaJournalArchive(filters: IpIndiaArchiveFilters =
     (prisma as any).ipIndiaJournalFile.findMany({
       where,
       orderBy: [
-        { availabilityDate: 'asc' },
-        { part: 'asc' },
+        { availabilityDate: { sort: 'desc', nulls: 'last' } },
+        { part: 'desc' },
+        { createdAt: 'desc' },
       ],
       take,
       skip,
