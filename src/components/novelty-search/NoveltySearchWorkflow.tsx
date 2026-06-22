@@ -129,6 +129,7 @@ interface NoveltySearchWorkflowProps {
   initialTitle?: string;
   initialDescription?: string;
   ideaId?: string;
+  executionMode?: 'legacy';
 }
 
 interface SearchState {
@@ -373,7 +374,8 @@ export default function NoveltySearchWorkflow({
   initialSearchId,
   initialTitle,
   initialDescription,
-  ideaId
+  ideaId,
+  executionMode
 }: NoveltySearchWorkflowProps) {
   const [activeSearchPath, setActiveSearchPath] = useState<NoveltySearchPath>(
     initialSearchId || initialTitle || initialDescription ? 'intelligent' : 'manual'
@@ -1001,6 +1003,7 @@ export default function NoveltySearchWorkflow({
           'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify({
+          executionMode,
           patentId,
           projectId: validProjectId,
           ...formData,

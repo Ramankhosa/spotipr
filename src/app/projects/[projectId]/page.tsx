@@ -5,7 +5,6 @@ import { useAuth } from '@/lib/auth-context'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
-import NoveltySearchHistory from '@/components/novelty-search/NoveltySearchHistory'
 import { PageLoadingBird } from '@/components/ui/loading-bird'
 import {
   FileText,
@@ -24,8 +23,7 @@ import {
   ArrowLeft,
   Building2,
   Clock,
-  Layers,
-  BrainCircuit
+  Layers
 } from 'lucide-react'
 
 interface Collaborator {
@@ -413,27 +411,6 @@ export default function ProjectDashboardPage() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Novelty Search History Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.4 }}
-          id="novelty-search-history"
-        >
-          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 bg-slate-50/50">
-              <div className="flex items-center gap-2">
-                <BrainCircuit className="w-5 h-5 text-purple-500" />
-                <h2 className="text-lg font-semibold text-slate-900">Novelty Search History</h2>
-              </div>
-              <p className="text-sm text-slate-500 mt-1">View and access reports from previous novelty searches</p>
-            </div>
-            <div className="p-6">
-              <NoveltySearchHistory projectId={projectId} showStats={false} />
             </div>
           </div>
         </motion.div>

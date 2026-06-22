@@ -2,6 +2,7 @@ import { BasePatentService, LLMResult, User } from './base-patent-service';
 import { llmGateway } from './metering/gateway';
 import { enforceMetering } from './metering/enforcement';
 import { prisma } from './prisma';
+import { checkServiceAccess } from './org-access-service';
 import {
   IdeaBankIdea,
   IdeaBankReservation,
@@ -771,18 +772,27 @@ export class IdeaBankService extends BasePatentService {
       throw new Error('Idea not found');
     }
 
-    // Create novelty search run with idea data
-    const searchRun = await prisma.noveltySearchRun.create({
-      data: {
-        userId: user.id,
-        title: idea.title,
-        inventionDescription: idea.description,
-        config: {
-          source: 'idea_bank',
-          ideaId: idea.id,
-          reservationId: reservation.id
+    if (user.tenantId) {
+      const access = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+      if (!access.allowed) throw new Error(access.reason || 'Novelty search access denied');
+    }
+
+    // Create the run and opt-in background job atomically.
+    const searchRun = await prisma.$transaction(async tx => {
+      const run = await tx.noveltySearchRun.create({
+        data: {
+          userId: user.id,
+          title: idea.title,
+          inventionDescription: idea.description,
+          config: {
+            source: 'idea_bank',
+            ideaId: idea.id,
+            reservationId: reservation.id
+          }
         }
-      }
+      });
+      await (tx as any).noveltySearchJob.create({ data: { searchId: run.id, status: 'QUEUED', currentStep: 'STAGE_0' } });
+      return run;
     });
 
     // Update reservation to mark as sent to search

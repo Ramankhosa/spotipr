@@ -13,25 +13,17 @@ export default function NoveltySearchPipelineViewPage() {
   const searchId = params?.searchId as string;
 
   useEffect(() => {
-    if (!isLoading && !user) {
-      router.push('/login');
-    }
+    if (!isLoading && !user) router.push('/login');
   }, [isLoading, user, router]);
 
-  if (isLoading) {
-    return <PageLoadingBird message="Loading novelty search..." />;
-  }
-
-  if (!user || !searchId) {
-    return null;
-  }
+  if (isLoading) return <PageLoadingBird message="Loading novelty search..." />;
+  if (!user || !searchId) return null;
 
   return (
     <div className="min-h-screen bg-gray-50">
       <main className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <NoveltySearchWorkflow initialSearchId={searchId} />
+        <NoveltySearchWorkflow initialSearchId={searchId} executionMode="legacy" />
       </main>
     </div>
   );
 }
-

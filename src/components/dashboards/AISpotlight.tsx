@@ -33,8 +33,7 @@ export default function AISpotlight({ draftsCount, latestNoveltySearch, userRese
 
     // Novelty review suggestion
     if (latestNoveltySearch) {
-      const stage1Results = latestNoveltySearch.results?.stage1
-      const patentCount = stage1Results?.patentCount || 0
+      const patentCount = latestNoveltySearch.patentCount || latestNoveltySearch.results?.stage1?.patentCount || 0
 
       if (patentCount > 0) {
         suggestions.push({
@@ -42,7 +41,7 @@ export default function AISpotlight({ draftsCount, latestNoveltySearch, userRese
           title: 'Analysis Complete',
           message: `"${latestNoveltySearch.title.substring(0, 25)}..." returned ${patentCount} citations. Review the findings to proceed.`,
           actions: [
-            { label: 'View Report', action: () => router.push(`/novelty-search/${latestNoveltySearch.id}/consolidated`) },
+            { label: 'View Report', action: () => router.push(`/novelty-search/${latestNoveltySearch.id}/pdf`) },
             { label: 'New Search', action: () => router.push('/novelty-search') }
           ]
         })

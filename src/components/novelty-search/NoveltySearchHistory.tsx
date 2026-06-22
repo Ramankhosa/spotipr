@@ -1,305 +1,193 @@
-'use client';
+'use client'
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
-import { Button } from '../ui/button';
-import { Badge } from '../ui/badge';
-import { FileText, Download, Calendar, FolderOpen, Search, Eye } from 'lucide-react';
-import Link from 'next/link';
-import { format } from 'date-fns';
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
+import { Archive, Calendar, ChevronLeft, ChevronRight, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search } from 'lucide-react'
+import { useAuth } from '@/lib/auth-context'
 
-interface NoveltySearchHistoryItem {
-  id: string;
-  title: string;
-  inventionDescription: string;
-  status: string;
-  currentStage: string;
-  createdAt: string;
-  completedAt: string | null;
-  project: {
-    id: string;
-    name: string;
-  } | null;
-  patent: {
-    id: string;
-    title: string;
-  } | null;
-  hasReport: boolean;
-  reportUrl: string | null;
-  results: {
-    stage0: any;
-    stage1: { patentCount: number } | null;
-    stage35: { assessmentCount: number } | null;
-    stage4: any;
-  };
+type Client = { id: string; name: string; groups: MatterGroup[] }
+type MatterGroup = { id: string; name: string; referenceCode?: string | null; description?: string | null; archivedAt?: string | null; client?: { id: string; name: string }; _count?: { searchRuns: number } }
+type Project = { id: string; name: string }
+type HistoryItem = {
+  id: string; title: string; inventionDescription: string; status: 'QUEUED' | 'PROCESSING' | 'COMPLETE' | 'FAILED';
+  createdAt: string; completedAt?: string | null; jurisdiction: string; patentCount: number; error?: string | null;
+  project?: Project | null; group?: { id: string; name: string; referenceCode?: string | null; client: { id: string; name: string } } | null;
 }
 
-interface NoveltySearchHistoryProps {
-  projectId?: string; // Optional: filter by project
-  showStats?: boolean; // Show user statistics
+const statusClasses: Record<HistoryItem['status'], string> = {
+  QUEUED: 'border-amber-200 bg-amber-50 text-amber-800',
+  PROCESSING: 'border-blue-200 bg-blue-50 text-blue-800',
+  COMPLETE: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  FAILED: 'border-red-200 bg-red-50 text-red-800',
 }
 
-export default function NoveltySearchHistory({ projectId, showStats = true }: NoveltySearchHistoryProps) {
-  const [history, setHistory] = useState<NoveltySearchHistoryItem[]>([]);
-  const [userStats, setUserStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export default function NoveltySearchHistory() {
+  const { authFetch } = useAuth()
+  const searchParams = useSearchParams()
+  const highlight = searchParams?.get('highlight') || ''
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [clients, setClients] = useState<Client[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [page, setPage] = useState(1)
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1 })
+  const [q, setQ] = useState('')
+  const [status, setStatus] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [clientId, setClientId] = useState('')
+  const [groupId, setGroupId] = useState('')
+  const [sort, setSort] = useState('newest')
+  const [showGroups, setShowGroups] = useState(searchParams?.get('createGroup') === '1')
+  const [newClientName, setNewClientName] = useState('')
+  const [newGroupClientId, setNewGroupClientId] = useState('')
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newReference, setNewReference] = useState('')
+  const [newDescription, setNewDescription] = useState('')
+  const [savingGroup, setSavingGroup] = useState(false)
 
-  const fetchHistory = useCallback(async () => {
+  const groups = useMemo(() => clients.flatMap(client => (client.groups || []).map(group => ({ ...group, client: { id: client.id, name: client.name } }))), [clients])
+  const selectedClientGroups = clientId ? groups.filter(group => group.client?.id === clientId) : groups
+
+  const loadOrganization = useCallback(async () => {
+    const [clientResponse, projectResponse] = await Promise.all([authFetch('/api/novelty-search/clients'), authFetch('/api/projects')])
+    if (clientResponse.ok) setClients((await clientResponse.json()).clients || [])
+    if (projectResponse.ok) setProjects((await projectResponse.json()).projects || [])
+  }, [authFetch])
+
+  const loadHistory = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
+    setError('')
+    const params = new URLSearchParams({ page: String(page), pageSize: '10', sort })
+    if (q.trim()) params.set('q', q.trim())
+    if (status) params.set('status', status)
+    if (dateFrom) params.set('dateFrom', dateFrom)
+    if (dateTo) params.set('dateTo', dateTo)
+    if (projectId) params.set('projectId', projectId)
+    if (clientId) params.set('clientId', clientId)
+    if (groupId) params.set('groupId', groupId)
     try {
-      setLoading(true);
-      setError(null);
-
-      const token = localStorage.getItem('auth_token');
-      if (!token) {
-        setError('Authentication required');
-        return;
-      }
-
-      const url = projectId
-        ? `/api/novelty-search/history?projectId=${projectId}`
-        : '/api/novelty-search/history';
-
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch search history');
-      }
-
-      const data = await response.json();
-      setHistory(data.history || []);
-      setUserStats(data.userStats || null);
-
-    } catch (err) {
-      console.error('Error fetching novelty search history:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load history');
+      const response = await authFetch(`/api/novelty-search/history?${params.toString()}`, { cache: 'no-store' })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to load novelty search history.')
+      setHistory(body.history || [])
+      setPagination(body.pagination || { page: 1, pageSize: 10, total: 0, totalPages: 1 })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Failed to load novelty search history.')
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false)
     }
-  }, [projectId]);
+  }, [authFetch, clientId, dateFrom, dateTo, groupId, page, projectId, q, sort, status])
 
+  useEffect(() => { void loadOrganization() }, [loadOrganization])
+  useEffect(() => { const timer = setTimeout(() => void loadHistory(), 200); return () => clearTimeout(timer) }, [loadHistory])
   useEffect(() => {
-    fetchHistory();
-  }, [fetchHistory]);
+    if (!history.some(item => item.status === 'QUEUED' || item.status === 'PROCESSING')) return
+    const timer = setInterval(() => void loadHistory(true), 8000)
+    return () => clearInterval(timer)
+  }, [history, loadHistory])
 
-  const downloadReport = async (searchId: string, reportUrl: string) => {
-    try {
-      // For now, just redirect to the report URL
-      window.open(reportUrl, '_blank');
-    } catch (err) {
-      console.error('Error downloading report:', err);
+  const resetPage = (action: () => void) => { setPage(1); action() }
+
+  const createGroup = async () => {
+    if (!newGroupName.trim() || (!newGroupClientId && !newClientName.trim())) {
+      setError('Select or create a client and enter a matter group name.')
+      return
     }
-  };
-
-  const getStatusBadge = (status: string, currentStage: string) => {
-    const statusColors = {
-      COMPLETED: 'bg-green-100 text-green-800',
-      FAILED: 'bg-red-100 text-red-800',
-      PENDING: 'bg-yellow-100 text-yellow-800',
-      STAGE_0_COMPLETED: 'bg-blue-100 text-blue-800',
-      STAGE_1_COMPLETED: 'bg-blue-100 text-blue-800',
-      STAGE_3_5_COMPLETED: 'bg-purple-100 text-purple-800'
-    };
-
-    const color = statusColors[status as keyof typeof statusColors] || 'bg-gray-100 text-gray-800';
-
-    return (
-      <Badge className={`${color} border-0`}>
-        {status.replace('_', ' ')}
-      </Badge>
-    );
-  };
-
-  if (loading) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Search className="h-5 w-5" />
-            Novelty Search History
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <span className="ml-2">Loading search history...</span>
-          </div>
-        </CardContent>
-      </Card>
-    );
+    setSavingGroup(true)
+    setError('')
+    try {
+      let resolvedClientId = newGroupClientId
+      if (!resolvedClientId) {
+        const response = await authFetch('/api/novelty-search/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newClientName }) })
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(body.error || 'Failed to create client.')
+        resolvedClientId = body.client.id
+      }
+      const response = await authFetch('/api/novelty-search/groups', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: resolvedClientId, name: newGroupName, referenceCode: newReference, description: newDescription }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Failed to create matter group.')
+      setNewClientName(''); setNewGroupClientId(''); setNewGroupName(''); setNewReference(''); setNewDescription('')
+      await loadOrganization()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Failed to create matter group.')
+    } finally { setSavingGroup(false) }
   }
 
-  if (error) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Search className="h-5 w-5" />
-            Novelty Search History
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-center py-8 text-red-600">
-            <p>Error: {error}</p>
-            <Button onClick={fetchHistory} variant="outline" className="mt-2">
-              Try Again
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    );
+  const updateGroup = async (group: MatterGroup, data: Record<string, unknown>) => {
+    const response = await authFetch(`/api/novelty-search/groups/${group.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+    if (!response.ok) setError((await response.json().catch(() => ({}))).error || 'Failed to update matter group.')
+    await loadOrganization()
+  }
+
+  const moveSearch = async (searchId: string, nextGroupId: string) => {
+    const response = await authFetch(`/api/novelty-search/${searchId}/organization`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: nextGroupId || null }) })
+    if (!response.ok) setError((await response.json().catch(() => ({}))).error || 'Failed to move search.')
+    await loadHistory(true)
+    await loadOrganization()
+  }
+
+  const retry = async (searchId: string) => {
+    const response = await authFetch(`/api/novelty-search/${searchId}/retry`, { method: 'POST' })
+    if (!response.ok) setError((await response.json().catch(() => ({}))).error || 'Failed to retry search.')
+    await loadHistory(true)
   }
 
   return (
     <div className="space-y-6">
-      {showStats && userStats && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Search Statistics</CardTitle>
-            <CardDescription>Your novelty search activity</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">{userStats.totalSearches}</div>
-                <div className="text-sm text-gray-600">Total Searches</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">{history.length}</div>
-                <div className="text-sm text-gray-600">Advanced Searches</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-purple-600">
-                  {history.filter(h => h.status === 'COMPLETED' || h.status === 'STAGE_3_5_COMPLETED').length}
-                </div>
-                <div className="text-sm text-gray-600">Reports Available</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div><h1 className="flex items-center gap-2 text-2xl font-semibold text-slate-900"><History className="h-6 w-6 text-indigo-600" /> Novelty Search History</h1><p className="mt-1 text-sm text-slate-600">Your private client matters and background novelty reports.</p></div>
+        <div className="flex gap-2">
+          <button onClick={() => setShowGroups(value => !value)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><FolderOpen className="h-4 w-4" /> Manage Groups</button>
+          <Link href="/novelty-search" className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"><Plus className="h-4 w-4" /> New Search</Link>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Search className="h-5 w-5" />
-            Novelty Search History
-            {projectId && <span className="text-sm font-normal">- Project Specific</span>}
-          </CardTitle>
-          <CardDescription>
-            {projectId
-              ? 'Searches performed within this project'
-              : 'Your novelty searches with available reports'
-            }
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {history.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <Search className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p className="text-lg">No search history found</p>
-              <p className="text-sm">
-                {projectId
-                  ? 'No novelty searches have been completed in this project yet.'
-                  : 'You haven\'t completed any novelty searches yet.'
-                }
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {history.map((search, index) => (
-                <div key={search.id}>
-                  <div className="flex items-start justify-between p-4 border rounded-lg hover:bg-gray-50">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="font-medium text-gray-900 truncate">{search.title}</h3>
-                        {getStatusBadge(search.status, search.currentStage)}
-                      </div>
+      {showGroups && <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="font-semibold text-slate-900">Create Client Matter Group</h2>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <select value={newGroupClientId} onChange={event => { setNewGroupClientId(event.target.value); if (event.target.value) setNewClientName('') }} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">Create new client…</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
+          {!newGroupClientId && <input value={newClientName} onChange={event => setNewClientName(event.target.value)} placeholder="Client name" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />}
+          <input value={newGroupName} onChange={event => setNewGroupName(event.target.value)} placeholder="Matter / group name" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
+          <input value={newReference} onChange={event => setNewReference(event.target.value)} placeholder="Internal reference (optional)" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
+          <input value={newDescription} onChange={event => setNewDescription(event.target.value)} placeholder="Description (optional)" className="h-10 rounded-lg border border-slate-300 px-3 text-sm lg:col-span-3" />
+          <button onClick={createGroup} disabled={savingGroup} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-medium text-white disabled:opacity-50">{savingGroup && <Loader2 className="h-4 w-4 animate-spin" />} Create Group</button>
+        </div>
+        {groups.length > 0 && <div className="mt-5 divide-y divide-slate-100 border-t border-slate-200">{groups.map(group => <div key={group.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div><span className="font-medium text-slate-900">{group.client?.name} — {group.name}</span>{group.referenceCode && <span className="ml-2 text-slate-500">{group.referenceCode}</span>}<span className="ml-2 text-xs text-slate-400">{group._count?.searchRuns || 0} searches</span></div><div className="flex gap-2"><button onClick={() => { const name = window.prompt('Rename matter group', group.name); if (name && name !== group.name) void updateGroup(group, { name }) }} className="text-xs font-medium text-blue-600 hover:underline">Rename</button><button onClick={() => void updateGroup(group, { archived: true })} className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:underline"><Archive className="h-3 w-3" /> Archive</button></div></div>)}</div>}
+      </section>}
 
-                      <p className="text-sm text-gray-600 mb-2 line-clamp-2">
-                        {search.inventionDescription}
-                      </p>
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <label className="relative"><Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" /><input value={q} onChange={event => resetPage(() => setQ(event.target.value))} placeholder="Search invention titles" className="h-10 w-full rounded-lg border border-slate-300 pl-9 pr-3 text-sm" /></label>
+          <select value={status} onChange={event => resetPage(() => setStatus(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All statuses</option><option value="QUEUED">Queued</option><option value="PROCESSING">Processing</option><option value="COMPLETE">Complete</option><option value="FAILED">Failed</option></select>
+          <select value={clientId} onChange={event => resetPage(() => { setClientId(event.target.value); setGroupId('') })} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All clients</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
+          <select value={groupId} onChange={event => resetPage(() => setGroupId(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All matter groups</option>{selectedClientGroups.map(group => <option key={group.id} value={group.id}>{group.client?.name} — {group.name}</option>)}</select>
+          <select value={projectId} onChange={event => resetPage(() => setProjectId(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="">All projects</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+          <label className="flex items-center gap-2"><Calendar className="h-4 w-4 text-slate-400" /><input type="date" value={dateFrom} onChange={event => resetPage(() => setDateFrom(event.target.value))} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm" /></label>
+          <label className="flex items-center gap-2"><span className="text-xs text-slate-500">to</span><input type="date" value={dateTo} onChange={event => resetPage(() => setDateTo(event.target.value))} className="h-10 min-w-0 flex-1 rounded-lg border border-slate-300 px-2 text-sm" /></label>
+          <select value={sort} onChange={event => resetPage(() => setSort(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select>
+        </div>
+      </section>
 
-                      <div className="flex items-center gap-4 text-xs text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <Calendar className="h-3 w-3" />
-                          {format(new Date(search.createdAt), 'MMM dd, yyyy')}
-                        </div>
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-                        {search.project && (
-                          <div className="flex items-center gap-1">
-                            <FolderOpen className="h-3 w-3" />
-                            {search.project.name}
-                          </div>
-                        )}
-
-                        {search.results.stage1 && (
-                          <div className="flex items-center gap-1">
-                            <Search className="h-3 w-3" />
-                            {search.results.stage1.patentCount} patents found
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 ml-4">
-                      {(search.status === 'COMPLETED' || search.status === 'STAGE_3_5_COMPLETED') && (
-                        <>
-                          <Link href={`/novelty-search/${search.id}/report`}>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="flex items-center gap-1"
-                            >
-                              <FileText className="h-3 w-3" />
-                              View Step-by-Step
-                            </Button>
-                          </Link>
-
-                          <Link href={`/novelty-search/${search.id}/consolidated`}>
-                          <Button
-                            size="sm"
-                            variant="default"
-                            className="flex items-center gap-1"
-                          >
-                            <Eye className="h-3 w-3" />
-                              Consolidated Report
-                          </Button>
-                        </Link>
-                        </>
-                      )}
-
-                      {search.hasReport && search.reportUrl && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => downloadReport(search.id, search.reportUrl!)}
-                          className="flex items-center gap-1"
-                        >
-                          <Download className="h-3 w-3" />
-                          Download PDF
-                        </Button>
-                      )}
-
-                      {search.completedAt && (
-                        <div className="text-xs text-green-600 font-medium">
-                          Completed {format(new Date(search.completedAt), 'MMM dd')}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {index < history.length - 1 && <div className="border-t border-gray-200 my-4" />}
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div className="text-sm text-slate-600">{pagination.total} search{pagination.total === 1 ? '' : 'es'}</div><button onClick={() => void loadHistory()} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" title="Refresh"><RefreshCw className="h-4 w-4" /></button></div>
+        {loading ? <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /> Loading history…</div> : history.length === 0 ? <div className="py-16 text-center text-slate-500"><Search className="mx-auto mb-3 h-9 w-9 text-slate-300" /><p>No novelty searches match these filters.</p></div> : <div className="divide-y divide-slate-100">{history.map(item => <article key={item.id} className={`p-5 transition-colors ${highlight === item.id ? 'bg-indigo-50 ring-1 ring-inset ring-indigo-200' : 'hover:bg-slate-50'}`}>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-900">{item.title}</h3><span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusClasses[item.status]}`}>{item.status === 'COMPLETE' ? 'Complete' : item.status.charAt(0) + item.status.slice(1).toLowerCase()}</span>{(item.status === 'QUEUED' || item.status === 'PROCESSING') && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}</div><p className="mt-2 line-clamp-2 text-sm leading-5 text-slate-600">{item.inventionDescription}</p><div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500"><span>{new Date(item.createdAt).toLocaleString()}</span><span>{item.jurisdiction}</span>{item.project && <span>Project: {item.project.name}</span>}<span>{item.patentCount} candidates</span></div>{item.error && <p className="mt-2 text-xs text-red-600">{item.error}</p>}</div>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end"><select value={item.group?.id || ''} onChange={event => void moveSearch(item.id, event.target.value)} className="h-9 max-w-56 rounded-lg border border-slate-300 bg-white px-2 text-xs"><option value="">Ungrouped</option>{groups.map(group => <option key={group.id} value={group.id}>{group.client?.name} — {group.name}</option>)}</select>{item.status === 'COMPLETE' && <Link href={`/novelty-search/${item.id}/pdf`} className="inline-flex h-9 items-center gap-2 rounded-lg bg-indigo-600 px-3 text-xs font-medium text-white hover:bg-indigo-700"><FileText className="h-4 w-4" /> View PDF</Link>}{item.status === 'FAILED' && <button onClick={() => void retry(item.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-300 bg-white px-3 text-xs font-medium text-red-700 hover:bg-red-50"><RefreshCw className="h-4 w-4" /> Retry</button>}</div>
+          </div>
+          {item.group && <div className="mt-3 inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600"><FolderOpen className="h-3 w-3" /> {item.group.client.name} / {item.group.name}{item.group.referenceCode ? ` / ${item.group.referenceCode}` : ''}</div>}
+        </article>)}</div>}
+        <div className="flex items-center justify-between border-t border-slate-200 px-5 py-4"><span className="text-xs text-slate-500">Page {pagination.page} of {pagination.totalPages}</span><div className="flex gap-2"><button disabled={page <= 1} onClick={() => setPage(value => value - 1)} className="rounded-lg border border-slate-300 p-2 disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button><button disabled={page >= pagination.totalPages} onClick={() => setPage(value => value + 1)} className="rounded-lg border border-slate-300 p-2 disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button></div></div>
+      </section>
     </div>
-  );
+  )
 }

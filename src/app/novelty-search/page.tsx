@@ -3,7 +3,7 @@
 import { useAuth } from '@/lib/auth-context';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, Suspense } from 'react';
-import NoveltySearchWorkflow from '@/components/novelty-search/NoveltySearchWorkflow';
+import NoveltySearchSubmission from '@/components/novelty-search/NoveltySearchSubmission';
 import { PageLoadingBird } from '@/components/ui/loading-bird';
 
 // Component that uses search params, wrapped in Suspense
@@ -12,14 +12,12 @@ function NoveltySearchContent() {
   const projectId = searchParams?.get('projectId');
   const title = searchParams?.get('title');
   const description = searchParams?.get('description');
-  const ideaId = searchParams?.get('ideaId');
 
   return (
-    <NoveltySearchWorkflow 
-      projectId={projectId || undefined}
+    <NoveltySearchSubmission
+      initialProjectId={projectId || undefined}
       initialTitle={title || undefined}
       initialDescription={description || undefined}
-      ideaId={ideaId || undefined}
     />
   );
 }

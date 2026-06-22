@@ -18,6 +18,8 @@ export async function POST(request: NextRequest) {
       projectId,
       inventionDescription,
       title,
+      groupId,
+      executionMode,
       jurisdiction = 'IN',
       config
     } = body;
@@ -83,6 +85,7 @@ export async function POST(request: NextRequest) {
     const searchRequest: NoveltySearchRequest = {
       patentId,
       projectId,
+      groupId,
       jwtToken,
       inventionDescription: resolvedDescription,
       title: resolvedTitle,
@@ -90,7 +93,9 @@ export async function POST(request: NextRequest) {
       config
     };
 
-    const result = await noveltySearchService.startNoveltySearch(searchRequest);
+    const result = executionMode === 'legacy'
+      ? await noveltySearchService.startNoveltySearch(searchRequest)
+      : await noveltySearchService.enqueueNoveltySearch(searchRequest);
 
     if (!result.success) {
       return NextResponse.json(
@@ -99,13 +104,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (executionMode === 'legacy') {
+      return NextResponse.json({
+        success: true,
+        searchId: result.searchId,
+        status: result.status,
+        currentStage: result.currentStage,
+        results: result.results,
+      });
+    }
+
     return NextResponse.json({
       success: true,
       searchId: result.searchId,
-      status: result.status,
-      currentStage: result.currentStage,
-      results: result.results
-    });
+      status: 'QUEUED'
+    }, { status: 202 });
 
   } catch (error) {
     console.error('Novelty search API error:', error);

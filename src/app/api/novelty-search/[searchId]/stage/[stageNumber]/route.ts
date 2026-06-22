@@ -69,6 +69,14 @@ export async function POST(
 
     const userId = user.id;
 
+    const backgroundJob = await (prisma as any).noveltySearchJob.findUnique({ where: { searchId } });
+    if (backgroundJob) {
+      return NextResponse.json(
+        { error: 'This search is processed automatically in the background.' },
+        { status: 409 }
+      );
+    }
+
     // Extract request headers for LLM gateway
     const requestHeaders: Record<string, string> = {};
     request.headers.forEach((value, key) => {

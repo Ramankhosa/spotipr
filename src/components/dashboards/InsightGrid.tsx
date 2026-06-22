@@ -167,7 +167,7 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
       bgColor: 'bg-purple-50',
       borderColor: 'border-purple-200',
       tooltip: `Total novelty searches: ${noveltyHistory.length}.`,
-      navigateTo: '/novelty-search'
+      navigateTo: '/novelty-search/history'
     }
   ]
 

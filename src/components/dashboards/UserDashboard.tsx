@@ -10,7 +10,7 @@ import ActivityFeed from './ActivityFeed'
 import KishoWidget from './KishoWidget'
 import LoadingBird from '../ui/loading-bird'
 import { motion } from 'framer-motion'
-import { Sparkles, Plus, Search, Lightbulb, FileText } from 'lucide-react'
+import { Sparkles, Plus, Search, Lightbulb, FileText, History } from 'lucide-react'
 
 interface DashboardStats {
   draftsCount: number
@@ -249,16 +249,18 @@ export default function UserDashboard() {
                 <span className="text-xs text-slate-500 mt-1">Start a fresh application</span>
               </button>
 
-              <button
-                onClick={() => router.push('/novelty-search')}
-                className="group flex flex-col items-start p-4 bg-white border border-slate-200 rounded-xl hover:border-purple-500/50 hover:shadow-md hover:shadow-purple-500/10 transition-all duration-200"
-              >
+              <div className="group flex flex-col items-start p-4 bg-white border border-slate-200 rounded-xl hover:border-purple-500/50 hover:shadow-md hover:shadow-purple-500/10 transition-all duration-200">
+                <button onClick={() => router.push('/novelty-search')} className="w-full text-left">
                 <div className="p-2 bg-purple-50 rounded-lg text-purple-600 mb-3 group-hover:bg-purple-600 group-hover:text-white transition-colors">
                   <Search className="w-5 h-5" />
                 </div>
                 <span className="font-semibold text-slate-900">Novelty Search</span>
-                <span className="text-xs text-slate-500 mt-1">Check prior art</span>
-              </button>
+                <span className="block text-xs text-slate-500 mt-1">Check prior art</span>
+                </button>
+                <button onClick={() => router.push('/novelty-search/history')} className="mt-3 inline-flex items-center gap-1.5 border-t border-slate-100 pt-3 text-xs font-medium text-purple-700 hover:text-purple-900">
+                  <History className="h-3.5 w-3.5" /> Search History
+                </button>
+              </div>
 
               <button
                 onClick={() => router.push('/idea-bank')}

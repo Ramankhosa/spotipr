@@ -21,7 +21,6 @@ import {
   type PriorArtGateRecord,
 } from '@/lib/novelty-prior-art-visibility';
 
-const PATENTNEST_APP_URL = 'https://patentnest.ai';
 const FEATURE_MAPPING_CACHE_VERSION = 'v1.2';
 const STAGE15_GATE_CACHE_VERSION = 'stage15-gate-v3';
 
@@ -34,8 +33,9 @@ function escapeEmailHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-function buildAuthenticatedNoveltyReportUrl(searchId: string): string {
-  return `${PATENTNEST_APP_URL}/novelty-search/${encodeURIComponent(searchId)}/consolidated`;
+export function buildAuthenticatedNoveltyReportUrl(searchId: string): string {
+  const appUrl = String(process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://patentnest.ai').replace(/\/$/, '');
+  return `${appUrl}/novelty-search/${encodeURIComponent(searchId)}/pdf`;
 }
 
 // LLM Prompt Specification for Novelty Search (enhanced versions)
@@ -999,6 +999,7 @@ export interface NoveltySearchConfig {
 export interface NoveltySearchRequest {
   patentId?: string; // Optional - can create standalone search
   projectId?: string; // Optional - can associate with a project
+  groupId?: string; // Optional - attorney client/matter group
   jwtToken: string;
   inventionDescription: string;
   title: string;
@@ -1593,6 +1594,98 @@ export class NoveltySearchService extends BasePatentService {
       }
     }
     return merged;
+  }
+
+  /**
+   * Validate and enqueue a novelty search without executing any LLM stage in
+   * the request process. A NoveltySearchJob is the opt-in marker consumed by
+   * the standalone background worker; legacy runs have no job row.
+   */
+  async enqueueNoveltySearch(request: NoveltySearchRequest): Promise<NoveltySearchResponse> {
+    try {
+      const user = await this.validateUser(request.jwtToken);
+      let remainingQuota: { daily: number | null; monthly: number | null } | undefined;
+
+      if (user.tenantId) {
+        const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+        if (!serviceAccess.allowed) {
+          return { success: false, error: serviceAccess.reason || 'Novelty search access denied.' };
+        }
+        remainingQuota = serviceAccess.remainingQuota;
+      }
+
+      const config = this.mergeConfig(request.config);
+
+      if (request.patentId) await this.validatePatentAccess(request.patentId, user.id);
+
+      if (request.projectId) {
+        const project = await prisma.project.findFirst({
+          where: {
+            id: request.projectId,
+            OR: [
+              { userId: user.id },
+              { collaborators: { some: { userId: user.id } } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (!project) throw new Error('Project not found or access denied');
+      }
+
+      if (request.groupId) {
+        const group = await (prisma as any).noveltySearchGroup.findFirst({
+          where: { id: request.groupId, userId: user.id, archivedAt: null },
+          select: { id: true },
+        });
+        if (!group) throw new Error('Matter group not found or archived');
+      }
+
+      if (user.tenantId && remainingQuota) {
+        const pendingJobs = await (prisma as any).noveltySearchJob.count({
+          where: {
+            status: { in: ['QUEUED', 'PROCESSING'] },
+            search: { user: { tenantId: user.tenantId } },
+          },
+        });
+        const finiteRemaining = [remainingQuota.daily, remainingQuota.monthly]
+          .filter((value): value is number => typeof value === 'number');
+        if (finiteRemaining.length > 0 && pendingJobs >= Math.min(...finiteRemaining)) {
+          return { success: false, error: 'Novelty search quota is already reserved by queued searches.' };
+        }
+      }
+
+      const searchRun = await prisma.$transaction(async tx => {
+        const created = await tx.noveltySearchRun.create({
+          data: {
+            patentId: request.patentId,
+            projectId: request.projectId,
+            groupId: request.groupId,
+            userId: user.id,
+            status: NoveltySearchStatus.PENDING,
+            currentStage: NoveltySearchStage.STAGE_0,
+            config: config as any,
+            inventionDescription: request.inventionDescription,
+            title: request.title,
+            jurisdiction: config.jurisdiction,
+            filingType: config.filingType,
+          } as any,
+        });
+        await (tx as any).noveltySearchJob.create({
+          data: { searchId: created.id, status: 'QUEUED', currentStep: 'STAGE_0' },
+        });
+        return created;
+      });
+
+      return {
+        success: true,
+        searchId: searchRun.id,
+        status: NoveltySearchStatus.PENDING,
+        currentStage: NoveltySearchStage.STAGE_0,
+      };
+    } catch (error) {
+      console.error('Novelty search enqueue error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to queue novelty search' };
+    }
   }
 
   /**
@@ -2882,7 +2975,53 @@ export class NoveltySearchService extends BasePatentService {
     return data?.notification?.completionEmailSentAt || data?.completionEmailSentAt || null;
   }
 
-  private async sendNoveltyCompletionEmail(searchRun: any, userId: string): Promise<{ sentAt: string; reportUrl: string } | null> {
+  async completeNoMatchNoveltySearch(searchId: string, userId: string): Promise<NoveltySearchResponse> {
+    const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
+    if (!searchRun) return { success: false, error: 'Novelty search not found' };
+
+    const stage4Results = {
+      decision: 'Low Evidence',
+      confidence: 'Low',
+      noRelevantMatches: true,
+      executive_summary: {
+        summary: 'The configured search completed without identifying sufficiently relevant patent records for detailed feature mapping.',
+      },
+      concluding_remarks: {
+        summary: 'No sufficiently relevant mapped citations were identified in this search run. This result is not a legal conclusion and does not establish novelty.',
+      },
+      per_patent_remarks: [],
+      risks: [
+        'A no-match result may reflect terminology, corpus, jurisdiction, translation, classification, or source-data limitations.',
+      ],
+      recommendations: [
+        'Review the generated query and extracted features.',
+        'Consider broader terminology, classifications, jurisdictions, and full-document searching.',
+        'Have a patent professional review the search scope before relying on the result.',
+      ],
+      report_metadata: { outcome: 'no_relevant_matches', generatedAt: new Date().toISOString() },
+    };
+
+    await prisma.noveltySearchRun.update({
+      where: { id: searchId },
+      data: {
+        status: NoveltySearchStatus.COMPLETED,
+        currentStage: NoveltySearchStage.STAGE_4,
+        stage4CompletedAt: new Date(),
+        stage4Results: stage4Results as any,
+        reportUrl: null,
+      },
+    });
+
+    return {
+      success: true,
+      searchId,
+      status: NoveltySearchStatus.COMPLETED,
+      currentStage: NoveltySearchStage.STAGE_4,
+      results: stage4Results,
+    };
+  }
+
+  async sendNoveltyCompletionEmail(searchRun: any, userId: string): Promise<{ sentAt: string; reportUrl: string } | null> {
     if (this.getNoveltyCompletionEmailSentAt(searchRun.stage4Results)) return null;
 
     const user = await prisma.user.findUnique({
@@ -2904,11 +3043,11 @@ export class NoveltySearchService extends BasePatentService {
           <div style="font-family:Segoe UI,Arial,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#0f172a">
             <h2 style="margin:0 0 12px">Your novelty search report is ready</h2>
             <p>The novelty search for <strong>${safeTitle}</strong> has completed.</p>
-            <p>Log in to PatentNest.ai and open the link below to view the consolidated report and download the professional PDF.</p>
-            <p><a href="${reportUrl}" style="color:#2563eb">${reportUrl}</a></p>
+            <p>Open the protected link below to view or download the final PDF report. If your session has expired, you will be asked to sign in first.</p>
+            <p><a href="${reportUrl}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:10px 16px;border-radius:6px">View final PDF report</a></p>
           </div>
         `,
-        text: `Your novelty search report is ready. Log in to PatentNest.ai and open this download link: ${reportUrl}`
+        text: `Your novelty search report is ready for ${title}. Sign in if requested, then view the final PDF report: ${reportUrl}`
       });
       if (result?.sent === false) return null;
 
@@ -2988,31 +3127,30 @@ export class NoveltySearchService extends BasePatentService {
         }
       });
 
-      const completionEmail = await this.sendNoveltyCompletionEmail(searchRun, userId);
-      if (completionEmail) {
-        finalStage4Data = {
-          ...finalStage4Data,
-          notification: {
-            ...(finalStage4Data?.notification || {}),
-            completionEmailSentAt: completionEmail.sentAt,
-            completionEmailReportUrl: completionEmail.reportUrl,
-          },
-        };
-        await prisma.noveltySearchRun.update({
-          where: { id: searchId },
-          data: { stage4Results: finalStage4Data as any },
+      const backgroundJob = await (prisma as any).noveltySearchJob.findUnique({ where: { searchId } });
+      if (!backgroundJob) {
+        const completionEmail = await this.sendNoveltyCompletionEmail(searchRun, userId);
+        if (completionEmail) {
+          finalStage4Data = {
+            ...finalStage4Data,
+            notification: {
+              ...(finalStage4Data?.notification || {}),
+              completionEmailSentAt: completionEmail.sentAt,
+              completionEmailReportUrl: completionEmail.reportUrl,
+            },
+          };
+          await prisma.noveltySearchRun.update({
+            where: { id: searchId },
+            data: { stage4Results: finalStage4Data as any },
+          });
+        }
+
+        // Legacy interactive runs retain their existing completion accounting.
+        await prisma.user.update({
+          where: { id: userId },
+          data: { noveltySearchesCompleted: { increment: 1 } }
         });
       }
-
-      // Increment user's successful novelty searches count
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          noveltySearchesCompleted: {
-            increment: 1
-          }
-        }
-      });
 
       // USAGE TRACKING: Record completed search toward quota
       // Get user's tenantId for tracking
@@ -3021,7 +3159,7 @@ export class NoveltySearchService extends BasePatentService {
         select: { tenantId: true }
       });
 
-      if (userForTracking?.tenantId) {
+      if (userForTracking?.tenantId && !backgroundJob) {
         try {
           await trackServiceUsage({
             tenantId: userForTracking.tenantId,
