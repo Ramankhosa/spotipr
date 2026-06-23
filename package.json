@@ -21,6 +21,8 @@
     "seed:adminplans": "node scripts/adminplans-seed.js",
     "llm:add-thinking-models": "tsx scripts/add-thinking-models.ts",
     "email-drafting:worker": "tsx scripts/email-drafting-worker.ts",
+    "patent-drafting:worker": "tsx scripts/patent-drafting-worker.ts",
+    "patent-drafting:worker:once": "tsx scripts/patent-drafting-worker.ts --once",
     "novelty-search:worker": "tsx scripts/novelty-search-worker.ts",
     "novelty-search:worker:once": "tsx scripts/novelty-search-worker.ts --once",
     "patent-corpus:worker": "tsx scripts/patent-corpus-worker.ts",

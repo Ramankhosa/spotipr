@@ -9125,7 +9125,7 @@ async function handlePlanFiguresLLM(
   data: any, 
   requestHeaders: Record<string, string>
 ): Promise<NextResponse> {
-  const { sessionId, figureCount } = data
+  const { sessionId, figureCount, figureRemarks } = data
 
   if (!sessionId) {
     return NextResponse.json({ error: 'Session ID is required' }, { status: 400 })
@@ -9179,6 +9179,9 @@ async function handlePlanFiguresLLM(
   const componentsContext = components.length > 0
     ? components.map((c: any) => `- ${c.name} [ref=${c.referenceLabel || c.numeral || '?'}]${c.description ? ': ' + c.description : ''}`).join('\n')
     : 'No components defined yet.'
+  const userFigureRemarksBlock = typeof figureRemarks === 'string' && figureRemarks.trim()
+    ? `USER FIGURE REMARKS (MANDATORY):\n${figureRemarks.trim()}\n`
+    : ''
   const claimLinkedComponentsContext = components
     .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
     .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
@@ -9234,6 +9237,7 @@ ${figureScopeBlock ? `${figureScopeBlock}\n` : ''}
 COMPONENTS (with reference labels):
 ${componentsContext}
 
+${userFigureRemarksBlock}
 REQUIRED CLAIM-LINKED FIGURE COMPONENTS:
 ${claimLinkedComponentsContext}
 
@@ -9489,7 +9493,7 @@ async function handlePlanAndGenerateDiagramsLLM(
   data: any,
   requestHeaders: Record<string, string>
 ): Promise<NextResponse> {
-  const { sessionId, replaceExisting, figureCount } = data
+  const { sessionId, replaceExisting, figureCount, figureRemarks } = data
 
   if (!sessionId) {
     console.error('[PlanAndGenerate] ERROR: No sessionId provided')
@@ -9507,7 +9511,7 @@ async function handlePlanAndGenerateDiagramsLLM(
   // Stage 1: Plan the figures
   // Pass figureCount if user wants to override AI's decision
   console.log('[PlanAndGenerate] Stage 1: Calling handlePlanFiguresLLM...')
-  const planResponse = await handlePlanFiguresLLM(user, patentId, { sessionId, figureCount }, requestHeaders)
+  const planResponse = await handlePlanFiguresLLM(user, patentId, { sessionId, figureCount, figureRemarks }, requestHeaders)
   
   // Check if planning succeeded
   if (!planResponse.ok) {
@@ -9530,7 +9534,8 @@ async function handlePlanAndGenerateDiagramsLLM(
     { 
       sessionId, 
       usePlan: true,  // Use the plan from Stage 1
-      replaceExisting: replaceExisting !== false
+      replaceExisting: replaceExisting !== false,
+      figureRemarks
     }, 
     requestHeaders
   )
@@ -9568,7 +9573,7 @@ async function handlePlanAndGenerateDiagramsLLM(
 // It focuses ONLY on code quality, rule compliance, and syntax correctness.
 
 async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, prompt, replaceExisting, usePlan } = data
+  const { sessionId, prompt, replaceExisting, usePlan, figureRemarks } = data
 
   // When using plan, prompt is optional (we build it from plan)
   if (!sessionId || (!prompt && !usePlan)) {
@@ -9629,6 +9634,9 @@ async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any,
       .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
       .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
       .join('\n') || '- No claim-linked components identified for mandatory figure coverage.'
+    const userFigureRemarksBlock = typeof figureRemarks === 'string' && figureRemarks.trim()
+      ? `USER FIGURE REMARKS (MANDATORY):\n${figureRemarks.trim()}\n`
+      : ''
 
     // Map diagram types to PlantUML diagram types
     const typeToPlantUML: Record<string, string> = {
@@ -9676,6 +9684,7 @@ AVAILABLE COMPONENTS (Use ONLY these - do not invent new ones)
 ═══════════════════════════════════════════════════════════════════════════════
 ${componentsContext}
 
+${userFigureRemarksBlock}
 REQUIRED CLAIM-LINKED FIGURE COMPONENTS:
 ${claimLinkedComponentsContext}
 

@@ -35,6 +35,9 @@ function featureRow(index: number, overrides: Record<string, unknown> = {}) {
     evidenceSource: 'abstract',
     extentScore: index % 3 === 2 ? 0 : 0.72,
     crispRemark: `Attorney remark for feature ${index + 1}.`,
+    attorneyRemark: `Detailed attorney discussion for feature ${index + 1}.`,
+    noveltyImpact: `Novelty impact for feature ${index + 1}.`,
+    claimReviewNote: `Claim review note for feature ${index + 1}.`,
     confidence: 0.82,
     ...overrides,
   }
@@ -160,9 +163,13 @@ describe('GET attorney report PDF', () => {
   test('embeds Inter, renders the grouped hierarchy, and preserves long substantive content', async () => {
     const rows = Array.from({ length: 9 }, (_, index) => featureRow(index))
     rows[0] = featureRow(0, {
+      userDisclosure: longText('Long submitted feature disclosure', 'USER_DISCLOSURE_TAIL_MARKER'),
       patentDisclosure: longText('Long patent disclosure', 'DISCLOSURE_TAIL_MARKER'),
       evidenceQuote: longText('Long mapped evidence', 'EVIDENCE_TAIL_MARKER'),
       crispRemark: longText('Long attorney remark', 'REMARK_TAIL_MARKER'),
+      attorneyRemark: longText('Long detailed attorney discussion', 'ATTORNEY_DISCUSSION_TAIL_MARKER'),
+      noveltyImpact: longText('Long novelty impact discussion', 'NOVELTY_IMPACT_TAIL_MARKER'),
+      claimReviewNote: longText('Long claim review note', 'CLAIM_REVIEW_TAIL_MARKER'),
     })
     const comparison = citation(rows, {
       abstract: longText('Long patent abstract', 'ABSTRACT_TAIL_MARKER'),
@@ -187,6 +194,8 @@ describe('GET attorney report PDF', () => {
     const response = await GET(request(), { params: { searchId: 'search-1' } })
     const buffer = await responseBuffer(response)
     const parsed = await pdfParse(buffer)
+    const normalizedText = parsed.text.replace(/\s+/g, ' ')
+    const compactText = parsed.text.replace(/\s+/g, '')
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('application/pdf')
@@ -198,15 +207,23 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text).toContain('2 Citation Analysis')
     expect(parsed.text).toContain('2.2 List of Other Shortlisted Citations')
     expect(parsed.text).not.toContain('2.3 List of Other Shortlisted Citations')
+    expect(parsed.text).toContain('Key Features')
+    expect(normalizedText).toContain('Reference Patent: US-2026-000001-A1')
+    expect(parsed.text).toContain('Relevance / Evidence')
+    expect(parsed.text).toContain('Discussion Points')
     for (const marker of [
       'ABSTRACT_TAIL_MARKER',
       'TECHNICAL_TAIL_MARKER',
+      'USER_DISCLOSURE_TAIL_MARKER',
       'DISCLOSURE_TAIL_MARKER',
       'EVIDENCE_TAIL_MARKER',
       'REMARK_TAIL_MARKER',
+      'ATTORNEY_DISCUSSION_TAIL_MARKER',
+      'NOVELTY_IMPACT_TAIL_MARKER',
+      'CLAIM_REVIEW_TAIL_MARKER',
       'REFERENCE_TAIL_MARKER',
       'CLAIM_TAIL_MARKER',
-    ]) expect(parsed.text).toContain(marker)
+    ]) expect(compactText).toContain(marker)
   }, 30_000)
 
   test('handles identical disclosure text, missing evidence, and no additional shortlisted citations', async () => {
@@ -225,10 +242,11 @@ describe('GET attorney report PDF', () => {
 
     const response = await GET(request('attachment'), { params: { searchId: 'search-1' } })
     const parsed = await pdfParse(await responseBuffer(response))
+    const normalizedText = parsed.text.replace(/\s+/g, ' ')
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-disposition')).toContain('attachment;')
-    expect(parsed.text).toContain('No supporting quotation was mapped')
+    expect(normalizedText).toContain('No supporting quotation was mapped')
     expect(parsed.text).toContain('No additional shortlisted citations remained')
     expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
   }, 20_000)

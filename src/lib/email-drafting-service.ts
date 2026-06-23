@@ -10,6 +10,7 @@ import { sendEmail, SITE_URL } from '@/lib/mailer'
 import { generateToken, hashToken } from '@/lib/token-utils'
 import { upsertUserInstruction } from '@/lib/user-instruction-service'
 import { checkServiceAccess } from '@/lib/org-access-service'
+import { refreshAutoPatentDraftBatch, refreshReadyAutoPatentDraftBatches } from '@/lib/auto-patent-draft-batch-service'
 import {
   AUTO_DRAFTING_BULK_RECIPIENT,
   EMAIL_DRAFTING_INBOUND_ADDRESS,
@@ -46,7 +47,11 @@ export type EmailDraftPayload = {
   claimsNotes: string
   priorArtText: string
   priorArtHandling: 'use only' | 'expand with search' | 'auto'
+  noveltyText?: string
+  literatureReviewInstructions?: string
+  literatureReviewContent?: string
   figureDirections: string
+  draftingRemarks?: string
   illustrativeData: string
   warnings: string[]
   attachments: CanonicalAttachment[]
@@ -161,10 +166,16 @@ function extractLabelSections(bodyText: string): Record<string, string> {
     'Claims',
     'Claims Handling',
     'Claims Notes',
+    'Novelty',
     'Prior Art',
     'Prior Art Handling',
+    'Literature Review Instructions',
+    'Literature Review Content',
     'Figure Directions',
+    'Figure Remarks',
     'Illustrative Data',
+    'Patent Drafting Remarks',
+    'Drafting Remarks',
   ]
   const labelMap = new Map(labels.map(label => [label.toLowerCase(), label]))
   const sections: Record<string, string> = {}
@@ -327,6 +338,11 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
 
   const bodyClaims = sections['Claims']?.trim() || ''
   const bodyPriorArt = sections['Prior Art']?.trim() || ''
+  const noveltyText = sections['Novelty']?.trim() || ''
+  const literatureReviewInstructions = sections['Literature Review Instructions']?.trim() || ''
+  const literatureReviewContent = sections['Literature Review Content']?.trim() || ''
+  const figureDirections = (sections['Figure Directions'] || sections['Figure Remarks'] || '').trim()
+  const draftingRemarks = (sections['Patent Drafting Remarks'] || sections['Drafting Remarks'] || '').trim()
   const labeledMainBrief = sections['Main Brief']?.trim() || ''
   const unlabeledBody = parsedEmail.bodyText.trim()
   const claimsCandidates: CanonicalAttachment[] = []
@@ -359,14 +375,15 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
   let mainBriefText = labeledMainBrief
   let coverMemo = ''
   let claimsText = bodyClaims
-  let priorArtText = bodyPriorArt
+  let priorArtText = [bodyPriorArt, literatureReviewContent].filter(Boolean).join('\n\n')
 
   if (!sections['Claims'] && claimsCandidates.length === 1) {
     claimsText = claimsCandidates[0].extractedText || ''
   }
 
   if (!sections['Prior Art'] && priorArtCandidates.length > 0) {
-    priorArtText = priorArtCandidates.map(candidate => candidate.extractedText || '').filter(Boolean).join('\n\n')
+    const attachmentPriorArtText = priorArtCandidates.map(candidate => candidate.extractedText || '').filter(Boolean).join('\n\n')
+    priorArtText = [priorArtText, attachmentPriorArtText].filter(Boolean).join('\n\n')
   }
 
   if (generalTextCandidates.length === 1 && unlabeledBody && Object.keys(sections).length === 0) {
@@ -426,14 +443,18 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
     filingType: parseFilingType(sections['Filing Type'] || ''),
     allowRefine: true,
     coverMemo: coverMemo.trim(),
-    mainBriefText: mainBriefText.trim(),
-    normalizationBrief: condenseForNormalization(mainBriefText),
+    mainBriefText: [mainBriefText.trim(), noveltyText ? `Novelty / inventive distinction:\n${noveltyText}` : ''].filter(Boolean).join('\n\n'),
+    normalizationBrief: condenseForNormalization([mainBriefText, noveltyText ? `Novelty / inventive distinction:\n${noveltyText}` : ''].filter(Boolean).join('\n\n')),
     claimsText: claimsText.trim(),
     claimsHandling: (!claimsText && claimsHandling === 'use as is') ? 'draft from brief' : claimsHandling,
     claimsNotes: sections['Claims Notes']?.trim() || '',
     priorArtText: priorArtText.trim(),
     priorArtHandling,
-    figureDirections: sections['Figure Directions']?.trim() || '',
+    noveltyText,
+    literatureReviewInstructions,
+    literatureReviewContent,
+    figureDirections,
+    draftingRemarks,
     illustrativeData: sections['Illustrative Data']?.trim() || '',
     warnings,
     attachments: [
@@ -725,6 +746,133 @@ async function storeExportArtifact(params: {
   })
 
   return document
+}
+
+function isDiagramReviewIssue(issue: any) {
+  const text = [
+    issue?.category,
+    issue?.sectionKey,
+    issue?.sectionLabel,
+    issue?.title,
+    issue?.description,
+    issue?.suggestion,
+    issue?.fix,
+    issue?.fixPrompt
+  ].filter(Boolean).join(' ').toLowerCase()
+  return /\b(diagram|figure|drawing|sketch|plantuml|briefdescriptionofdrawings|brief description of drawings)\b/.test(text)
+}
+
+async function getLatestDraftForJurisdiction(sessionId: string, jurisdiction: string) {
+  return prisma.annexureDraft.findFirst({
+    where: { sessionId, jurisdiction: jurisdiction.toUpperCase() },
+    orderBy: { version: 'desc' }
+  })
+}
+
+function draftToSectionMap(draft: any) {
+  if (!draft) return {}
+  return {
+    title: draft.title || '',
+    fieldOfInvention: draft.fieldOfInvention || '',
+    background: draft.background || '',
+    summary: draft.summary || '',
+    briefDescriptionOfDrawings: draft.briefDescriptionOfDrawings || '',
+    detailedDescription: draft.detailedDescription || '',
+    bestMethod: draft.bestMethod || '',
+    claims: draft.claims || '',
+    abstract: draft.abstract || '',
+    industrialApplicability: draft.industrialApplicability || '',
+    listOfNumerals: draft.listOfNumerals || '',
+    ...((draft.extraSections as any) || {})
+  }
+}
+
+async function setActiveDraftingJurisdiction(sessionId: string, jurisdiction: string) {
+  await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: { activeJurisdiction: jurisdiction.toUpperCase() } as any
+  })
+}
+
+async function runAIReviewAndApplyTextFixes(params: {
+  user: any
+  patentId: string
+  sessionId: string
+  jurisdiction: string
+  maxFixes?: number
+}) {
+  const review = await invokeDraftingAction({
+    user: params.user,
+    patentId: params.patentId,
+    body: {
+      action: 'run_ai_review',
+      sessionId: params.sessionId,
+      jurisdiction: params.jurisdiction
+    }
+  })
+
+  const issues = Array.isArray(review.json?.issues) ? review.json.issues : []
+  const fixableIssues = issues
+    .filter((issue: any) => issue?.sectionKey && issue.sectionKey !== 'general')
+    .filter((issue: any) => issue.status !== 'fixed' && issue.status !== 'ignored')
+    .filter((issue: any) => !isDiagramReviewIssue(issue))
+    .slice(0, Math.max(1, params.maxFixes || 8))
+
+  let appliedFixes = 0
+  for (const issue of fixableIssues) {
+    const draft = await getLatestDraftForJurisdiction(params.sessionId, params.jurisdiction)
+    const sectionMap = draftToSectionMap(draft)
+    const sectionKey = issue.sectionKey
+    const currentContent = sectionMap[sectionKey]
+    if (!currentContent || typeof currentContent !== 'string') continue
+
+    const relatedContent = Object.fromEntries(
+      Object.entries(sectionMap).filter(([key]) => key !== sectionKey)
+    )
+
+    const fix = await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'apply_ai_fix',
+        sessionId: params.sessionId,
+        jurisdiction: params.jurisdiction,
+        sectionKey,
+        issue,
+        currentContent,
+        relatedContent
+      }
+    })
+
+    const fixedContent = fix.json?.fixedContent
+    if (typeof fixedContent !== 'string' || !fixedContent.trim()) continue
+
+    await setActiveDraftingJurisdiction(params.sessionId, params.jurisdiction)
+    await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'save_sections',
+        sessionId: params.sessionId,
+        patch: { [sectionKey]: fixedContent }
+      }
+    })
+    appliedFixes += 1
+  }
+
+  if (appliedFixes > 0) {
+    await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'run_ai_review',
+        sessionId: params.sessionId,
+        jurisdiction: params.jurisdiction
+      }
+    })
+  }
+
+  return { issueCount: issues.length, appliedFixes }
 }
 
 async function validateInboundSender(alias: any, senderEmail: string) {
@@ -1102,6 +1250,45 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
       })
     }
 
+    if (payload.literatureReviewInstructions) {
+      for (const sectionKey of ['background', 'summary', 'detailedDescription']) {
+        await upsertUserInstruction({
+          sessionId,
+          userId: user.id,
+          jurisdiction: '*',
+          sectionKey,
+          instruction: `Use the supplied literature review and prior-art remarks when drafting this section:\n\n${payload.literatureReviewInstructions}`,
+          isPersistent: false
+        })
+      }
+    }
+
+    if (payload.draftingRemarks) {
+      for (const sectionKey of [
+        'title',
+        'fieldOfInvention',
+        'background',
+        'summary',
+        'briefDescriptionOfDrawings',
+        'detailedDescription',
+        'bestMethod',
+        'claims',
+        'abstract',
+        'industrialApplicability'
+      ]) {
+        await upsertUserInstruction({
+          sessionId,
+          userId: user.id,
+          jurisdiction: '*',
+          sectionKey,
+          instruction: sectionKey === 'claims'
+            ? [payload.claimsNotes, payload.draftingRemarks].filter(Boolean).join('\n\n')
+            : payload.draftingRemarks,
+          isPersistent: false
+        })
+      }
+    }
+
     await heartbeatRequest(requestId, workerId)
 
     await transitionRequest(requestId, 'NORMALIZING')
@@ -1240,7 +1427,8 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
         priorArtConfig: {
           mode: payload.priorArtHandling === 'use only' ? 'manual' : (selectedPatents.length ? 'selected' : 'manual'),
           selectedPatents,
-          manualText: payload.priorArtText || ''
+          manualText: payload.priorArtText || '',
+          literatureReviewInstructions: payload.literatureReviewInstructions || '',
         },
         skipClaimRefinement: true
       }
@@ -1263,7 +1451,8 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
         patentId: patent.id,
         body: {
           action: 'plan_and_generate_diagrams_llm',
-          sessionId
+          sessionId,
+          figureRemarks: payload.figureDirections
         }
       })
     } catch (error: any) {
@@ -1328,75 +1517,81 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
     await heartbeatRequest(requestId, workerId)
 
     await transitionRequest(requestId, 'REVIEW')
-    try {
-      await invokeDraftingAction({
-        user,
-        patentId: patent.id,
-        body: {
-          action: 'run_ai_review',
+    const exportJurisdictions = jurisdictions.length ? jurisdictions : [activeJurisdiction]
+    for (const jurisdiction of exportJurisdictions) {
+      try {
+        await setActiveDraftingJurisdiction(sessionId, jurisdiction)
+        const reviewResult = await runAIReviewAndApplyTextFixes({
+          user,
+          patentId: patent.id,
           sessionId,
-          jurisdiction: activeJurisdiction
+          jurisdiction
+        })
+        if (reviewResult.appliedFixes > 0) {
+          await createEvent(requestId, 'REVIEW', 'completed', `Applied ${reviewResult.appliedFixes} AI text fix(es) for ${jurisdiction}.`)
         }
-      })
-    } catch (error: any) {
-      await createEvent(requestId, 'REVIEW', 'warning', error?.message || 'AI review failed')
+      } catch (error: any) {
+        await createEvent(requestId, 'REVIEW', 'warning', `${jurisdiction}: ${error?.message || 'AI review failed'}`)
+      }
     }
     await heartbeatRequest(requestId, workerId)
 
     await transitionRequest(requestId, 'EXPORT')
-    const docxExport = await invokeDraftingAction({
-      user,
-      patentId: patent.id,
-      body: {
-        action: 'export_docx',
-        sessionId,
-        jurisdiction: activeJurisdiction
-      }
-    })
-    const docxBuffer = Buffer.from(await docxExport.response.arrayBuffer())
-    const docxDisposition = docxExport.response.headers.get('content-disposition') || ''
-    const docxFilename = /filename="?([^"]+)"?/i.exec(docxDisposition)?.[1] || `${payload.title.replace(/[^\w.-]+/g, '_')}.docx`
-    const artifacts = [
-      await storeExportArtifact({
-        requestId,
-        user,
-        tenantId: requestRecord.tenantId,
-        filename: docxFilename,
-        buffer: docxBuffer,
-        mimeType: docxExport.response.headers.get('content-type') || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      })
-    ]
-
-    try {
-      const pdfExport = await invokeDraftingAction({
+    const artifacts: any[] = []
+    for (const jurisdiction of exportJurisdictions) {
+      await setActiveDraftingJurisdiction(sessionId, jurisdiction)
+      const docxExport = await invokeDraftingAction({
         user,
         patentId: patent.id,
         body: {
-          action: 'export_pdf',
+          action: 'export_docx',
           sessionId,
-          jurisdiction: activeJurisdiction
+          jurisdiction
         }
       })
-      const pdfContentType = pdfExport.response.headers.get('content-type') || ''
-      if (pdfContentType.includes('pdf') || pdfContentType.includes('octet-stream')) {
-        const pdfBuffer = Buffer.from(await pdfExport.response.arrayBuffer())
-        const pdfDisposition = pdfExport.response.headers.get('content-disposition') || ''
-        const pdfFilename = /filename="?([^"]+)"?/i.exec(pdfDisposition)?.[1] || `${payload.title.replace(/[^\w.-]+/g, '_')}.pdf`
-        artifacts.push(
-          await storeExportArtifact({
-            requestId,
-            user,
-            tenantId: requestRecord.tenantId,
-            filename: pdfFilename,
-            buffer: pdfBuffer,
-            mimeType: pdfContentType
-          })
-        )
-      } else {
-        exportWarnings.push('PDF export is not available in the current runtime. DOCX was generated successfully.')
+      const docxBuffer = Buffer.from(await docxExport.response.arrayBuffer())
+      const docxDisposition = docxExport.response.headers.get('content-disposition') || ''
+      const docxFilename = /filename="?([^"]+)"?/i.exec(docxDisposition)?.[1] || `${payload.title.replace(/[^\w.-]+/g, '_')}_${jurisdiction}.docx`
+      artifacts.push(await storeExportArtifact({
+        requestId,
+        user,
+        tenantId: requestRecord.tenantId,
+        filename: `${jurisdiction}_${docxFilename}`,
+        buffer: docxBuffer,
+        mimeType: docxExport.response.headers.get('content-type') || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      }))
+
+      try {
+        const pdfExport = await invokeDraftingAction({
+          user,
+          patentId: patent.id,
+          body: {
+            action: 'export_pdf',
+            sessionId,
+            jurisdiction
+          }
+        })
+        const pdfContentType = pdfExport.response.headers.get('content-type') || ''
+        if (pdfContentType.includes('pdf') || pdfContentType.includes('octet-stream')) {
+          const pdfBuffer = Buffer.from(await pdfExport.response.arrayBuffer())
+          const pdfDisposition = pdfExport.response.headers.get('content-disposition') || ''
+          const pdfFilename = /filename="?([^"]+)"?/i.exec(pdfDisposition)?.[1] || `${payload.title.replace(/[^\w.-]+/g, '_')}_${jurisdiction}.pdf`
+          artifacts.push(
+            await storeExportArtifact({
+              requestId,
+              user,
+              tenantId: requestRecord.tenantId,
+              filename: `${jurisdiction}_${pdfFilename}`,
+              buffer: pdfBuffer,
+              mimeType: pdfContentType
+            })
+          )
+        } else {
+          exportWarnings.push(`${jurisdiction}: PDF export is not available in the current runtime. DOCX was generated successfully.`)
+        }
+      } catch (error: any) {
+        exportWarnings.push(`${jurisdiction}: ${error?.message || 'PDF export failed'}`)
       }
-    } catch (error: any) {
-      exportWarnings.push(error?.message || 'PDF export failed')
     }
 
     const downloadToken = await createDocumentAccessLink(artifacts[0].id, user.id, requestId)
@@ -1416,6 +1611,10 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
       await sendCompletionEmail(user, requestRecord, downloadToken, exportWarnings)
     }
 
+    if (requestRecord.autoPatentDraftBatchId) {
+      await refreshAutoPatentDraftBatch(requestRecord.autoPatentDraftBatchId)
+    }
+
     return await (prisma as any).emailDraftRequest.findUnique({ where: { id: requestId } })
   } catch (error: any) {
     const code = error?.code || 'PIPELINE_ERROR'
@@ -1426,6 +1625,9 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
     const suppressFailureEmail = failedPayload?.suppressNotificationEmails === true || failedPayload?.source === 'bulk_upload' || requestRecord.recipientEmail === AUTO_DRAFTING_BULK_RECIPIENT
     if (!suppressFailureEmail) {
       await sendFailureEmail(user, failedRequest)
+    }
+    if (requestRecord.autoPatentDraftBatchId) {
+      await refreshAutoPatentDraftBatch(requestRecord.autoPatentDraftBatchId)
     }
     return failedRequest
   }
@@ -1439,6 +1641,7 @@ export async function processPendingEmailDraftRequests(workerId = `worker-${proc
     const result = await processEmailDraftRequestById(requestRecord.id, workerId)
     processed.push(result)
   }
+  await refreshReadyAutoPatentDraftBatches()
   return processed
 }
 

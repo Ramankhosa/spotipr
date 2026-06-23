@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "email_draft_requests_autoPatentDraftBatchId_autoPatentDraftBatc" RENAME TO "email_draft_requests_autoPatentDraftBatchId_autoPatentDraft_idx";

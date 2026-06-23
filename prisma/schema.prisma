@@ -182,6 +182,7 @@ model User {
   noveltySearchGroups     NoveltySearchGroup[]
   draftingSessions        DraftingSession[]
   draftingHistory         DraftingHistory[]
+  patentDraftingJobs      PatentDraftingJob[]
   emailDraftRequests      EmailDraftRequest[]
 
   // Auth tokens
@@ -582,6 +583,7 @@ model Patent {
   noveltyAssessments NoveltyAssessmentRun[]
   noveltySearchRuns  NoveltySearchRun[]
   draftingSessions   DraftingSession[]
+  patentDraftingJobs PatentDraftingJob[]
   sketchRecords      SketchRecord[]
   emailDraftRequest  EmailDraftRequest?
 
@@ -1501,8 +1503,8 @@ model LocalPatent {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  embeddings LocalPatentEmbedding[]
-  sourceImportFile PatentImportFile? @relation(fields: [sourceImportFileId], references: [id], onDelete: SetNull)
+  embeddings       LocalPatentEmbedding[]
+  sourceImportFile PatentImportFile?      @relation(fields: [sourceImportFileId], references: [id], onDelete: SetNull)
 
   @@index([sourceImportFileId])
   // Raw-SQL search indexes created by migrations 20260518143000 / 20260518170000 / 20260619120000 / 20260619170000.
@@ -1539,8 +1541,8 @@ model PatentImportBatch {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @default(now()) @updatedAt
 
-  uploader User               @relation(fields: [uploadedBy], references: [id])
-  files    PatentImportFile[]
+  uploader            User                 @relation(fields: [uploadedBy], references: [id])
+  files               PatentImportFile[]
   ipIndiaJournalFiles IpIndiaJournalFile[]
 
   @@index([status, createdAt])
@@ -1578,8 +1580,8 @@ model PatentImportFile {
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @default(now()) @updatedAt
 
-  batch PatentImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  extractedPatents LocalPatent[]
+  batch              PatentImportBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  extractedPatents   LocalPatent[]
   ipIndiaJournalFile IpIndiaJournalFile?
 
   @@unique([batchId, fileHash])
@@ -1662,14 +1664,14 @@ model IpIndiaJournalFile {
 }
 
 model IpIndiaJournalArchiveControl {
-  id              String   @id
-  downloadsPaused Boolean  @default(false)
+  id              String    @id
+  downloadsPaused Boolean   @default(false)
   pausedAt        DateTime?
   pausedBy        String?
   resumedAt       DateTime?
   resumedBy       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
 
   @@map("ipindia_journal_archive_control")
 }
@@ -2020,6 +2022,14 @@ enum DraftingSessionStatus {
   COMPLETED
 }
 
+enum PatentDraftingJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 enum ComponentType {
   MAIN_CONTROLLER
   SUBSYSTEM
@@ -2109,6 +2119,7 @@ model DraftingSession {
   // Sketch records
   sketchRecords     SketchRecord[]
   emailDraftRequest EmailDraftRequest?
+  automationJobs    PatentDraftingJob[]
 
   // Figure sequence for unified ordering of diagrams + sketches
   // Array of { type: 'diagram'|'sketch', sourceId: string, finalFigNo: number }
@@ -2127,6 +2138,40 @@ model DraftingSession {
   normalizationRequestId    String?   @map("normalization_request_id")
 
   @@map("drafting_sessions")
+}
+
+model PatentDraftingJob {
+  id            String                  @id @default(cuid())
+  patentId      String
+  sessionId     String?
+  userId        String
+  status        PatentDraftingJobStatus @default(QUEUED)
+  currentStep   String?
+  payload       Json
+  result        Json?
+  attemptCount  Int                     @default(0)
+  maxAttempts   Int                     @default(3)
+  nextAttemptAt DateTime                @default(now())
+  lockedBy      String?
+  lockedUntil   DateTime?
+  heartbeatAt   DateTime?
+  lastError     String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  cancelledById String?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  patent  Patent           @relation(fields: [patentId], references: [id], onDelete: Cascade)
+  session DraftingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([patentId, userId, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([lockedUntil])
+  @@index([sessionId])
+  @@map("patent_drafting_jobs")
 }
 
 model IdeaRecord {
@@ -2797,42 +2842,44 @@ model TenantInboundAlias {
 }
 
 model EmailDraftRequest {
-  id                 String                  @id @default(cuid())
-  tenantId           String
-  userId             String
-  aliasId            String?
-  projectId          String?
-  patentId           String?                 @unique
-  sessionId          String?                 @unique
-  subject            String?
-  senderEmail        String
-  senderDisplayName  String?
-  recipientEmail     String
-  messageId          String?
-  receiptId          String?
-  requestHash        String
-  dedupeKey          String                  @unique
-  rawMimeStorageKey  String?
-  rawMimeText        String?                 @db.Text
-  parsedPayload      Json?
-  normalizationBrief String?                 @db.Text
-  warnings           Json?
-  status             EmailDraftRequestStatus @default(RECEIVED)
-  progressPct        Int                     @default(5)
-  currentStage       String?
-  errorCode          String?
-  errorMessage       String?
-  startedAt          DateTime?
-  completedAt        DateTime?
-  deliveredAt        DateTime?
-  lockedBy           String?
-  lockedUntil        DateTime?
-  heartbeatAt        DateTime?
-  attemptCount       Int                     @default(0)
-  retryCount         Int                     @default(0)
-  nextAttemptAt      DateTime                @default(now())
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
+  id                         String                  @id @default(cuid())
+  tenantId                   String
+  userId                     String
+  aliasId                    String?
+  autoPatentDraftBatchId     String?
+  autoPatentDraftBatchItemNo Int?
+  projectId                  String?
+  patentId                   String?                 @unique
+  sessionId                  String?                 @unique
+  subject                    String?
+  senderEmail                String
+  senderDisplayName          String?
+  recipientEmail             String
+  messageId                  String?
+  receiptId                  String?
+  requestHash                String
+  dedupeKey                  String                  @unique
+  rawMimeStorageKey          String?
+  rawMimeText                String?                 @db.Text
+  parsedPayload              Json?
+  normalizationBrief         String?                 @db.Text
+  warnings                   Json?
+  status                     EmailDraftRequestStatus @default(RECEIVED)
+  progressPct                Int                     @default(5)
+  currentStage               String?
+  errorCode                  String?
+  errorMessage               String?
+  startedAt                  DateTime?
+  completedAt                DateTime?
+  deliveredAt                DateTime?
+  lockedBy                   String?
+  lockedUntil                DateTime?
+  heartbeatAt                DateTime?
+  attemptCount               Int                     @default(0)
+  retryCount                 Int                     @default(0)
+  nextAttemptAt              DateTime                @default(now())
+  createdAt                  DateTime                @default(now())
+  updatedAt                  DateTime                @updatedAt
 
   tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2847,9 +2894,43 @@ model EmailDraftRequest {
   @@index([status, nextAttemptAt])
   @@index([userId, status])
   @@index([tenantId, createdAt])
+  @@index([autoPatentDraftBatchId, autoPatentDraftBatchItemNo])
   @@index([messageId])
   @@index([receiptId])
   @@map("email_draft_requests")
+}
+
+enum AutoPatentDraftBatchStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+}
+
+model AutoPatentDraftBatch {
+  id                    String                     @id @default(cuid())
+  tenantId              String
+  userId                String
+  projectId             String?
+  name                  String
+  sourceFilename        String?
+  status                AutoPatentDraftBatchStatus @default(QUEUED)
+  totalItems            Int
+  completedItems        Int                        @default(0)
+  failedItems           Int                        @default(0)
+  warningItems          Int                        @default(0)
+  requestIds            String[]                   @default([])
+  itemSummaries         Json?
+  zipDocumentId         String?
+  completionEmailSentAt DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([tenantId, status])
+  @@map("auto_patent_draft_batches")
 }
 
 model EmailDraftAttachment {

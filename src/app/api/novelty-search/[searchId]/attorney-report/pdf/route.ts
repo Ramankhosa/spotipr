@@ -627,10 +627,246 @@ function drawTableRow(
   doc.y = y + rowHeight;
 }
 
-function drawFeatureTable(doc: PdfDoc, rows: AttorneyReportFeatureRow[]) {
-  rows.forEach((row, index) => {
-    drawDetailedFeatureRow(doc, row, index);
+const REFERENCE_FEATURE_TABLE = {
+  paddingX: 6,
+  paddingY: 6,
+  fontSize: TYPE.caption,
+  headerFontSize: TYPE.caption,
+  lineGap: 1.2,
+  minRowHeight: 42,
+  divider: '#E2E8F0',
+  continuationFill: '#F1F5F9',
+} as const;
+
+function referenceFeatureTableWidths(doc: PdfDoc) {
+  const total = contentWidth(doc);
+  const serial = 42;
+  const keyFeature = 88;
+  const patent = 170;
+  const relevance = 92;
+  return [serial, keyFeature, patent, relevance, total - serial - keyFeature - patent - relevance];
+}
+
+function referenceFeatureTableHeaders(publicationNumber: string) {
+  return [
+    'S.No.',
+    'Key Features',
+    `Reference Patent: ${cleanText(publicationNumber)}`,
+    'Relevance / Evidence',
+    'Discussion Points',
+  ];
+}
+
+function referenceFeatureHeaderHeight(doc: PdfDoc, headers: string[], widths: number[]) {
+  doc.font(FONTS.semibold).fontSize(REFERENCE_FEATURE_TABLE.headerFontSize);
+  const heights = headers.map((header, index) => doc.heightOfString(header, {
+    width: widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2,
+    lineGap: 1,
+  }) + REFERENCE_FEATURE_TABLE.paddingY * 2);
+  return Math.max(30, ...heights);
+}
+
+function drawReferenceFeatureTableHeader(doc: PdfDoc, headers: string[], widths: number[]) {
+  const rowHeight = referenceFeatureHeaderHeight(doc, headers, widths);
+  ensureSpace(doc, rowHeight + REFERENCE_FEATURE_TABLE.minRowHeight);
+  const y = doc.y;
+  let x = PAGE.left;
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+
+  doc.rect(PAGE.left, y, totalWidth, rowHeight).fill(COLORS.tableHeader);
+  headers.forEach((header, index) => {
+    doc.fillColor(COLORS.white)
+      .font(FONTS.semibold)
+      .fontSize(REFERENCE_FEATURE_TABLE.headerFontSize)
+      .text(header, x + REFERENCE_FEATURE_TABLE.paddingX, y + REFERENCE_FEATURE_TABLE.paddingY, {
+        width: widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2,
+        height: rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2,
+        lineGap: 1,
+      });
+    if (index > 0) {
+      doc.moveTo(x, y).lineTo(x, y + rowHeight).lineWidth(0.35).strokeColor('#93C5FD').stroke();
+    }
+    x += widths[index];
   });
+  doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + totalWidth, y + rowHeight)
+    .lineWidth(0.8).strokeColor(COLORS.blue2).stroke();
+  doc.y = y + rowHeight;
+}
+
+function labeledLine(label: string, value: unknown) {
+  const text = cleanText(value, '');
+  return text ? `${label}: ${text}` : '';
+}
+
+function uniqueLabeledLines(lines: Array<[string, unknown]>, fallback: string) {
+  const seen = new Set<string>();
+  const values = lines.flatMap(([label, value]) => {
+    const text = cleanText(value, '');
+    if (!text || seen.has(text)) return [];
+    seen.add(text);
+    return [`${label}: ${text}`];
+  });
+  return values.length ? values.join('\n') : fallback;
+}
+
+function referenceFeatureCells(row: AttorneyReportFeatureRow, index: number) {
+  const statusLabel = cleanText(row.statusLabel, cleanText(row.status, 'Review'));
+  const coverage = featureCoverageText(row);
+  const confidence = typeof row.confidence === 'number' ? `Confidence: ${pct(row.confidence)}` : '';
+  const evidenceQuote = cleanText(row.evidenceQuote, 'No supporting quotation was mapped in the available patent data.');
+  const evidenceSource = cleanText(row.evidenceSource, 'none');
+  const submittedDisclosure = cleanText(row.userDisclosure, '');
+
+  return [
+    String(index + 1),
+    [
+      labeledLine('Feature', `${cleanText(row.featureNumber)} - ${cleanText(row.userFeature)}`),
+      submittedDisclosure ? labeledLine('Submitted disclosure', submittedDisclosure) : '',
+    ].filter(Boolean).join('\n'),
+    cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.'),
+    [
+      `Status: ${statusLabel}`,
+      coverage ? `Feature ${coverage.toLowerCase()}` : '',
+      confidence,
+      `Evidence source: ${evidenceSource}`,
+      `Evidence quote: ${evidenceQuote}`,
+    ].filter(Boolean).join('\n'),
+    uniqueLabeledLines([
+      ['Crisp remark', row.crispRemark],
+      ['Attorney remark', row.attorneyRemark],
+      ['Novelty impact', row.noveltyImpact],
+      ['Claim review note', row.claimReviewNote],
+    ], 'No attorney discussion point was mapped for this feature.'),
+  ];
+}
+
+function referenceFeatureRowHeight(doc: PdfDoc, cells: string[], widths: number[]) {
+  doc.font(FONTS.regular).fontSize(REFERENCE_FEATURE_TABLE.fontSize);
+  const heights = cells.map((cell, index) => {
+    if (!cell) return 0;
+    return doc.heightOfString(cell, {
+      width: widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2,
+      lineGap: REFERENCE_FEATURE_TABLE.lineGap,
+    }) + REFERENCE_FEATURE_TABLE.paddingY * 2;
+  });
+  return Math.max(REFERENCE_FEATURE_TABLE.minRowHeight, ...heights);
+}
+
+function splitReferenceFeatureCellsToHeight(doc: PdfDoc, cells: string[], widths: number[], rowHeight: number) {
+  doc.font(FONTS.regular).fontSize(REFERENCE_FEATURE_TABLE.fontSize);
+  const availableTextHeight = Math.max(12, rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2);
+  return cells.map((cell, index) => {
+    if (!cell) return ['', ''] as const;
+    return fitTextToHeight(
+      doc,
+      cell,
+      widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2,
+      availableTextHeight,
+      REFERENCE_FEATURE_TABLE.lineGap,
+    );
+  });
+}
+
+function hasRemainingTableText(cells: string[]) {
+  return cells.some(cell => cleanText(cell, '').length > 0);
+}
+
+function drawReferenceFeatureRowChunk(
+  doc: PdfDoc,
+  cells: string[],
+  widths: number[],
+  rowHeight: number,
+  rowIndex: number,
+  continuation: boolean,
+) {
+  const y = doc.y;
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+  const fill = continuation ? REFERENCE_FEATURE_TABLE.continuationFill : (rowIndex % 2 ? COLORS.tableAlt : COLORS.white);
+  let x = PAGE.left;
+
+  doc.rect(PAGE.left, y, totalWidth, rowHeight).fill(fill);
+  cells.forEach((cell, index) => {
+    if (index > 0) {
+      doc.moveTo(x, y).lineTo(x, y + rowHeight).lineWidth(0.25).strokeColor(REFERENCE_FEATURE_TABLE.divider).stroke();
+    }
+    const text = cell || (continuation && index === 0 ? `${rowIndex + 1} cont.` : '');
+    const textX = x + REFERENCE_FEATURE_TABLE.paddingX;
+    const textY = y + REFERENCE_FEATURE_TABLE.paddingY;
+    const textWidth = widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2;
+    const textHeight = rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2;
+
+    if (index === 3 && !continuation) {
+      const statusLine = text.split('\n')[0] || '';
+      const status = statusLine.replace(/^Status:\s*/i, '');
+      const palette = statusPalette(status);
+      const badgeWidth = Math.min(textWidth, Math.max(42, doc.widthOfString(statusLine) + 12));
+      doc.roundedRect(textX - 1, textY - 1, badgeWidth, 13, 3).fillAndStroke(palette.fill, palette.stroke);
+    }
+
+    doc.fillColor(index === 0 ? COLORS.blue2 : COLORS.text)
+      .font(index === 0 ? FONTS.semibold : FONTS.regular)
+      .fontSize(REFERENCE_FEATURE_TABLE.fontSize)
+      .text(text, textX, textY, {
+        width: textWidth,
+        height: textHeight,
+        align: index === 0 ? 'center' : 'left',
+        lineGap: REFERENCE_FEATURE_TABLE.lineGap,
+      });
+    x += widths[index];
+  });
+
+  doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + totalWidth, y + rowHeight)
+    .lineWidth(0.45).strokeColor(COLORS.border).stroke();
+  doc.y = y + rowHeight;
+}
+
+function drawReferenceFeatureRow(
+  doc: PdfDoc,
+  row: AttorneyReportFeatureRow,
+  rowIndex: number,
+  widths: number[],
+  headers: string[],
+) {
+  let remaining = referenceFeatureCells(row, rowIndex);
+  let continuation = false;
+
+  while (hasRemainingTableText(remaining)) {
+    if (pageBottom(doc) - doc.y < REFERENCE_FEATURE_TABLE.minRowHeight) {
+      addPage(doc);
+      drawReferenceFeatureTableHeader(doc, headers, widths);
+    }
+
+    const available = pageBottom(doc) - doc.y;
+    const fullHeight = referenceFeatureRowHeight(doc, remaining, widths);
+    const rowHeight = fullHeight <= available ? fullHeight : Math.max(REFERENCE_FEATURE_TABLE.minRowHeight, available);
+    const split = splitReferenceFeatureCellsToHeight(doc, remaining, widths, rowHeight);
+    const chunks = split.map(([chunk]) => chunk);
+    const rest = split.map(([, next]) => next);
+
+    if (continuation) {
+      if (!chunks[0]) chunks[0] = `${rowIndex + 1} cont.`;
+      if (!chunks[1]) chunks[1] = `${cleanText(row.featureNumber)} cont.`;
+    }
+
+    drawReferenceFeatureRowChunk(doc, chunks, widths, rowHeight, rowIndex, continuation);
+    remaining = rest;
+
+    if (hasRemainingTableText(remaining)) {
+      addPage(doc);
+      drawReferenceFeatureTableHeader(doc, headers, widths);
+      continuation = true;
+    }
+  }
+}
+
+function drawFeatureTable(doc: PdfDoc, publicationNumber: string, rows: AttorneyReportFeatureRow[]) {
+  const widths = referenceFeatureTableWidths(doc);
+  const headers = referenceFeatureTableHeaders(publicationNumber);
+  drawReferenceFeatureTableHeader(doc, headers, widths);
+  rows.forEach((row, index) => {
+    drawReferenceFeatureRow(doc, row, index, widths, headers);
+  });
+  doc.y += SPACE.md;
 }
 
 function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, index: number) {
@@ -1170,7 +1406,7 @@ export async function GET(
       }
       doc.font(FONTS.semibold).fontSize(TYPE.h3).fillColor(COLORS.text).text('Feature-by-Feature Comparison', PAGE.left, doc.y, { width: contentWidth(doc) });
       doc.y += SPACE.md;
-      if (item.rows.length > 0) drawFeatureTable(doc, item.rows);
+      if (item.rows.length > 0) drawFeatureTable(doc, item.publicationNumber, item.rows);
       else drawParagraph(doc, 'No feature comparison rows were available for this citation.');
       doc.y += SPACE.sm;
       keyValueRow(doc, 'Reference Summary', item.summary);

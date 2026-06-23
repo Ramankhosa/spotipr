@@ -62,10 +62,14 @@ describe('email drafting parser', () => {
           '2. The system of claim 1, wherein a valve actuator is networked.',
           'Claims Handling: use as is',
           'Claims Notes: Keep one device independent claim broad.',
+          'Novelty: Uses a split valve-control heuristic that reduces watering drift.',
           'Prior Art: US 1234567 A',
           'EP 7654321 B1',
+          'Literature Review Instructions: Treat cited irrigation timers as closest prior art.',
+          'Literature Review Content: CN 1111111 A discloses a basic moisture controller.',
           'Prior Art Handling: use only',
-          'Figure Directions: Include a controller block diagram and a valve assembly diagram.',
+          'Figure Remarks: Include a controller block diagram and a valve assembly diagram.',
+          'Patent Drafting Remarks: Keep the independent claim hardware-anchored.',
           'Illustrative Data: Moisture values collected over 14 days.',
         ].join('\n'),
         directAttachments: [],
@@ -75,12 +79,16 @@ describe('email drafting parser', () => {
     expect(payload.title).toBe('Smart irrigation controller')
     expect(payload.jurisdictions).toEqual(['IN', 'US'])
     expect(payload.filingType).toBe('utility')
-    expect(payload.mainBriefText).toBe(mainBrief)
+    expect(payload.mainBriefText).toContain(mainBrief)
     expect(payload.normalizationBrief.length).toBeLessThanOrEqual(MAX_DRAFTING_INPUT_CHARS)
     expect(payload.claimsHandling).toBe('use as is')
     expect(payload.claimsText).toContain('1. A system for irrigation control.')
     expect(payload.priorArtHandling).toBe('use only')
+    expect(payload.mainBriefText).toContain('split valve-control heuristic')
+    expect(payload.literatureReviewInstructions).toContain('closest prior art')
+    expect(payload.priorArtText).toContain('CN 1111111 A')
     expect(payload.figureDirections).toContain('controller block diagram')
+    expect(payload.draftingRemarks).toContain('hardware-anchored')
     expect(payload.illustrativeData).toContain('14 days')
   })
 
