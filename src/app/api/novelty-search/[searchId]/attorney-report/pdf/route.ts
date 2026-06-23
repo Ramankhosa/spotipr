@@ -11,6 +11,7 @@ export const runtime = 'nodejs';
 const PDFDocument = require('pdfkit/js/pdfkit.standalone');
 
 type PdfDoc = InstanceType<typeof PDFDocument>;
+type PdfTextAlign = 'left' | 'center' | 'right' | 'justify';
 
 const FONTS = {
   regular: 'Helvetica',
@@ -185,6 +186,11 @@ function fitTextToHeight(doc: PdfDoc, value: string, width: number, height: numb
   return [value.slice(0, splitAt).trimEnd(), value.slice(splitAt).trimStart()] as const;
 }
 
+function proseAlign(value: unknown): PdfTextAlign {
+  const text = cleanText(value, '');
+  return text.split(/\s+/).filter(Boolean).length >= 8 ? 'justify' : 'left';
+}
+
 function drawFlowingLabeledText(
   doc: PdfDoc,
   label: string,
@@ -207,7 +213,7 @@ function drawFlowingLabeledText(
     doc.fillColor(options.color || '#334155').font(FONTS.regular).fontSize(fontSize);
     const available = Math.max(24, pageBottom(doc) - doc.y);
     const [chunk, rest] = fitTextToHeight(doc, remaining, width, available, lineGap);
-    doc.text(chunk, x, doc.y, { width, align: 'left', lineGap });
+    doc.text(chunk, x, doc.y, { width, align: proseAlign(chunk), lineGap });
     remaining = rest;
     if (remaining) {
       addPage(doc);
@@ -365,6 +371,37 @@ function drawSnapshotInfoItem(doc: PdfDoc, x: number, y: number, width: number, 
     .text(truncate(value, 90), x + 17, y + 12, { width: width - 17, height: 27, ellipsis: true, lineGap: 1 });
 }
 
+function highestMappedRow(report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
+  return report.comparisons
+    .flatMap(item => item.rows.map(row => ({ row, patent: item.publicationNumber })))
+    .filter(item => item.row.status === 'Present' || item.row.status === 'Partial')
+    .sort((a, b) => Number(b.row.extentScore || 0) - Number(a.row.extentScore || 0))[0];
+}
+
+function strongestDifferentiatorRow(report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
+  const rows = report.comparisons
+    .flatMap(item => item.rows.map(row => ({ row, patent: item.publicationNumber })))
+    .filter(item => item.row.status === 'Absent' || item.row.status === 'Unknown');
+  return rows.find(item => /distinction|differentiator|not disclosed|absent/i.test(item.row.crispRemark)) || rows[0];
+}
+
+function drawDecisionFact(
+  doc: PdfDoc,
+  x: number,
+  y: number,
+  width: number,
+  label: string,
+  value: string,
+  accent: string,
+) {
+  drawCard(doc, x, y, width, 54, 6);
+  doc.rect(x, y, 3, 54).fill(accent);
+  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text(label.toUpperCase(), x + SPACE.md, y + 10, { width: width - 20, height: 9, lineBreak: false, ellipsis: true });
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .text(truncate(value, 115), x + SPACE.md, y + 24, { width: width - 20, height: 20, ellipsis: true, lineGap: 1.2 });
+}
+
 function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
   const strongest = report.comparisons.reduce((best, item) => (
     Number(item.coverage?.score || 0) > Number(best?.coverage?.score || 0) ? item : best
@@ -372,6 +409,17 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const strongestCoverage = strongest ? pct(strongest.coverage.score) : '0%';
   const signal = cleanText(report.finalAssessment.decision, 'Review required');
   const palette = verdictPalette(signal);
+  const mappedRow = highestMappedRow(report);
+  const differentiatorRow = strongestDifferentiatorRow(report);
+  const topMappedFeature = mappedRow
+    ? `${mappedRow.row.featureNumber} - ${mappedRow.row.userFeature}`
+    : 'No mapped overlap feature identified';
+  const mainDifferentiator = differentiatorRow
+    ? `${differentiatorRow.row.featureNumber} - ${differentiatorRow.row.userFeature}`
+    : 'No unmapped differentiator identified';
+  const reviewFocus = strongest
+    ? `Review ${strongest.publicationNumber} first; compare ${mappedRow?.row.featureNumber || 'mapped features'} and preserve ${differentiatorRow?.row.featureNumber || 'unmapped distinctions'} in claim drafting.`
+    : 'Run detailed citation mapping before forming claim-positioning conclusions.';
 
   doc.addNamedDestination('executive-snapshot', 'XYZ', PAGE.left, PAGE.top, null);
   doc.rect(PAGE.left, PAGE.top + 2, 72, 4).fill(COLORS.cyan);
@@ -382,21 +430,38 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
 
   const verdictY = PAGE.top + 76;
   const rationale = firstSentence(report.finalAssessment.summary);
-  doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), 72, 7).fillAndStroke(palette.fill, palette.stroke);
-  doc.rect(PAGE.left, verdictY, 4, 72).fill(palette.accent);
+  doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), 86, 7).fillAndStroke(palette.fill, palette.stroke);
+  doc.rect(PAGE.left, verdictY, 4, 86).fill(palette.accent);
   doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
     .text('AUTOMATED OVERLAP VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: 180, lineBreak: false });
   doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
     .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: 180, height: 30, ellipsis: true });
+  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text(`Report confidence: ${cleanText(report.finalAssessment.confidence, 'Review')}`, PAGE.left + SPACE.lg, verdictY + 64, { width: 180, height: 9, lineBreak: false, ellipsis: true });
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
     .text(rationale, PAGE.left + 210, verdictY + SPACE.md, {
       width: contentWidth(doc) - 226,
-      height: 49,
+      height: 62,
       lineGap: 1.5,
       ellipsis: true,
     });
 
-  const metricsY = verdictY + 84;
+  const factsY = verdictY + 98;
+  const factGap = SPACE.sm;
+  const factWidth = (contentWidth(doc) - factGap * 2) / 3;
+  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Closest citation', strongest ? `${strongest.publicationNumber} (${strongestCoverage})` : 'None mapped', COLORS.blue);
+  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Top mapped feature', topMappedFeature, COLORS.red);
+  drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success);
+
+  const focusY = factsY + 66;
+  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), 46, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
+  doc.circle(PAGE.left + 15, focusY + 17, 4).fill(palette.accent);
+  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text('ATTORNEY REVIEW FOCUS', PAGE.left + 28, focusY + 9, { width: 145, height: 9, lineBreak: false });
+  doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
+    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, height: 15, lineBreak: false, ellipsis: true });
+
+  const metricsY = focusY + 58;
   const gap = SPACE.sm;
   const metricWidth = (contentWidth(doc) - gap * 4) / 5;
   const metrics = [
@@ -488,10 +553,10 @@ function drawGroupHeading(doc: PdfDoc, number: string, title: string) {
 function drawParagraph(doc: PdfDoc, text: string) {
   const value = cleanText(text);
   doc.font(FONTS.regular).fontSize(TYPE.body);
-  const height = doc.heightOfString(value, { width: contentWidth(doc), align: 'left', lineGap: 2 });
+  const height = doc.heightOfString(value, { width: contentWidth(doc), align: 'justify', lineGap: 2 });
   ensureSpace(doc, Math.min(height + SPACE.md, doc.page.height - PAGE.top - PAGE.bottom));
   doc.fillColor('#334155')
-    .text(value, PAGE.left, doc.y, { width: contentWidth(doc), align: 'left', lineGap: 2 });
+    .text(value, PAGE.left, doc.y, { width: contentWidth(doc), align: 'justify', lineGap: 2 });
   doc.y += SPACE.md;
 }
 
@@ -518,7 +583,7 @@ function drawFlowTextBlock(doc: PdfDoc, label: string, value: string) {
     .fontSize(TYPE.body)
     .text(text, PAGE.left + 8, doc.y, {
       width: contentWidth(doc) - 16,
-      align: 'left',
+      align: 'justify',
       lineGap: 1.4,
     });
   doc.y += SPACE.md;
@@ -537,7 +602,7 @@ function drawFlowBulletList(doc: PdfDoc, label: string, items: string[]) {
       .fontSize(TYPE.body)
       .text(item, PAGE.left + 22, y, {
         width: contentWidth(doc) - 30,
-        align: 'left',
+        align: proseAlign(item),
         lineGap: 1.4,
       });
     doc.y += SPACE.xs;
@@ -579,7 +644,7 @@ function drawTableRow(
     fills?: string[];
     fontSize?: number;
     textColors?: string[];
-    aligns?: Array<'left' | 'center' | 'right'>;
+    aligns?: PdfTextAlign[];
     verticalAligns?: Array<'top' | 'center'>;
     boldCells?: number[];
     repeatHeader?: { cells: string[]; widths: number[] };
@@ -605,7 +670,7 @@ function drawTableRow(
   prepared.forEach((cell, index) => {
     const text = cell || '-';
     const textWidth = widths[index] - padding * 2;
-    const align = opts.aligns?.[index] || 'left';
+    const align = opts.aligns?.[index] || (opts.header ? 'left' : proseAlign(text));
     const font = opts.header || opts.boldCells?.includes(index) ? FONTS.semibold : FONTS.regular;
     const textHeight = doc.heightOfString(text, { width: textWidth, align, lineGap: 1.5 });
     const textY = opts.verticalAligns?.[index] === 'center'
@@ -628,22 +693,22 @@ function drawTableRow(
 }
 
 const REFERENCE_FEATURE_TABLE = {
-  paddingX: 6,
-  paddingY: 6,
+  paddingX: 7,
+  paddingY: 7,
   fontSize: TYPE.caption,
   headerFontSize: TYPE.caption,
-  lineGap: 1.2,
-  minRowHeight: 42,
-  divider: '#E2E8F0',
+  lineGap: 1.35,
+  minRowHeight: 50,
+  divider: '#D7E0EA',
   continuationFill: '#F1F5F9',
 } as const;
 
 function referenceFeatureTableWidths(doc: PdfDoc) {
   const total = contentWidth(doc);
-  const serial = 42;
-  const keyFeature = 88;
-  const patent = 170;
-  const relevance = 92;
+  const serial = 34;
+  const keyFeature = 92;
+  const patent = 126;
+  const relevance = 98;
   return [serial, keyFeature, patent, relevance, total - serial - keyFeature - patent - relevance];
 }
 
@@ -746,6 +811,7 @@ function referenceFeatureRowHeight(doc: PdfDoc, cells: string[], widths: number[
     if (!cell) return 0;
     return doc.heightOfString(cell, {
       width: widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2,
+      align: index === 0 ? 'center' : proseAlign(cell),
       lineGap: REFERENCE_FEATURE_TABLE.lineGap,
     }) + REFERENCE_FEATURE_TABLE.paddingY * 2;
   });
@@ -771,6 +837,23 @@ function hasRemainingTableText(cells: string[]) {
   return cells.some(cell => cleanText(cell, '').length > 0);
 }
 
+function referenceRowStatus(cells: string[]) {
+  const statusLine = cleanText(cells[3], '').split('\n')[0] || '';
+  const status = statusLine.replace(/^Status:\s*/i, '');
+  if (/present/i.test(status)) return 'Present';
+  if (/partial/i.test(status)) return 'Partial';
+  if (/absent/i.test(status)) return 'Absent';
+  return 'Review';
+}
+
+function referenceRowFill(status: string, rowIndex: number, continuation: boolean) {
+  if (continuation) return REFERENCE_FEATURE_TABLE.continuationFill;
+  if (status === 'Present') return '#F7FFFB';
+  if (status === 'Partial') return '#FFFEF7';
+  if (status === 'Absent') return '#FFF9FA';
+  return rowIndex % 2 ? COLORS.tableAlt : COLORS.white;
+}
+
 function drawReferenceFeatureRowChunk(
   doc: PdfDoc,
   cells: string[],
@@ -781,10 +864,15 @@ function drawReferenceFeatureRowChunk(
 ) {
   const y = doc.y;
   const totalWidth = widths.reduce((sum, width) => sum + width, 0);
-  const fill = continuation ? REFERENCE_FEATURE_TABLE.continuationFill : (rowIndex % 2 ? COLORS.tableAlt : COLORS.white);
+  const rowStatus = referenceRowStatus(cells);
+  const palette = statusPalette(rowStatus);
+  const fill = referenceRowFill(rowStatus, rowIndex, continuation);
   let x = PAGE.left;
 
   doc.rect(PAGE.left, y, totalWidth, rowHeight).fill(fill);
+  if (!continuation) {
+    doc.rect(PAGE.left, y, 3, rowHeight).fill(palette.text);
+  }
   cells.forEach((cell, index) => {
     if (index > 0) {
       doc.moveTo(x, y).lineTo(x, y + rowHeight).lineWidth(0.25).strokeColor(REFERENCE_FEATURE_TABLE.divider).stroke();
@@ -797,19 +885,18 @@ function drawReferenceFeatureRowChunk(
 
     if (index === 3 && !continuation) {
       const statusLine = text.split('\n')[0] || '';
-      const status = statusLine.replace(/^Status:\s*/i, '');
-      const palette = statusPalette(status);
       const badgeWidth = Math.min(textWidth, Math.max(42, doc.widthOfString(statusLine) + 12));
       doc.roundedRect(textX - 1, textY - 1, badgeWidth, 13, 3).fillAndStroke(palette.fill, palette.stroke);
     }
 
-    doc.fillColor(index === 0 ? COLORS.blue2 : COLORS.text)
+    const textColor = index === 0 ? COLORS.blue2 : (index === 4 ? '#111827' : COLORS.text);
+    doc.fillColor(textColor)
       .font(index === 0 ? FONTS.semibold : FONTS.regular)
       .fontSize(REFERENCE_FEATURE_TABLE.fontSize)
       .text(text, textX, textY, {
         width: textWidth,
         height: textHeight,
-        align: index === 0 ? 'center' : 'left',
+        align: index === 0 ? 'center' : proseAlign(text),
         lineGap: REFERENCE_FEATURE_TABLE.lineGap,
       });
     x += widths[index];
@@ -1183,46 +1270,57 @@ function drawCitationCardHeader(
   const width = contentWidth(doc);
   doc.font(FONTS.semibold).fontSize(TYPE.small);
   const titleHeight = doc.heightOfString(cleanText(item.title), { width: width - 28, lineGap: 1.5 });
-  const height = Math.max(166, 137 + titleHeight);
+  const height = Math.max(184, 155 + titleHeight);
   ensureSpace(doc, height + SPACE.lg);
   const y = doc.y;
   drawCard(doc, x, y, width, height, 7);
+  const coverage = pct(item.coverage.score);
+  const coveragePalette = item.coverage.score >= 0.7 ? STATUS.Present : item.coverage.score >= 0.35 ? STATUS.Partial : STATUS.Absent;
+  const riskPalette = verdictPalette(item.noveltyThreat || item.overlapRiskLevel);
+  doc.rect(x, y, 5, height).fill(riskPalette.accent);
 
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(`REFERENCE ${index + 1} OF ${total}`, x + 14, y + 13, { width: 110, height: 9, lineBreak: false });
-  const coverage = pct(item.coverage.score);
-  const coveragePalette = item.coverage.score >= 0.7 ? STATUS.Present : STATUS.Partial;
-  doc.roundedRect(x + width - 120, y + 9, 106, 23, 5).fillAndStroke(coveragePalette.fill, coveragePalette.stroke);
+    .text(`REFERENCE ${index + 1} OF ${total}`, x + 18, y + 13, { width: 110, height: 9, lineBreak: false });
+  doc.roundedRect(x + width - 252, y + 9, 122, 23, 5).fillAndStroke(riskPalette.fill, riskPalette.stroke);
+  doc.fillColor(riskPalette.text).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text(truncate(item.noveltyThreat || item.overlapRiskLevel, 34), x + width - 244, y + 16, { width: 106, height: 8, align: 'center', lineBreak: false, ellipsis: true });
+  doc.roundedRect(x + width - 124, y + 9, 110, 23, 5).fillAndStroke(coveragePalette.fill, coveragePalette.stroke);
   doc.fillColor(coveragePalette.text).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(`Feature coverage: ${coverage}`, x + width - 106, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false });
+    .text(`Feature coverage: ${coverage}`, x + width - 112, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false });
 
   doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
-    .text(item.publicationNumber, x + 14, y + 38, { width: width - 28, height: 16, lineBreak: false, ellipsis: true });
+    .text(`${cleanText(item.citationNo, `D${index + 1}`)}  ${item.publicationNumber}`, x + 18, y + 38, { width: width - 36, height: 16, lineBreak: false, ellipsis: true });
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
-    .text(cleanText(item.title), x + 14, y + 59, { width: width - 28, lineGap: 1.5 });
+    .text(cleanText(item.title), x + 18, y + 59, { width: width - 36, lineGap: 1.5 });
 
   const separatorY = y + 67 + titleHeight;
-  doc.moveTo(x + 14, separatorY).lineTo(x + width - 14, separatorY).lineWidth(0.5).strokeColor('#E2E8F0').stroke();
+  doc.moveTo(x + 18, separatorY).lineTo(x + width - 18, separatorY).lineWidth(0.5).strokeColor('#E2E8F0').stroke();
   const meta = [
-    ['Type', item.matchCategoryLabel],
-    ['Publication date', item.publicationDate],
+    ['Match category', item.matchCategoryLabel],
+    ['Publication / priority', `${item.publicationDate} / ${item.priorityDate}`],
     ['Assignee', item.assignees],
     ['Jurisdiction', jurisdiction],
   ];
-  const cellWidth = (width - 28) / 4;
+  const metaY = separatorY + 10;
+  const cellWidth = (width - 36) / 4;
+  doc.roundedRect(x + 18, metaY - 3, width - 36, 47, 5).fill('#F8FAFC');
   meta.forEach(([label, value], metaIndex) => {
-    const metaX = x + 14 + metaIndex * cellWidth;
+    const metaX = x + 28 + metaIndex * cellWidth;
     doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
-      .text(label.toUpperCase(), metaX, separatorY + 10, { width: cellWidth - 12, height: 9, lineBreak: false, ellipsis: true });
+      .text(label.toUpperCase(), metaX, metaY + 4, { width: cellWidth - 18, height: 9, lineBreak: false, ellipsis: true });
     doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.caption)
-      .text(truncate(value, 70), metaX, separatorY + 23, { width: cellWidth - 12, height: 20, ellipsis: true });
+      .text(truncate(value, 82), metaX, metaY + 17, { width: cellWidth - 18, height: 20, ellipsis: true, lineGap: 1 });
   });
 
   const evidenceSources = Array.from(new Set(item.rows.map(row => cleanText(row.evidenceSource, 'Not found'))));
-  const evidenceY = separatorY + 52;
+  const evidenceY = metaY + 57;
+  doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text('REVIEW SIGNAL', x + 18, evidenceY + 4, { width: 72, height: 8, lineBreak: false });
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text('Evidence sources', x + 14, evidenceY + 5, { width: 80, height: 9, lineBreak: false });
-  let badgeX = x + 94;
+    .text(`${item.rows.filter(row => row.status === 'Present').length} present / ${item.rows.filter(row => row.status === 'Partial').length} partial / ${item.rows.filter(row => row.status === 'Absent').length} absent`, x + 94, evidenceY + 3, { width: 180, height: 10, lineBreak: false, ellipsis: true });
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .text('Evidence sources', x + 290, evidenceY + 3, { width: 80, height: 9, lineBreak: false });
+  let badgeX = x + 374;
   evidenceSources.slice(0, 4).forEach(source => {
     badgeX += drawEvidenceBadge(doc, source, badgeX, evidenceY) + 5;
   });

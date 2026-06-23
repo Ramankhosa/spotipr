@@ -38,12 +38,34 @@ export type AutoPatentDraftIdeaInput = {
   illustrativeData?: string
 }
 
+export type AutoPatentDraftBatchDefaults = {
+  defaultJurisdictions?: string[] | string
+  defaultFilingType?: string
+  defaultClaimsHandling?: EmailDraftPayload['claimsHandling'] | string
+  defaultPriorArtHandling?: EmailDraftPayload['priorArtHandling'] | string
+  defaultDraftingRemarks?: string
+}
+
+export type AutoPatentDraftBatchPreviewRow = AutoPatentDraftIdeaInput & {
+  rowNo: number
+  title: string
+  ideaDetails: string
+  noveltyDetails: string
+  jurisdictions: string[]
+  filingType: string
+  claimsHandling: EmailDraftPayload['claimsHandling']
+  priorArtHandling: EmailDraftPayload['priorArtHandling']
+  errors: string[]
+  warnings: string[]
+}
+
 type CreateBatchInput = {
   user: BatchCreateUser
   name?: string
   projectId?: string | null
   sourceFilename?: string
   ideas: AutoPatentDraftIdeaInput[]
+  defaults?: AutoPatentDraftBatchDefaults
 }
 
 const FINAL_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS', 'REJECTED', 'FAILED', 'CANCELED']
@@ -173,9 +195,103 @@ function normalizeClaimsHandling(value: unknown): EmailDraftPayload['claimsHandl
 
 function normalizePriorArtHandling(value: unknown, hasPriorArtText: boolean): EmailDraftPayload['priorArtHandling'] {
   const normalized = safeString(value).toLowerCase()
+  if (normalized === 'use only') return 'use only'
   if (normalized === 'expand with search') return 'expand with search'
   if (normalized === 'auto') return 'auto'
   return hasPriorArtText ? 'use only' : 'auto'
+}
+
+function readIdeaFields(input: AutoPatentDraftIdeaInput, index: number) {
+  const row = input as Record<string, unknown>
+  const title = safeString(input.title) || firstString(row, ['name', 'inventionTitle']) || `Patent Draft ${index + 1}`
+  const ideaDetails = safeString(input.ideaDetails) || firstString(row, ['idea', 'idea_detail', 'idea_details', 'invention', 'description', 'mainBrief', 'main_brief'])
+  const noveltyDetails = safeString(input.noveltyDetails) || firstString(row, ['novelty', 'novelty_detail', 'novelty_details', 'noveltySummary'])
+  const literatureReviewInstructions = safeString(input.literatureReviewInstructions) || firstString(row, ['literatureReviewInstructions', 'literature_review_instructions', 'priorArtInstructions'])
+  const literatureReviewContent = safeString(input.literatureReviewContent) || firstString(row, ['literatureReviewContent', 'literature_review_content', 'literatureReview', 'priorArtReview', 'prior_art_review', 'priorArt', 'prior_art'])
+  const figureRemarks = safeString(input.figureRemarks) || firstString(row, ['figureDirections', 'figure_remarks', 'diagramRemarks', 'diagram_generation_remarks'])
+  const draftingRemarks = safeString(input.draftingRemarks) || firstString(row, ['patentDraftingRemarks', 'drafting_remarks', 'draftingInstructions', 'drafting_instructions'])
+  const claimsText = safeString(input.claimsText) || firstString(row, ['claims', 'claimsText', 'claims_text'])
+  const claimsNotes = safeString(input.claimsNotes) || firstString(row, ['claimsNotes', 'claims_notes'])
+  const illustrativeData = safeString(input.illustrativeData) || firstString(row, ['illustrativeData', 'detailedDescriptionData', 'supportData'])
+  const jurisdictions = normalizeJurisdictions(input.jurisdictions ?? row.jurisdictions ?? row.jurisdiction)
+  const filingType = safeString(input.filingType) || firstString(row, ['filingType', 'filing_type'])
+
+  return {
+    title,
+    ideaDetails,
+    noveltyDetails,
+    literatureReviewInstructions,
+    literatureReviewContent,
+    figureRemarks,
+    draftingRemarks,
+    claimsText,
+    claimsNotes,
+    illustrativeData,
+    jurisdictions,
+    filingType,
+    claimsHandling: input.claimsHandling ?? row.claimsHandling ?? row.claims_handling,
+    priorArtHandling: input.priorArtHandling ?? row.priorArtHandling ?? row.prior_art_handling,
+  }
+}
+
+function applyBatchDefaults(input: AutoPatentDraftIdeaInput, defaults: AutoPatentDraftBatchDefaults = {}): AutoPatentDraftIdeaInput {
+  const fields = readIdeaFields(input, 0)
+  const defaultJurisdictions = normalizeJurisdictions(defaults.defaultJurisdictions)
+  return {
+    ...input,
+    jurisdictions: fields.jurisdictions.length ? fields.jurisdictions : (defaultJurisdictions.length ? defaultJurisdictions : ['IN']),
+    filingType: fields.filingType || safeString(defaults.defaultFilingType) || 'utility',
+    claimsHandling: safeString(fields.claimsHandling) ? fields.claimsHandling as EmailDraftPayload['claimsHandling'] : normalizeClaimsHandling(defaults.defaultClaimsHandling),
+    priorArtHandling: safeString(fields.priorArtHandling) ? fields.priorArtHandling as EmailDraftPayload['priorArtHandling'] : normalizePriorArtHandling(defaults.defaultPriorArtHandling, !!(fields.literatureReviewInstructions || fields.literatureReviewContent)),
+    draftingRemarks: fields.draftingRemarks || safeString(defaults.defaultDraftingRemarks),
+  }
+}
+
+export function previewAutoPatentDraftBatchIdeas(
+  ideas: AutoPatentDraftIdeaInput[],
+  defaults: AutoPatentDraftBatchDefaults = {}
+) {
+  const rows = ideas.map((idea, index): AutoPatentDraftBatchPreviewRow => {
+    const applied = applyBatchDefaults(idea, defaults)
+    const fields = readIdeaFields(applied, index)
+    const priorArtText = [fields.literatureReviewInstructions, fields.literatureReviewContent].filter(Boolean).join('\n\n')
+    const errors: string[] = []
+    const warnings: string[] = []
+
+    if (!fields.ideaDetails) errors.push('ideaDetails is required.')
+    if (!safeString(idea.title) && !firstString(idea as Record<string, unknown>, ['name', 'inventionTitle'])) warnings.push('Title is blank; a fallback title will be used.')
+    if (!fields.noveltyDetails) warnings.push('Novelty details are blank.')
+    if (!fields.jurisdictions.length) warnings.push('No jurisdiction supplied; IN will be used.')
+
+    return {
+      ...applied,
+      rowNo: index + 1,
+      title: fields.title,
+      ideaDetails: fields.ideaDetails,
+      noveltyDetails: fields.noveltyDetails,
+      literatureReviewInstructions: fields.literatureReviewInstructions,
+      literatureReviewContent: fields.literatureReviewContent,
+      figureRemarks: fields.figureRemarks,
+      draftingRemarks: fields.draftingRemarks,
+      claimsText: fields.claimsText,
+      claimsNotes: fields.claimsNotes,
+      illustrativeData: fields.illustrativeData,
+      jurisdictions: fields.jurisdictions.length ? fields.jurisdictions : ['IN'],
+      filingType: fields.filingType || 'utility',
+      claimsHandling: normalizeClaimsHandling(fields.claimsHandling),
+      priorArtHandling: normalizePriorArtHandling(fields.priorArtHandling, !!priorArtText),
+      errors,
+      warnings,
+    }
+  })
+
+  return {
+    rows,
+    totalRows: rows.length,
+    validRows: rows.filter(row => row.errors.length === 0).length,
+    invalidRows: rows.filter(row => row.errors.length > 0).length,
+    warnings: rows.reduce((count, row) => count + row.warnings.length, 0),
+  }
 }
 
 function condenseForNormalization(text: string) {
@@ -191,17 +307,19 @@ function section(label: string, value: string) {
 }
 
 function buildPayload(input: AutoPatentDraftIdeaInput, index: number): EmailDraftPayload {
-  const row = input as Record<string, unknown>
-  const title = safeString(input.title) || firstString(row, ['name', 'inventionTitle']) || `Patent Draft ${index + 1}`
-  const ideaDetails = safeString(input.ideaDetails) || firstString(row, ['idea', 'idea_detail', 'idea_details', 'invention', 'description', 'mainBrief', 'main_brief'])
-  const noveltyDetails = safeString(input.noveltyDetails) || firstString(row, ['novelty', 'novelty_detail', 'novelty_details', 'noveltySummary'])
-  const literatureReviewInstructions = safeString(input.literatureReviewInstructions) || firstString(row, ['literatureReviewInstructions', 'literature_review_instructions', 'priorArtInstructions'])
-  const literatureReviewContent = safeString(input.literatureReviewContent) || firstString(row, ['literatureReviewContent', 'literature_review_content', 'literatureReview', 'priorArtReview', 'prior_art_review', 'priorArt', 'prior_art'])
-  const figureRemarks = safeString(input.figureRemarks) || firstString(row, ['figureDirections', 'figure_remarks', 'diagramRemarks', 'diagram_generation_remarks'])
-  const draftingRemarks = safeString(input.draftingRemarks) || firstString(row, ['patentDraftingRemarks', 'drafting_remarks', 'draftingInstructions', 'drafting_instructions'])
-  const claimsText = safeString(input.claimsText) || firstString(row, ['claims', 'claimsText', 'claims_text'])
-  const claimsNotes = safeString(input.claimsNotes) || firstString(row, ['claimsNotes', 'claims_notes'])
-  const illustrativeData = safeString(input.illustrativeData) || firstString(row, ['illustrativeData', 'detailedDescriptionData', 'supportData'])
+  const fields = readIdeaFields(input, index)
+  const {
+    title,
+    ideaDetails,
+    noveltyDetails,
+    literatureReviewInstructions,
+    literatureReviewContent,
+    figureRemarks,
+    draftingRemarks,
+    claimsText,
+    claimsNotes,
+    illustrativeData,
+  } = fields
 
   if (!ideaDetails) {
     throw new Error(`Idea ${index + 1} is missing ideaDetails/idea/description content.`)
@@ -218,24 +336,22 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): EmailDraf
     section('Literature review content', literatureReviewContent),
   ].filter(Boolean).join('\n\n')
 
-  const jurisdictions = normalizeJurisdictions(input.jurisdictions ?? row.jurisdictions ?? row.jurisdiction)
-
   return {
     parserVersion: 1,
     source: 'bulk_upload',
     suppressNotificationEmails: true,
     title,
-    jurisdictions,
-    filingType: safeString(input.filingType) || firstString(row, ['filingType', 'filing_type']) || 'utility',
+    jurisdictions: fields.jurisdictions,
+    filingType: fields.filingType || 'utility',
     allowRefine: true,
     coverMemo: draftingRemarks,
     mainBriefText,
     normalizationBrief: condenseForNormalization(mainBriefText),
     claimsText,
-    claimsHandling: normalizeClaimsHandling(input.claimsHandling ?? row.claimsHandling ?? row.claims_handling),
+    claimsHandling: normalizeClaimsHandling(fields.claimsHandling),
     claimsNotes: [claimsNotes, draftingRemarks].filter(Boolean).join('\n\n'),
     priorArtText,
-    priorArtHandling: normalizePriorArtHandling(input.priorArtHandling ?? row.priorArtHandling ?? row.prior_art_handling, !!priorArtText),
+    priorArtHandling: normalizePriorArtHandling(fields.priorArtHandling, !!priorArtText),
     figureDirections: figureRemarks,
     illustrativeData,
     draftingRemarks,
@@ -294,7 +410,7 @@ export async function createAutoPatentDraftBatch(input: CreateBatchInput) {
     throw new Error(`A batch can include at most ${AUTO_DRAFTING_MAX_UPLOAD_ROWS} ideas.`)
   }
 
-  const payloads = input.ideas.map(buildPayload)
+  const payloads = input.ideas.map(idea => applyBatchDefaults(idea, input.defaults)).map(buildPayload)
   const batch = await (prisma as any).autoPatentDraftBatch.create({
     data: {
       tenantId: input.user.tenantId,

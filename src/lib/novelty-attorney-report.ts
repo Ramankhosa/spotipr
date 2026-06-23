@@ -522,16 +522,46 @@ function defaultClaimReviewNote(status: FeatureMapCell['status'], feature: strin
 
 function defaultCrispRemark(status: FeatureMapCell['status'], feature: string, patentDisclosure: string): string {
   const disclosure = cleanText(patentDisclosure, 'No supporting disclosure was mapped');
+  const shortDisclosure = disclosure.length > 90 ? `${disclosure.slice(0, 87).trim()}...` : disclosure;
   if (status === 'Present') {
-    return `Mapped overlap for ${feature}: ${disclosure} Review whether the claimed implementation contains a narrower technical distinction.`;
+    return `Mapped overlap: ${shortDisclosure}`;
   }
   if (status === 'Partial') {
-    return `Partial mapping for ${feature}: ${disclosure} The unmapped elements should be stated explicitly when distinguishing this reference.`;
+    return `Partial overlap: ${shortDisclosure}`;
   }
   if (status === 'Absent') {
-    return `No supporting disclosure was mapped for ${feature} in this reference; assess whether the specific missing mechanism is a defensible distinction.`;
+    return `Potential distinction: ${feature} is not disclosed by this reference.`;
   }
-  return `The available evidence does not support a reliable assessment of ${feature}; review the complete patent record before relying on this distinction.`;
+  return `Verification needed: available data does not reliably address ${feature}.`;
+}
+
+function isUsefulCrispRemark(value: unknown): boolean {
+  const text = cleanText(value);
+  if (!text) return false;
+  if (/\b(attorney remark|novelty impact|claim review note|crisp remark|review note|status)\s*:/i.test(text)) return false;
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length >= 4 && words.length <= 30;
+}
+
+function rowCrispRemark(
+  supplied: any,
+  cell: FeatureMapCell | undefined,
+  status: FeatureMapCell['status'],
+  feature: string,
+  patentDisclosure: string
+): string {
+  const candidates = [
+    supplied.crisp_remark,
+    (cell as any)?.crisp_remark,
+    supplied.attorney_remark,
+    cell?.attorney_remark,
+    supplied.novelty_impact,
+    cell?.novelty_impact,
+  ];
+  for (const candidate of candidates) {
+    if (isUsefulCrispRemark(candidate)) return reportSafeText(candidate);
+  }
+  return reportSafeText(defaultCrispRemark(status, feature, patentDisclosure));
 }
 
 function buildClaimImpactSummary(rows: AttorneyReportFeatureRow[], riskLabel: string): string {
@@ -648,13 +678,7 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       patentDisclosure,
       status,
       statusLabel: statusLabel(status),
-      crispRemark: reportSafeText(
-        supplied.attorney_remark ||
-        cell?.attorney_remark ||
-        supplied.novelty_impact ||
-        cell?.novelty_impact ||
-        defaultCrispRemark(status, feature, patentDisclosure)
-      ),
+      crispRemark: rowCrispRemark(supplied, cell, status, feature, patentDisclosure),
       evidenceQuote,
       evidenceSource: evidenceQuote ? evidenceSource : 'none',
       extentScore: status === 'Absent' ? null : extentScore,

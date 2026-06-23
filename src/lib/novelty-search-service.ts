@@ -479,6 +479,7 @@ OUTPUT JSON SHAPE:
           "evidence_source": "title|abstract|none",
           "extent_score": 0.0,
           "confidence": 0.0,
+          "crisp_remark": "one clear 8-30 word feature-level conclusion for the PDF table",
           "attorney_remark": "attorney-style feature comparison grounded in the submitted idea and available patent data",
           "novelty_impact": "specific mapped overlap or difference without legal conclusions",
           "claim_review_note": "specific claim drafting or attorney-review note"
@@ -520,7 +521,15 @@ RULES
 - confidence means confidence in the row assessment, not degree of feature disclosure.
 - evidence_source must be title, abstract, or none. Do not cite unavailable claims, descriptions, embodiments, examples, or figures.
 - Do not repeat the source-field limitation in narrative fields; use "available patent data" or "limited available patent data" for user-facing limitation language.
-- attorney_remark and claim_review_note must be specific to the feature and status, not generic boilerplate.
+- crisp_remark is the primary PDF table remark. It must be one meaningful sentence fragment, 8-30 words, specific to the feature and mapped status.
+- crisp_remark must directly answer one question: "Does this reference cover this feature, and what should the reviewer notice?"
+- For Present: state the mapped overlap and the concrete disclosed mechanism.
+- For Partial: state the overlap and the missing element.
+- For Absent: state the missing mechanism that may distinguish the user's invention.
+- For Unknown: state the exact evidence gap to verify.
+- Do not put labels such as "Attorney remark", "Novelty impact", "Claim review note", "Crisp remark", "Status", or "Review note" inside crisp_remark.
+- Do not concatenate attorney_remark, novelty_impact, and claim_review_note into crisp_remark.
+- attorney_remark, novelty_impact, and claim_review_note must be specific to the feature and status, not generic boilerplate.
 - Do not add markdown, comments, citations, or text outside JSON.
 - ASCII only.`;
 
@@ -1158,6 +1167,7 @@ export interface FeatureMapCell {
   attorney_remark?: string;
   novelty_impact?: string;
   claim_review_note?: string;
+  crisp_remark?: string;
   evidence?: string | {
     quote: string;
     field: string;
@@ -1333,6 +1343,7 @@ export interface PatentFeatureComparisonRow {
   evidence_source: 'title' | 'abstract' | 'title/abstract' | 'none';
   extent_score?: number;
   confidence?: number;
+  crisp_remark: string;
   attorney_remark: string;
   novelty_impact: string;
   claim_review_note: string;
@@ -3846,6 +3857,21 @@ RESPONSE:`;
   private selectRelevantPatentsForDeepAnalysis(stage1Data: any, maxCandidates = 20): any[] {
     const gate = stage1Data?.aiRelevance;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
+    const safeMaxCandidates = Math.max(0, Math.trunc(maxCandidates || 0));
+    const BORDERLINE_FILL_RATIO = 0.35;
+    const MIN_DEEP_ANALYSIS_TARGET = 15;
+    const MAX_DEEP_ANALYSIS_TARGET = 40;
+    const MAX_BORDERLINE_FILL = 10;
+    const deepAnalysisTarget = (acceptedCount: number, componentCount: number, borderlineCount: number) => {
+      const reviewableCount = Math.max(0, acceptedCount + componentCount + borderlineCount);
+      if (reviewableCount === 0 || safeMaxCandidates === 0) return 0;
+      const relativeTarget = Math.ceil(reviewableCount * BORDERLINE_FILL_RATIO);
+      const boundedTarget = Math.min(
+        MAX_DEEP_ANALYSIS_TARGET,
+        Math.max(MIN_DEEP_ANALYSIS_TARGET, relativeTarget)
+      );
+      return Math.min(safeMaxCandidates, boundedTarget);
+    };
     const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0) => ({
       ...candidate,
       rerankScore: score,
@@ -3858,8 +3884,9 @@ RESPONSE:`;
       rerankReason: record?.reason,
     });
     const selectedKeys = new Set<string>();
-    const selectByDecision = (decisionName: 'accept' | 'component' | 'borderline') => {
+    const selectByDecision = (decisionName: 'accept' | 'component' | 'borderline', limit = safeMaxCandidates - selectedKeys.size) => {
       if (!(candidatePool.length > 0 && gate?.byPn && gate?.gateStatus !== 'failed')) return [];
+      if (limit <= 0) return [];
       return candidatePool
         .map((candidate, index) => {
           const pn = getPriorArtPublicationNumber(candidate);
@@ -3876,7 +3903,7 @@ RESPONSE:`;
           return Boolean(item.key && !selectedKeys.has(item.key));
         })
         .sort((a, b) => (b.score - a.score) || (a.index - b.index))
-        .slice(0, Math.max(0, maxCandidates - selectedKeys.size))
+        .slice(0, Math.max(0, Math.min(limit, safeMaxCandidates - selectedKeys.size)))
         .map(item => {
           if (item.key) selectedKeys.add(item.key);
           return annotate(item.candidate, item.record, item.score);
@@ -3885,8 +3912,13 @@ RESPONSE:`;
 
     const accepted = selectByDecision('accept');
     const component = selectByDecision('component');
-    const borderline = selectByDecision('borderline');
-    const categorySelected = [...accepted, ...component, ...borderline].slice(0, Math.max(0, maxCandidates));
+    const gateAcceptedCount = Array.isArray(gate?.accepted) ? gate.accepted.length : accepted.length;
+    const gateComponentCount = Array.isArray(gate?.component) ? gate.component.length : component.length;
+    const gateBorderlineCount = Array.isArray(gate?.borderline) ? gate.borderline.length : 0;
+    const targetCount = deepAnalysisTarget(gateAcceptedCount, gateComponentCount, gateBorderlineCount);
+    const borderlineNeeded = Math.max(0, targetCount - accepted.length - component.length);
+    const borderline = selectByDecision('borderline', Math.min(MAX_BORDERLINE_FILL, borderlineNeeded));
+    const categorySelected = [...accepted, ...component, ...borderline].slice(0, safeMaxCandidates);
     if (categorySelected.length > 0) return categorySelected;
 
     const visibleResults = Array.isArray(stage1Data?.visiblePriorArtResults)
@@ -3903,27 +3935,31 @@ RESPONSE:`;
     const selected: any[] = [];
     const seen = new Set<string>();
 
-    const addBySet = (values: any[]) => {
+    const addBySet = (values: any[], limit = safeMaxCandidates - selected.length) => {
+      if (limit <= 0) return;
       const exact = new Set(values.map(value => String(value || '').toUpperCase()));
       const canonical = new Set(values.map(value => this.canonicalPatentNumber(value)).filter(Boolean));
       for (const patent of results) {
-        if (selected.length >= maxCandidates) break;
+        if (selected.length >= safeMaxCandidates || limit <= 0) break;
         const pn = patent.publicationNumber || patent.publication_number || patent.pn || patent.id || '';
         const key = this.canonicalPatentNumber(pn) || String(pn).toUpperCase();
         if (!key || seen.has(key)) continue;
         if (exact.has(String(pn).toUpperCase()) || canonical.has(this.canonicalPatentNumber(pn))) {
           selected.push(patent);
           seen.add(key);
+          limit -= 1;
         }
       }
     };
 
     addBySet(acceptedPns);
-    if (selected.length < maxCandidates) addBySet(componentPns);
-    if (selected.length < maxCandidates) addBySet(borderlinePns);
+    if (selected.length < safeMaxCandidates) addBySet(componentPns);
+    const fallbackTargetCount = deepAnalysisTarget(acceptedPns.length, componentPns.length, borderlinePns.length);
+    const fallbackBorderlineNeeded = Math.max(0, fallbackTargetCount - selected.length);
+    if (selected.length < safeMaxCandidates) addBySet(borderlinePns, Math.min(MAX_BORDERLINE_FILL, fallbackBorderlineNeeded));
 
     if (selected.length === 0) {
-      return results.slice(0, maxCandidates);
+      return results.slice(0, safeMaxCandidates);
     }
 
     return selected;
@@ -4171,6 +4207,11 @@ RESPONSE:`;
         cell?.novelty_impact ||
         this.defaultNoveltyImpact(status, feature)
       ).trim();
+      const crispRemark = String(
+        suppliedRow.crisp_remark ||
+        cell?.crisp_remark ||
+        this.defaultCrispRemark(status, feature, patentDisclosure, evidenceQuote)
+      ).trim();
 
       return {
         feature_id: String(suppliedRow.feature_id || cell?.feature_id || `KF${index + 1}`),
@@ -4182,6 +4223,7 @@ RESPONSE:`;
         evidence_source: evidenceSource,
         extent_score: extentScore,
         confidence,
+        crisp_remark: crispRemark,
         attorney_remark: String(
           suppliedRow.attorney_remark ||
           cell?.attorney_remark ||
@@ -4207,6 +4249,7 @@ RESPONSE:`;
       cell.user_invention_disclosure = row.user_invention_disclosure;
       cell.patent_disclosure = row.patent_disclosure;
       cell.evidence_source = row.evidence_source;
+      cell.crisp_remark = row.crisp_remark;
       cell.attorney_remark = row.attorney_remark;
       cell.novelty_impact = row.novelty_impact;
       cell.claim_review_note = row.claim_review_note;
@@ -4246,6 +4289,30 @@ RESPONSE:`;
     if (status === 'Partial') return `${reference} is technically related to ${feature}, but at least one required element is not apparent from the available patent data.`;
     if (status === 'Absent') return `${reference} does not show support for ${feature} in the available patent data; treat this as a potential distinction, not confirmed novelty.`;
     return `${reference} has insufficient available patent data to compare ${feature} reliably.`;
+  }
+
+  private defaultCrispRemark(
+    status: FeatureMapCell['status'],
+    feature: string,
+    patentDisclosure = '',
+    evidenceQuote = ''
+  ): string {
+    const disclosure = String(evidenceQuote || patentDisclosure || '').replace(/\s+/g, ' ').trim();
+    const shortDisclosure = disclosure
+      ? disclosure.length > 90 ? `${disclosure.slice(0, 87).trim()}...` : disclosure
+      : '';
+    if (status === 'Present') {
+      return shortDisclosure
+        ? `Mapped overlap: ${shortDisclosure}`
+        : `Mapped overlap: this reference discloses ${feature}.`;
+    }
+    if (status === 'Partial') {
+      return `Partial overlap: related disclosure exists, but the full ${feature} is not mapped.`;
+    }
+    if (status === 'Absent') {
+      return `Potential distinction: ${feature} is not disclosed by this reference.`;
+    }
+    return `Verification needed: available data does not reliably address ${feature}.`;
   }
 
   private defaultClaimReviewNote(status: FeatureMapCell['status'], feature: string): string {
@@ -8280,6 +8347,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           reason: status === 'Unknown'
             ? 'Deterministic fallback could not establish this feature from the available patent data.'
             : `Deterministic token overlap matched ${matched.length} of ${Math.max(tokens.length, 1)} feature terms.`,
+          crisp_remark: this.defaultCrispRemark(status, featureText, quote || ''),
           attorney_remark: this.defaultAttorneyRemark(status, featureText, patent.canonicalPn),
           novelty_impact: this.defaultNoveltyImpact(status, featureText),
           claim_review_note: this.defaultClaimReviewNote(status, featureText)
@@ -8471,6 +8539,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
               field: cell.field,
               evidence_source: cell.evidence_source,
               reason: cell.reason,
+              crisp_remark: cell.crisp_remark,
               attorney_remark: cell.attorney_remark,
               novelty_impact: cell.novelty_impact,
               claim_review_note: cell.claim_review_note

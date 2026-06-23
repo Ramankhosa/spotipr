@@ -5,6 +5,7 @@ import {
   buildAutoPatentDraftBatchTemplate,
   parseAutoPatentDraftIdeasFromJson,
   parseAutoPatentDraftIdeasFromUpload,
+  previewAutoPatentDraftBatchIdeas,
 } from '@/lib/auto-patent-draft-batch-service'
 
 describe('auto patent draft batch parsing', () => {
@@ -92,5 +93,81 @@ describe('auto patent draft batch parsing', () => {
       buffer: template.buffer,
     })
     expect(ideas).toEqual([])
+  })
+
+  test('previews rows without requiring database writes', () => {
+    const preview = previewAutoPatentDraftBatchIdeas([
+      {
+        title: 'Smart latch',
+        ideaDetails: 'A latch with a monitored locking pin.',
+        jurisdictions: 'US, EP',
+      }
+    ])
+
+    expect(preview).toMatchObject({
+      totalRows: 1,
+      validRows: 1,
+      invalidRows: 0,
+    })
+    expect(preview.rows[0]).toMatchObject({
+      rowNo: 1,
+      title: 'Smart latch',
+      jurisdictions: ['US', 'EP'],
+      filingType: 'utility',
+      claimsHandling: 'draft from brief',
+      priorArtHandling: 'auto',
+      errors: [],
+    })
+  })
+
+  test('applies defaults only when row values are blank', () => {
+    const preview = previewAutoPatentDraftBatchIdeas([
+      {
+        title: 'Defaulted idea',
+        ideaDetails: 'A controller-assisted storage tray.',
+      },
+      {
+        title: 'Override idea',
+        ideaDetails: 'A tray with a local sensor.',
+        jurisdictions: 'JP',
+        filingType: 'provisional',
+        claimsHandling: 'improve',
+        priorArtHandling: 'use only',
+        draftingRemarks: 'Use row-level remarks.',
+      }
+    ], {
+      defaultJurisdictions: 'IN,US',
+      defaultFilingType: 'utility',
+      defaultClaimsHandling: 'draft from brief',
+      defaultPriorArtHandling: 'auto',
+      defaultDraftingRemarks: 'Use default remarks.',
+    })
+
+    expect(preview.rows[0]).toMatchObject({
+      jurisdictions: ['IN', 'US'],
+      filingType: 'utility',
+      claimsHandling: 'draft from brief',
+      priorArtHandling: 'auto',
+      draftingRemarks: 'Use default remarks.',
+    })
+    expect(preview.rows[1]).toMatchObject({
+      jurisdictions: ['JP'],
+      filingType: 'provisional',
+      claimsHandling: 'improve',
+      priorArtHandling: 'use only',
+      draftingRemarks: 'Use row-level remarks.',
+    })
+  })
+
+  test('marks rows without idea details as invalid', () => {
+    const preview = previewAutoPatentDraftBatchIdeas([
+      {
+        title: 'Incomplete idea',
+        noveltyDetails: 'Novelty without disclosure.',
+      }
+    ])
+
+    expect(preview.invalidRows).toBe(1)
+    expect(preview.rows[0].errors).toContain('ideaDetails is required.')
   })
 })

@@ -624,6 +624,12 @@ function NewPatentDraftPageContent() {
             <p className="text-lg text-gray-600">
               Enter your invention details and let AI create a complete patent draft
             </p>
+            <Link
+              href="/patents/draft/batch"
+              className="mt-3 inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
+            >
+              Upload a batch instead
+            </Link>
           </div>
         </div>
 

@@ -165,7 +165,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
                 evidence_source: 'none',
                 extent_score: 0.08,
                 confidence: 0.84,
-                attorney_remark: 'The reference lacks the threshold-triggered decision sequence required by this feature.',
+                attorney_remark: 'Attorney remark: The reference lacks the threshold-triggered sequence. Novelty impact: potential distinction. Claim review note: emphasize threshold inputs.',
                 novelty_impact: 'The threshold sequence is a mapped technical difference from this reference.',
                 claim_review_note: 'State the threshold inputs and resulting control transition expressly.',
               },
@@ -239,8 +239,9 @@ describe('buildNoveltyAttorneyReportModel', () => {
       patentDisclosure: 'The patent controls irrigation without disclosing the submitted threshold decision rule.',
       evidenceSource: 'none',
       extentScore: null,
-      crispRemark: 'The reference lacks the threshold-triggered decision sequence required by this feature.',
+      crispRemark: 'The threshold sequence is a mapped technical difference from this reference.',
     });
+    expect(model.comparisons[0].rows[1].crispRemark).not.toMatch(/Attorney remark|Novelty impact|Claim review note/i);
     expect(model.comparisons[0].rows[3]).toMatchObject({
       featureNumber: 'KF4',
       status: 'Absent',

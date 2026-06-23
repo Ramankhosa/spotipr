@@ -10,7 +10,7 @@ import ActivityFeed from './ActivityFeed'
 import KishoWidget from './KishoWidget'
 import LoadingBird from '../ui/loading-bird'
 import { motion } from 'framer-motion'
-import { Sparkles, Plus, Search, Lightbulb, FileText, History } from 'lucide-react'
+import { Sparkles, Plus, Search, Lightbulb, FileText, History, Files } from 'lucide-react'
 
 interface DashboardStats {
   draftsCount: number
@@ -236,7 +236,7 @@ export default function UserDashboard() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1, duration: 0.5 }}
-            className="grid grid-cols-2 md:grid-cols-4 gap-4"
+            className="grid grid-cols-2 md:grid-cols-5 gap-4"
           >
              <button
                 onClick={() => router.push('/patents/draft/new')}
@@ -247,6 +247,17 @@ export default function UserDashboard() {
                 </div>
                 <span className="font-semibold text-slate-900">New Draft</span>
                 <span className="text-xs text-slate-500 mt-1">Start a fresh application</span>
+              </button>
+
+              <button
+                onClick={() => router.push('/patents/draft/batch')}
+                className="group flex flex-col items-start p-4 bg-white border border-slate-200 rounded-xl hover:border-cyan-500/50 hover:shadow-md hover:shadow-cyan-500/10 transition-all duration-200"
+              >
+                <div className="p-2 bg-cyan-50 rounded-lg text-cyan-600 mb-3 group-hover:bg-cyan-600 group-hover:text-white transition-colors">
+                  <Files className="w-5 h-5" />
+                </div>
+                <span className="font-semibold text-slate-900">Batch Drafting</span>
+                <span className="text-xs text-slate-500 mt-1">Upload many ideas</span>
               </button>
 
               <div className="group flex flex-col items-start p-4 bg-white border border-slate-200 rounded-xl hover:border-purple-500/50 hover:shadow-md hover:shadow-purple-500/10 transition-all duration-200">

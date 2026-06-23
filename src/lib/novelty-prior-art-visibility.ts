@@ -1,4 +1,4 @@
-export const DEFAULT_VISIBLE_PRIOR_ART_LIMIT = 30;
+export const DEFAULT_VISIBLE_PRIOR_ART_LIMIT = 50;
 export const DEFAULT_MINIMUM_VISIBLE_CONFIDENCE = 0.7;
 
 export type RerankDecision = 'accept' | 'component' | 'borderline' | 'reject';

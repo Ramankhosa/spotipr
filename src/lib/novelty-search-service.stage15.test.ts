@@ -258,6 +258,85 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     expect(selected[1].matchCategory).toBe('component');
   });
 
+  test('does not add borderline candidates when direct and component coverage reaches the target', () => {
+    const svc = service();
+    const componentCandidates = Array.from({ length: 20 }, (_, index) => ({
+      publicationNumber: `IN_COMPONENT_${index + 1}`,
+      title: `Component ${index + 1}`,
+    }));
+    const borderlineCandidates = Array.from({ length: 20 }, (_, index) => ({
+      publicationNumber: `IN_BORDERLINE_${index + 1}`,
+      title: `Borderline ${index + 1}`,
+    }));
+    const retrievalCandidates = [...componentCandidates, ...borderlineCandidates];
+    const byPn = Object.fromEntries([
+      ...componentCandidates.map((candidate, index) => [
+        candidate.publicationNumber,
+        { pn: candidate.publicationNumber, decision: 'component', score: 0.8 - index * 0.01, evidence_quality: 'medium', reviewStatus: 'reviewed' },
+      ]),
+      ...borderlineCandidates.map((candidate, index) => [
+        candidate.publicationNumber,
+        { pn: candidate.publicationNumber, decision: 'borderline', score: 0.7 - index * 0.01, evidence_quality: 'medium', reviewStatus: 'reviewed' },
+      ]),
+    ]);
+    const stage1Data = {
+      retrievalCandidates,
+      aiRelevance: {
+        accepted: [],
+        component: componentCandidates.map(candidate => candidate.publicationNumber),
+        borderline: borderlineCandidates.map(candidate => candidate.publicationNumber),
+        rejected: [],
+        byPn,
+        gateStatus: 'complete',
+      },
+    };
+
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 60);
+
+    expect(selected).toHaveLength(20);
+    expect(selected.every((item: any) => item.rerankDecision === 'component')).toBe(true);
+  });
+
+  test('caps borderline filler when direct and component coverage is thin', () => {
+    const svc = service();
+    const acceptedCandidates = Array.from({ length: 2 }, (_, index) => ({
+      publicationNumber: `IN_ACCEPT_${index + 1}`,
+      title: `Accepted ${index + 1}`,
+    }));
+    const borderlineCandidates = Array.from({ length: 20 }, (_, index) => ({
+      publicationNumber: `IN_BORDERLINE_${index + 1}`,
+      title: `Borderline ${index + 1}`,
+    }));
+    const retrievalCandidates = [...acceptedCandidates, ...borderlineCandidates];
+    const byPn = Object.fromEntries([
+      ...acceptedCandidates.map((candidate, index) => [
+        candidate.publicationNumber,
+        { pn: candidate.publicationNumber, decision: 'accept', score: 0.9 - index * 0.01, evidence_quality: 'high', reviewStatus: 'reviewed' },
+      ]),
+      ...borderlineCandidates.map((candidate, index) => [
+        candidate.publicationNumber,
+        { pn: candidate.publicationNumber, decision: 'borderline', score: 0.7 - index * 0.01, evidence_quality: 'medium', reviewStatus: 'reviewed' },
+      ]),
+    ]);
+    const stage1Data = {
+      retrievalCandidates,
+      aiRelevance: {
+        accepted: acceptedCandidates.map(candidate => candidate.publicationNumber),
+        component: [],
+        borderline: borderlineCandidates.map(candidate => candidate.publicationNumber),
+        rejected: [],
+        byPn,
+        gateStatus: 'complete',
+      },
+    };
+
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 60);
+
+    expect(selected).toHaveLength(12);
+    expect(selected.filter((item: any) => item.rerankDecision === 'borderline')).toHaveLength(10);
+    expect(selected.slice(0, 2).map((item: any) => item.rerankDecision)).toEqual(['accept', 'accept']);
+  });
+
   test('keeps no-high-confidence path when accepted and borderline are both empty', () => {
     const svc = service();
     const stage1Data = {
