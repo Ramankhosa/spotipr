@@ -6,6 +6,31 @@ Deploy the database migration before enabling automated drafting jobs:
 npx prisma migrate deploy
 ```
 
+Required runtime environment:
+
+```bash
+DATABASE_URL=...
+JWT_SECRET=...
+SITE_URL=https://your-domain.com
+# or NEXTAUTH_URL=https://your-domain.com
+
+MAILJET_API_KEY=...
+MAILJET_API_SECRET=...
+
+# Configure whichever LLM provider keys are used by Super Admin LLM config.
+OPENAI_API_KEY=...
+GOOGLE_AI_API_KEY=...
+```
+
+Optional worker tuning:
+
+```bash
+EMAIL_DRAFTING_WORKER_BATCH=1
+EMAIL_DRAFTING_WORKER_ID=patentnest-email-drafting-worker
+PATENT_DRAFTING_WORKER_BATCH=1
+PATENT_DRAFTING_WORKER_ID=patentnest-drafting-worker
+```
+
 Start the worker:
 
 ```bash
@@ -22,6 +47,58 @@ The worker claims rows from `patent_drafting_jobs` with a lease, so multiple ins
 
 ```bash
 PATENT_DRAFTING_WORKER_BATCH=1 npm run patent-drafting:worker
+```
+
+## Batch upload
+
+Users can download a fillable batch template, enter one patent idea per row, and upload it to create a server-side drafting batch.
+
+Template downloads:
+
+```http
+GET /api/auto-patent-drafting/batches/template
+GET /api/auto-patent-drafting/batches/template?format=xlsx
+GET /api/auto-patent-drafting/batches/template?format=csv
+```
+
+Batch upload:
+
+```http
+POST /api/auto-patent-drafting/batches
+```
+
+Supported upload formats:
+
+- `.xlsx`
+- `.csv`
+- `.tsv`
+- `.json`
+
+The template uses these columns. Each populated row creates one patent draft request:
+
+```text
+title
+ideaDetails
+noveltyDetails
+literatureReviewInstructions
+literatureReviewContent
+figureRemarks
+draftingRemarks
+jurisdictions
+filingType
+claimsText
+claimsHandling
+claimsNotes
+priorArtHandling
+illustrativeData
+```
+
+Useful batch status/download endpoints:
+
+```http
+GET /api/auto-patent-drafting/batches
+GET /api/auto-patent-drafting/batches/:batchId
+GET /api/auto-patent-drafting/batches/:batchId/download
 ```
 
 Queue an automated draft with:

@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx'
 import { describe, expect, test } from 'vitest'
 import {
+  AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS,
+  buildAutoPatentDraftBatchTemplate,
   parseAutoPatentDraftIdeasFromJson,
   parseAutoPatentDraftIdeasFromUpload,
 } from '@/lib/auto-patent-draft-batch-service'
@@ -64,5 +66,31 @@ describe('auto patent draft batch parsing', () => {
 
     expect(ideas).toHaveLength(1)
     expect(ideas[0].title).toBe('Posture chair')
+  })
+
+  test('builds a safe CSV upload template with the parser headers', () => {
+    const template = buildAutoPatentDraftBatchTemplate('csv')
+    const csv = template.buffer.toString('utf8')
+
+    expect(template.filename).toBe('patent-drafting-batch-template.csv')
+    expect(csv.trim()).toBe(AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS.join(','))
+  })
+
+  test('builds an XLSX template with upload, instructions, and example sheets', () => {
+    const template = buildAutoPatentDraftBatchTemplate('xlsx')
+    const workbook = XLSX.read(template.buffer, { type: 'buffer' })
+
+    expect(template.filename).toBe('patent-drafting-batch-template.xlsx')
+    expect(workbook.SheetNames).toEqual(['Batch Upload', 'Instructions', 'Example'])
+
+    const uploadRows = XLSX.utils.sheet_to_json<string[]>(workbook.Sheets['Batch Upload'], { header: 1 })
+    expect(uploadRows[0]).toEqual([...AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS])
+
+    const ideas = parseAutoPatentDraftIdeasFromUpload({
+      filename: template.filename,
+      mimeType: template.mimeType,
+      buffer: template.buffer,
+    })
+    expect(ideas).toEqual([])
   })
 })

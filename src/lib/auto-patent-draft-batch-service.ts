@@ -49,6 +49,94 @@ type CreateBatchInput = {
 const FINAL_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS', 'REJECTED', 'FAILED', 'CANCELED']
 const SUCCESS_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS']
 
+export const AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS = [
+  'title',
+  'ideaDetails',
+  'noveltyDetails',
+  'literatureReviewInstructions',
+  'literatureReviewContent',
+  'figureRemarks',
+  'draftingRemarks',
+  'jurisdictions',
+  'filingType',
+  'claimsText',
+  'claimsHandling',
+  'claimsNotes',
+  'priorArtHandling',
+  'illustrativeData',
+] as const
+
+const TEMPLATE_GUIDE_ROWS = [
+  ['Column', 'Required', 'How it is used', 'Example'],
+  ['title', 'Recommended', 'Patent title and batch item label.', 'Smart inhaler dose tracker'],
+  ['ideaDetails', 'Yes', 'Main invention disclosure. Each row with ideaDetails creates one patent draft.', 'A dose tracking inhaler having a sensor, controller, and usage log...'],
+  ['noveltyDetails', 'Recommended', 'Novelty/inventive distinction appended to the invention brief.', 'Low-power dose event detection using a split sensor path.'],
+  ['literatureReviewInstructions', 'Optional', 'Instructions for how the prior-art/literature content should influence drafting.', 'Treat the cited inhaler counters as closest prior art; avoid admitting equivalence.'],
+  ['literatureReviewContent', 'Optional', 'User-provided prior-art review content saved into prior-art context.', 'US1234567 discloses a mechanical counter but not wireless dose validation.'],
+  ['figureRemarks', 'Optional', 'Instructions for figure/diagram planning.', 'Generate a system block diagram and a dose event flow chart.'],
+  ['draftingRemarks', 'Optional', 'Session instructions propagated to major drafting sections.', 'Keep claims broad and emphasize controller-based validation.'],
+  ['jurisdictions', 'Optional', 'Comma-separated jurisdiction codes. Defaults to IN when omitted.', 'IN,US'],
+  ['filingType', 'Optional', 'utility, provisional, or design. Defaults to utility.', 'utility'],
+  ['claimsText', 'Optional', 'Existing claims to use/improve depending on claimsHandling.', '1. A dose tracking inhaler comprising...'],
+  ['claimsHandling', 'Optional', 'use as is, improve, draft from brief, or auto. Defaults to draft from brief.', 'draft from brief'],
+  ['claimsNotes', 'Optional', 'Specific instructions for claims drafting.', 'Include one broad system claim and dependent sensing claims.'],
+  ['priorArtHandling', 'Optional', 'use only, expand with search, or auto. Defaults based on prior-art text.', 'use only'],
+  ['illustrativeData', 'Optional', 'Additional support data for detailed description.', 'Prototype detected 98% of actuation events over 30 days.'],
+]
+
+function csvEscape(value: unknown) {
+  const text = safeString(value)
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+export function buildAutoPatentDraftBatchTemplate(format: 'xlsx' | 'csv' = 'xlsx') {
+  if (format === 'csv') {
+    const csv = `${AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS.map(csvEscape).join(',')}\r\n`
+    return {
+      filename: 'patent-drafting-batch-template.csv',
+      mimeType: 'text/csv; charset=utf-8',
+      buffer: Buffer.from(csv, 'utf8'),
+    }
+  }
+
+  const workbook = XLSX.utils.book_new()
+  const blankRows = Array.from({ length: 10 }, () => AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS.map(() => ''))
+  const uploadSheet = XLSX.utils.aoa_to_sheet([
+    [...AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS],
+    ...blankRows,
+  ])
+  XLSX.utils.book_append_sheet(workbook, uploadSheet, 'Batch Upload')
+
+  const guideSheet = XLSX.utils.aoa_to_sheet(TEMPLATE_GUIDE_ROWS)
+  XLSX.utils.book_append_sheet(workbook, guideSheet, 'Instructions')
+
+  const exampleSheet = XLSX.utils.json_to_sheet([
+    {
+      title: 'Smart inhaler dose tracker',
+      ideaDetails: 'A dose tracking inhaler having a sensor, controller, memory, and wireless interface for logging dose events.',
+      noveltyDetails: 'Low-power dose event detection using a split sensor path.',
+      literatureReviewInstructions: 'Use cited inhaler counters as closest prior art; avoid admitting equivalence.',
+      literatureReviewContent: 'US1234567 discloses a mechanical counter but not wireless dose validation.',
+      figureRemarks: 'Generate a system block diagram and a dose event flow chart.',
+      draftingRemarks: 'Keep claims broad and emphasize controller-based validation.',
+      jurisdictions: 'IN,US',
+      filingType: 'utility',
+      claimsText: '',
+      claimsHandling: 'draft from brief',
+      claimsNotes: 'Include one broad system claim and dependent sensing claims.',
+      priorArtHandling: 'use only',
+      illustrativeData: 'Prototype detected 98% of actuation events over 30 days.',
+    }
+  ], { header: [...AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS] })
+  XLSX.utils.book_append_sheet(workbook, exampleSheet, 'Example')
+
+  return {
+    filename: 'patent-drafting-batch-template.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: Buffer.from(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })),
+  }
+}
+
 function sha256(input: Buffer | string) {
   return crypto.createHash('sha256').update(input).digest('hex')
 }
@@ -165,6 +253,7 @@ function rowsFromWorksheet(buffer: Buffer, filename: string): Record<string, unk
   if (!sheetName) return []
   const sheet = workbook.Sheets[sheetName]
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+    .filter(row => Object.values(row).some(value => safeString(value)))
   if (!rows.length && (lower.endsWith('.csv') || lower.endsWith('.tsv'))) {
     throw new Error('The uploaded table is empty.')
   }
