@@ -4,8 +4,8 @@
  * Resolves the appropriate LLM model for a given context based on:
  * 1. Stage-specific configuration (most specific)
  * 2. Task-specific configuration
- * 3. Plan defaults (via PlanLLMAccess - backward compatible)
- * 4. System default model
+ * 3. Plan defaults (via PlanLLMAccess - backward compatible, task-only calls)
+ * 4. System default model (task-only calls)
  * 
  * Super Admin can configure ANY model for ANY stage/task via the admin panel.
  */
@@ -60,7 +60,9 @@ const MODEL_CLASS_DEFAULTS: Record<string, string> = {
 
 /**
  * Resolve the best model for a given context
- * Priority: Stage Config > Task Config > Plan Default (PlanLLMAccess) > System Default
+ * Priority:
+ * - Stage-coded calls: Stage Config > Task Config
+ * - Task-only calls: Task Config > Plan Default (PlanLLMAccess) > System Default
  */
 export async function resolveModel(
   planId: string,
@@ -85,6 +87,8 @@ export async function resolveModel(
     result = await getStageConfig(planId, stageCode)
     if (result) {
       console.log(`[ModelResolver] Found stage config: ${result.modelCode}`)
+    } else {
+      console.log(`[ModelResolver] No stage config found for planId=${planId}, stageCode=${stageCode}`)
     }
   }
 
@@ -98,7 +102,13 @@ export async function resolveModel(
     }
   }
 
-  // 3. Try plan's default model (existing PlanLLMAccess for backward compatibility)
+  if (!result && stageCode) {
+    throw new Error(
+      `No active LLM stage/task model config found for planId=${planId}, taskCode=${taskCode}, stageCode=${stageCode}. Configure this stage or task in Super Admin LLM Config.`
+    )
+  }
+
+  // 3. Try plan's default model for legacy task-only calls.
   if (!result) {
     result = await getPlanDefault(planId, taskCode)
     if (result) {

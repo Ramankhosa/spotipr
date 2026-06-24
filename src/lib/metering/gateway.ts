@@ -159,13 +159,29 @@ export class LLMGateway {
             console.log(`[Gateway]   No fallback models configured`)
           }
         } catch (resolveError) {
-          // Log error details for debugging but continue with fallback
+          const message = resolveError instanceof Error ? resolveError.message : String(resolveError)
+          // Log error details for debugging. Stage-coded calls must be configured
+          // in Super Admin and cannot fall back to legacy model-class defaults.
           console.error('[Gateway] ✗ Model resolution FAILED:', {
-            error: resolveError instanceof Error ? resolveError.message : resolveError,
+            error: message,
             planId: tenantContext.planId,
             taskCode: llmRequest.taskCode,
             stageCode: llmRequest.stageCode
           })
+          if (llmRequest.stageCode) {
+            if (decision.reservationId) {
+              try {
+                await this.system.reservation.releaseReservation(decision.reservationId)
+                console.log(`[Gateway] Released reservation ${decision.reservationId} due to model resolution failure`)
+              } catch (releaseError) {
+                console.warn('[Gateway] Failed to release reservation on model resolution failure:', releaseError)
+              }
+            }
+            return {
+              success: false,
+              error: new MeteringError('CONFIGURATION_ERROR', message)
+            }
+          }
           console.warn('[Gateway] ⚠️ Falling back to DEFAULT PROVIDER ROUTING (model resolution error)')
         }
       } else {
