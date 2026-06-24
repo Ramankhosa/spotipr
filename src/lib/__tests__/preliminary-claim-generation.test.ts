@@ -39,6 +39,7 @@ describe('preliminary claim generation helper', () => {
     const prompt = buildPreliminaryClaimsPrompt(basePromptParams)
 
     expect(prompt).toContain('minimum source-supported inventive combination')
+    expect(prompt).toContain('Generate no more than 10 total claims')
     expect(prompt).toContain('Do not pad the set')
     expect(prompt).toContain('Expected Claim 1 category: system or apparatus')
     expect(prompt).toContain('"category": "system"')
@@ -48,6 +49,15 @@ describe('preliminary claim generation helper', () => {
     expect(prompt).toContain('SF-numericValuesAndUnits-1')
     expect(prompt).toContain('CLAIM SCOPE STYLE STRATEGY')
     expect(prompt).toContain('Selected style: Default Style')
+  })
+
+  test('allows an explicit higher claim count to override the default cap', () => {
+    const prompt = buildPreliminaryClaimsPrompt({
+      ...basePromptParams,
+      maxClaims: 15,
+    })
+
+    expect(prompt).toContain('Generate no more than 15 total claims')
   })
 
   test('injects broad claim scope strategy without changing the output contract', () => {

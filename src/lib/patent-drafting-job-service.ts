@@ -173,6 +173,137 @@ async function storeExportArtifact(params: {
   })
 }
 
+function mimeTypeForFilename(filename: string) {
+  const ext = path.extname(filename).toLowerCase()
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.webp') return 'image/webp'
+  if (ext === '.puml' || ext === '.plantuml' || ext === '.txt') return 'text/plain; charset=utf-8'
+  return 'application/octet-stream'
+}
+
+function localFileCandidates(params: { rawPath?: string | null; filename?: string | null; patentId?: string | null }) {
+  const candidates: string[] = []
+  const rawPath = String(params.rawPath || '').trim()
+  const filename = String(params.filename || '').trim()
+
+  if (rawPath) {
+    candidates.push(path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath.replace(/^[/\\]+/, '')))
+    if (rawPath.startsWith('/uploads/')) {
+      candidates.push(path.join(process.cwd(), 'public', rawPath.replace(/^[/\\]+/, '')))
+    }
+  }
+
+  if (filename && params.patentId) {
+    candidates.push(path.join(process.cwd(), 'uploads', 'patents', params.patentId, 'figures', filename))
+    candidates.push(path.join(process.cwd(), 'public', 'uploads', 'patents', params.patentId, 'figures', filename))
+  }
+
+  return Array.from(new Set(candidates))
+}
+
+async function readFirstExistingFile(candidates: string[]) {
+  for (const candidate of candidates) {
+    try {
+      return await fs.readFile(candidate)
+    } catch {
+      // Try the next likely storage path.
+    }
+  }
+  return null
+}
+
+function figureArtifactInfos(session: any) {
+  const plans: any[] = Array.isArray(session?.figurePlans) ? session.figurePlans : []
+  const sources: any[] = Array.isArray(session?.diagramSources) ? session.diagramSources : []
+  const sequence: any[] = Array.isArray(session?.figureSequence) ? session.figureSequence : []
+  const plansById = new Map<string, any>(plans.map((plan: any) => [plan.id, plan]))
+  const plansByFigureNo = new Map<number, any>(plans.map((plan: any) => [Number(plan.figureNo), plan]))
+  const finalNoByFigureNo = new Map<number, number>()
+
+  if (session?.figureSequenceFinalized && sequence.length) {
+    for (const item of sequence) {
+      if (item?.type !== 'diagram') continue
+      const plan = plansById.get(item.sourceId)
+      const originalNo = Number(plan?.figureNo || item.figureNo)
+      const finalNo = Number(item.finalFigNo || item.figureNo || originalNo)
+      if (Number.isFinite(originalNo) && Number.isFinite(finalNo)) {
+        finalNoByFigureNo.set(originalNo, finalNo)
+      }
+    }
+  }
+
+  return sources
+    .filter((source: any) => String(source?.plantumlCode || '').trim())
+    .map((source: any) => {
+      const originalNo = Number(source.figureNo)
+      const finalNo = finalNoByFigureNo.get(originalNo) || originalNo
+      const plan = plansByFigureNo.get(originalNo)
+      return {
+        source,
+        originalNo,
+        finalNo,
+        title: sanitizeFilename(plan?.title || `Figure ${finalNo}`),
+        language: String(source.language || 'en').trim().toLowerCase() || 'en',
+      }
+    })
+    .sort((a: any, b: any) => a.finalNo - b.finalNo || a.language.localeCompare(b.language))
+}
+
+async function storeBatchFigureArtifacts(params: {
+  job: any
+  payload: PatentDraftingAutomationPayload
+  user: any
+  tenantId: string
+  session: any
+}) {
+  const artifacts: any[] = []
+  let renderedImageCount = 0
+
+  for (const info of figureArtifactInfos(params.session)) {
+    const figurePrefix = `FIG-${String(info.finalNo).padStart(2, '0')}${info.language !== 'en' ? `_${info.language}` : ''}`
+    artifacts.push(await storeExportArtifact({
+      jobId: params.job.id,
+      batchId: params.payload.batchId,
+      batchItemId: params.payload.batchItemId,
+      batchItemNo: params.payload.batchItemNo,
+      user: params.user,
+      tenantId: params.tenantId,
+      filename: `${figurePrefix}_${info.title}.puml`,
+      buffer: Buffer.from(info.source.plantumlCode, 'utf8'),
+      mimeType: 'text/plain; charset=utf-8',
+    }))
+
+    const imageBuffer = await readFirstExistingFile(localFileCandidates({
+      rawPath: info.source.imagePath,
+      filename: info.source.imageFilename,
+      patentId: params.job.patentId,
+    }))
+    if (imageBuffer) {
+      renderedImageCount += 1
+      const sourceFilename = info.source.imageFilename || path.basename(String(info.source.imagePath || '')) || `${figurePrefix}.png`
+      artifacts.push(await storeExportArtifact({
+        jobId: params.job.id,
+        batchId: params.payload.batchId,
+        batchItemId: params.payload.batchItemId,
+        batchItemNo: params.payload.batchItemNo,
+        user: params.user,
+        tenantId: params.tenantId,
+        filename: `${figurePrefix}_${info.title}${path.extname(sourceFilename) || '.png'}`,
+        buffer: imageBuffer,
+        mimeType: mimeTypeForFilename(sourceFilename),
+      }))
+    }
+  }
+
+  return {
+    artifacts,
+    renderedImageCount,
+    figureCount: figureArtifactInfos(params.session).length,
+  }
+}
+
 function normalizePriorArtEntries(payload: PatentDraftingAutomationPayload) {
   const entries = [
     ...(Array.isArray(payload.literatureReview?.priorArtEntries) ? payload.literatureReview!.priorArtEntries! : []),
@@ -1161,6 +1292,19 @@ async function runPipeline(job: any, workerId: string) {
       const message = error instanceof Error ? error.message : 'PDF export failed'
       pipelineWarnings.push(`${jurisdiction}: ${message}`)
     }
+  }
+
+  session = await loadSession(sessionId)
+  const figureExport = await storeBatchFigureArtifacts({
+    job,
+    payload,
+    user,
+    tenantId: user.tenantId,
+    session,
+  })
+  artifacts.push(...figureExport.artifacts)
+  if (figureExport.figureCount > 0 && figureExport.renderedImageCount === 0) {
+    pipelineWarnings.push('Figure PlantUML source files were included in the batch ZIP; rendered figure image files were not available for this session.')
   }
 
   await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'set_stage', sessionId, stage: 'COMPLETED' } })

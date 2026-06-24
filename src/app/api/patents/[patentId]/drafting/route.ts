@@ -58,6 +58,7 @@ import {
 import {
   analyzePreliminaryClaimQuality,
   buildPreliminaryClaimsPrompt,
+  DEFAULT_PRELIMINARY_MAX_CLAIMS,
   normalizePreliminaryClaimScopeStyle,
   resetPreliminaryClaimFields,
   shouldBlockPreliminaryClaimReset,
@@ -5335,6 +5336,66 @@ const getWorkingClaims = (normalized: Record<string, any> = {}) => {
 }
 
 const CLAIMS_RESET_BLOCKED_DOWNSTREAM_ERROR = 'Claims cannot be reset after downstream stages have started. You can unfreeze or edit claims instead.'
+const DEFAULT_GENERATED_CLAIM_LIMIT = DEFAULT_PRELIMINARY_MAX_CLAIMS
+
+function extractExplicitClaimCount(value: unknown): number | null {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return null
+
+  const patterns = [
+    /\b(?:generate|draft|prepare|create|write|include|provide|need|want|requires?|limit(?:ed)? to|maximum of|max(?:imum)?|up to|at least|around|approximately|about)\s+(\d{1,3})\s+(?:total\s+)?claims?\b/i,
+    /\b(\d{1,3})\s+(?:total\s+)?claims?\b/i,
+  ]
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match) {
+      const count = Number(match[1])
+      if (Number.isInteger(count) && count > 0 && count <= 200) return count
+    }
+  }
+
+  const numberedClaims = Array.from(text.matchAll(/(?:^|\n|\s)(\d{1,3})\.\s+(?:A|An|The)\b/g))
+    .map(match => Number(match[1]))
+    .filter(count => Number.isInteger(count) && count > 0 && count <= 200)
+  return numberedClaims.length ? Math.max(...numberedClaims) : null
+}
+
+function resolveGeneratedClaimLimit(data: any, userInstructions: unknown, userClaimRemarks: unknown) {
+  const requested = Number(data?.maxClaims ?? data?.claimCount ?? data?.claimsCount)
+  if (Number.isInteger(requested) && requested > 0 && requested <= 200) return requested
+
+  const explicitFromInstructions = extractExplicitClaimCount([
+    userInstructions,
+    userClaimRemarks,
+  ].filter(Boolean).join('\n\n'))
+  if (explicitFromInstructions) return explicitFromInstructions
+
+  return DEFAULT_GENERATED_CLAIM_LIMIT
+}
+
+function applyGeneratedClaimLimit(params: {
+  claims: any[]
+  supportMatrix: any[]
+  qualityWarnings: string[]
+  maxClaims: number | null
+}) {
+  const { claims, supportMatrix, qualityWarnings, maxClaims } = params
+  if (!maxClaims || claims.length <= maxClaims) {
+    return { claims, supportMatrix, qualityWarnings, capped: false }
+  }
+
+  const limitedClaims = claims.slice(0, maxClaims)
+  const keptNumbers = new Set(limitedClaims.map(claim => Number(claim.number)).filter(Number.isFinite))
+  return {
+    claims: limitedClaims,
+    supportMatrix: supportMatrix.filter(item => keptNumbers.has(Number(item?.claimNumber))),
+    qualityWarnings: [
+      ...qualityWarnings,
+      `Generated claim set was capped to ${maxClaims} claims because no higher explicit claim count was requested.`,
+    ],
+    capped: true,
+  }
+}
 
 async function handleGenerateClaims(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const { 
@@ -5369,6 +5430,7 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
     return NextResponse.json({ error: 'Claims are frozen. Unfreeze to regenerate.' }, { status: 400 })
   }
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle ?? existingNormalized.claimScopeStyle)
+  const maxClaims = resolveGeneratedClaimLimit(data, userInstructions, userClaimRemarks)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // PATENT TYPE DECISION - from Stage 0 normalization or user override
@@ -5638,7 +5700,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       context,
       patentTypePrimary,
       userClaimRemarks: existingNormalized.userClaimRemarks,
-      claimScopeStyle: normalizedClaimScopeStyle
+      claimScopeStyle: normalizedClaimScopeStyle,
+      maxClaims,
     })
 
     // Call LLM to generate claims using the proper gateway API
@@ -5687,6 +5750,16 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       }, { status: 502 })
     }
 
+    const limitedClaimsPayload = applyGeneratedClaimLimit({
+      claims: generatedClaims,
+      supportMatrix: generatedSupportMatrix,
+      qualityWarnings: generatedQualityWarnings,
+      maxClaims,
+    })
+    generatedClaims = limitedClaimsPayload.claims
+    generatedSupportMatrix = limitedClaimsPayload.supportMatrix
+    generatedQualityWarnings = limitedClaimsPayload.qualityWarnings
+
     // Format claims as HTML for the editor
     const claimsHtml = formatDraftClaimsAsHtml(generatedClaims)
     const claimGenerationQuality = analyzePreliminaryClaimQuality({
@@ -5706,6 +5779,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       claimsStructuredProvisional: generatedClaims,
       claimGenerationQuality,
       claimScopeStyle: normalizedClaimScopeStyle,
+      maxClaimsRequested: maxClaims,
+      claimsCappedToDefault: limitedClaimsPayload.capped,
       claimsJurisdiction: activeJurisdiction,
       claimsGeneratedAt: new Date().toISOString()
     }
@@ -5721,6 +5796,8 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       claimGenerationQuality,
       jurisdiction: activeJurisdiction,
       claimScopeStyle: normalizedClaimScopeStyle,
+      maxClaims,
+      claimsCappedToDefault: limitedClaimsPayload.capped,
       patentType: patentTypePrimary, // Return patent type for UI display
       personaStyleApplied: Object.values(personaProvenance).some((p: any) => p?.applied),
       personaProvenance,

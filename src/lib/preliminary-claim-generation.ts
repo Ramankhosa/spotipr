@@ -19,6 +19,8 @@ export type PreliminaryClaimScopeStyle = 'broad' | 'default' | 'narrow'
 
 export type PreliminaryClaimQualityStatus = 'source_supported' | 'needs_review' | 'thin_disclosure'
 
+export const DEFAULT_PRELIMINARY_MAX_CLAIMS = 10
+
 export type PreliminaryClaimQualityWarning = {
   code: string
   severity: 'info' | 'warning'
@@ -138,6 +140,7 @@ type BuildPreliminaryClaimsPromptParams = {
   patentTypePrimary: PreliminaryPatentType
   userClaimRemarks?: string
   claimScopeStyle?: PreliminaryClaimScopeStyle
+  maxClaims?: number | null
 }
 
 type AnalyzePreliminaryClaimQualityParams = {
@@ -352,6 +355,7 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     patentTypePrimary,
     userClaimRemarks,
     claimScopeStyle,
+    maxClaims = DEFAULT_PRELIMINARY_MAX_CLAIMS,
   } = params
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle)
 
@@ -450,6 +454,11 @@ Use the type-specific drafting rules from the database prompt for this detected 
 
 MULTI-INDEPENDENT CLAIM RUNTIME NOTE:
 Use the Independent Claim Policy in the claims base prompt. The detected patent type is ${renderedPatentType}. The invention archetype is ${inventionType}. Additional independent claims must be included only when source-supported, jurisdictionally permitted, and allowed by the output contract.
+
+CLAIM COUNT CONTROL:
+${typeof maxClaims === 'number' && maxClaims > 0
+  ? `Generate no more than ${maxClaims} total claims. This is a hard default cap unless the user explicitly requested a higher claim count. Prefer one independent claim plus dependent fallback claims unless the source disclosure and jurisdiction rules justify another independent claim within this cap.`
+  : 'The user explicitly requested a claim set above the default 10-claim cap. Follow the explicit requested count if source-supported and jurisdictionally permitted; do not pad the claim set.'}
 
 CLAIM NARROWING STRATEGY:
 For dependent claims under each independent claim:
