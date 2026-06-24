@@ -14,6 +14,7 @@ import { llmGateway } from '@/lib/metering/gateway';
 import {
   patentSearchOrchestrator,
   type NormalizedPatentResult,
+  type PatentSearchProviderId,
   type PatentRetrievalQuery,
   type PatentSearchFilters,
   type PatentSearchQueryPlan,
@@ -1260,7 +1261,8 @@ async function handleSavePriorArtConfig(user: any, patentId: string, data: any) 
     priorArtForDrafting: priorArtConfig ? {
       mode: priorArtConfig.mode || 'ai',
       selectedPatents: priorArtConfig.selectedPatents || [],
-      manualText: priorArtConfig.manualText || ''
+      manualText: priorArtConfig.manualText || '',
+      literatureReviewInstructions: priorArtConfig.literatureReviewInstructions || ''
     } : existingConfig.priorArtForDrafting,
     // Claim Refinement workflow
     claimRefinementConfig: claimRefConfig ? {
@@ -1481,6 +1483,16 @@ function normalizeRelatedArtSourceMode(value: unknown): PatentSearchSourceMode {
   return value === 'INDIAN_ONLY' || value === 'PQAI_ONLY' || value === 'PQAI_PLUS_INDIAN'
     ? value
     : 'PQAI_PLUS_INDIAN'
+}
+
+function normalizeRelatedArtProviderIds(value: unknown): PatentSearchProviderId[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const providerIds = Array.from(new Set(
+    value
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  )) as PatentSearchProviderId[]
+  return providerIds.length ? providerIds : undefined
 }
 
 function normalizeRelatedArtDateText(value: unknown): string | undefined {
@@ -8051,6 +8063,8 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
   const safeQuery = normalizeRelatedArtSearchText(baseQuery)
   const safeLimit = Math.min(Math.max(10, Number(limit) || 15), 100)
   const sourceMode = normalizeRelatedArtSourceMode((data as any)?.sourceMode)
+  const requestedProviderIds = normalizeRelatedArtProviderIds((data as any)?.providerIds)
+  const skipTrigramSearch = (data as any)?.skipTrigramSearch === true
   const publicationDateFrom = normalizeRelatedArtDateText(afterDate)
   const filters: PatentSearchFilters = publicationDateFrom ? { publicationDateFrom } : {}
   const searchContext = buildDraftingRelatedArtSearchPlan(idea, safeQuery, filters) as Partial<PatentSearchQueryPlan> & { inventionText?: string }
@@ -8059,6 +8073,8 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
 
   console.log('Drafting related art provider search:', {
     sourceMode,
+    requestedProviderIds,
+    skipTrigramSearch,
     queryPreview: safeQuery.substring(0, 120),
     limit: safeLimit,
     after: publicationDateFrom,
@@ -8076,10 +8092,12 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
       filters,
       jurisdictions: [jurisdiction],
       sourceMode,
+      providerIds: requestedProviderIds,
       llmExpansion: false,
       queryPlan,
       limit: safeLimit,
       requestHeaders,
+      skipTrigramSearch,
     })
   } catch (error) {
     console.error('Drafting related art provider search failed:', error)
@@ -8110,11 +8128,13 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
   const paramsJson = {
     endpoint: 'patent-search-orchestrator',
     sourceMode,
+    requestedProviderIds,
     providerIds: searchResponse.providerStats.map(stat => stat.providerId),
     providerStats: searchResponse.providerStats,
     warnings: searchResponse.warnings,
     limit: safeLimit,
     after: publicationDateFrom,
+    skipTrigramSearch,
     queryPlan: searchResponse.queryPlan,
   }
 
@@ -8136,6 +8156,7 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
     queryPlan: searchResponse.queryPlan,
     searchSource: {
       mode: sourceMode,
+      requestedProviderIds,
       providerIds: searchResponse.providerStats.map(stat => stat.providerId),
       searchMode: 'intelligent',
     },
@@ -9493,7 +9514,7 @@ async function handlePlanAndGenerateDiagramsLLM(
   data: any,
   requestHeaders: Record<string, string>
 ): Promise<NextResponse> {
-  const { sessionId, replaceExisting, figureCount, figureRemarks } = data
+  const { sessionId, replaceExisting, figureCount, figureRemarks, skipSketchSuggestions } = data
 
   if (!sessionId) {
     console.error('[PlanAndGenerate] ERROR: No sessionId provided')
@@ -9535,7 +9556,8 @@ async function handlePlanAndGenerateDiagramsLLM(
       sessionId, 
       usePlan: true,  // Use the plan from Stage 1
       replaceExisting: replaceExisting !== false,
-      figureRemarks
+      figureRemarks,
+      skipSketchSuggestions: skipSketchSuggestions === true
     }, 
     requestHeaders
   )
@@ -9562,6 +9584,7 @@ async function handlePlanAndGenerateDiagramsLLM(
     warnings: generateResult.warnings,
     repairSummary: generateResult.repairSummary,
     failedFigures: generateResult.failedFigures,
+    sketchSuggestionsGenerating: generateResult.sketchSuggestionsGenerating,
     message: `Successfully planned and generated ${generateResult.figures?.length || 0} diagrams`
   })
 }
@@ -10272,22 +10295,25 @@ If in doubt about a non-required element, OMIT rather than add.
     }))
 
     // === GENERATE SKETCH SUGGESTIONS IN BACKGROUND ===
-    // Fire-and-forget: Generate sketch suggestions asynchronously without blocking the response
-    // This allows PlantUML diagrams to be returned immediately to the user
+    // Fire-and-forget for the interactive UI. Batch mode passes skipSketchSuggestions
+    // so it remains diagram-only and does not create sketch suggestion records.
     const existingDiagramTitles = saved.map((s: any) => 
       `Figure ${s.figureNo}: ${s.title}${s.purpose ? ` - ${s.purpose}` : ''}`
     )
     
-    // Start background sketch suggestion generation (do not await)
-    generateSketchSuggestionsInBackground(
-      session,
-      patentId,
-      sessionId,
-      existingDiagramTitles,
-      requestHeaders
-    ).catch(err => {
-      console.warn('[DiagramsLLM] Background sketch suggestion generation failed:', err)
-    })
+    const sketchSuggestionsEnabled = data?.skipSketchSuggestions !== true
+    if (sketchSuggestionsEnabled) {
+      // Start background sketch suggestion generation (do not await)
+      generateSketchSuggestionsInBackground(
+        session,
+        patentId,
+        sessionId,
+        existingDiagramTitles,
+        requestHeaders
+      ).catch(err => {
+        console.warn('[DiagramsLLM] Background sketch suggestion generation failed:', err)
+      })
+    }
 
     // Return diagrams immediately without waiting for sketch suggestions
     return NextResponse.json({ 
@@ -10296,7 +10322,7 @@ If in doubt about a non-required element, OMIT rather than add.
       warnings: warnings.length > 0 ? warnings : undefined,
       repairSummary: shouldExposeRepairSummary(repairSummary) ? repairSummary : undefined,
       failedFigures: failedFigures.length > 0 ? failedFigures : undefined,
-      sketchSuggestionsGenerating: true // Indicate that suggestions are being generated in background
+      sketchSuggestionsGenerating: sketchSuggestionsEnabled
     })
   } catch (persistErr) {
     console.error('Persist diagrams error:', persistErr)

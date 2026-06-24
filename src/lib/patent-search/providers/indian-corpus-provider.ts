@@ -805,7 +805,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }, forceWarning)
     }
 
-    if (textQuery.length >= 3 && !manualMode) {
+    if (textQuery.length >= 3 && !manualMode && !request.skipTrigramSearch) {
       try {
         const trigramCandidatePoolLimit = Math.min(Math.max(candidateLimit * 6, 180), TRIGRAM_MATCH_CANDIDATE_CAP)
         const titleRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
@@ -838,6 +838,12 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       } catch (error) {
         console.warn('[IndianCorpusProvider] Trigram search skipped:', error)
       }
+    } else if (request.skipTrigramSearch) {
+      logEmbeddingSearch('info', 'trigram_search_skipped', {
+        traceId,
+        reason: 'request_skip_trigram_search',
+        searchMode: request.searchMode || 'intelligent',
+      })
     }
 
     if (hasPositiveFieldFilters(filters)) {

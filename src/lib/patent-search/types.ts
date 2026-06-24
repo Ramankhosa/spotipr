@@ -108,6 +108,7 @@ export interface PatentSearchRequest {
   sort?: PatentSearchSort
   queryPlan?: Partial<PatentSearchQueryPlan>
   requestHeaders?: Record<string, string>
+  skipTrigramSearch?: boolean
 }
 
 export interface PatentResultScores {
