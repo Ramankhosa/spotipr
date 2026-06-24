@@ -132,26 +132,23 @@ export class LLMGateway {
             llmRequest.stageCode
           )
           
-          // Apply stage-specific limits if configured (both input and output)
-          // Stage limits should override plan defaults, not be capped by them
+          // Apply stage/task-specific limits if configured. These limits come
+          // from Super Admin LLM Config and are the only application-level
+          // token ceilings enforced by the LLM gateway.
           if (modelResolution.maxTokensOut) {
             decision.maxTokensOut = modelResolution.maxTokensOut
+          } else {
+            delete decision.maxTokensOut
           }
 
-          // Apply maxTokensIn from stage config (NEW: enforce input limits)
           if (modelResolution.maxTokensIn) {
             decision.maxTokensIn = modelResolution.maxTokensIn
+          } else {
+            delete decision.maxTokensIn
           }
 
-          // Honor per-call output cap from request parameters (maxOutputTokens / maxTokensOut / maxTokens).
-          // This allows lightweight calls (e.g. patent-type classification needing one word) to use
-          // a tighter cap than the stage ceiling configured by Super Admin.
-          const perCallMaxOut = this.extractPerCallMaxOutputTokens(llmRequest.parameters)
-          if (perCallMaxOut && (!decision.maxTokensOut || perCallMaxOut < decision.maxTokensOut)) {
-            console.log(`[Gateway] Per-call maxOutputTokens=${perCallMaxOut} is tighter than stage limit=${decision.maxTokensOut ?? 'none'}, applying`)
-            decision.maxTokensOut = perCallMaxOut
-          }
-          
+          console.log(`[Gateway] LLM config token limits: in=${decision.maxTokensIn ?? 'provider-only'}, out=${decision.maxTokensOut ?? 'provider-only'}`)
+
           console.log(`[Gateway] ✓ Model resolved: ${modelResolution.modelCode} (source: ${modelResolution.source}, provider: ${modelResolution.provider})`)
           if (modelResolution.source === 'system-default') {
             console.warn(`[Gateway] ⚠️ Using SYSTEM DEFAULT model - no specific config found for plan=${tenantContext.planId}, task=${llmRequest.taskCode}`)
@@ -174,6 +171,12 @@ export class LLMGateway {
       } else {
         console.warn('[Gateway] ⚠️ No planId in tenant context - using DEFAULT PROVIDER ROUTING')
         console.warn('[Gateway]   This will NOT honor plan-specific LLM configurations!')
+      }
+
+      if (!modelResolution) {
+        delete decision.maxTokensIn
+        delete decision.maxTokensOut
+        console.warn('[Gateway] No LLM config token limits resolved; enforcing provider limits only')
       }
 
       // 6. Validate model capabilities (vision, streaming, etc.)
@@ -389,20 +392,6 @@ export class LLMGateway {
     else if (hasCode) charsPerToken = 3
     
     return Math.ceil(text.length / charsPerToken)
-  }
-
-  /**
-   * Extract a per-call output token cap from request parameters.
-   * Callers can pass maxOutputTokens, maxTokensOut, or maxTokens to request
-   * a tighter limit than the stage ceiling set by Super Admin.
-   */
-  private extractPerCallMaxOutputTokens(parameters?: Record<string, any>): number | undefined {
-    if (!parameters) return undefined
-    const raw = parameters.maxOutputTokens ?? parameters.maxTokensOut ?? parameters.maxTokens
-    if (raw === undefined || raw === null || raw === '') return undefined
-    const value = Number(raw)
-    if (!Number.isFinite(value) || value <= 0) return undefined
-    return Math.floor(value)
   }
 
   /**

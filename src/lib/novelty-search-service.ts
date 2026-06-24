@@ -4606,7 +4606,6 @@ RESPONSE:`;
           stageCode: 'NOVELTY_CONSOLIDATED_ANALYSIS',
           prompt,
           parameters: {
-            maxOutputTokens: Math.max(12000, batch.length * 1800),
             temperature: 0,
             reasoning_effort: 'low',
           },
@@ -5241,7 +5240,6 @@ RESPONSE:`;
                 modelClass: modelPreference,
                 prompt,
                 parameters: {
-                  maxOutputTokens: Math.max(900, batch.length * 180),
                   reasoning_effort: 'low',
                   temperature: 0,
                 },
@@ -7866,7 +7864,6 @@ ${candidatesText}`;
         idempotencyKey: crypto.randomUUID(),
         inputTokens: Math.ceil(safeIdeaPrompt.length / 4),
         parameters: {
-          maxOutputTokens: 5000,
           temperature: 0.9,  // High creativity for idea generation
           topP: 0.95
         },
