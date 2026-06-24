@@ -10,7 +10,6 @@ import {
   AUTO_PATENT_DRAFTING_PROJECT_NAME,
   AUTO_DRAFTING_MAX_UPLOAD_ROWS,
   EMAIL_DRAFTING_DOWNLOAD_TTL_DAYS,
-  MAX_DRAFTING_INPUT_CHARS,
 } from '@/lib/drafting-constants'
 import { enqueuePatentDraftingJob, type PatentDraftingAutomationPayload } from '@/lib/patent-drafting-job-service'
 
@@ -287,18 +286,6 @@ export function previewAutoPatentDraftBatchIdeas(
   }
 }
 
-function condenseForNormalization(text: string) {
-  const trimmed = text.trim()
-  if (trimmed.length <= MAX_DRAFTING_INPUT_CHARS) return trimmed
-  const head = trimmed.slice(0, 10000).trimEnd()
-  const tail = trimmed.slice(-4500).trimStart()
-  return `${head}\n\n[Condensed for automated patent drafting. Full disclosure retained in batch metadata.]\n\n${tail}`.slice(0, MAX_DRAFTING_INPUT_CHARS)
-}
-
-function section(label: string, value: string) {
-  return value ? `${label}:\n${value}` : ''
-}
-
 function buildPayload(input: AutoPatentDraftIdeaInput, index: number): PatentDraftingAutomationPayload {
   const fields = readIdeaFields(input, index)
   const {
@@ -317,19 +304,19 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): PatentDra
     throw new Error(`Idea ${index + 1} is missing ideaDetails/idea/description content.`)
   }
 
-  const mainBriefText = [
-    section('Idea details', ideaDetails),
-    section('Novelty supplied by user', noveltyDetails),
+  const sourceDisclosureText = [
+    ideaDetails,
+    noveltyDetails,
   ].filter(Boolean).join('\n\n')
   const priorArtText = [
-    section('Literature review instructions', literatureReviewInstructions),
-    section('Literature review content', literatureReviewContent),
+    literatureReviewInstructions,
+    literatureReviewContent,
   ].filter(Boolean).join('\n\n')
 
   return {
     title,
-    ideaDetails: condenseForNormalization(mainBriefText),
-    rawIdea: condenseForNormalization(mainBriefText),
+    ideaDetails,
+    rawIdea: sourceDisclosureText,
     novelty: noveltyDetails,
     jurisdictions: fields.jurisdictions.length ? fields.jurisdictions : ['IN'],
     activeJurisdiction: (fields.jurisdictions[0] || 'IN').toUpperCase(),

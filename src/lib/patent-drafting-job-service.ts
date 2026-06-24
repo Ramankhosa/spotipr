@@ -93,9 +93,11 @@ function stringifyIdeaDetails(value: unknown) {
 }
 
 export function buildAutomationIdeaText(payload: PatentDraftingAutomationPayload) {
+  if (typeof payload.rawIdea === 'string' && payload.rawIdea.trim()) {
+    return payload.rawIdea
+  }
+
   const parts = [
-    `Title: ${payload.title}`,
-    normalizeText(payload.rawIdea),
     stringifyIdeaDetails(payload.ideaDetails),
     normalizeText(payload.novelty) ? `Novelty / inventive contribution:\n${normalizeText(payload.novelty)}` : '',
   ].filter(Boolean)
@@ -522,8 +524,7 @@ async function runPipeline(job: any, workerId: string) {
     const claimsHandling = payload.claimsHandling || (claimsText ? 'improve' : 'draft from brief')
     const claimRemarks = [
       normalizeText(payload.claimRemarks),
-      normalizeText(payload.claimsNotes),
-      normalizeText(payload.novelty) ? `Draft claims around this novelty contribution:\n${normalizeText(payload.novelty)}` : '',
+      payload.claimRemarks === payload.claimsNotes ? '' : normalizeText(payload.claimsNotes),
       claimsHandling === 'improve' && claimsText
         ? `Improve the following draft claims without entering claim-refinement mode:\n\n${claimsText}`
         : '',
