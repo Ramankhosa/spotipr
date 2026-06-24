@@ -163,27 +163,28 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant                  Tenant?                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  signupAtiToken          ATIToken?               @relation("SignupATIToken", fields: [signupAtiTokenId], references: [id])
-  projects                Project[]
-  collaborations          ProjectCollaborator[]
-  patents                 Patent[]
-  annexureVersions        AnnexureVersion[]
-  auditLogs               AuditLog[]
-  usageLogs               UsageLog[]
-  createdPriorArtBundles  PriorArtSearchBundle[]  @relation("PriorArtBundleCreator")
-  approvedPriorArtBundles PriorArtSearchBundle[]  @relation("PriorArtBundleApprover")
-  priorArtHistory         PriorArtSearchHistory[]
-  priorArtRuns            PriorArtRun[]
-  credits                 UserCredit?
-  noveltyAssessments      NoveltyAssessmentRun[]
-  noveltySearchRuns       NoveltySearchRun[]
-  noveltySearchClients    NoveltySearchClient[]
-  noveltySearchGroups     NoveltySearchGroup[]
-  draftingSessions        DraftingSession[]
-  draftingHistory         DraftingHistory[]
-  patentDraftingJobs      PatentDraftingJob[]
-  emailDraftRequests      EmailDraftRequest[]
+  tenant                    Tenant?                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupAtiToken            ATIToken?                  @relation("SignupATIToken", fields: [signupAtiTokenId], references: [id])
+  projects                  Project[]
+  collaborations            ProjectCollaborator[]
+  patents                   Patent[]
+  annexureVersions          AnnexureVersion[]
+  auditLogs                 AuditLog[]
+  usageLogs                 UsageLog[]
+  createdPriorArtBundles    PriorArtSearchBundle[]     @relation("PriorArtBundleCreator")
+  approvedPriorArtBundles   PriorArtSearchBundle[]     @relation("PriorArtBundleApprover")
+  priorArtHistory           PriorArtSearchHistory[]
+  priorArtRuns              PriorArtRun[]
+  credits                   UserCredit?
+  noveltyAssessments        NoveltyAssessmentRun[]
+  noveltySearchRuns         NoveltySearchRun[]
+  noveltySearchClients      NoveltySearchClient[]
+  noveltySearchGroups       NoveltySearchGroup[]
+  draftingSessions          DraftingSession[]
+  draftingHistory           DraftingHistory[]
+  patentDraftingJobs        PatentDraftingJob[]
+  emailDraftRequests        EmailDraftRequest[]
+  autoPatentDraftBatchItems AutoPatentDraftBatchItem[]
 
   // Auth tokens
   emailVerificationTokens EmailVerificationToken[]
@@ -2141,27 +2142,30 @@ model DraftingSession {
 }
 
 model PatentDraftingJob {
-  id            String                  @id @default(cuid())
-  patentId      String
-  sessionId     String?
-  userId        String
-  status        PatentDraftingJobStatus @default(QUEUED)
-  currentStep   String?
-  payload       Json
-  result        Json?
-  attemptCount  Int                     @default(0)
-  maxAttempts   Int                     @default(3)
-  nextAttemptAt DateTime                @default(now())
-  lockedBy      String?
-  lockedUntil   DateTime?
-  heartbeatAt   DateTime?
-  lastError     String?
-  startedAt     DateTime?
-  completedAt   DateTime?
-  cancelledAt   DateTime?
-  cancelledById String?
-  createdAt     DateTime                @default(now())
-  updatedAt     DateTime                @updatedAt
+  id                         String                  @id @default(cuid())
+  patentId                   String
+  sessionId                  String?
+  userId                     String
+  status                     PatentDraftingJobStatus @default(QUEUED)
+  currentStep                String?
+  payload                    Json
+  result                     Json?
+  attemptCount               Int                     @default(0)
+  maxAttempts                Int                     @default(3)
+  nextAttemptAt              DateTime                @default(now())
+  lockedBy                   String?
+  lockedUntil                DateTime?
+  heartbeatAt                DateTime?
+  lastError                  String?
+  startedAt                  DateTime?
+  completedAt                DateTime?
+  cancelledAt                DateTime?
+  cancelledById              String?
+  autoPatentDraftBatchId     String?
+  autoPatentDraftBatchItemId String?
+  autoPatentDraftBatchItemNo Int?
+  createdAt                  DateTime                @default(now())
+  updatedAt                  DateTime                @updatedAt
 
   patent  Patent           @relation(fields: [patentId], references: [id], onDelete: Cascade)
   session DraftingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
@@ -2171,6 +2175,7 @@ model PatentDraftingJob {
   @@index([status, nextAttemptAt])
   @@index([lockedUntil])
   @@index([sessionId])
+  @@index([autoPatentDraftBatchId, autoPatentDraftBatchItemNo])
   @@map("patent_drafting_jobs")
 }
 
@@ -2921,6 +2926,7 @@ model AutoPatentDraftBatch {
   failedItems           Int                        @default(0)
   warningItems          Int                        @default(0)
   requestIds            String[]                   @default([])
+  jobIds                String[]                   @default([])
   itemSummaries         Json?
   zipDocumentId         String?
   completionEmailSentAt DateTime?
@@ -2928,9 +2934,42 @@ model AutoPatentDraftBatch {
   createdAt             DateTime                   @default(now())
   updatedAt             DateTime                   @updatedAt
 
+  items AutoPatentDraftBatchItem[]
+
   @@index([userId, createdAt])
   @@index([tenantId, status])
   @@map("auto_patent_draft_batches")
+}
+
+model AutoPatentDraftBatchItem {
+  id            String   @id @default(cuid())
+  batchId       String
+  tenantId      String
+  userId        String
+  projectId     String?
+  patentId      String?
+  sessionId     String?
+  jobId         String?
+  itemNo        Int
+  title         String
+  jurisdictions String[] @default([])
+  status        String   @default("QUEUED")
+  currentStep   String?
+  progressPct   Int      @default(5)
+  warnings      Json?
+  errorMessage  String?
+  artifactIds   String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  batch AutoPatentDraftBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  user  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, itemNo])
+  @@index([batchId, status])
+  @@index([jobId])
+  @@index([patentId])
+  @@map("auto_patent_draft_batch_items")
 }
 
 model EmailDraftAttachment {

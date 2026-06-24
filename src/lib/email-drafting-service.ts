@@ -11,6 +11,7 @@ import { generateToken, hashToken } from '@/lib/token-utils'
 import { upsertUserInstruction } from '@/lib/user-instruction-service'
 import { checkServiceAccess } from '@/lib/org-access-service'
 import { refreshAutoPatentDraftBatch, refreshReadyAutoPatentDraftBatches } from '@/lib/auto-patent-draft-batch-service'
+import { isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
 import {
   AUTO_DRAFTING_BULK_RECIPIENT,
   EMAIL_DRAFTING_INBOUND_ADDRESS,
@@ -815,6 +816,7 @@ async function runAIReviewAndApplyTextFixes(params: {
   const fixableIssues = issues
     .filter((issue: any) => issue?.sectionKey && issue.sectionKey !== 'general')
     .filter((issue: any) => issue.status !== 'fixed' && issue.status !== 'ignored')
+    .filter((issue: any) => !isProtectedAIReviewIssue(issue))
     .filter((issue: any) => !isDiagramReviewIssue(issue))
     .slice(0, Math.max(1, params.maxFixes || 8))
 

@@ -33,7 +33,6 @@ type PreviewRow = {
   literatureReviewInstructions?: string
   literatureReviewContent?: string
   figureRemarks?: string
-  draftingRemarks?: string
   jurisdictions: string[]
   filingType: string
   claimsText?: string
@@ -55,9 +54,14 @@ type BatchSummary = {
   failedItems: number
   warningItems: number
   itemSummaries?: Array<{
+    itemId?: string
+    jobId?: string
     requestId?: string
     itemNo?: number
     title?: string
+    currentStep?: string
+    jurisdictions?: string[]
+    warnings?: string[]
     status?: string
     patentId?: string
     sessionId?: string
@@ -116,7 +120,6 @@ export default function PatentDraftBatchPage() {
   const [defaultFilingType, setDefaultFilingType] = useState('utility')
   const [defaultClaimsHandling, setDefaultClaimsHandling] = useState<ClaimsHandling>('draft from brief')
   const [defaultPriorArtHandling, setDefaultPriorArtHandling] = useState<PriorArtHandling>('auto')
-  const [defaultDraftingRemarks, setDefaultDraftingRemarks] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([])
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({})
@@ -131,8 +134,7 @@ export default function PatentDraftBatchPage() {
     defaultFilingType,
     defaultClaimsHandling,
     defaultPriorArtHandling,
-    defaultDraftingRemarks,
-  }), [defaultClaimsHandling, defaultDraftingRemarks, defaultFilingType, defaultJurisdictions, defaultPriorArtHandling])
+  }), [defaultClaimsHandling, defaultFilingType, defaultJurisdictions, defaultPriorArtHandling])
 
   const hasBlockingErrors = previewRows.some(row => row.errors.length > 0)
   const hasActiveBatches = batches.some(batch => !TERMINAL_BATCH_STATUSES.has(batch.status))
@@ -257,7 +259,6 @@ export default function PatentDraftBatchPage() {
         literatureReviewInstructions: row.literatureReviewInstructions || '',
         literatureReviewContent: row.literatureReviewContent || '',
         figureRemarks: row.figureRemarks || '',
-        draftingRemarks: row.draftingRemarks || '',
         jurisdictions: row.jurisdictions,
         filingType: row.filingType,
         claimsText: row.claimsText || '',
@@ -442,16 +443,6 @@ export default function PatentDraftBatchPage() {
                     <option value="expand with search">Expand with search</option>
                   </select>
                 </label>
-                <label className="block md:col-span-2">
-                  <span className="text-sm font-medium text-slate-700">Default drafting remarks</span>
-                  <textarea
-                    value={defaultDraftingRemarks}
-                    onChange={(event) => setDefaultDraftingRemarks(event.target.value)}
-                    rows={3}
-                    placeholder="Optional remarks applied only to rows with blank drafting remarks."
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
               </div>
             </div>
 
@@ -566,7 +557,6 @@ export default function PatentDraftBatchPage() {
                             ['literatureReviewInstructions', 'Literature review instructions'],
                             ['literatureReviewContent', 'Literature review content'],
                             ['figureRemarks', 'Figure remarks'],
-                            ['draftingRemarks', 'Drafting remarks'],
                             ['claimsText', 'Claims text'],
                             ['claimsNotes', 'Claims notes'],
                             ['illustrativeData', 'Illustrative data'],
@@ -707,12 +697,15 @@ export default function PatentDraftBatchPage() {
 
                 <div className="mt-5 space-y-2">
                   {(selectedBatch.itemSummaries || []).length ? selectedBatch.itemSummaries!.map((item, index) => (
-                    <div key={`${item.requestId || index}`} className="rounded-lg border border-slate-200 p-3">
+                    <div key={`${item.itemId || item.jobId || item.requestId || index}`} className="rounded-lg border border-slate-200 p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium text-slate-900">
                             {String(item.itemNo || index + 1).padStart(2, '0')}. {item.title || 'Untitled draft'}
                           </div>
+                          {item.currentStep ? <div className="mt-1 text-xs text-slate-500">{item.currentStep.replace(/_/g, ' ')}</div> : null}
+                          {item.jurisdictions?.length ? <div className="mt-1 text-xs text-slate-500">{item.jurisdictions.join(', ')}</div> : null}
+                          {Array.isArray(item.warnings) && item.warnings.length ? <div className="mt-1 text-xs text-amber-700">{item.warnings.join('; ')}</div> : null}
                           {item.error ? <div className="mt-1 text-xs text-rose-700">{item.error}</div> : null}
                         </div>
                         <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClasses(item.status || 'QUEUED')}`}>
@@ -720,7 +713,6 @@ export default function PatentDraftBatchPage() {
                         </span>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                        {item.requestId ? <Link className="font-medium text-blue-700 hover:underline" href={`/email-drafting/requests/${item.requestId}`}>Request</Link> : null}
                         {item.patentId ? <Link className="font-medium text-blue-700 hover:underline" href={`/patents/${item.patentId}/draft`}>Patent</Link> : null}
                       </div>
                     </div>

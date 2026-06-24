@@ -7,12 +7,12 @@ import { prisma } from '@/lib/prisma'
 import { sendEmail, SITE_URL } from '@/lib/mailer'
 import { generateToken, hashToken } from '@/lib/token-utils'
 import {
-  AUTO_DRAFTING_BULK_RECIPIENT,
+  AUTO_PATENT_DRAFTING_PROJECT_NAME,
   AUTO_DRAFTING_MAX_UPLOAD_ROWS,
   EMAIL_DRAFTING_DOWNLOAD_TTL_DAYS,
   MAX_DRAFTING_INPUT_CHARS,
 } from '@/lib/drafting-constants'
-import type { EmailDraftPayload } from '@/lib/email-drafting-service'
+import { enqueuePatentDraftingJob, type PatentDraftingAutomationPayload } from '@/lib/patent-drafting-job-service'
 
 type BatchCreateUser = {
   id: string
@@ -28,22 +28,20 @@ export type AutoPatentDraftIdeaInput = {
   literatureReviewInstructions?: string
   literatureReviewContent?: string
   figureRemarks?: string
-  draftingRemarks?: string
   jurisdictions?: string[] | string
   filingType?: string
   claimsText?: string
-  claimsHandling?: EmailDraftPayload['claimsHandling']
+  claimsHandling?: PatentDraftingAutomationPayload['claimsHandling']
   claimsNotes?: string
-  priorArtHandling?: EmailDraftPayload['priorArtHandling']
+  priorArtHandling?: PatentDraftingAutomationPayload['priorArtHandling']
   illustrativeData?: string
 }
 
 export type AutoPatentDraftBatchDefaults = {
   defaultJurisdictions?: string[] | string
   defaultFilingType?: string
-  defaultClaimsHandling?: EmailDraftPayload['claimsHandling'] | string
-  defaultPriorArtHandling?: EmailDraftPayload['priorArtHandling'] | string
-  defaultDraftingRemarks?: string
+  defaultClaimsHandling?: PatentDraftingAutomationPayload['claimsHandling'] | string
+  defaultPriorArtHandling?: PatentDraftingAutomationPayload['priorArtHandling'] | string
 }
 
 export type AutoPatentDraftBatchPreviewRow = AutoPatentDraftIdeaInput & {
@@ -53,8 +51,8 @@ export type AutoPatentDraftBatchPreviewRow = AutoPatentDraftIdeaInput & {
   noveltyDetails: string
   jurisdictions: string[]
   filingType: string
-  claimsHandling: EmailDraftPayload['claimsHandling']
-  priorArtHandling: EmailDraftPayload['priorArtHandling']
+  claimsHandling: PatentDraftingAutomationPayload['claimsHandling']
+  priorArtHandling: PatentDraftingAutomationPayload['priorArtHandling']
   errors: string[]
   warnings: string[]
 }
@@ -68,6 +66,8 @@ type CreateBatchInput = {
   defaults?: AutoPatentDraftBatchDefaults
 }
 
+const FINAL_JOB_STATUSES = ['COMPLETED', 'FAILED', 'CANCELLED']
+const SUCCESS_JOB_STATUSES = ['COMPLETED']
 const FINAL_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS', 'REJECTED', 'FAILED', 'CANCELED']
 const SUCCESS_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS']
 
@@ -78,7 +78,6 @@ export const AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS = [
   'literatureReviewInstructions',
   'literatureReviewContent',
   'figureRemarks',
-  'draftingRemarks',
   'jurisdictions',
   'filingType',
   'claimsText',
@@ -96,7 +95,6 @@ const TEMPLATE_GUIDE_ROWS = [
   ['literatureReviewInstructions', 'Optional', 'Instructions for how the prior-art/literature content should influence drafting.', 'Treat the cited inhaler counters as closest prior art; avoid admitting equivalence.'],
   ['literatureReviewContent', 'Optional', 'User-provided prior-art review content saved into prior-art context.', 'US1234567 discloses a mechanical counter but not wireless dose validation.'],
   ['figureRemarks', 'Optional', 'Instructions for figure/diagram planning.', 'Generate a system block diagram and a dose event flow chart.'],
-  ['draftingRemarks', 'Optional', 'Session instructions propagated to major drafting sections.', 'Keep claims broad and emphasize controller-based validation.'],
   ['jurisdictions', 'Optional', 'Comma-separated jurisdiction codes. Defaults to IN when omitted.', 'IN,US'],
   ['filingType', 'Optional', 'utility, provisional, or design. Defaults to utility.', 'utility'],
   ['claimsText', 'Optional', 'Existing claims to use/improve depending on claimsHandling.', '1. A dose tracking inhaler comprising...'],
@@ -140,7 +138,6 @@ export function buildAutoPatentDraftBatchTemplate(format: 'xlsx' | 'csv' = 'xlsx
       literatureReviewInstructions: 'Use cited inhaler counters as closest prior art; avoid admitting equivalence.',
       literatureReviewContent: 'US1234567 discloses a mechanical counter but not wireless dose validation.',
       figureRemarks: 'Generate a system block diagram and a dose event flow chart.',
-      draftingRemarks: 'Keep claims broad and emphasize controller-based validation.',
       jurisdictions: 'IN,US',
       filingType: 'utility',
       claimsText: '',
@@ -185,7 +182,7 @@ function normalizeJurisdictions(value: unknown): string[] {
   return Array.from(new Set(jurisdictions)).slice(0, 8)
 }
 
-function normalizeClaimsHandling(value: unknown): EmailDraftPayload['claimsHandling'] {
+function normalizeClaimsHandling(value: unknown): NonNullable<PatentDraftingAutomationPayload['claimsHandling']> {
   const normalized = safeString(value).toLowerCase()
   if (normalized === 'use as is') return 'use as is'
   if (normalized === 'improve') return 'improve'
@@ -193,7 +190,7 @@ function normalizeClaimsHandling(value: unknown): EmailDraftPayload['claimsHandl
   return 'draft from brief'
 }
 
-function normalizePriorArtHandling(value: unknown, hasPriorArtText: boolean): EmailDraftPayload['priorArtHandling'] {
+function normalizePriorArtHandling(value: unknown, hasPriorArtText: boolean): NonNullable<PatentDraftingAutomationPayload['priorArtHandling']> {
   const normalized = safeString(value).toLowerCase()
   if (normalized === 'use only') return 'use only'
   if (normalized === 'expand with search') return 'expand with search'
@@ -209,7 +206,6 @@ function readIdeaFields(input: AutoPatentDraftIdeaInput, index: number) {
   const literatureReviewInstructions = safeString(input.literatureReviewInstructions) || firstString(row, ['literatureReviewInstructions', 'literature_review_instructions', 'priorArtInstructions'])
   const literatureReviewContent = safeString(input.literatureReviewContent) || firstString(row, ['literatureReviewContent', 'literature_review_content', 'literatureReview', 'priorArtReview', 'prior_art_review', 'priorArt', 'prior_art'])
   const figureRemarks = safeString(input.figureRemarks) || firstString(row, ['figureDirections', 'figure_remarks', 'diagramRemarks', 'diagram_generation_remarks'])
-  const draftingRemarks = safeString(input.draftingRemarks) || firstString(row, ['patentDraftingRemarks', 'drafting_remarks', 'draftingInstructions', 'drafting_instructions'])
   const claimsText = safeString(input.claimsText) || firstString(row, ['claims', 'claimsText', 'claims_text'])
   const claimsNotes = safeString(input.claimsNotes) || firstString(row, ['claimsNotes', 'claims_notes'])
   const illustrativeData = safeString(input.illustrativeData) || firstString(row, ['illustrativeData', 'detailedDescriptionData', 'supportData'])
@@ -223,7 +219,6 @@ function readIdeaFields(input: AutoPatentDraftIdeaInput, index: number) {
     literatureReviewInstructions,
     literatureReviewContent,
     figureRemarks,
-    draftingRemarks,
     claimsText,
     claimsNotes,
     illustrativeData,
@@ -241,9 +236,8 @@ function applyBatchDefaults(input: AutoPatentDraftIdeaInput, defaults: AutoPaten
     ...input,
     jurisdictions: fields.jurisdictions.length ? fields.jurisdictions : (defaultJurisdictions.length ? defaultJurisdictions : ['IN']),
     filingType: fields.filingType || safeString(defaults.defaultFilingType) || 'utility',
-    claimsHandling: safeString(fields.claimsHandling) ? fields.claimsHandling as EmailDraftPayload['claimsHandling'] : normalizeClaimsHandling(defaults.defaultClaimsHandling),
-    priorArtHandling: safeString(fields.priorArtHandling) ? fields.priorArtHandling as EmailDraftPayload['priorArtHandling'] : normalizePriorArtHandling(defaults.defaultPriorArtHandling, !!(fields.literatureReviewInstructions || fields.literatureReviewContent)),
-    draftingRemarks: fields.draftingRemarks || safeString(defaults.defaultDraftingRemarks),
+    claimsHandling: safeString(fields.claimsHandling) ? fields.claimsHandling as PatentDraftingAutomationPayload['claimsHandling'] : normalizeClaimsHandling(defaults.defaultClaimsHandling),
+    priorArtHandling: safeString(fields.priorArtHandling) ? fields.priorArtHandling as PatentDraftingAutomationPayload['priorArtHandling'] : normalizePriorArtHandling(defaults.defaultPriorArtHandling, !!(fields.literatureReviewInstructions || fields.literatureReviewContent)),
   }
 }
 
@@ -272,7 +266,6 @@ export function previewAutoPatentDraftBatchIdeas(
       literatureReviewInstructions: fields.literatureReviewInstructions,
       literatureReviewContent: fields.literatureReviewContent,
       figureRemarks: fields.figureRemarks,
-      draftingRemarks: fields.draftingRemarks,
       claimsText: fields.claimsText,
       claimsNotes: fields.claimsNotes,
       illustrativeData: fields.illustrativeData,
@@ -306,7 +299,7 @@ function section(label: string, value: string) {
   return value ? `${label}:\n${value}` : ''
 }
 
-function buildPayload(input: AutoPatentDraftIdeaInput, index: number): EmailDraftPayload {
+function buildPayload(input: AutoPatentDraftIdeaInput, index: number): PatentDraftingAutomationPayload {
   const fields = readIdeaFields(input, index)
   const {
     title,
@@ -315,7 +308,6 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): EmailDraf
     literatureReviewInstructions,
     literatureReviewContent,
     figureRemarks,
-    draftingRemarks,
     claimsText,
     claimsNotes,
     illustrativeData,
@@ -328,38 +320,43 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): EmailDraf
   const mainBriefText = [
     section('Idea details', ideaDetails),
     section('Novelty supplied by user', noveltyDetails),
-    section('Patent drafting remarks', draftingRemarks),
   ].filter(Boolean).join('\n\n')
-
   const priorArtText = [
     section('Literature review instructions', literatureReviewInstructions),
     section('Literature review content', literatureReviewContent),
   ].filter(Boolean).join('\n\n')
 
   return {
-    parserVersion: 1,
-    source: 'bulk_upload',
-    suppressNotificationEmails: true,
     title,
-    jurisdictions: fields.jurisdictions,
+    ideaDetails: condenseForNormalization(mainBriefText),
+    rawIdea: condenseForNormalization(mainBriefText),
+    novelty: noveltyDetails,
+    jurisdictions: fields.jurisdictions.length ? fields.jurisdictions : ['IN'],
+    activeJurisdiction: (fields.jurisdictions[0] || 'IN').toUpperCase(),
     filingType: fields.filingType || 'utility',
     allowRefine: true,
-    coverMemo: draftingRemarks,
-    mainBriefText,
-    normalizationBrief: condenseForNormalization(mainBriefText),
     claimsText,
     claimsHandling: normalizeClaimsHandling(fields.claimsHandling),
-    claimsNotes: [claimsNotes, draftingRemarks].filter(Boolean).join('\n\n'),
-    priorArtText,
+    claimsNotes,
+    claimRemarks: claimsNotes,
     priorArtHandling: normalizePriorArtHandling(fields.priorArtHandling, !!priorArtText),
-    figureDirections: figureRemarks,
+    literatureReview: {
+      instructions: literatureReviewInstructions,
+      content: literatureReviewContent,
+    },
+    priorArtReview: {
+      instructions: literatureReviewInstructions,
+      content: literatureReviewContent,
+    },
+    figureRemarks,
+    figureMode: 'generate',
     illustrativeData,
-    draftingRemarks,
-    literatureReviewInstructions,
-    literatureReviewContent,
-    warnings: [],
-    attachments: []
-  } as EmailDraftPayload
+    languageMode: 'common',
+    commonLanguage: 'en',
+    figuresLanguage: 'en',
+    languageByJurisdiction: Object.fromEntries((fields.jurisdictions.length ? fields.jurisdictions : ['IN']).map(code => [code.toUpperCase(), 'en'])),
+    runReview: true,
+  }
 }
 
 function rowsFromWorksheet(buffer: Buffer, filename: string): Record<string, unknown>[] {
@@ -403,6 +400,33 @@ export function parseAutoPatentDraftIdeasFromUpload(input: {
   throw new Error('Unsupported batch file type. Upload .json, .csv, .tsv, or .xlsx.')
 }
 
+async function getOrCreateAutoDraftingProject(userId: string, projectId?: string | null) {
+  if (projectId) {
+    const project = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        OR: [
+          { userId },
+          { collaborators: { some: { userId } } }
+        ]
+      }
+    })
+    if (!project) throw new Error('Project not found or access denied.')
+    return project
+  }
+
+  const existing = await prisma.project.findFirst({
+    where: { userId, name: AUTO_PATENT_DRAFTING_PROJECT_NAME }
+  })
+  if (existing) return existing
+  return prisma.project.create({
+    data: {
+      userId,
+      name: AUTO_PATENT_DRAFTING_PROJECT_NAME
+    }
+  })
+}
+
 export async function createAutoPatentDraftBatch(input: CreateBatchInput) {
   if (!input.user.tenantId) throw new Error('User tenant is required for automated patent drafting.')
   if (!input.ideas.length) throw new Error('At least one idea is required.')
@@ -410,12 +434,13 @@ export async function createAutoPatentDraftBatch(input: CreateBatchInput) {
     throw new Error(`A batch can include at most ${AUTO_DRAFTING_MAX_UPLOAD_ROWS} ideas.`)
   }
 
+  const project = await getOrCreateAutoDraftingProject(input.user.id, input.projectId)
   const payloads = input.ideas.map(idea => applyBatchDefaults(idea, input.defaults)).map(buildPayload)
   const batch = await (prisma as any).autoPatentDraftBatch.create({
     data: {
       tenantId: input.user.tenantId,
       userId: input.user.id,
-      projectId: input.projectId || null,
+      projectId: project.id,
       name: input.name || (payloads.length === 1 ? payloads[0].title : `Patent draft batch - ${new Date().toISOString().slice(0, 10)}`),
       sourceFilename: input.sourceFilename,
       totalItems: payloads.length,
@@ -423,50 +448,65 @@ export async function createAutoPatentDraftBatch(input: CreateBatchInput) {
       itemSummaries: payloads.map((payload, index) => ({
         itemNo: index + 1,
         title: payload.title,
-        jurisdictions: payload.jurisdictions.length ? payload.jurisdictions : ['IN'],
-        status: 'RECEIVED'
+        jurisdictions: payload.jurisdictions?.length ? payload.jurisdictions : ['IN'],
+        status: 'QUEUED'
       }))
     }
   })
 
-  const requests: any[] = []
+  const jobs: any[] = []
   for (let index = 0; index < payloads.length; index += 1) {
     const payload = payloads[index]
-    const requestHash = sha256(JSON.stringify(payload))
-    const request = await (prisma as any).emailDraftRequest.create({
+    const patent = await prisma.patent.create({
       data: {
-        tenantId: input.user.tenantId,
-        userId: input.user.id,
-        projectId: input.projectId || null,
-        autoPatentDraftBatchId: batch.id,
-        autoPatentDraftBatchItemNo: index + 1,
-        subject: payload.title,
-        senderEmail: input.user.email,
-        senderDisplayName: input.user.name || undefined,
-        recipientEmail: AUTO_DRAFTING_BULK_RECIPIENT,
-        requestHash,
-        dedupeKey: `auto-batch:${batch.id}:${index + 1}:${requestHash.slice(0, 16)}`,
-        parsedPayload: payload,
-        normalizationBrief: payload.normalizationBrief,
-        warnings: payload.warnings,
-        status: 'RECEIVED',
-        currentStage: 'RECEIVED',
-        progressPct: 5
+        projectId: project.id,
+        createdBy: input.user.id,
+        title: payload.title,
       }
     })
-    requests.push(request)
+    const item = await (prisma as any).autoPatentDraftBatchItem.create({
+      data: {
+        batchId: batch.id,
+        tenantId: input.user.tenantId,
+        userId: input.user.id,
+        projectId: project.id,
+        patentId: patent.id,
+        itemNo: index + 1,
+        title: payload.title,
+        jurisdictions: payload.jurisdictions?.length ? payload.jurisdictions : ['IN'],
+        status: 'QUEUED',
+        currentStep: 'QUEUED',
+        progressPct: 5,
+      }
+    })
+    const job = await enqueuePatentDraftingJob({
+      patentId: patent.id,
+      userId: input.user.id,
+      payload: {
+        ...payload,
+        projectId: project.id,
+        batchId: batch.id,
+        batchItemId: item.id,
+        batchItemNo: index + 1,
+      }
+    })
+    await (prisma as any).autoPatentDraftBatchItem.update({
+      where: { id: item.id },
+      data: { jobId: job.id }
+    })
+    jobs.push(job)
   }
 
   await (prisma as any).autoPatentDraftBatch.update({
     where: { id: batch.id },
-    data: { requestIds: requests.map(request => request.id) }
+    data: { jobIds: jobs.map(job => job.id) }
   })
 
   return {
     batchId: batch.id,
     status: 'QUEUED',
-    totalItems: requests.length,
-    requestIds: requests.map(request => request.id)
+    totalItems: jobs.length,
+    jobIds: jobs.map(job => job.id)
   }
 }
 
@@ -487,27 +527,43 @@ async function createZipAccessLink(documentId: string, userId: string) {
   return token
 }
 
-async function createBatchZip(batch: any, requests: any[]) {
+async function createBatchZip(batch: any, records: any[]) {
   if (batch.zipDocumentId) {
     const token = await createZipAccessLink(batch.zipDocumentId, batch.userId)
     return { documentId: batch.zipDocumentId, token }
   }
 
-  const requestIds = requests.map(request => request.id)
-  const documents = await prisma.document.findMany({
-    where: {
-      userId: batch.userId,
-      type: 'PATENT_DRAFT_EXPORT',
-      OR: requestIds.map(requestId => ({ contentPtr: { contains: requestId } }))
-    },
-    orderBy: { createdAt: 'asc' }
-  })
+  const artifactIds = Array.from(new Set(records.flatMap(record => Array.isArray(record.artifactIds) ? record.artifactIds : [])))
+  const requestIds = records.map(record => record.id).filter(Boolean)
+  if (!artifactIds.length && !requestIds.length) {
+    throw new Error('No completed draft artifacts were found for this batch.')
+  }
+  const documents = artifactIds.length
+    ? await prisma.document.findMany({
+        where: {
+          id: { in: artifactIds },
+          userId: batch.userId,
+          type: 'PATENT_DRAFT_EXPORT',
+        },
+        orderBy: { createdAt: 'asc' }
+      })
+    : await prisma.document.findMany({
+        where: {
+          userId: batch.userId,
+          type: 'PATENT_DRAFT_EXPORT',
+          OR: requestIds.map(requestId => ({ contentPtr: { contains: requestId } }))
+        },
+        orderBy: { createdAt: 'asc' }
+      })
 
   const zip = new AdmZip()
-  for (const request of requests) {
-    const itemNo = request.autoPatentDraftBatchItemNo || requestIds.indexOf(request.id) + 1
-    const requestDocs = documents.filter(document => String(document.contentPtr || '').includes(request.id))
-    for (const document of requestDocs) {
+  for (const record of records) {
+    const itemNo = record.itemNo || record.autoPatentDraftBatchItemNo || requestIds.indexOf(record.id) + 1
+    const recordArtifactIds = Array.isArray(record.artifactIds) ? record.artifactIds : []
+    const recordDocs = recordArtifactIds.length
+      ? documents.filter(document => recordArtifactIds.includes(document.id))
+      : documents.filter(document => String(document.contentPtr || '').includes(record.id))
+    for (const document of recordDocs) {
       if (!document.contentPtr) continue
       const buffer = await fs.readFile(document.contentPtr)
       const prefix = String(itemNo).padStart(2, '0')
@@ -550,7 +606,7 @@ async function createBatchZip(batch: any, requests: any[]) {
 async function sendBatchCompletionEmail(batch: any, token: string, hasFailures: boolean) {
   const user = await prisma.user.findUnique({ where: { id: batch.userId } })
   if (!user?.email) return
-  const link = `${SITE_URL}/email-drafting/download/${token}`
+  const link = `${SITE_URL}/patents/draft/batch/download/${token}`
   const subject = hasFailures
     ? `Patent drafting batch completed with errors: ${batch.name}`
     : `Patent drafting batch ready: ${batch.name}`
@@ -594,6 +650,118 @@ async function sendBatchFailureEmail(batch: any) {
 export async function refreshAutoPatentDraftBatch(batchId: string, options: { sendEmail?: boolean } = {}) {
   const batch = await (prisma as any).autoPatentDraftBatch.findUnique({ where: { id: batchId } })
   if (!batch) return null
+
+  const items = await (prisma as any).autoPatentDraftBatchItem.findMany({
+    where: { batchId },
+    orderBy: { itemNo: 'asc' }
+  })
+
+  if (items.length > 0) {
+    const jobs = await (prisma as any).patentDraftingJob.findMany({
+      where: { id: { in: items.map((item: any) => item.jobId).filter(Boolean) } }
+    })
+    const jobsById = new Map<string, any>(jobs.map((job: any) => [job.id, job]))
+    const syncedItems = []
+    for (const item of items) {
+      const job: any = item.jobId ? jobsById.get(item.jobId) : null
+      const result: Record<string, any> = job?.result && typeof job.result === 'object' ? job.result : {}
+      const artifactIds = Array.isArray(result.artifactIds) ? result.artifactIds : item.artifactIds
+      const warnings = Array.isArray(result.warnings) ? result.warnings : item.warnings
+      const nextStatus = job?.status || item.status
+      const nextStep = job?.currentStep || item.currentStep
+      const nextSessionId = job?.sessionId || result.sessionId || item.sessionId
+      const errorMessage = job?.lastError || item.errorMessage
+      if (
+        item.status !== nextStatus ||
+        item.currentStep !== nextStep ||
+        item.sessionId !== nextSessionId ||
+        JSON.stringify(item.artifactIds || []) !== JSON.stringify(artifactIds || []) ||
+        JSON.stringify(item.warnings || null) !== JSON.stringify(warnings || null) ||
+        item.errorMessage !== errorMessage
+      ) {
+        syncedItems.push(await (prisma as any).autoPatentDraftBatchItem.update({
+          where: { id: item.id },
+          data: {
+            status: nextStatus,
+            currentStep: nextStep,
+            sessionId: nextSessionId || null,
+            artifactIds: artifactIds || [],
+            warnings: warnings || undefined,
+            errorMessage: errorMessage || null,
+            progressPct: nextStatus === 'COMPLETED' ? 100 : nextStatus === 'FAILED' || nextStatus === 'CANCELLED' ? 100 : item.progressPct,
+          }
+        }))
+      } else {
+        syncedItems.push(item)
+      }
+    }
+
+    const completedItems = syncedItems.filter((item: any) => SUCCESS_JOB_STATUSES.includes(item.status)).length
+    const failedItems = syncedItems.filter((item: any) => ['FAILED', 'CANCELLED'].includes(item.status)).length
+    const warningItems = syncedItems.filter((item: any) => Array.isArray(item.warnings) && item.warnings.length > 0).length
+    const allFinal = syncedItems.length > 0 && syncedItems.every((item: any) => FINAL_JOB_STATUSES.includes(item.status))
+    const anyStarted = syncedItems.some((item: any) => !['QUEUED'].includes(item.status))
+    const nextStatus = allFinal
+      ? failedItems > 0
+        ? completedItems > 0 ? 'COMPLETED_WITH_ERRORS' : 'FAILED'
+        : 'COMPLETED'
+      : anyStarted
+        ? 'PROCESSING'
+        : 'QUEUED'
+
+    const itemSummaries = syncedItems.map((item: any) => ({
+      itemId: item.id,
+      jobId: item.jobId,
+      itemNo: item.itemNo,
+      title: item.title,
+      jurisdictions: item.jurisdictions,
+      status: item.status,
+      currentStep: item.currentStep,
+      patentId: item.patentId,
+      sessionId: item.sessionId,
+      artifactIds: item.artifactIds,
+      warnings: item.warnings,
+      error: item.errorMessage || undefined
+    }))
+
+    let updated = await (prisma as any).autoPatentDraftBatch.update({
+      where: { id: batchId },
+      data: {
+        status: nextStatus,
+        completedItems,
+        failedItems,
+        warningItems,
+        itemSummaries,
+        completedAt: allFinal ? (batch.completedAt || new Date()) : null
+      }
+    })
+
+    if (!allFinal) return updated
+
+    if (completedItems === 0) {
+      if (options.sendEmail !== false && !updated.completionEmailSentAt) {
+        await sendBatchFailureEmail(updated)
+        updated = await (prisma as any).autoPatentDraftBatch.update({
+          where: { id: batchId },
+          data: { completionEmailSentAt: new Date() }
+        })
+      }
+      return updated
+    }
+
+    const { token } = await createBatchZip(updated, syncedItems)
+    updated = await (prisma as any).autoPatentDraftBatch.findUnique({ where: { id: batchId } })
+
+    if (options.sendEmail !== false && !updated.completionEmailSentAt) {
+      await sendBatchCompletionEmail(updated, token, failedItems > 0)
+      updated = await (prisma as any).autoPatentDraftBatch.update({
+        where: { id: batchId },
+        data: { completionEmailSentAt: new Date() }
+      })
+    }
+
+    return updated
+  }
 
   const requests = await (prisma as any).emailDraftRequest.findMany({
     where: { autoPatentDraftBatchId: batchId },
@@ -666,7 +834,7 @@ export async function refreshReadyAutoPatentDraftBatches(limit = 10) {
   const candidates = await (prisma as any).autoPatentDraftBatch.findMany({
     where: {
       completionEmailSentAt: null,
-      status: { in: ['QUEUED', 'PROCESSING', 'COMPLETED', 'COMPLETED_WITH_ERRORS'] }
+      status: { in: ['QUEUED', 'PROCESSING', 'COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'] }
     },
     orderBy: { createdAt: 'asc' },
     take: Math.max(1, limit)

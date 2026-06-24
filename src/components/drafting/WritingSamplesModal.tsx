@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { DEFAULT_LIMITS, SECTION_WORD_LIMITS } from '@/lib/writing-sample-limits'
 
 interface WritingSample {
   id?: string
@@ -35,23 +36,6 @@ const JURISDICTIONS = [
   { code: 'EP', label: '🇪🇺 European Patent', description: 'EPO-specific style' },
   { code: 'PCT', label: '🌍 PCT', description: 'International filing style' },
 ]
-
-// Section-specific word limits - MUST match backend (src/app/api/writing-samples/limits/route.ts)
-// Higher limits for key sections to capture more writing patterns for effective style mimicry
-const SECTION_WORD_LIMITS: Record<string, { min: number; max: number; recommended: { min: number; max: number } }> = {
-  title: { min: 3, max: 50, recommended: { min: 5, max: 30 } },
-  fieldOfInvention: { min: 5, max: 200, recommended: { min: 10, max: 100 } },
-  background: { min: 10, max: 1500, recommended: { min: 80, max: 400 } },
-  objectsOfInvention: { min: 5, max: 500, recommended: { min: 20, max: 200 } },
-  summary: { min: 10, max: 1500, recommended: { min: 80, max: 400 } },
-  briefDescriptionOfDrawings: { min: 5, max: 500, recommended: { min: 20, max: 150 } },
-  detailedDescription: { min: 20, max: 3000, recommended: { min: 150, max: 800 } },
-  claims: { min: 10, max: 2000, recommended: { min: 100, max: 600 } },
-  abstract: { min: 10, max: 500, recommended: { min: 50, max: 200 } },
-}
-
-// Default for unknown sections
-const DEFAULT_LIMITS = { min: 5, max: 1000, recommended: { min: 10, max: 300 } }
 
 function getSectionLimits(sectionKey: string) {
   return SECTION_WORD_LIMITS[sectionKey] || DEFAULT_LIMITS

@@ -29,8 +29,8 @@ describe('auto patent draft batch parsing', () => {
 
   test('parses CSV uploads with drafting-specific columns', () => {
     const csv = [
-      'title,ideaDetails,noveltyDetails,literatureReviewContent,figureRemarks,draftingRemarks,jurisdictions',
-      '"Bottle cap","Tamper-evident cap","Novel hinge","US123 prior art","Generate exploded view","Use concise claims","IN,US"'
+      'title,ideaDetails,noveltyDetails,literatureReviewContent,figureRemarks,jurisdictions',
+      '"Bottle cap","Tamper-evident cap","Novel hinge","US123 prior art","Generate exploded view","IN,US"'
     ].join('\n')
 
     const ideas = parseAutoPatentDraftIdeasFromUpload({
@@ -133,14 +133,12 @@ describe('auto patent draft batch parsing', () => {
         filingType: 'provisional',
         claimsHandling: 'improve',
         priorArtHandling: 'use only',
-        draftingRemarks: 'Use row-level remarks.',
       }
     ], {
       defaultJurisdictions: 'IN,US',
       defaultFilingType: 'utility',
       defaultClaimsHandling: 'draft from brief',
       defaultPriorArtHandling: 'auto',
-      defaultDraftingRemarks: 'Use default remarks.',
     })
 
     expect(preview.rows[0]).toMatchObject({
@@ -148,14 +146,12 @@ describe('auto patent draft batch parsing', () => {
       filingType: 'utility',
       claimsHandling: 'draft from brief',
       priorArtHandling: 'auto',
-      draftingRemarks: 'Use default remarks.',
     })
     expect(preview.rows[1]).toMatchObject({
       jurisdictions: ['JP'],
       filingType: 'provisional',
       claimsHandling: 'improve',
       priorArtHandling: 'use only',
-      draftingRemarks: 'Use row-level remarks.',
     })
   })
 

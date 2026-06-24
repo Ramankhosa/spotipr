@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server'
+import crypto from 'crypto'
+import fs from 'fs/promises'
+import path from 'path'
 import { prisma } from '@/lib/prisma'
 import { generateJWT } from '@/lib/auth'
 import { checkServiceAccess } from '@/lib/org-access-service'
-import { upsertUserInstruction } from '@/lib/user-instruction-service'
+import { isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
 
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
 const DEFAULT_JURISDICTION = 'IN'
@@ -30,17 +33,25 @@ export type PatentDraftingAutomationPayload = {
     content?: string
     entries?: any[]
   }
+  claimsText?: string
+  claimsHandling?: 'draft from brief' | 'use as is' | 'improve' | 'auto'
+  claimsNotes?: string
+  priorArtHandling?: 'use only' | 'expand with search' | 'auto'
   claimRemarks?: string
   claimScopeStyle?: string
   figureRemarks?: string
   figureMode?: 'generate' | 'skip'
   figureCount?: number
-  draftingRemarks?: string | Record<string, string>
+  illustrativeData?: string
   languageMode?: 'common' | 'individual_english_figures'
   commonLanguage?: string
   figuresLanguage?: string
   languageByJurisdiction?: Record<string, string>
   runReview?: boolean
+  projectId?: string
+  batchId?: string
+  batchItemId?: string
+  batchItemNo?: number
 }
 
 class PatentDraftingJobLeaseLostError extends Error {
@@ -103,6 +114,51 @@ function jsonSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? null))
 }
 
+function sha256(input: Buffer | string) {
+  return crypto.createHash('sha256').update(input).digest('hex')
+}
+
+function sanitizeFilename(value: string) {
+  return value.replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 160) || 'patent-draft'
+}
+
+function filenameFromDisposition(disposition: string | null, fallback: string) {
+  const match = disposition?.match(/filename="?([^"]+)"?/i)
+  return sanitizeFilename(match?.[1] || fallback)
+}
+
+async function storeExportArtifact(params: {
+  jobId: string
+  batchId?: string
+  batchItemId?: string
+  batchItemNo?: number
+  user: any
+  tenantId: string
+  filename: string
+  buffer: Buffer
+  mimeType: string
+}) {
+  const scopeDir = params.batchId && params.batchItemId
+    ? path.join(process.cwd(), 'uploads', 'auto-patent-batches', params.batchId, params.batchItemId)
+    : path.join(process.cwd(), 'uploads', 'patent-drafting-jobs', params.jobId)
+  await fs.mkdir(scopeDir, { recursive: true })
+  const filePath = path.join(scopeDir, sanitizeFilename(params.filename))
+  await fs.writeFile(filePath, params.buffer)
+
+  return prisma.document.create({
+    data: {
+      tenantId: params.tenantId,
+      userId: params.user.id,
+      type: 'PATENT_DRAFT_EXPORT',
+      filename: sanitizeFilename(params.filename),
+      contentPtr: filePath,
+      hash: sha256(params.buffer),
+      mimeType: params.mimeType,
+      sizeBytes: params.buffer.length,
+    }
+  })
+}
+
 function normalizePriorArtEntries(payload: PatentDraftingAutomationPayload) {
   const entries = [
     ...(Array.isArray(payload.literatureReview?.priorArtEntries) ? payload.literatureReview!.priorArtEntries! : []),
@@ -147,13 +203,6 @@ function buildPriorArtText(payload: PatentDraftingAutomationPayload) {
     reviewContent ? `Literature review content:\n${reviewContent}` : '',
     entryText,
   ].filter(Boolean).join('\n\n').trim()
-}
-
-function buildDraftingRemarksForSection(payload: PatentDraftingAutomationPayload, section: string) {
-  const remarks = payload.draftingRemarks
-  if (!remarks) return ''
-  if (typeof remarks === 'string') return remarks.trim()
-  return normalizeText(remarks[section] || remarks.all || remarks['*'])
 }
 
 function buildInternalUserJwt(user: any) {
@@ -262,54 +311,129 @@ function hasGeneratedDraft(session: any, jurisdiction: string) {
   )
 }
 
-async function persistAutomationInstructions(user: any, sessionId: string, payload: PatentDraftingAutomationPayload) {
-  const priorArtInstruction = normalizeText(payload.literatureReview?.instructions || payload.priorArtReview?.instructions)
-  if (priorArtInstruction) {
-    await upsertUserInstruction({
-      sessionId,
-      userId: user.id,
-      jurisdiction: '*',
-      sectionKey: 'background',
-      instruction: priorArtInstruction,
-      isPersistent: false,
-    })
-  }
+function isDiagramReviewIssue(issue: any) {
+  const text = [
+    issue?.category,
+    issue?.sectionKey,
+    issue?.sectionLabel,
+    issue?.title,
+    issue?.description,
+    issue?.suggestion,
+    issue?.fix,
+    issue?.fixPrompt,
+  ].filter(Boolean).join(' ').toLowerCase()
+  return /\b(diagram|figure|drawing|sketch|plantuml|briefdescriptionofdrawings|brief description of drawings)\b/.test(text)
+}
 
-  const figureRemarks = normalizeText(payload.figureRemarks)
-  if (figureRemarks) {
-    for (const sectionKey of ['briefDescriptionOfDrawings', 'detailedDescription']) {
-      await upsertUserInstruction({
-        sessionId,
-        userId: user.id,
-        jurisdiction: '*',
+function draftToSectionMap(draft: any) {
+  if (!draft) return {}
+  return {
+    title: draft.title || '',
+    fieldOfInvention: draft.fieldOfInvention || '',
+    background: draft.background || '',
+    summary: draft.summary || '',
+    briefDescriptionOfDrawings: draft.briefDescriptionOfDrawings || '',
+    detailedDescription: draft.detailedDescription || '',
+    bestMethod: draft.bestMethod || '',
+    claims: draft.claims || '',
+    abstract: draft.abstract || '',
+    industrialApplicability: draft.industrialApplicability || '',
+    listOfNumerals: draft.listOfNumerals || '',
+    ...((draft.extraSections as any) || {}),
+  }
+}
+
+async function setActiveDraftingJurisdiction(sessionId: string, jurisdiction: string) {
+  await prisma.draftingSession.update({
+    where: { id: sessionId },
+    data: { activeJurisdiction: jurisdiction.toUpperCase() } as any,
+  })
+}
+
+async function getLatestDraftForJurisdiction(sessionId: string, jurisdiction: string) {
+  return prisma.annexureDraft.findFirst({
+    where: { sessionId, jurisdiction: jurisdiction.toUpperCase() },
+    orderBy: { version: 'desc' },
+  })
+}
+
+async function runAIReviewAndApplyTextFixes(params: {
+  user: any
+  patentId: string
+  sessionId: string
+  jurisdiction: string
+  maxFixes?: number
+}) {
+  const review = await invokeDraftingAction({
+    user: params.user,
+    patentId: params.patentId,
+    body: {
+      action: 'run_ai_review',
+      sessionId: params.sessionId,
+      jurisdiction: params.jurisdiction,
+    },
+  })
+
+  const issues = Array.isArray(review.json?.issues) ? review.json.issues : []
+  const fixableIssues = issues
+    .filter((issue: any) => issue?.sectionKey && issue.sectionKey !== 'general')
+    .filter((issue: any) => issue.status !== 'fixed' && issue.status !== 'ignored')
+    .filter((issue: any) => !isProtectedAIReviewIssue(issue))
+    .filter((issue: any) => !isDiagramReviewIssue(issue))
+    .slice(0, Math.max(1, params.maxFixes || 8))
+
+  let appliedFixes = 0
+  for (const issue of fixableIssues) {
+    const draft = await getLatestDraftForJurisdiction(params.sessionId, params.jurisdiction)
+    const sectionMap = draftToSectionMap(draft)
+    const sectionKey = issue.sectionKey
+    const currentContent = sectionMap[sectionKey]
+    if (!currentContent || typeof currentContent !== 'string') continue
+
+    const relatedContent = Object.fromEntries(Object.entries(sectionMap).filter(([key]) => key !== sectionKey))
+    const fix = await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'apply_ai_fix',
+        sessionId: params.sessionId,
+        jurisdiction: params.jurisdiction,
         sectionKey,
-        instruction: figureRemarks,
-        isPersistent: false,
-      })
-    }
+        issue,
+        currentContent,
+        relatedContent,
+      },
+    })
+
+    const fixedContent = fix.json?.fixedContent
+    if (typeof fixedContent !== 'string' || !fixedContent.trim()) continue
+
+    await setActiveDraftingJurisdiction(params.sessionId, params.jurisdiction)
+    await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'save_sections',
+        sessionId: params.sessionId,
+        patch: { [sectionKey]: fixedContent },
+      },
+    })
+    appliedFixes += 1
   }
 
-  const coreSections = [
-    'title',
-    'fieldOfInvention',
-    'background',
-    'summary',
-    'detailedDescription',
-    'claims',
-    'abstract',
-  ]
-  for (const sectionKey of coreSections) {
-    const instruction = buildDraftingRemarksForSection(payload, sectionKey)
-    if (!instruction) continue
-    await upsertUserInstruction({
-      sessionId,
-      userId: user.id,
-      jurisdiction: '*',
-      sectionKey,
-      instruction,
-      isPersistent: false,
+  if (appliedFixes > 0) {
+    await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'run_ai_review',
+        sessionId: params.sessionId,
+        jurisdiction: params.jurisdiction,
+      },
     })
   }
+
+  return { issueCount: issues.length, appliedFixes }
 }
 
 async function ensureSession(job: any, user: any, payload: PatentDraftingAutomationPayload) {
@@ -351,6 +475,7 @@ async function runPipeline(job: any, workerId: string) {
   const jurisdictions = normalizeJurisdictions(payload)
   const activeJurisdiction = (payload.activeJurisdiction || jurisdictions[0] || DEFAULT_JURISDICTION).toUpperCase()
   const languageByJurisdiction = payload.languageByJurisdiction || Object.fromEntries(jurisdictions.map(code => [code, 'en']))
+  const pipelineWarnings: string[] = []
 
   await setStep(job.id, workerId, 'INITIALIZING')
   const sessionId = await ensureSession(job, user, payload)
@@ -370,8 +495,6 @@ async function runPipeline(job: any, workerId: string) {
       commonLanguage: payload.commonLanguage || 'en',
     },
   })
-
-  await persistAutomationInstructions(user, sessionId, payload)
 
   let session = await loadSession(sessionId)
   if (!session?.ideaRecord) {
@@ -395,24 +518,41 @@ async function runPipeline(job: any, workerId: string) {
 
   if (!hasFrozenClaims(session)) {
     await setStep(job.id, workerId, 'CLAIMS')
+    const claimsText = normalizeText(payload.claimsText)
+    const claimsHandling = payload.claimsHandling || (claimsText ? 'improve' : 'draft from brief')
     const claimRemarks = [
       normalizeText(payload.claimRemarks),
+      normalizeText(payload.claimsNotes),
       normalizeText(payload.novelty) ? `Draft claims around this novelty contribution:\n${normalizeText(payload.novelty)}` : '',
-      buildDraftingRemarksForSection(payload, 'claims'),
+      claimsHandling === 'improve' && claimsText
+        ? `Improve the following draft claims without entering claim-refinement mode:\n\n${claimsText}`
+        : '',
     ].filter(Boolean).join('\n\n')
 
-    const claims = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
-      user,
-      patentId: job.patentId,
-      body: {
-        action: 'generate_claims',
-        sessionId,
-        jurisdiction: activeJurisdiction,
-        userClaimRemarks: claimRemarks,
-        claimScopeStyle: payload.claimScopeStyle,
-        acceptPersonaWarnings: true,
-      },
-    }))
+    let claimsHtml = claimsText
+    if (claimsText) {
+      await invokeDraftingAction({
+        user,
+        patentId: job.patentId,
+        body: { action: 'save_claims', sessionId, claims: claimsText },
+      })
+    }
+
+    if (!(claimsHandling === 'use as is' && claimsText)) {
+      const claims = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
+        user,
+        patentId: job.patentId,
+        body: {
+          action: 'generate_claims',
+          sessionId,
+          jurisdiction: activeJurisdiction,
+          userClaimRemarks: claimRemarks,
+          claimScopeStyle: payload.claimScopeStyle,
+          acceptPersonaWarnings: true,
+        },
+      }))
+      claimsHtml = claims.json?.claimsHtml
+    }
 
     await invokeDraftingAction({
       user,
@@ -420,7 +560,7 @@ async function runPipeline(job: any, workerId: string) {
       body: {
         action: 'freeze_claims',
         sessionId,
-        claims: claims.json?.claimsHtml,
+        claims: claimsHtml,
         jurisdiction: activeJurisdiction,
         skipPriorArt: true,
         useInitialClaimsForDrafting: true,
@@ -431,7 +571,8 @@ async function runPipeline(job: any, workerId: string) {
 
   await setStep(job.id, workerId, 'PRIOR_ART_REVIEW')
   const priorArtText = buildPriorArtText(payload)
-  const selectedPatents = normalizePriorArtEntries(payload)
+  const priorArtHandling = payload.priorArtHandling || (priorArtText ? 'use only' : 'auto')
+  let selectedPatents = normalizePriorArtEntries(payload)
   if (priorArtText) {
     await invokeDraftingAction({
       user,
@@ -447,6 +588,36 @@ async function runPipeline(job: any, workerId: string) {
       },
     })
   }
+  if (priorArtHandling !== 'use only') {
+    try {
+      const searchResult = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
+        user,
+        patentId: job.patentId,
+        body: {
+          action: 'related_art_search',
+          sessionId,
+          limit: 5,
+        },
+      }))
+      const searchSelections = Array.isArray(searchResult.json?.results) ? searchResult.json.results.slice(0, 5) : []
+      if (searchSelections.length) {
+        selectedPatents = [...selectedPatents, ...searchSelections]
+        await invokeDraftingAction({
+          user,
+          patentId: job.patentId,
+          body: {
+            action: 'related_art_select',
+            sessionId,
+            runId: searchResult.json?.runId,
+            selections: searchSelections,
+          },
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Prior art search failed'
+      pipelineWarnings.push(`Prior art search: ${message}`)
+    }
+  }
   await invokeDraftingAction({
     user,
     patentId: job.patentId,
@@ -457,6 +628,7 @@ async function runPipeline(job: any, workerId: string) {
         mode: selectedPatents.length ? 'selected' : (priorArtText ? 'manual' : 'none'),
         selectedPatents,
         manualText: priorArtText,
+        literatureReviewInstructions: normalizeText(payload.literatureReview?.instructions || payload.priorArtReview?.instructions),
       },
       skipClaimRefinement: true,
     },
@@ -498,6 +670,25 @@ async function runPipeline(job: any, workerId: string) {
   }
 
   await setStep(job.id, workerId, 'DRAFTING')
+  const illustrativeData = normalizeText(payload.illustrativeData)
+  if (illustrativeData) {
+    const existingDdData = await prisma.dDUserData.findUnique({ where: { sessionId } })
+    if (existingDdData) {
+      await prisma.dDUserData.update({
+        where: { sessionId },
+        data: { userData: illustrativeData, updatedBy: user.id }
+      })
+    } else {
+      await prisma.dDUserData.create({
+        data: {
+          sessionId,
+          userData: illustrativeData,
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      })
+    }
+  }
   session = await loadSession(sessionId)
   if (jurisdictions.length > 1) {
     const hasReferenceDraft = hasGeneratedDraft(session, 'REFERENCE')
@@ -538,14 +729,90 @@ async function runPipeline(job: any, workerId: string) {
 
   if (payload.runReview) {
     await setStep(job.id, workerId, 'REVIEW')
+    for (const jurisdiction of jurisdictions) {
+      try {
+        await setActiveDraftingJurisdiction(sessionId, jurisdiction)
+        const reviewResult = await withHeartbeat(job.id, workerId, () => runAIReviewAndApplyTextFixes({
+          user,
+          patentId: job.patentId,
+          sessionId,
+          jurisdiction,
+        }))
+        if (reviewResult.appliedFixes > 0) {
+          pipelineWarnings.push(`${jurisdiction}: Applied ${reviewResult.appliedFixes} AI text fix(es).`)
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'AI review failed'
+        pipelineWarnings.push(`${jurisdiction}: ${message}`)
+      }
+    }
+  }
+
+  await setStep(job.id, workerId, 'EXPORT')
+  const artifacts: any[] = []
+  for (const jurisdiction of jurisdictions) {
+    await setActiveDraftingJurisdiction(sessionId, jurisdiction)
+    const safeTitle = sanitizeFilename(payload.title || 'patent-draft')
+    const docxExport = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
+      user,
+      patentId: job.patentId,
+      body: {
+        action: 'export_docx',
+        sessionId,
+        jurisdiction,
+      },
+    }))
+    const docxBuffer = Buffer.from(await docxExport.response.arrayBuffer())
+    const docxFilename = filenameFromDisposition(
+      docxExport.response.headers.get('content-disposition'),
+      `${safeTitle}_${jurisdiction}.docx`
+    )
+    artifacts.push(await storeExportArtifact({
+      jobId: job.id,
+      batchId: payload.batchId,
+      batchItemId: payload.batchItemId,
+      batchItemNo: payload.batchItemNo,
+      user,
+      tenantId: user.tenantId,
+      filename: `${jurisdiction}_${docxFilename}`,
+      buffer: docxBuffer,
+      mimeType: docxExport.response.headers.get('content-type') || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }))
+
     try {
-      await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
+      const pdfExport = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
         user,
         patentId: job.patentId,
-        body: { action: 'run_ai_review', sessionId, jurisdiction: activeJurisdiction },
+        body: {
+          action: 'export_pdf',
+          sessionId,
+          jurisdiction,
+        },
       }))
+      const pdfContentType = pdfExport.response.headers.get('content-type') || ''
+      if (pdfContentType.includes('pdf') || pdfContentType.includes('octet-stream')) {
+        const pdfBuffer = Buffer.from(await pdfExport.response.arrayBuffer())
+        const pdfFilename = filenameFromDisposition(
+          pdfExport.response.headers.get('content-disposition'),
+          `${safeTitle}_${jurisdiction}.pdf`
+        )
+        artifacts.push(await storeExportArtifact({
+          jobId: job.id,
+          batchId: payload.batchId,
+          batchItemId: payload.batchItemId,
+          batchItemNo: payload.batchItemNo,
+          user,
+          tenantId: user.tenantId,
+          filename: `${jurisdiction}_${pdfFilename}`,
+          buffer: pdfBuffer,
+          mimeType: pdfContentType,
+        }))
+      } else {
+        pipelineWarnings.push(`${jurisdiction}: PDF export is not available in the current runtime. DOCX was generated successfully.`)
+      }
     } catch (error) {
-      console.warn('[PatentDraftingJob] AI review failed; completing draft with warning:', error)
+      const message = error instanceof Error ? error.message : 'PDF export failed'
+      pipelineWarnings.push(`${jurisdiction}: ${message}`)
     }
   }
 
@@ -557,6 +824,8 @@ async function runPipeline(job: any, workerId: string) {
     patentId: job.patentId,
     jurisdictions,
     activeJurisdiction,
+    artifactIds: artifacts.map(artifact => artifact.id),
+    warnings: pipelineWarnings,
     draftIds: (session?.annexureDrafts || []).map((draft: any) => draft.id),
   }
 }
@@ -592,6 +861,9 @@ export async function enqueuePatentDraftingJob(params: {
       patentId: params.patentId,
       userId: user.id,
       sessionId: params.payload.sessionId || null,
+      autoPatentDraftBatchId: params.payload.batchId || null,
+      autoPatentDraftBatchItemId: params.payload.batchItemId || null,
+      autoPatentDraftBatchItemNo: params.payload.batchItemNo || null,
       status: 'QUEUED',
       currentStep: 'QUEUED',
       payload: jsonSafe({
@@ -655,7 +927,12 @@ export async function processPatentDraftingJob(job: any, workerId: string) {
       },
     })
     if (completed.count !== 1) return null
-    return (prisma as any).patentDraftingJob.findUnique({ where: { id: job.id } })
+    const completedJob = await (prisma as any).patentDraftingJob.findUnique({ where: { id: job.id } })
+    if (completedJob?.autoPatentDraftBatchId) {
+      const { refreshAutoPatentDraftBatch } = await import('@/lib/auto-patent-draft-batch-service')
+      await refreshAutoPatentDraftBatch(completedJob.autoPatentDraftBatchId)
+    }
+    return completedJob
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Patent drafting job failed'
     const freshJob = await (prisma as any).patentDraftingJob.findUnique({ where: { id: job.id } })
@@ -676,6 +953,10 @@ export async function processPatentDraftingJob(job: any, workerId: string) {
         lockedUntil: null,
       },
     })
+    if (freshJob.autoPatentDraftBatchId) {
+      const { refreshAutoPatentDraftBatch } = await import('@/lib/auto-patent-draft-batch-service')
+      await refreshAutoPatentDraftBatch(freshJob.autoPatentDraftBatchId)
+    }
     return null
   }
 }
@@ -687,6 +968,8 @@ export async function processPendingPatentDraftingJobs(workerId = `drafting-work
     if (!job) break
     processed.push(await processPatentDraftingJob(job, workerId))
   }
+  const { refreshReadyAutoPatentDraftBatches } = await import('@/lib/auto-patent-draft-batch-service')
+  await refreshReadyAutoPatentDraftBatches()
   return processed
 }
 

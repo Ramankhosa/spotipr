@@ -16128,6 +16128,7 @@ async function handleValidateDraft(user: any, patentId: string, data: any) {
 // ============================================================================
 
 import { runAIReview, buildFixPrompt, type AIReviewIssue, type FixContext } from '@/lib/ai-review-service'
+import { filterProtectedAIReviewIssues, isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
 
 /**
  * Run comprehensive AI review on draft
@@ -16586,6 +16587,12 @@ async function handleApplyAIFix(
     severity: issue.severity || (issue.metadata as any)?.originalSeverity || 3
   }
 
+  if (isProtectedAIReviewIssue(normalizedIssue)) {
+    return NextResponse.json({
+      error: 'This AI review item targets frozen claims or approved diagram assets and cannot be applied automatically.'
+    }, { status: 400 })
+  }
+
   // Build the fix prompt with full context including diagrams
   const fixPrompt = buildFixPrompt(content, normalizedIssue, {
     relatedContent,
@@ -16908,10 +16915,28 @@ async function handleGetAIReviews(user: any, patentId: string, data: any) {
     orderBy: { reviewedAt: 'desc' },
     take: 10 // Limit to last 10 reviews per jurisdiction
   })
+  const sanitizedReviews = reviews.map((review: any) => {
+    const issues = Array.isArray(review.issues) ? filterProtectedAIReviewIssues(review.issues as any[]) : []
+    const errors = issues.filter((i: any) => i.type === 'error' || i.t === 'E').length
+    const warnings = issues.filter((i: any) => i.type === 'warning' || i.t === 'W').length
+    const suggestions = issues.filter((i: any) => i.type === 'suggestion' || i.t === 'S').length
+    const summary = {
+      ...((review.summary as any) || {}),
+      totalIssues: issues.length,
+      errors,
+      warnings,
+      suggestions,
+      overallScore: issues.length === 0 ? 100 : ((review.summary as any)?.overallScore || 85),
+      recommendation: issues.length === 0
+        ? 'Draft looks good! Ready for export.'
+        : ((review.summary as any)?.recommendation || 'Review completed.')
+    }
+    return { ...review, issues, summary }
+  })
 
   // Get the latest review for each jurisdiction
   const latestByJurisdiction: Record<string, any> = {}
-  for (const review of reviews) {
+  for (const review of sanitizedReviews) {
     if (!latestByJurisdiction[review.jurisdiction]) {
       latestByJurisdiction[review.jurisdiction] = review
     }
@@ -16919,9 +16944,9 @@ async function handleGetAIReviews(user: any, patentId: string, data: any) {
 
   return NextResponse.json({
     success: true,
-    reviews,
+    reviews: sanitizedReviews,
     latest: latestByJurisdiction,
-    count: reviews.length
+    count: sanitizedReviews.length
   })
 }
 

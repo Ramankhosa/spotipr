@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { DEFAULT_LIMITS, SECTION_WORD_LIMITS } from '@/lib/writing-sample-limits'
 import Link from 'next/link'
 
 interface Persona {
@@ -43,30 +44,6 @@ const JURISDICTIONS = [
   { code: 'CA', label: '🇨🇦 Canada' },
   { code: 'AU', label: '🇦🇺 Australia' }
 ]
-
-// Section-specific word limits - MUST match backend (src/app/api/writing-samples/limits/route.ts)
-// Higher limits for key sections to capture more writing patterns for effective style mimicry
-const SECTION_WORD_LIMITS: Record<string, { min: number; max: number; recommended: { min: number; max: number } }> = {
-  title: { min: 3, max: 50, recommended: { min: 5, max: 30 } },
-  fieldOfInvention: { min: 5, max: 200, recommended: { min: 10, max: 100 } },
-  background: { min: 10, max: 1500, recommended: { min: 80, max: 400 } }, // Increased for prior art patterns
-  objectsOfInvention: { min: 5, max: 500, recommended: { min: 20, max: 200 } },
-  summary: { min: 10, max: 1500, recommended: { min: 80, max: 400 } }, // Increased for structural patterns
-  briefDescriptionOfDrawings: { min: 5, max: 500, recommended: { min: 20, max: 150 } },
-  detailedDescription: { min: 20, max: 3000, recommended: { min: 150, max: 800 } }, // Increased significantly for complex writing patterns
-  claims: { min: 10, max: 2000, recommended: { min: 100, max: 600 } }, // Increased for multi-claim structures
-  abstract: { min: 10, max: 500, recommended: { min: 50, max: 200 } },
-  technicalProblem: { min: 10, max: 500, recommended: { min: 30, max: 200 } },
-  technicalSolution: { min: 10, max: 500, recommended: { min: 30, max: 200 } },
-  advantageousEffects: { min: 10, max: 500, recommended: { min: 30, max: 200 } },
-  industrialApplicability: { min: 5, max: 300, recommended: { min: 20, max: 150 } },
-  bestMethod: { min: 10, max: 1000, recommended: { min: 50, max: 300 } },
-  preamble: { min: 5, max: 200, recommended: { min: 10, max: 100 } },
-  crossReference: { min: 5, max: 300, recommended: { min: 10, max: 100 } }
-}
-
-// Default limits for unknown sections
-const DEFAULT_LIMITS = { min: 5, max: 1000, recommended: { min: 10, max: 300 } }
 
 // Word count indicator component with visual feedback
 function WordCountIndicator({ text, sectionKey }: { text: string; sectionKey: string }) {

@@ -11,6 +11,7 @@
 import { llmGateway } from '@/lib/metering'
 import type { NumberingStyle, PatentTypePrimary } from './drafting-service'
 import crypto from 'crypto'
+import { filterProtectedAIReviewIssues } from './ai-review-protection'
 
 // ============================================================================
 // Types
@@ -240,13 +241,15 @@ export async function runAIReview(
       }
     }
 
-    // Parse the review response
+    // Parse the review response and enforce locked-section protections defensively.
     const reviewData = parseReviewResponse(result.response.output)
+    const filteredIssues = filterProtectedAIReviewIssues(reviewData.issues)
+    const filteredSummary = rebuildReviewSummary(reviewData.summary, filteredIssues)
     
     return {
       success: true,
-      issues: reviewData.issues,
-      summary: reviewData.summary,
+      issues: filteredIssues,
+      summary: filteredSummary,
       reviewedAt: new Date().toISOString(),
       tokensUsed: result.response.outputTokens
     }
@@ -273,7 +276,7 @@ export async function runAIReview(
 // Prompt Building
 // ============================================================================
 
-function buildReviewPrompt(
+export function buildReviewPrompt(
   draft: Record<string, string>,
   figures: Array<{ figureNo: number; title: string; plantuml: string }>,
   jurisdiction: string,
@@ -286,16 +289,31 @@ function buildReviewPrompt(
   patentTypePrimary?: PatentTypePrimary | string,
   figuresSkipped: boolean = false
 ): string {
-  // Build sections text - increased limit to 15000 chars per section for comprehensive review
-  // Critical sections like claims and detailedDescription need full content for proper analysis
+  const lockedClaims = draft.claims || ''
+  const reviewableSectionKeys = new Set(
+    Object.entries(draft)
+      .filter(([key, content]) => (
+        key !== 'claims' &&
+        (!figuresSkipped || key !== 'briefDescriptionOfDrawings') &&
+        content &&
+        content.trim().length > 0
+      ))
+      .map(([key]) => key)
+  )
+
+  // Build sections text. Claims are intentionally excluded because they are user-frozen.
   const sectionsText = Object.entries(draft)
-    .filter(([key, content]) => (!figuresSkipped || key !== 'briefDescriptionOfDrawings') && content && content.trim().length > 0)
+    .filter(([key, content]) => reviewableSectionKeys.has(key) && content && content.trim().length > 0)
     .map(([key, content]) => {
-      const maxLen = ['claims', 'detailedDescription', 'summary'].includes(key) ? 20000 : 10000
+      const maxLen = ['detailedDescription', 'summary'].includes(key) ? 20000 : 10000
       const truncated = content.length > maxLen
       return `### ${SECTION_LABELS[key] || key}\n${content.substring(0, maxLen)}${truncated ? `\n\n[Note: Section continues for ${content.length - maxLen} more characters. Review the portion shown above.]` : ''}`
     })
     .join('\n\n')
+
+  const lockedClaimsText = lockedClaims && lockedClaims.trim().length > 0
+    ? `### Frozen Claims (Read-Only - Do Not Review Or Modify)\n${lockedClaims.substring(0, 20000)}${lockedClaims.length > 20000 ? `\n\n[Note: Frozen claims continue for ${lockedClaims.length - 20000} more characters. Use only as a locked consistency anchor.]` : ''}`
+    : 'No frozen claims provided.'
 
   // Build comprehensive figures text with PlantUML and extracted elements
   let figuresText = figuresSkipped
@@ -321,10 +339,10 @@ ${f.plantuml}
 - Reference Numerals: ${numeralMatches.length > 0 ? Array.from(new Set(numeralMatches)).join(', ') : 'None detected'}`
     }).join('\n\n')
 
-    figuresText = `**DIAGRAM FIGURES (PlantUML Code):**
-These ${figures.length} diagram(s) are provided as PlantUML source code.
+    figuresText = `**APPROVED DIAGRAM FIGURES (Read-Only PlantUML Code):**
+These ${figures.length} approved diagram(s) are provided as locked PlantUML source code.
 The PlantUML code defines the structure, components, and relationships in each figure.
-Analyze the code to understand what each diagram depicts.
+Analyze the code only to understand what each diagram depicts. Do not suggest changing PlantUML, diagram structure, figure order, figure content, or diagram assets.
 
 ${figureDetails}`
   }
@@ -338,10 +356,11 @@ ${figureDetails}`
     sketchesText = `
 
 ═══════════════════════════════════════════════════════════════════════════════
-SKETCH FIGURES (Image-based - No Code Provided)
+APPROVED SKETCH FIGURES (Image-based - Read-Only Metadata)
 ═══════════════════════════════════════════════════════════════════════════════
 ⚠️ **CRITICAL:** The following figures are REAL figures included in the patent specification.
 They are hand-drawn sketches or uploaded images, NOT PlantUML diagrams.
+They are locked and must not be changed, redrawn, reordered, regenerated, replaced, or removed.
 
 **Why no code is provided:** These are raster images (JPG/PNG), not text-based diagrams.
 To save tokens, we provide only their metadata (title, description, position).
@@ -360,14 +379,14 @@ ${sketches.length > 0 ? `- Sketches (image-based): FIG. ${sketches.map(s => s.fi
   // Build section limits text for jurisdiction-specific validation
   let sectionLimitsText = ''
   if (sectionLimits && sectionLimits.length > 0) {
-    const limitsDetails = sectionLimits.map(l => {
+    const limitsDetails = sectionLimits
+      .filter(l => l.sectionKey !== 'claims' && reviewableSectionKeys.has(l.sectionKey))
+      .map(l => {
       const limits: string[] = []
       if (l.maxWords) limits.push(`max ${l.maxWords} words`)
       if (l.minWords) limits.push(`min ${l.minWords} words`)
       if (l.recommendedWords) limits.push(`recommended ${l.recommendedWords} words`)
       if (l.maxChars) limits.push(`max ${l.maxChars} characters`)
-      if (l.maxCount) limits.push(`max ${l.maxCount} claims`)
-      if (l.maxIndependent) limits.push(`max ${l.maxIndependent} independent claims`)
       const message = l.wordLimitMessage || l.charLimitMessage || ''
       const ref = l.legalReference ? ` (${l.legalReference})` : ''
       return `- ${SECTION_LABELS[l.sectionKey] || l.sectionKey}: ${limits.join(', ')}${message ? ` - ${message}` : ''}${ref}`
@@ -387,7 +406,10 @@ ${limitsDetails}
   // Build cross-validation rules text
   let crossValidationsText = ''
   if (crossValidations && crossValidations.length > 0) {
-    const validationDetails = crossValidations.map(cv => 
+    const validationDetails = crossValidations
+      .filter(cv => cv.targetSection !== 'claims')
+      .filter(cv => reviewableSectionKeys.has(cv.targetSection) || cv.sourceSection === 'claims')
+      .map(cv => 
       `- [${cv.severity.toUpperCase()}] ${cv.ruleName}: ${cv.description} (${cv.sourceSection} → ${cv.targetSection})`
     ).join('\n')
     crossValidationsText = `
@@ -445,8 +467,15 @@ DRAFT SECTIONS
 ═══════════════════════════════════════════════════════════════════════════════
 ${sectionsText}
 
+==============================================================================
+LOCKED CLAIMS CONTEXT (Read-Only)
+==============================================================================
+${lockedClaimsText}
+
+Use these claims only as an authoritative consistency anchor for editable sections. Do not review, critique, amend, rewrite, renumber, add, delete, narrow, broaden, or otherwise modify any claim.
+
 ═══════════════════════════════════════════════════════════════════════════════
-PATENT FIGURES (Diagrams + Sketches)
+LOCKED PATENT FIGURES (Approved Diagrams + Sketches)
 ═══════════════════════════════════════════════════════════════════════════════
 ${figuresText}
 ${sketchesText}
@@ -455,7 +484,7 @@ ${figuresSkipped
   ? '**FIGURELESS DRAFT NOTE:** Figures are intentionally unavailable. Do not recommend creating figures, drawing descriptions, diagrams, sketches, or Brief Description of Drawings text. Flag only accidental references to FIG. X, figures, drawings, diagrams, or sketches in the draft text.'
   : `**FIGURE VALIDATION NOTE:** When reviewing figure references in the draft, check against
 BOTH the PlantUML diagrams above AND the sketch figures listed. A reference to "FIG. X"
-is valid if X appears in either the diagrams section OR the sketches section.`}
+is valid if X appears in either the diagrams section OR the sketches section. These figures are approved read-only context. If a mismatch exists, suggest changing only editable draft text, not the figure, diagram, sketch, PlantUML, figure sequence, or drawing asset.`}
 ${sectionLimitsText}
 ${crossValidationsText}
 
@@ -465,25 +494,32 @@ REVIEW INSTRUCTIONS
 
 Analyze the draft for the following issues:
 
-1. **CLAIMS vs DESCRIPTION CONSISTENCY**
-   - Every feature in claims MUST be supported in detailed description
-   - Check if claim limitations are properly disclosed
-   - Identify any claim features missing from description
+0. **LOCKED-CONTENT PROTECTION (MANDATORY)**
+   - Do NOT output any issue with sectionKey "claims".
+   - Do NOT suggest amending, rewriting, renumbering, adding, deleting, narrowing, broadening, or otherwise changing claims.
+   - Do NOT suggest changing PlantUML, sketches, figure sequence, figure content, drawing sheets, or approved diagram structure.
+   - If locked claims or locked figures expose a mismatch, target the editable draft section that should be revised.
+
+1. **LOCKED CLAIMS vs EDITABLE DESCRIPTION CONSISTENCY**
+   - Use frozen claims only as read-only context
+   - Identify claim features that need support in editable sections such as detailedDescription or summary
+   - Set sectionKey to the editable section needing the fix, never to claims
 
 ${figuresSkipped ? `2. **FIGURELESS DRAFT CHECK**
    - Do NOT perform diagram-description alignment checks.
    - Do NOT suggest adding figures, drawings, diagrams, sketches, or a Brief Description of Drawings section.
-   - Flag any draft language that refers to FIG. X, figures, drawings, diagrams, sketches, or drawing sheets because figures are disabled for this draft.` : `2. **DIAGRAM-DESCRIPTION ALIGNMENT** (Analyze PlantUML code to understand diagrams)
+   - Flag any draft language that refers to FIG. X, figures, drawings, diagrams, sketches, or drawing sheets because figures are disabled for this draft.` : `2. **LOCKED FIGURE-DESCRIPTION ALIGNMENT** (Analyze approved PlantUML/sketch context)
    - Compare PlantUML diagram structure with Brief Description of Drawings
    - Verify all reference numerals in PlantUML code appear in description text
    - Check if components shown in PlantUML match declared components above
    - Identify any diagram elements not explained in Detailed Description
    - Verify figure captions accurately describe what PlantUML shows
+   - Target only editable text sections for fixes; never recommend changing approved diagram/sketch assets
    - Respect the declared numbering style for the patent type (NUMERIC_BUCKET: assigned numeric labels; STEP_LABEL: S100/S200; CONSTITUENT_LABEL: (a)/(b)). Flag any mixing or missing labels.`}
 
 3. **COMPLETENESS CHECKS**
    - Are all declared components (above) mentioned and explained?
-   - Does summary accurately reflect the claims?
+   - Does summary accurately reflect the locked claims without changing the claims?
    - Is the abstract within typical limits (150 words)?
    - Are reference numerals used consistently and in the declared style?
 
@@ -492,11 +528,10 @@ ${figuresSkipped ? `2. **FIGURELESS DRAFT CHECK**
    - PROCESS: Confirm step order and dependencies use S-prefixed labels and are fully described.
    - COMPOSITION: Confirm constituents are labeled (a)/(b)/(c) and composition ratios/roles are covered without mixing numeric labels.
 
-5. **LEGAL/FORMAL ISSUES**
-   - Claims properly numbered and dependent claims reference correctly
-   - Independent claims are self-contained
-   - No indefinite language without proper basis
-   - Proper antecedent basis in claims
+5. **LEGAL/FORMAL ISSUES FOR EDITABLE TEXT ONLY**
+   - No indefinite language in editable description/summary/abstract sections without proper basis
+   - Proper formal patent tone in editable draft sections
+   - Do not review claim numbering, claim dependencies, independent-claim scope, claim count, or antecedent basis in claims
 
 6. **CLARITY & QUALITY**
    - Ambiguous or unclear passages
@@ -505,8 +540,8 @@ ${figuresSkipped ? `2. **FIGURELESS DRAFT CHECK**
 ${sectionLimits && sectionLimits.length > 0 ? `
 7. **SECTION LENGTH LIMITS** (CRITICAL - Check against limits above)
    - Review each section against the jurisdiction-specific limits provided
-   - Flag sections exceeding word/character/claim count limits as ERRORS
-   - Note: For claims, check both total count AND independent claim count
+   - Flag editable sections exceeding word/character limits as ERRORS
+   - Do not check claim count, independent claim count, or any claims-section limit
 ` : ''}
 ${crossValidations && crossValidations.length > 0 ? `
 8. **CROSS-SECTION CONSISTENCY** (Check rules above)
@@ -532,15 +567,15 @@ Return ONLY a JSON object with this EXACT structure:
 
 {
   "issues": [
-    {"s": "claims", "t": "E", "title": "Antecedent basis error in Claim 2", "fix": "Change 'the processor' to 'a processor' in Claim 2 since this is the first mention."},
-    {"s": "detailedDescription", "t": "W", "title": "Missing component 104", "fix": "Add paragraph after data flow section describing storage module (104)."}
+    {"s": "detailedDescription", "t": "W", "title": "Missing support for locked claim feature", "fix": "Add paragraph after data flow section describing how the controller performs predictive thermal adjustment."},
+    {"s": "briefDescriptionOfDrawings", "t": "S", "title": "Caption omits approved FIG. 1 detail", "fix": "Revise the FIG. 1 caption text to mention the controller and sensor blocks shown in the approved figure."}
   ],
   "score": 85,
   "summary": "Good draft with 2 issues to fix before filing."
 }
 
 FIELD DEFINITIONS:
-- "s": Section key (claims, detailedDescription, abstract, briefDescriptionOfDrawings, etc.)
+- "s": Editable section key (detailedDescription, abstract, briefDescriptionOfDrawings, summary, etc.). NEVER use "claims".
 - "t": Type - MUST be exactly one of: "E" (error), "W" (warning), "S" (suggestion)
 - "title": Brief issue title (max 10 words)
 - "fix": Complete fix instruction that a smaller LLM can follow WITHOUT any other context
@@ -566,8 +601,8 @@ The "fix" field will be sent to a DIFFERENT LLM with NO context. It MUST be:
 ✓ Specific - Quote exact text that needs changing
 ✓ Actionable - Give concrete steps
 
-BAD: "Fix the antecedent basis issue"
-GOOD: "In Claim 2, change 'the processor' to 'a processor' since this is the first mention."
+BAD: "Change Claim 2 to add the controller limitation."
+GOOD: "In Detailed Description, add a paragraph explaining the controller limitation already present in frozen Claim 2."
 
 BAD: "Add missing component"
 GOOD: "After '...data flow between modules.' add: 'The storage module (104) comprises non-volatile memory for user preferences.'"
@@ -584,7 +619,7 @@ JSON RULES (MUST FOLLOW)
 ⚠️ If unsure, output FEWER issues rather than risk JSON errors
 
 EXAMPLE OUTPUT (copy this structure exactly):
-{"issues":[{"s":"claims","t":"E","title":"Missing antecedent","fix":"In Claim 2, change 'the unit' to 'a unit'."}],"score":90,"summary":"Good draft, one fix needed."}`
+{"issues":[{"s":"detailedDescription","t":"W","title":"Missing support for locked claim feature","fix":"Add one paragraph explaining the predictive controller already recited in frozen Claim 1."}],"score":90,"summary":"Good draft, one editable-section fix needed."}`
 }
 
 // ============================================================================
@@ -1028,6 +1063,30 @@ function calculateScore(errorCount: number, warningCount: number, suggestionCoun
   
   // Ensure score is between 85 and 90 when issues exist
   return Math.round(Math.min(CEILING_WITH_ISSUES, Math.max(FLOOR_SCORE, score)))
+}
+
+function rebuildReviewSummary(
+  originalSummary: AIReviewResult['summary'],
+  issues: AIReviewIssue[]
+): AIReviewResult['summary'] {
+  const errors = issues.filter(i => i.type === 'error').length
+  const warnings = issues.filter(i => i.type === 'warning').length
+  const suggestions = issues.filter(i => i.type === 'suggestion').length
+  const originalRecommendation = originalSummary?.recommendation || ''
+
+  return {
+    ...(originalSummary || {}),
+    totalIssues: issues.length,
+    errors,
+    warnings,
+    suggestions,
+    overallScore: issues.length === 0
+      ? 100
+      : Math.min(100, Math.max(85, originalSummary?.overallScore || calculateScore(errors, warnings, suggestions))),
+    recommendation: issues.length === 0
+      ? 'Draft looks good! Ready for export.'
+      : originalRecommendation || getDefaultRecommendation(errors, warnings)
+  }
 }
 
 function getDefaultRecommendation(errors: number, warnings: number): string {
