@@ -282,6 +282,16 @@ export default function NoveltySearchSubmission(props: {
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
               Approval is required because these terms control patent retrieval and feature-by-feature comparison. Internal processing begins only after you approve and queue this plan.
             </div>
+            {Array.isArray(review.warnings) && review.warnings.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-white px-4 py-3 text-xs leading-5 text-amber-900">
+                <div className="font-semibold">Review warnings</div>
+                <ul className="mt-1 list-disc space-y-1 pl-5">
+                  {review.warnings.slice(0, 5).map((warning: unknown, index: number) => (
+                    <li key={index}>{String(warning)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
         )}
 

@@ -739,6 +739,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                     <Cell>{feature.typeLabel}</Cell>
                     <Cell>
                       <div>{feature.feature}</div>
+                      {feature.claimableText && <div className="mt-2 text-xs leading-5 text-slate-600">{feature.claimableText}</div>}
                       {feature.genericWarning && <div className="mt-2 text-xs font-semibold text-amber-700">{feature.genericWarning}</div>}
                     </Cell>
                   </tr>
@@ -985,12 +986,35 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
               </div>
               <div className="rounded-sm border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
                 <div className="font-semibold">Attorney Review Focus</div>
+                <p className="mt-2">{reportData.attorneyReviewFocus || 'Run detailed citation mapping before forming claim-positioning conclusions.'}</p>
                 <p className="mt-2">Closest mapped citation: {reportData.publicClosestCitation?.publicationNumber || '-'}</p>
-                <p>Reference role: {reportData.publicClosestCitation?.referenceRole || '-'}</p>
-                <p>Review priority: {reportData.publicClosestCitation?.reviewPriority || '-'}</p>
                 <p>Legal conclusion: {reportData.reportConfidence.legalConclusion}</p>
               </div>
             </div>
+            {reportData.claimConceptMapping.length > 0 && (
+              <div className="mt-5 overflow-x-auto rounded-sm border border-slate-300">
+                <table className="min-w-full border-collapse text-xs">
+                  <thead>
+                    <tr>
+                      <HeaderCell>Claim Concept</HeaderCell>
+                      <HeaderCell className="w-32">Feature Coverage</HeaderCell>
+                      <HeaderCell className="w-40">Relationship</HeaderCell>
+                      <HeaderCell>Interpretation</HeaderCell>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportData.claimConceptMapping.map(item => (
+                      <tr className="print-row" key={item.claimConceptTitle}>
+                        <Cell className="font-semibold text-slate-950">{item.claimConceptTitle}</Cell>
+                        <Cell>{item.mappedFeatures}/{item.totalFeatures}</Cell>
+                        <Cell>{item.relationshipMapped ? 'Mapped' : 'Not fully mapped'} ({item.relationshipRisk})</Cell>
+                        <Cell>{item.reason}</Cell>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             <div className="mt-5 grid gap-5 md:grid-cols-2">
               <ListBlock title="Key Risks" items={reportData.finalAssessment.risks} />
               <ListBlock title="Strategic Recommendations" items={reportData.finalAssessment.recommendations} />

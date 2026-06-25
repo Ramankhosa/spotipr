@@ -1,4 +1,4 @@
-import type { FeatureMapCell, NormalizedIdea, PatentFeatureMap, PerPatentRemark } from './novelty-search-service';
+import type { ClaimConcept, ClaimConceptMapping, FeatureMapCell, NormalizedIdea, PatentFeatureMap, PerPatentRemark } from './novelty-search-service';
 import { buildNoveltyReportCountSummary } from './novelty-report-counts';
 import { matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
 
@@ -15,6 +15,9 @@ export interface AttorneyReportFeatureSummary {
   importance: AttorneyReportFeatureImportance;
   importanceLabel: string;
   disclosure: string;
+  claimableText: string;
+  embeddingSearchText: string;
+  featureConfidence: number | null;
   genericWarning: string;
 }
 
@@ -153,6 +156,11 @@ export interface AttorneyReportModel {
   };
   potentialDifferentiationSpace: string;
   matrixInsight: string;
+  architecturalInnovation: string;
+  claimConcepts: ClaimConcept[];
+  claimConceptMapping: ClaimConceptMapping[];
+  mainDifferentiator: string;
+  attorneyReviewFocus: string;
   finalAssessment: {
     decision: string;
     confidence: string;
@@ -488,6 +496,9 @@ function buildFeatureSummaries(stage0: NormalizedIdea, inventionDescription: str
       importance,
       importanceLabel: featureImportanceLabel(importance),
       disclosure: disclosureMap.get(feature) || feature,
+      claimableText: cleanText((detail as any)?.claimableText || (detail as any)?.claimable_text),
+      embeddingSearchText: cleanText((detail as any)?.embeddingSearchText || (detail as any)?.embedding_search_text),
+      featureConfidence: numberScore((detail as any)?.featureConfidence ?? (detail as any)?.feature_confidence) ?? null,
       genericWarning: type === 'generic_weak'
         ? 'Broad/common feature. Do not rely on this feature alone without a narrower technical mechanism.'
         : '',
@@ -851,6 +862,149 @@ function buildMatrixInsight(comparisons: AttorneyReportPatentComparison[], featu
   return `No cited reference maps ${coreLabels} together. ${risk.combinationRiskExplanation} The strongest potential differentiation space is the integrated arrangement of the unmapped or partially mapped core features.`;
 }
 
+function normalizeClaimConcepts(stage0: NormalizedIdea): ClaimConcept[] {
+  const features = new Set((stage0.inventionFeatures || []).map(feature => cleanText(feature)));
+  return (Array.isArray(stage0.claimConcepts) ? stage0.claimConcepts : [])
+    .map((concept: any, index) => {
+      const linkedFeatures = (Array.isArray(concept?.linkedFeatures) ? concept.linkedFeatures : [])
+        .map((feature: unknown) => cleanText(feature))
+        .filter((feature: string) => features.has(feature));
+      if (!linkedFeatures.length) return null;
+      const importance = cleanText(concept?.importance).toLowerCase();
+      return {
+        title: cleanText(concept?.title, `Claim concept ${index + 1}`),
+        linkedFeatures,
+        claimableSummary: cleanText(concept?.claimableSummary),
+        importance: importance === 'primary' || importance === 'secondary' || importance === 'fallback' ? importance : (index === 0 ? 'primary' : 'secondary'),
+        riskIfMissing: cleanText(concept?.riskIfMissing),
+      } as ClaimConcept;
+    })
+    .filter(Boolean) as ClaimConcept[];
+}
+
+function conceptFeatureNumbers(concept: ClaimConcept, featureSummaries: AttorneyReportFeatureSummary[]): string {
+  return concept.linkedFeatures
+    .map(feature => featureSummaries.find(summary => summary.feature === feature)?.featureNumber)
+    .filter(Boolean)
+    .join(' + ');
+}
+
+function buildFallbackConceptMapping(
+  concepts: ClaimConcept[],
+  comparisons: AttorneyReportPatentComparison[],
+  featureSummaries: AttorneyReportFeatureSummary[]
+): ClaimConceptMapping[] {
+  return concepts.map(concept => {
+    const totalFeatures = Math.max(1, concept.linkedFeatures.length);
+    const perPatent = comparisons.map(comparison => {
+      const mappedRows = concept.linkedFeatures
+        .map(feature => comparison.rows.find(row => row.userFeature === feature))
+        .filter((row): row is AttorneyReportFeatureRow => {
+          if (!row) return false;
+          return row.status === 'Present' || row.status === 'Partial';
+        });
+      const weighted = mappedRows.reduce((sum, row) => sum + (row.status === 'Present' ? 1 : 0.5), 0);
+      const text = [
+        comparison.title,
+        comparison.technicalDisclosure,
+        comparison.summary,
+        ...mappedRows.map(row => `${row.patentDisclosure} ${row.evidenceQuote} ${row.professionalRemark}`),
+      ].join(' ').toLowerCase();
+      const relationshipTokens = cleanText(`${concept.title} ${concept.claimableSummary}`).toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(token => token.length > 4)
+        .slice(0, 20);
+      const tokenHits = relationshipTokens.filter(token => text.includes(token)).length;
+      const relationshipMapped = mappedRows.length >= Math.min(2, totalFeatures) && tokenHits >= Math.min(4, Math.max(2, Math.ceil(relationshipTokens.length * 0.25)));
+      return {
+        pn: comparison.publicationNumber,
+        mappedFeatures: mappedRows,
+        coverage: Math.round((weighted / totalFeatures) * 100) / 100,
+        relationshipMapped,
+        evidence: relationshipMapped
+          ? cleanText(mappedRows.map(row => row.patentDisclosure || row.evidenceQuote).filter(Boolean).join(' ')).slice(0, 240)
+          : `Feature overlap is present, but the reviewed citation evidence does not show the cooperative relationship: ${concept.claimableSummary || concept.title}.`,
+      };
+    }).sort((a, b) => Number(b.relationshipMapped) - Number(a.relationshipMapped) || b.coverage - a.coverage);
+    const best = perPatent[0];
+    const distributedMapped = concept.linkedFeatures.filter(feature =>
+      comparisons.some(comparison => {
+        const row = comparison.rows.find(item => item.userFeature === feature);
+        return row?.status === 'Present' || row?.status === 'Partial';
+      })
+    ).length;
+    const distributedCoverage = Math.round((distributedMapped / totalFeatures) * 100) / 100;
+    const coverage = best?.coverage || 0;
+    const relationshipMapped = Boolean(best?.relationshipMapped && coverage >= 0.75);
+    const relationshipRisk: ClaimConceptMapping['relationshipRisk'] = relationshipMapped
+      ? 'high'
+      : coverage >= 0.75 || distributedCoverage >= 0.75
+        ? 'moderate'
+        : 'low';
+    return {
+      claimConceptTitle: concept.title,
+      linkedFeatures: concept.linkedFeatures,
+      mappedFeatures: best?.mappedFeatures.length || 0,
+      totalFeatures,
+      coverage,
+      distributedCoverage,
+      bestReference: best?.pn,
+      relationshipMapped,
+      relationshipEvidence: best?.evidence || '',
+      relationshipRisk,
+      risk: relationshipRisk,
+      reason: relationshipMapped
+        ? 'A single reviewed citation maps the linked features and the cooperative relationship.'
+        : coverage >= 0.75
+          ? 'A citation maps most linked features, but the cooperative relationship is not fully disclosed.'
+          : distributedCoverage >= 0.75
+            ? 'Linked features are distributed across references without one citation mapping the full cooperative relationship.'
+            : 'No reviewed citation maps most linked features or their cooperative relationship.',
+    };
+  });
+}
+
+function buildMainDifferentiator(stage0: NormalizedIdea, concepts: ClaimConcept[], mapping: ClaimConceptMapping[], featureSummaries: AttorneyReportFeatureSummary[]): string {
+  const architecture = cleanText(stage0.architecturalInnovation);
+  if (architecture) return architecture;
+  const primary = concepts.find(concept => concept.importance === 'primary') || concepts[0];
+  if (primary) return primary.title;
+  const novelty = featureSummaries.find(feature => feature.type === 'novelty_candidate') || featureSummaries.find(feature => feature.importance === 'core_inventive');
+  return novelty ? `${novelty.featureNumber} - ${novelty.feature}` : 'No unmapped differentiator identified';
+}
+
+function buildAttorneyReviewFocus(
+  concepts: ClaimConcept[],
+  mapping: ClaimConceptMapping[],
+  featureSummaries: AttorneyReportFeatureSummary[],
+  closestCitation: AttorneyReportCitation | null
+): string {
+  const topConcepts = (concepts.length ? concepts : [])
+    .slice()
+    .sort((a, b) => (a.importance === 'primary' ? -1 : 0) - (b.importance === 'primary' ? -1 : 0))
+    .slice(0, 2);
+  if (!topConcepts.length) {
+    return closestCitation
+      ? `Review ${closestCitation.publicationNumber} first; preserve unmapped or partially mapped core feature combinations in claim-positioning review.`
+      : 'Run detailed citation mapping before forming claim-positioning conclusions.';
+  }
+  const conceptLabels = topConcepts.map(concept => concept.title).join(' and ');
+  const featureGroups = topConcepts
+    .map(concept => conceptFeatureNumbers(concept, featureSummaries))
+    .filter(Boolean)
+    .join('; ');
+  const relationshipGaps = mapping
+    .filter(item => !item.relationshipMapped)
+    .slice(0, 2)
+    .map(item => item.claimConceptTitle);
+  return [
+    closestCitation ? `Review ${closestCitation.publicationNumber} first for overlap against ${conceptLabels}.` : `Review closest citations for overlap against ${conceptLabels}.`,
+    featureGroups ? `Preserve the cooperative relationship across ${featureGroups}.` : '',
+    relationshipGaps.length ? `Do not treat isolated feature overlap as mapping ${relationshipGaps.join(' or ')} unless the relationship is disclosed.` : '',
+  ].filter(Boolean).join(' ');
+}
+
 function sanitizeRiskItem(value: unknown): string {
   return reportSafeText(value)
     .replace(/\bNot Novel determination indicates\b/gi, 'Preliminary mapped-overlap assessment indicates')
@@ -1150,6 +1304,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
   const sourceMode = cleanText((searchRun.config as any)?.searchSource?.mode || 'Selected patent sources');
   const featureSummaries = buildFeatureSummaries(stage0, searchRun.inventionDescription || '');
   const genericFeatures = featureSummaries.filter(feature => feature.type === 'generic_weak').map(feature => feature.feature);
+  const claimConcepts = normalizeClaimConcepts(stage0);
   const publicClosestCitation = [...citations].sort((a, b) => {
     const priority = (citation: AttorneyReportCitation) => {
       const categoryWeight = citation.matchCategory === 'direct' ? 3 : citation.matchCategory === 'component' ? 2 : citation.matchCategory === 'borderline' ? 1 : 0;
@@ -1158,6 +1313,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     };
     return priority(b) - priority(a);
   })[0] || null;
+  const claimConceptMapping = Array.isArray(stage4?.claimConceptMapping) && stage4.claimConceptMapping.length
+    ? stage4.claimConceptMapping as ClaimConceptMapping[]
+    : buildFallbackConceptMapping(claimConcepts, comparisons, featureSummaries);
+  const mainDifferentiator = buildMainDifferentiator(stage0, claimConcepts, claimConceptMapping, featureSummaries);
+  const attorneyReviewFocus = buildAttorneyReviewFocus(claimConcepts, claimConceptMapping, featureSummaries, publicClosestCitation);
   const riskAssessment = deterministicRiskAssessment(comparisons, featureSummaries, counts);
   const potentialDifferentiationSpace = buildPotentialDifferentiationSpace(comparisons, featureSummaries);
   const matrixInsight = buildMatrixInsight(comparisons, featureSummaries, riskAssessment);
@@ -1260,6 +1420,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     riskAssessment,
     potentialDifferentiationSpace,
     matrixInsight,
+    architecturalInnovation: cleanText(stage0.architecturalInnovation),
+    claimConcepts,
+    claimConceptMapping,
+    mainDifferentiator,
+    attorneyReviewFocus,
     finalAssessment: {
       decision: riskAssessment.headline,
       confidence: cleanText(stage4?.confidence || stage4?.executive_summary?.confidence, 'Low'),

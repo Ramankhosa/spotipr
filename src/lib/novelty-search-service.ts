@@ -160,13 +160,33 @@ OUTPUT JSON SHAPE:
       "feature_type": "core_technical|implementation|novelty_candidate|generic_weak",
       "user_disclosure": "what the user's invention specifically does for this feature",
       "technical_role": "why this feature matters technically",
-      "source_excerpt": "short excerpt from the user disclosure, or empty string"
+      "source_excerpt": "short excerpt from the user disclosure, or empty string",
+      "claimable_text": "attorney-style functional/structural phrase for claim positioning",
+      "embedding_search_text": "controlled search/embedding phrase with synonyms and patent terminology",
+      "feature_confidence": 0.0
     }
   ],
   "inventionType": ["MECHANICAL|SOFTWARE|CHEMICAL|ELECTRICAL|BIO|GENERAL"],
   "cpcCodes": ["optional CPC class hint, or empty array"],
   "ipcCodes": ["optional IPC class hint, or empty array"],
   "novelty_focus": ["feature most likely to drive novelty"],
+  "novelty_focus_interactions": [
+    {
+      "type": "feature_interaction|single_feature|architecture",
+      "description": "how linked features cooperate to create the novelty focus",
+      "linked_features": ["copy invention_features items exactly"]
+    }
+  ],
+  "architectural_innovation": "single sentence describing the cooperative invention-level architecture",
+  "claim_concepts": [
+    {
+      "title": "short claim-positioning title",
+      "linked_features": ["copy invention_features items exactly"],
+      "claimable_summary": "how the linked features cooperate technically",
+      "importance": "primary|secondary|fallback",
+      "risk_if_missing": "what claim strength is lost if this concept is removed"
+    }
+  ],
   "search_exclusions": ["term that should not dominate search"],
   "confidence": 0.0,
   "warnings": ["coverage or ambiguity warning"]
@@ -196,6 +216,7 @@ FEATURE EXTRACTION DISCIPLINE:
 - Do not extract only generic field labels such as device, system, composition, method, platform, app, server, controller, polymer, coating, sensor, module, or database.
 - Do not list field-common generic components as standalone features. These include, by domain: engineering (processor, memory, sensor, controller, module, database, server, app, battery, housing, network, API); chemical/materials (composition, compound, polymer, coating, excipient, carrier, solvent); biological (sequence, vector, construct, antibody, assay, marker, cell line).
 - Include generic components only when their specific interaction is material to novelty.
+- invention_features must remain atomic and retrieval-friendly. Do not use them alone to represent the full inventive concept; use feature_details, architectural_innovation, claim_concepts, and novelty_focus_interactions for cooperative mechanisms.
 
 FEATURE TYPE GUIDANCE:
 - core_technical: a baseline technical object, architecture, mechanism, process, material structure, or transformation without which the invention would not work.
@@ -211,6 +232,10 @@ FEATURE DETAILS RULES:
 - source_excerpt should quote or closely paraphrase the shortest available supporting phrase from the user disclosure.
 - If the feature is inferred from the disclosure rather than explicitly stated, keep source_excerpt empty and mention the inference in warnings.
 - Do not add materials, thresholds, ratios, dimensions, algorithms, sensors, biological targets, or data types unless disclosed.
+- claimable_text must be 18-45 words and phrase the feature as functional/structural claim-positioning language without using claim boilerplate.
+- embedding_search_text must be 12-30 words, must stay technical, and may include synonyms only when technically relevant.
+- embedding_search_text must not include marketing words such as innovative, efficient, improved, advanced, or smart unless part of a known technical term.
+- feature_confidence must reflect how directly the feature is supported by the submitted disclosure.
 
 SEARCH QUERY DISCIPLINE:
 - The searchQuery is for retrieving the closest prior art, not for proving novelty.
@@ -229,6 +254,18 @@ NOVELTY FOCUS RULES:
 - novelty_focus should usually prefer novelty_candidate features, but may include a core_technical feature if the core architecture itself appears novel.
 - novelty_focus should hold differentiators that may be too narrow for the main searchQuery but important for later novelty assessment.
 - novelty_focus must not include ordinary field-common parts unless their specific interaction is the likely inventive contribution. Prefer features involving a control relationship, material relationship, formulation relationship, biological target interaction, structural geometry, process sequence, signal-processing transformation, release/detection/verification mechanism, or measurable technical effect.
+- novelty_focus_interactions must describe the cooperative relationship behind the novelty focus, not merely repeat one atomic feature.
+- novelty_focus_interactions.linked_features must copy invention_features strings exactly.
+
+CLAIM CONCEPT RULES:
+- architectural_innovation must be one sentence and no more than 35 words.
+- architectural_innovation must describe a cooperative architecture, such as X drives Y, A validates B, C controls D based on E, or P is stored for Q.
+- architectural_innovation must not simply repeat the title.
+- claim_concepts should group 2-5 related invention_features unless a single feature is genuinely claim-defining.
+- Do not create more than 4 claim_concepts.
+- claim_concepts.linked_features must copy invention_features strings exactly.
+- claimable_summary must explain the technical relationship among linked features, not a market benefit.
+- Prefer claim concepts that preserve causal or cooperative relationships such as identification driving control, sensing validating actuation, or generated records supporting traceability.
 
 CLASSIFICATION:
 - inventionType may include more than one category when appropriate.
@@ -1049,6 +1086,9 @@ export interface NormalizedIdea {
   cpcCodes?: string[];
   ipcCodes?: string[];
   noveltyFocus?: string[];
+  noveltyFocusInteractions?: NoveltyFocusInteraction[];
+  architecturalInnovation?: string;
+  claimConcepts?: ClaimConcept[];
   searchExclusions?: string[];
   confidence?: number;
   warnings?: string[];
@@ -1061,6 +1101,38 @@ export interface InventionFeatureDetail {
   user_disclosure?: string;
   technical_role?: string;
   source_excerpt?: string;
+  claimableText?: string;
+  embeddingSearchText?: string;
+  featureConfidence?: number;
+}
+
+export interface NoveltyFocusInteraction {
+  type?: 'feature_interaction' | 'single_feature' | 'architecture';
+  description: string;
+  linkedFeatures: string[];
+}
+
+export interface ClaimConcept {
+  title: string;
+  linkedFeatures: string[];
+  claimableSummary: string;
+  importance: 'primary' | 'secondary' | 'fallback';
+  riskIfMissing?: string;
+}
+
+export interface ClaimConceptMapping {
+  claimConceptTitle: string;
+  linkedFeatures: string[];
+  mappedFeatures: number;
+  totalFeatures: number;
+  coverage: number;
+  distributedCoverage: number;
+  bestReference?: string;
+  relationshipMapped: boolean;
+  relationshipEvidence: string;
+  relationshipRisk: 'low' | 'moderate' | 'high';
+  risk: 'low' | 'moderate' | 'high';
+  reason: string;
 }
 
 function normalizeRetrievalText(value: unknown, maxWords = 36): string {
@@ -1072,7 +1144,11 @@ function normalizeRetrievalText(value: unknown, maxWords = 36): string {
   return words.slice(0, maxWords).join(' ');
 }
 
-function buildIndianCorpusRetrievalQueries(searchQuery: string, inventionFeatures: string[]): PatentRetrievalQuery[] {
+function buildIndianCorpusRetrievalQueries(
+  searchQuery: string,
+  inventionFeatures: string[],
+  featureDetails?: InventionFeatureDetail[]
+): PatentRetrievalQuery[] {
   const queries: PatentRetrievalQuery[] = [];
   const seen = new Set<string>();
   const addQuery = (query: PatentRetrievalQuery) => {
@@ -1093,12 +1169,28 @@ function buildIndianCorpusRetrievalQueries(searchQuery: string, inventionFeature
     });
   }
 
-  const features = inventionFeatures.map(feature => normalizeRetrievalText(feature, 18)).filter(Boolean).slice(0, 8);
-  features.forEach((feature, index) => {
+  const detailByFeature = new Map(
+    (Array.isArray(featureDetails) ? featureDetails : [])
+      .map(detail => [String(detail.feature || '').trim().toLowerCase(), detail] as const)
+      .filter(([feature]) => Boolean(feature))
+  );
+  const features = inventionFeatures
+    .map((feature, index) => {
+      const detail = detailByFeature.get(String(feature || '').trim().toLowerCase());
+      const retrievalText = detail?.embeddingSearchText || feature;
+      return {
+        feature,
+        text: normalizeRetrievalText(retrievalText, 30),
+        index,
+      };
+    })
+    .filter(item => Boolean(item.text))
+    .slice(0, 8);
+  features.forEach(({ feature, text, index }) => {
     addQuery({
       id: `feature-${index + 1}`,
       type: 'feature',
-      text: feature,
+      text,
       weight: 1.1,
       featureIndex: index,
       featureIndexes: [index],
@@ -1311,6 +1403,7 @@ export interface AggregationResult {
   distributed_component_risks?: string[];
   closest_mapped_references?: string[];
   combination_sensitive_differentiators?: string[];
+  claimConceptMapping?: ClaimConceptMapping[];
   decision: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence';
   mapped_overlap_assessment?: 'Novel' | 'Partially Novel' | 'Not Novel' | 'Low Evidence';
   confidence: 'High' | 'Medium' | 'Low';
@@ -1427,6 +1520,10 @@ export class NoveltySearchService extends BasePatentService {
       modelPreference: 'gemini-2.5-pro'
     }
   };
+
+  normalizeApprovedStage0(stage0Data: NormalizedIdea, inventionDisclosure = ''): NormalizedIdea {
+    return this.normalizeStage0Idea(stage0Data, inventionDisclosure);
+  }
 
   private mergeConfig(input?: Partial<NoveltySearchConfig>): NoveltySearchConfig {
     const requestConfig = input || {};
@@ -1686,7 +1783,7 @@ export class NoveltySearchService extends BasePatentService {
       const suppliedDetails = Array.isArray(request.approvedStage0?.featureDetails)
         ? request.approvedStage0.featureDetails
         : [];
-      const approvedStage0: NormalizedIdea | undefined = intelligentSearch
+      const approvedStage0Raw: NormalizedIdea | undefined = intelligentSearch
         ? {
             ...request.approvedStage0,
             searchQuery: approvedQuery.slice(0, 1000),
@@ -1714,6 +1811,9 @@ export class NoveltySearchService extends BasePatentService {
             title: request.title,
             inventionText: request.inventionDescription,
           }
+        : undefined;
+      const approvedStage0: NormalizedIdea | undefined = approvedStage0Raw
+        ? this.normalizeStage0Idea(approvedStage0Raw, request.inventionDescription)
         : undefined;
 
       if (request.patentId) await this.validatePatentAccess(request.patentId, user.id);
@@ -3477,6 +3577,9 @@ RESPONSE:`;
             title: request.title || 'Manual Patent Search',
             inventionText: request.inventionDescription || '',
             inventionType: ['GENERAL'],
+            architecturalInnovation: '',
+            claimConcepts: [],
+            noveltyFocusInteractions: [],
             queryPlan: {
               searchMode: 'manual',
               fieldFilters: filters,
@@ -3532,6 +3635,15 @@ RESPONSE:`;
         cpcCodes: Array.isArray(normalizedData?.cpcCodes) ? normalizedData.cpcCodes.filter(Boolean) : [],
         ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : [],
         noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
+        noveltyFocusInteractions: Array.isArray(normalizedData?.novelty_focus_interactions)
+          ? normalizedData.novelty_focus_interactions
+          : [],
+        architecturalInnovation: typeof normalizedData?.architectural_innovation === 'string'
+          ? normalizedData.architectural_innovation
+          : (typeof normalizedData?.architecturalInnovation === 'string' ? normalizedData.architecturalInnovation : ''),
+        claimConcepts: Array.isArray(normalizedData?.claim_concepts)
+          ? normalizedData.claim_concepts
+          : (Array.isArray(normalizedData?.claimConcepts) ? normalizedData.claimConcepts : []),
         searchExclusions: Array.isArray(normalizedData?.search_exclusions) ? normalizedData.search_exclusions.filter(Boolean) : [],
         confidence: typeof normalizedData?.confidence === 'number' ? normalizedData.confidence : undefined,
         warnings: Array.isArray(normalizedData?.warnings) ? normalizedData.warnings.filter(Boolean) : []
@@ -3558,22 +3670,16 @@ RESPONSE:`;
         }
       }
 
-      if (!Array.isArray(extractedFields.featureDetails) || extractedFields.featureDetails.length === 0) {
-        extractedFields.featureDetails = extractedFields.inventionFeatures.map(feature => ({
-          feature,
-          user_disclosure: feature,
-          technical_role: 'Technical feature extracted from the user disclosure.',
-          source_excerpt: ''
-        }));
-      }
+      const normalizedStage0 = this.normalizeStage0Idea(extractedFields, request.inventionDescription || '');
 
       console.log('[NoveltyPipeline] stage_summary', {
         stage: 'stage0_completed',
         searchId,
-        searchQueryLength: extractedFields.searchQuery.length,
-        featureCount: extractedFields.inventionFeatures.length,
+        searchQueryLength: normalizedStage0.searchQuery.length,
+        featureCount: normalizedStage0.inventionFeatures?.length || 0,
+        claimConceptCount: normalizedStage0.claimConcepts?.length || 0,
       });
-      return { success: true, data: extractedFields };
+      return { success: true, data: normalizedStage0 };
 
     } catch (error) {
       console.error('Stage 0 error:', error);
@@ -3604,6 +3710,7 @@ RESPONSE:`;
       const searchMode = config.searchSource?.searchMode === 'manual' ? 'manual' : 'intelligent';
       const stage0SearchQuery = String(stage0Data.searchQuery || '').trim();
       const stage0Features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures.filter(Boolean) : [];
+      const stage0FeatureDetails = this.normalizeFeatureDetails(stage0Data, stage0Data.inventionText || searchRun?.inventionDescription || '');
       const stage0CpcCodes = Array.isArray(stage0Data.cpcCodes) ? stage0Data.cpcCodes.filter(Boolean) : [];
       const stage0IpcCodes = Array.isArray(stage0Data.ipcCodes) ? stage0Data.ipcCodes.filter(Boolean) : [];
       const stage0SearchExclusions = Array.isArray(stage0Data.searchExclusions) ? stage0Data.searchExclusions.filter(Boolean) : [];
@@ -3626,7 +3733,7 @@ RESPONSE:`;
           fieldFilters: stage1Filters,
           explicitFilters: stage1Filters,
           searchVariants: stage0SearchQuery ? [stage0SearchQuery] : [],
-          retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features),
+          retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features, stage0FeatureDetails),
           llmExpanded: false,
           confidence: 0.9,
           warnings: ['Using Stage 0 query plan; Stage 1 LLM query expansion disabled.'],
@@ -4011,6 +4118,183 @@ RESPONSE:`;
     };
   }
 
+  private normalizeStage0Scalar(value: unknown, maxLength = 1000): string {
+    return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+  }
+
+  private normalizeStage0Score(value: unknown): number | undefined {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return undefined;
+    const scaled = n > 1 && n <= 100 ? n / 100 : n;
+    return Math.round(Math.max(0, Math.min(1, scaled)) * 100) / 100;
+  }
+
+  private normalizedFeatureKey(value: unknown): string {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\b(detects?|detected|detecting|detection)\b/g, 'identify')
+      .replace(/\b(identifies|identified|identifying|identification)\b/g, 'identify')
+      .replace(/\b(adjusts?|adjusted|adjusting|adjustment)\b/g, 'adjust')
+      .replace(/\b(characterizes?|characterized|characterizing|characterization)\b/g, 'characterize')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private featureReferenceScore(candidate: string, feature: string): number {
+    const a = this.normalizedFeatureKey(candidate);
+    const b = this.normalizedFeatureKey(feature);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (a.length > 12 && b.includes(a)) return 0.92;
+    if (b.length > 12 && a.includes(b)) return 0.92;
+    const aTokens = new Set(a.split(/\s+/).filter(token => token.length > 2));
+    const bTokens = new Set(b.split(/\s+/).filter(token => token.length > 2));
+    if (!aTokens.size || !bTokens.size) return 0;
+    const intersection = Array.from(aTokens).filter(token => bTokens.has(token)).length;
+    const union = new Set([...Array.from(aTokens), ...Array.from(bTokens)]).size;
+    return intersection / Math.max(1, union);
+  }
+
+  private repairFeatureReference(value: unknown, features: string[]): { feature?: string; repaired: boolean; confidence: number } {
+    const raw = this.normalizeStage0Scalar(value, 1000);
+    if (!raw) return { repaired: false, confidence: 0 };
+    const exact = features.find(feature => this.normalizedFeatureKey(feature) === this.normalizedFeatureKey(raw));
+    if (exact) return { feature: exact, repaired: exact !== raw, confidence: 1 };
+    const ranked = features
+      .map(feature => ({ feature, confidence: this.featureReferenceScore(raw, feature) }))
+      .sort((a, b) => b.confidence - a.confidence);
+    const best = ranked[0];
+    if (best && best.confidence >= 0.82) {
+      return { feature: best.feature, repaired: true, confidence: best.confidence };
+    }
+    return { repaired: false, confidence: best?.confidence || 0 };
+  }
+
+  private normalizeFeatureDetailForFeature(feature: string, raw: any = {}): InventionFeatureDetail {
+    const featureType = String(raw?.feature_type || raw?.featureType || '').toLowerCase();
+    const normalizedType = featureType === 'core_technical' || featureType === 'implementation' || featureType === 'novelty_candidate' || featureType === 'generic_weak'
+      ? featureType as InventionFeatureDetail['feature_type']
+      : undefined;
+    return {
+      ...raw,
+      feature,
+      feature_type: normalizedType,
+      user_disclosure: this.normalizeStage0Scalar(raw?.user_disclosure ?? raw?.userDisclosure ?? feature, 1600),
+      technical_role: this.normalizeStage0Scalar(raw?.technical_role ?? raw?.technicalRole ?? 'Technical feature extracted from the user disclosure.', 1000),
+      source_excerpt: this.normalizeStage0Scalar(raw?.source_excerpt ?? raw?.sourceExcerpt ?? '', 800),
+      claimableText: this.normalizeStage0Scalar(raw?.claimableText ?? raw?.claimable_text ?? '', 1200),
+      embeddingSearchText: normalizeRetrievalText(raw?.embeddingSearchText ?? raw?.embedding_search_text ?? '', 30),
+      featureConfidence: this.normalizeStage0Score(raw?.featureConfidence ?? raw?.feature_confidence),
+    };
+  }
+
+  private normalizeClaimConcepts(rawConcepts: unknown, features: string[], warnings: string[]): ClaimConcept[] {
+    if (!Array.isArray(rawConcepts)) {
+      if (features.length >= 4) warnings.push('Stage 0 did not provide claim concepts for a multi-feature invention.');
+      return [];
+    }
+
+    const concepts: ClaimConcept[] = [];
+    rawConcepts.slice(0, 6).forEach((raw: any, conceptIndex) => {
+      const linkedRaw = Array.isArray(raw?.linkedFeatures) ? raw.linkedFeatures : (Array.isArray(raw?.linked_features) ? raw.linked_features : []);
+      const linkedFeatures: string[] = [];
+      for (const linked of linkedRaw) {
+        const repaired = this.repairFeatureReference(linked, features);
+        if (repaired.feature && !linkedFeatures.includes(repaired.feature)) {
+          linkedFeatures.push(repaired.feature);
+          if (repaired.repaired) {
+            warnings.push(`Claim concept "${raw?.title || conceptIndex + 1}" linked feature "${String(linked).trim()}" was repaired to "${repaired.feature}".`);
+          }
+        } else {
+          warnings.push(`Claim concept "${raw?.title || conceptIndex + 1}" linked feature "${String(linked).trim()}" could not be matched to an extracted feature and was removed.`);
+        }
+      }
+      if (linkedFeatures.length === 0) {
+        warnings.push(`Claim concept "${raw?.title || conceptIndex + 1}" was removed because it had no valid linked features.`);
+        return;
+      }
+      const importance = String(raw?.importance || '').toLowerCase();
+      concepts.push({
+        title: this.normalizeStage0Scalar(raw?.title || `Claim concept ${conceptIndex + 1}`, 220),
+        linkedFeatures,
+        claimableSummary: this.normalizeStage0Scalar(raw?.claimableSummary ?? raw?.claimable_summary ?? raw?.summary ?? '', 1200),
+        importance: importance === 'primary' || importance === 'secondary' || importance === 'fallback' ? importance : (conceptIndex === 0 ? 'primary' : 'secondary'),
+        riskIfMissing: this.normalizeStage0Scalar(raw?.riskIfMissing ?? raw?.risk_if_missing ?? '', 1000),
+      });
+    });
+
+    if (features.length >= 4 && concepts.length === 0) {
+      warnings.push('Stage 0 claim concepts were missing or invalid for a multi-feature invention.');
+    }
+    if (concepts.length > 4) {
+      warnings.push('Stage 0 returned more than four claim concepts; only the first four valid concepts were retained.');
+    }
+    return concepts.slice(0, 4);
+  }
+
+  private normalizeNoveltyFocusInteractions(rawInteractions: unknown, features: string[], warnings: string[]): NoveltyFocusInteraction[] {
+    if (!Array.isArray(rawInteractions)) return [];
+    return rawInteractions.slice(0, 4).map((raw: any, index) => {
+      const linkedRaw = Array.isArray(raw?.linkedFeatures) ? raw.linkedFeatures : (Array.isArray(raw?.linked_features) ? raw.linked_features : []);
+      const linkedFeatures: string[] = linkedRaw
+        .map((linked: unknown) => {
+          const repaired = this.repairFeatureReference(linked, features);
+          if (repaired.feature && repaired.repaired) {
+            warnings.push(`Novelty focus interaction ${index + 1} linked feature "${String(linked).trim()}" was repaired to "${repaired.feature}".`);
+          } else if (!repaired.feature) {
+            warnings.push(`Novelty focus interaction ${index + 1} linked feature "${String(linked).trim()}" could not be matched and was removed.`);
+          }
+          return repaired.feature;
+        })
+        .filter((feature: string | undefined): feature is string => Boolean(feature));
+      const type = String(raw?.type || '').toLowerCase();
+      const normalizedType: NoveltyFocusInteraction['type'] = type === 'feature_interaction' || type === 'single_feature' || type === 'architecture' ? type : 'feature_interaction';
+      return {
+        type: normalizedType,
+        description: this.normalizeStage0Scalar(raw?.description || raw?.summary || '', 1000),
+        linkedFeatures: Array.from(new Set(linkedFeatures)),
+      };
+    }).filter(item => item.description || item.linkedFeatures.length);
+  }
+
+  private normalizeStage0Idea(stage0Data: NormalizedIdea, inventionDisclosure = ''): NormalizedIdea {
+    const warnings = Array.from(new Set([
+      ...(Array.isArray(stage0Data.warnings) ? stage0Data.warnings.map(warning => this.normalizeStage0Scalar(warning, 500)).filter(Boolean) : []),
+    ]));
+    const features = Array.isArray(stage0Data.inventionFeatures)
+      ? Array.from(new Set(stage0Data.inventionFeatures.map(feature => this.normalizeStage0Scalar(feature, 1000)).filter(Boolean)))
+      : [];
+    const supplied = Array.isArray(stage0Data.featureDetails) ? stage0Data.featureDetails : [];
+    const byFeature = new Map<string, InventionFeatureDetail>();
+    for (const detail of supplied) {
+      const repaired = this.repairFeatureReference(detail?.feature, features);
+      if (!repaired.feature) continue;
+      byFeature.set(repaired.feature, this.normalizeFeatureDetailForFeature(repaired.feature, detail));
+      if (repaired.repaired) warnings.push(`Feature detail "${String(detail?.feature || '').trim()}" was repaired to "${repaired.feature}".`);
+    }
+    const featureDetails = features.map(feature => byFeature.get(feature) || this.normalizeFeatureDetailForFeature(feature, {
+      feature,
+      user_disclosure: feature,
+      technical_role: 'Technical feature extracted from the user disclosure.',
+      source_excerpt: this.findDisclosureExcerpt(inventionDisclosure, feature),
+    }));
+    const conceptSource = (stage0Data as any).claimConcepts ?? (stage0Data as any).claim_concepts;
+    const interactionSource = (stage0Data as any).noveltyFocusInteractions ?? (stage0Data as any).novelty_focus_interactions;
+    return {
+      ...stage0Data,
+      inventionFeatures: features,
+      featureDetails,
+      architecturalInnovation: this.normalizeStage0Scalar((stage0Data as any).architecturalInnovation ?? (stage0Data as any).architectural_innovation ?? '', 500),
+      claimConcepts: this.normalizeClaimConcepts(conceptSource, features, warnings),
+      noveltyFocusInteractions: this.normalizeNoveltyFocusInteractions(interactionSource, features, warnings),
+      noveltyFocus: Array.isArray(stage0Data.noveltyFocus)
+        ? Array.from(new Set(stage0Data.noveltyFocus.map(feature => this.repairFeatureReference(feature, features).feature).filter(Boolean) as string[])).slice(0, 4)
+        : [],
+      warnings: Array.from(new Set(warnings)),
+    };
+  }
+
   private normalizeFeatureDetails(stage0Data: NormalizedIdea, inventionDisclosure = ''): InventionFeatureDetail[] {
     const features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
     const supplied = Array.isArray(stage0Data.featureDetails) ? stage0Data.featureDetails : [];
@@ -4019,13 +4303,7 @@ RESPONSE:`;
     for (const detail of supplied) {
       const feature = String(detail?.feature || '').trim();
       if (!feature) continue;
-      byFeature.set(feature, {
-        feature,
-        feature_type: detail.feature_type,
-        user_disclosure: String(detail.user_disclosure || feature).trim(),
-        technical_role: String(detail.technical_role || 'Technical feature extracted from the user disclosure.').trim(),
-        source_excerpt: String(detail.source_excerpt || '').trim(),
-      });
+      byFeature.set(feature, this.normalizeFeatureDetailForFeature(feature, detail));
     }
 
     return features.map(feature => byFeature.get(feature) || {
@@ -4425,6 +4703,7 @@ RESPONSE:`;
         explanation: message,
       },
       novelty_score: 0,
+      claimConceptMapping: [],
       decision: 'Low Evidence',
       confidence: 'Low',
       risk_factors: [
@@ -5729,6 +6008,7 @@ RESPONSE:`;
       const combinationSensitiveDifferentiators = perFeatureUniqueness
         .filter(row => row.combination_sensitive_differentiator && !this.isGenericNoveltyFeature(row.feature))
         .map(row => row.feature);
+      const claimConceptMapping = this.buildClaimConceptMapping(stage0Data, featureMaps);
       const mappedImportantPatentCount = featureMaps.filter(patentMap =>
         importantFeatures.some(feature => this.isMappedCell(this.cellForFeature(patentMap, feature)))
       ).length;
@@ -5840,6 +6120,7 @@ RESPONSE:`;
         distributed_component_risks: distributedComponentRisks,
         closest_mapped_references: closestMappedReferences,
         combination_sensitive_differentiators: combinationSensitiveDifferentiators,
+        claimConceptMapping,
         decision,
         mapped_overlap_assessment: decision,
         confidence,
@@ -6916,6 +7197,125 @@ OUTPUT JSON:
     if (cell.status === 'Present') return 1;
     if (cell.status === 'Partial') return 0.5;
     return 0;
+  }
+
+  private featureCellEvidence(cell?: FeatureMapCell): string {
+    if (!cell) return '';
+    return [
+      cell.quote,
+      typeof cell.evidence === 'string' ? cell.evidence : '',
+      cell.patent_disclosure,
+      cell.reason,
+      cell.attorney_remark,
+      cell.professional_remark,
+    ].filter(Boolean).join(' ');
+  }
+
+  private meaningfulRelationshipTokens(value: string): string[] {
+    const stop = new Set(['with', 'that', 'from', 'this', 'into', 'based', 'using', 'where', 'while', 'each', 'such', 'their', 'there', 'feature', 'claim', 'concept']);
+    return Array.from(new Set(String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(token => token.length > 3 && !stop.has(token))))
+      .slice(0, 24);
+  }
+
+  private relationshipMappedByEvidence(concept: ClaimConcept, patentMap: PatentFeatureMap): { mapped: boolean; evidence: string } {
+    const relationshipText = [concept.title, concept.claimableSummary].filter(Boolean).join(' ');
+    const relationshipTokens = this.meaningfulRelationshipTokens(relationshipText);
+    const relationshipVerbs = relationshipTokens.filter(token =>
+      /^(adjust|control|drive|select|compute|detect|monitor|verify|validat|store|record|trigger|correlat|adapt|characteriz|identify|classif|generate)/.test(token)
+    );
+    const cells = concept.linkedFeatures.map(feature => this.cellForFeature(patentMap, feature)).filter(Boolean) as FeatureMapCell[];
+    const evidenceText = [
+      patentMap.title,
+      (patentMap as any).abstract,
+      patentMap.remarks,
+      ...cells.map(cell => this.featureCellEvidence(cell)),
+    ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    const lowerEvidence = evidenceText.toLowerCase();
+    const mappedFeatureCount = concept.linkedFeatures.filter(feature => this.isMappedCell(this.cellForFeature(patentMap, feature))).length;
+    const tokenHits = relationshipTokens.filter(token => lowerEvidence.includes(token)).length;
+    const verbHit = relationshipVerbs.length === 0 || relationshipVerbs.some(token => lowerEvidence.includes(token));
+    const relationshipMapped = mappedFeatureCount >= Math.min(2, concept.linkedFeatures.length) &&
+      tokenHits >= Math.min(4, Math.max(2, Math.ceil(relationshipTokens.length * 0.25))) &&
+      verbHit;
+
+    if (relationshipMapped) {
+      const supporting = cells
+        .map(cell => this.featureCellEvidence(cell))
+        .find(text => text && this.meaningfulRelationshipTokens(text).some(token => relationshipTokens.includes(token)));
+      return {
+        mapped: true,
+        evidence: normalizeRetrievalText(supporting || evidenceText, 42),
+      };
+    }
+
+    return {
+      mapped: false,
+      evidence: mappedFeatureCount > 0
+        ? `Feature overlap is present, but the reviewed citation evidence does not show the cooperative relationship: ${concept.claimableSummary || concept.title}.`
+        : `No reviewed citation evidence maps the linked features for this claim concept.`,
+    };
+  }
+
+  private buildClaimConceptMapping(stage0Data: NormalizedIdea, featureMaps: PatentFeatureMap[]): ClaimConceptMapping[] {
+    const concepts = Array.isArray(stage0Data.claimConcepts) ? stage0Data.claimConcepts : [];
+    if (!concepts.length) return [];
+
+    return concepts.map(concept => {
+      const totalFeatures = Math.max(1, concept.linkedFeatures.length);
+      const perPatent = featureMaps.map(patentMap => {
+        const mappedFeatures = concept.linkedFeatures.filter(feature => this.isMappedCell(this.cellForFeature(patentMap, feature)));
+        const weighted = concept.linkedFeatures.reduce((sum, feature) => sum + this.mappedFactor(this.cellForFeature(patentMap, feature)), 0);
+        const relationship = this.relationshipMappedByEvidence(concept, patentMap);
+        return {
+          pn: patentMap.pn,
+          mappedFeatures,
+          coverage: this.roundScore(weighted / totalFeatures),
+          relationshipMapped: relationship.mapped,
+          relationshipEvidence: relationship.evidence,
+        };
+      }).sort((a, b) => {
+        if (Number(b.relationshipMapped) !== Number(a.relationshipMapped)) return Number(b.relationshipMapped) - Number(a.relationshipMapped);
+        return b.coverage - a.coverage;
+      });
+      const best = perPatent[0];
+      const distributedMapped = concept.linkedFeatures.filter(feature =>
+        featureMaps.some(patentMap => this.isMappedCell(this.cellForFeature(patentMap, feature)))
+      ).length;
+      const distributedCoverage = this.roundScore(distributedMapped / totalFeatures);
+      const coverage = best?.coverage || 0;
+      const relationshipMapped = Boolean(best?.relationshipMapped && coverage >= 0.75);
+      const relationshipRisk: ClaimConceptMapping['relationshipRisk'] = relationshipMapped
+        ? 'high'
+        : coverage >= 0.75 || distributedCoverage >= 0.75
+          ? 'moderate'
+          : 'low';
+      const reason = relationshipMapped
+        ? `A single reviewed citation maps the linked features and the cooperative relationship.`
+        : coverage >= 0.75
+          ? `A citation maps most linked features, but the cooperative relationship is not fully disclosed.`
+          : distributedCoverage >= 0.75
+            ? `Linked features are distributed across references without one citation mapping the full cooperative relationship.`
+            : `No reviewed citation maps most linked features or their cooperative relationship.`;
+
+      return {
+        claimConceptTitle: concept.title,
+        linkedFeatures: concept.linkedFeatures,
+        mappedFeatures: best?.mappedFeatures.length || 0,
+        totalFeatures,
+        coverage,
+        distributedCoverage,
+        bestReference: best?.pn,
+        relationshipMapped,
+        relationshipEvidence: best?.relationshipEvidence || '',
+        relationshipRisk,
+        risk: relationshipRisk,
+        reason,
+      };
+    });
   }
 
   private weightedCoverageForPatent(

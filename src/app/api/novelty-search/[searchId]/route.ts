@@ -176,20 +176,21 @@ export async function PATCH(
       const approvedFeatures = Array.isArray(inventionFeatures)
         ? inventionFeatures.map((feature: unknown) => String(feature || '').trim()).filter(Boolean)
         : [];
+      const normalizedStage0 = noveltySearchService.normalizeApprovedStage0({
+        ...existingStage0,
+        searchQuery: approvedSearchQuery,
+        inventionFeatures: approvedFeatures,
+        ...(inventionType ? { inventionType } : {}),
+        ...(cpcCodes ? { cpcCodes } : {}),
+        ...(ipcCodes ? { ipcCodes } : {}),
+      }, String(existing?.inventionDescription || ''));
       const stage0Changed = approvedSearchQuery !== String(existingStage0.searchQuery || '').trim() ||
         JSON.stringify(approvedFeatures) !== JSON.stringify(existingStage0.inventionFeatures || []);
 
       await prisma.noveltySearchRun.update({
         where: { id: searchId, userId: user.id },
         data: {
-          stage0Results: {
-            ...existingStage0,
-            searchQuery: approvedSearchQuery,
-            inventionFeatures: approvedFeatures,
-            ...(inventionType ? { inventionType } : {}),
-            ...(cpcCodes ? { cpcCodes } : {}),
-            ...(ipcCodes ? { ipcCodes } : {})
-          },
+          stage0Results: normalizedStage0 as any,
           ...(stage0Changed ? {
             status: NoveltySearchStatus.STAGE_0_COMPLETED,
             currentStage: NoveltySearchStage.STAGE_1,

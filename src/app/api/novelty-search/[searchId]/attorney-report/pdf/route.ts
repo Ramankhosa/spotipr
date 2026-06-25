@@ -430,12 +430,12 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const palette = verdictPalette(signal);
   const mappedRow = highestMappedRow(report);
   const differentiatorRow = strongestDifferentiatorRow(report);
-  const mainDifferentiator = differentiatorRow
+  const mainDifferentiator = cleanText(report.mainDifferentiator) || (differentiatorRow
     ? `${differentiatorRow.row.featureNumber} - ${differentiatorRow.row.userFeature}`
-    : 'No unmapped differentiator identified';
-  const reviewFocus = strongest
+    : 'No unmapped differentiator identified');
+  const reviewFocus = cleanText(report.attorneyReviewFocus) || (strongest
     ? `Review ${strongest.publicationNumber} first; compare ${mappedRow?.row.featureNumber || 'mapped features'} and preserve ${differentiatorRow?.row.featureNumber || 'unmapped distinctions'} in claim-positioning review.`
-    : 'Run detailed citation mapping before forming claim-positioning conclusions.';
+    : 'Run detailed citation mapping before forming claim-positioning conclusions.');
 
   doc.addNamedDestination('executive-snapshot', 'XYZ', PAGE.left, PAGE.top, null);
   doc.rect(PAGE.left, PAGE.top + 2, 72, 4).fill(COLORS.cyan);
@@ -1526,6 +1526,21 @@ export async function GET(
     ]);
     drawFlowTextBlock(doc, 'Summary', report.finalAssessment.summary);
     drawFlowTextBlock(doc, 'Potential Differentiation Space', report.potentialDifferentiationSpace || 'Potential differentiation space requires mapped feature analysis.');
+    const claimConceptMapping = Array.isArray(report.claimConceptMapping) ? report.claimConceptMapping : [];
+    if (claimConceptMapping.length) {
+      drawFlowTextBlock(
+        doc,
+        'Concept Relationship Mapping',
+        claimConceptMapping.map(item => {
+          const coverage = `${item.mappedFeatures}/${item.totalFeatures}`;
+          const relationship = item.relationshipMapped ? 'relationship mapped' : 'relationship not fully mapped';
+          return `${item.claimConceptTitle}: ${coverage} linked features mapped; ${relationship}; ${item.reason}`;
+        }).join('\n')
+      );
+    }
+    if (report.attorneyReviewFocus) {
+      drawFlowTextBlock(doc, 'Attorney Review Focus', report.attorneyReviewFocus);
+    }
     drawFlowBulletList(doc, 'Key Risks', report.finalAssessment.risks);
     drawFlowBulletList(doc, 'Recommendations', report.finalAssessment.recommendations);
     drawFlowTextBlock(doc, 'Overall Drafting Direction', report.overallDraftingDirection);

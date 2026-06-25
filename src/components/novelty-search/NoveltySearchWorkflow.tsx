@@ -2466,27 +2466,39 @@ export default function NoveltySearchWorkflow({
                 </div>
               </div>
             ) : (
-              <div className="grid md:grid-cols-2 gap-6">
-                <div>
-                  <h4 className="font-medium text-slate-900 mb-3">Search Query</h4>
-                  <div className="rounded-lg border bg-slate-50 p-4">
-                    <p className="text-sm text-slate-700">"{s0.searchQuery}"</p>
+              <>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <h4 className="font-medium text-slate-900 mb-3">Search Query</h4>
+                    <div className="rounded-lg border bg-slate-50 p-4">
+                      <p className="text-sm text-slate-700">"{s0.searchQuery}"</p>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-slate-900 mb-3">
+                      Extracted Features ({Array.isArray(s0.inventionFeatures) ? s0.inventionFeatures.length : 0})
+                    </h4>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {Array.isArray(s0.inventionFeatures) && s0.inventionFeatures.map((feature: string, idx: number) => (
+                        <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border">
+                          <span className="text-xs font-mono bg-indigo-100 text-indigo-700 px-2 py-1 rounded">{idx + 1}</span>
+                          <span className="text-sm text-slate-700">{feature}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <h4 className="font-medium text-slate-900 mb-3">
-                    Extracted Features ({Array.isArray(s0.inventionFeatures) ? s0.inventionFeatures.length : 0})
-                  </h4>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {Array.isArray(s0.inventionFeatures) && s0.inventionFeatures.map((feature: string, idx: number) => (
-                      <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border">
-                        <span className="text-xs font-mono bg-indigo-100 text-indigo-700 px-2 py-1 rounded">{idx + 1}</span>
-                        <span className="text-sm text-slate-700">{feature}</span>
-                      </div>
-                    ))}
+                {Array.isArray(s0.warnings) && s0.warnings.length > 0 && (
+                  <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    <div className="font-semibold">Stage 0 review warnings</div>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {s0.warnings.slice(0, 5).map((warning: string, index: number) => (
+                        <li key={index}>{warning}</li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-              </div>
+                )}
+              </>
             )}
 
             {!isEditingStage0 && searchState.status === NoveltySearchStatus.STAGE_0_COMPLETED && (

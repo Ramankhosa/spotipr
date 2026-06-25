@@ -197,9 +197,15 @@ describe('novelty search guardrails', () => {
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).not.toContain('preliminary claim-positioning');
     expect(source).toContain('Relevance should reflect threat to the invention as a whole');
     expect(source).toContain("const stage0SearchQuery = String(stage0Data.searchQuery || '').trim()");
-    expect(source).toContain('retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features)');
+    expect(source).toContain('retrievalQueries: buildIndianCorpusRetrievalQueries(stage0SearchQuery, stage0Features, stage0FeatureDetails)');
     expect(source).toContain('private isBroadStage15Feature(value: string): boolean');
     expect(source).toContain('const features = this.buildStage15AtomicFeatures(stage0Data)');
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain('"claimable_text"');
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain('"embedding_search_text"');
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain('"architectural_innovation"');
+    expect(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2).toContain('"claim_concepts"');
+    expect(source).toContain('private buildClaimConceptMapping(stage0Data: NormalizedIdea, featureMaps: PatentFeatureMap[]): ClaimConceptMapping[]');
+    expect(source).toContain('relationshipMapped');
     expect(STAGE4_REPORT_PROMPT_FROM_REMARKS_V3).toContain(
       'Never output "No significant risks identified"'
     );

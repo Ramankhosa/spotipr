@@ -143,6 +143,79 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     ]);
   });
 
+  test('repairs claim concept linked features before storing approved Stage 0 metadata', () => {
+    const svc = service();
+    const normalized = svc.normalizeApprovedStage0({
+      searchQuery: 'adaptive torque wrench',
+      inventionFeatures: [
+        'bolt size identification',
+        'bolt material identification',
+        'adaptive torque adjustment',
+      ],
+      claimConcepts: [
+        {
+          title: 'Adaptive torque from fastener characterization',
+          linkedFeatures: ['bolt size detect', 'bolt material identification', 'adaptive torque adjustment'],
+          claimableSummary: 'Bolt size and material identification drive torque adjustment.',
+          importance: 'primary',
+        },
+      ],
+    }, 'The wrench identifies bolt size and bolt material and adjusts torque.');
+
+    expect(normalized.claimConcepts?.[0].linkedFeatures).toEqual([
+      'bolt size identification',
+      'bolt material identification',
+      'adaptive torque adjustment',
+    ]);
+    expect(normalized.warnings?.some((warning: string) => warning.includes('was repaired'))).toBe(true);
+  });
+
+  test('does not treat individually mapped features as mapped claim concept relationship', () => {
+    const svc = service();
+    const mapping = svc.buildClaimConceptMapping(
+      {
+        searchQuery: 'adaptive torque wrench',
+        inventionFeatures: [
+          'bolt size identification',
+          'bolt material identification',
+          'adaptive torque adjustment',
+        ],
+        claimConcepts: [
+          {
+            title: 'Adaptive torque from fastener characterization',
+            linkedFeatures: [
+              'bolt size identification',
+              'bolt material identification',
+              'adaptive torque adjustment',
+            ],
+            claimableSummary: 'Bolt size and bolt material identification control torque adjustment.',
+            importance: 'primary',
+          },
+        ],
+      },
+      [
+        {
+          pn: 'IN1',
+          title: 'Torque tool with bolt measurements',
+          feature_analysis: [
+            { feature: 'bolt size identification', status: 'Present', quote: 'identifies bolt size' },
+            { feature: 'bolt material identification', status: 'Present', quote: 'identifies bolt material' },
+            { feature: 'adaptive torque adjustment', status: 'Present', quote: 'sets torque value' },
+          ],
+        },
+      ]
+    );
+
+    expect(mapping[0]).toMatchObject({
+      mappedFeatures: 3,
+      totalFeatures: 3,
+      coverage: 1,
+      relationshipMapped: false,
+      relationshipRisk: 'moderate',
+    });
+    expect(mapping[0].reason).toContain('cooperative relationship is not fully disclosed');
+  });
+
   test('builds a successful no-high-confidence deep-analysis payload', () => {
     const svc = service();
     const stage1Data = {
