@@ -122,9 +122,12 @@ function statusPalette(status: string) {
   return STATUS.Review;
 }
 
-function featureCoverageText(row: AttorneyReportFeatureRow) {
-  if (typeof row.extentScore !== 'number') return '';
-  return `Coverage: ${Math.round(row.extentScore * 100)}%`;
+function overlapDescriptor(score: number | null | undefined) {
+  const value = typeof score === 'number' ? score : 0;
+  if (value >= 0.7) return 'Broad mapped overlap';
+  if (value >= 0.35) return 'Moderate mapped overlap';
+  if (value > 0) return 'Limited mapped overlap';
+  return 'No mapped overlap';
 }
 
 function addPage(doc: PdfDoc) {
@@ -406,7 +409,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const strongest = report.comparisons.reduce((best, item) => (
     Number(item.coverage?.score || 0) > Number(best?.coverage?.score || 0) ? item : best
   ), report.comparisons[0]);
-  const strongestCoverage = strongest ? pct(strongest.coverage.score) : '0%';
+  const strongestOverlap = strongest ? overlapDescriptor(strongest.coverage.score) : 'No mapped overlap';
   const signal = cleanText(report.finalAssessment.decision, 'Review required');
   const palette = verdictPalette(signal);
   const mappedRow = highestMappedRow(report);
@@ -437,7 +440,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
     .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: 180, height: 30, ellipsis: true });
   doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(`Report confidence: ${cleanText(report.finalAssessment.confidence, 'Review')}`, PAGE.left + SPACE.lg, verdictY + 64, { width: 180, height: 9, lineBreak: false, ellipsis: true });
+    .text(`Report status: ${cleanText(report.finalAssessment.confidence, 'Review')}`, PAGE.left + SPACE.lg, verdictY + 64, { width: 180, height: 9, lineBreak: false, ellipsis: true });
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
     .text(rationale, PAGE.left + 210, verdictY + SPACE.md, {
       width: contentWidth(doc) - 226,
@@ -449,7 +452,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const factsY = verdictY + 98;
   const factGap = SPACE.sm;
   const factWidth = (contentWidth(doc) - factGap * 2) / 3;
-  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Closest citation', strongest ? `${strongest.publicationNumber} (${strongestCoverage})` : 'None mapped', COLORS.blue);
+  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Closest citation', strongest ? `${strongest.publicationNumber} - ${strongestOverlap}` : 'None mapped', COLORS.blue);
   drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Top mapped feature', topMappedFeature, COLORS.red);
   drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success);
 
@@ -467,7 +470,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const metrics = [
     [String(report.counts.retrieved), 'Candidates', COLORS.blue],
     [String(report.counts.found), 'Shortlisted', COLORS.blue2],
-    [strongestCoverage, 'Top coverage', COLORS.success],
+    [strongestOverlap, 'Top mapping', COLORS.success],
     [String(report.directCitations.length), 'Direct matches', COLORS.red],
     [signal, 'Signal', palette.accent],
   ] as Array<[string, string, string]>;
@@ -489,7 +492,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
       .text(strongest.title, PAGE.left + SPACE.md, detailY + 64, { width: detailWidth - 24, height: 42, ellipsis: true, lineGap: 2 });
     doc.roundedRect(PAGE.left + SPACE.md, detailY + 112, 112, 21, 5).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
     doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
-      .text(`Feature coverage: ${strongestCoverage}`, PAGE.left + 18, detailY + 119, { width: 100, height: 9, lineBreak: false });
+      .text(strongestOverlap, PAGE.left + 18, detailY + 119, { width: 100, height: 9, lineBreak: false, ellipsis: true });
   } else {
     doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.small)
       .text('No citation was mapped for detailed comparison.', PAGE.left + SPACE.md, detailY + 48, { width: detailWidth - 24 });
@@ -705,20 +708,16 @@ const REFERENCE_FEATURE_TABLE = {
 
 function referenceFeatureTableWidths(doc: PdfDoc) {
   const total = contentWidth(doc);
-  const serial = 34;
-  const keyFeature = 92;
-  const patent = 126;
-  const relevance = 98;
-  return [serial, keyFeature, patent, relevance, total - serial - keyFeature - patent - relevance];
+  const keyFeature = 150;
+  const referenceDisclosure = 190;
+  return [keyFeature, referenceDisclosure, total - keyFeature - referenceDisclosure];
 }
 
 function referenceFeatureTableHeaders(publicationNumber: string) {
   return [
-    'S.No.',
-    'Key Features',
-    `Reference Patent: ${cleanText(publicationNumber)}`,
-    'Relevance / Evidence',
-    'Discussion Points',
+    'Key Feature',
+    `Reference Disclosure: ${cleanText(publicationNumber)}`,
+    'Professional Remark',
   ];
 }
 
@@ -763,45 +762,22 @@ function labeledLine(label: string, value: unknown) {
   return text ? `${label}: ${text}` : '';
 }
 
-function uniqueLabeledLines(lines: Array<[string, unknown]>, fallback: string) {
-  const seen = new Set<string>();
-  const values = lines.flatMap(([label, value]) => {
-    const text = cleanText(value, '');
-    if (!text || seen.has(text)) return [];
-    seen.add(text);
-    return [`${label}: ${text}`];
-  });
-  return values.length ? values.join('\n') : fallback;
-}
-
-function referenceFeatureCells(row: AttorneyReportFeatureRow, index: number) {
+function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
   const statusLabel = cleanText(row.statusLabel, cleanText(row.status, 'Review'));
-  const coverage = featureCoverageText(row);
-  const confidence = typeof row.confidence === 'number' ? `Confidence: ${pct(row.confidence)}` : '';
-  const evidenceQuote = cleanText(row.evidenceQuote, 'No supporting quotation was mapped in the available patent data.');
-  const evidenceSource = cleanText(row.evidenceSource, 'none');
+  const supportingPassage = cleanText(row.evidenceQuote, '');
   const submittedDisclosure = cleanText(row.userDisclosure, '');
 
   return [
-    String(index + 1),
     [
-      labeledLine('Feature', `${cleanText(row.featureNumber)} - ${cleanText(row.userFeature)}`),
+      `${cleanText(row.featureNumber)} - ${cleanText(row.userFeature)}`,
       submittedDisclosure ? labeledLine('Submitted disclosure', submittedDisclosure) : '',
     ].filter(Boolean).join('\n'),
-    cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.'),
     [
-      `Status: ${statusLabel}`,
-      coverage ? `Feature ${coverage.toLowerCase()}` : '',
-      confidence,
-      `Evidence source: ${evidenceSource}`,
-      `Evidence quote: ${evidenceQuote}`,
+      cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.'),
+      `Mapping assessment: ${statusLabel}`,
+      supportingPassage ? labeledLine('Supporting passage', supportingPassage) : '',
     ].filter(Boolean).join('\n'),
-    uniqueLabeledLines([
-      ['Crisp remark', row.crispRemark],
-      ['Attorney remark', row.attorneyRemark],
-      ['Novelty impact', row.noveltyImpact],
-      ['Claim review note', row.claimReviewNote],
-    ], 'No attorney discussion point was mapped for this feature.'),
+    cleanText(row.professionalRemark || row.crispRemark, 'No professional review note was mapped for this feature.'),
   ];
 }
 
@@ -931,8 +907,7 @@ function drawReferenceFeatureRow(
     const rest = split.map(([, next]) => next);
 
     if (continuation) {
-      if (!chunks[0]) chunks[0] = `${rowIndex + 1} cont.`;
-      if (!chunks[1]) chunks[1] = `${cleanText(row.featureNumber)} cont.`;
+      if (!chunks[0]) chunks[0] = `${cleanText(row.featureNumber)} cont.`;
     }
 
     drawReferenceFeatureRowChunk(doc, chunks, widths, rowHeight, rowIndex, continuation);
@@ -1003,16 +978,14 @@ function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, inde
   const evidence = row.evidenceQuote
     ? row.evidenceQuote
     : 'No supporting quotation was mapped in the available patent data.';
-  drawFlowingLabeledText(doc, `Evidence · ${cleanText(row.evidenceSource, 'none')}`, evidence, {
+  drawFlowingLabeledText(doc, 'Supporting passage', evidence, {
     indent: SPACE.xl,
     color: COLORS.muted,
     labelColor: statusColor(row.status),
     fontSize: TYPE.small,
   });
 
-  const coverage = featureCoverageText(row);
-  if (coverage) drawFlowingLabeledText(doc, 'Mapped coverage', coverage, { indent: SPACE.md, fontSize: TYPE.small });
-  drawFlowingLabeledText(doc, 'Attorney remark', row.crispRemark, { indent: SPACE.md });
+  drawFlowingLabeledText(doc, 'Professional remark', row.professionalRemark || row.crispRemark, { indent: SPACE.md });
 
   ensureSpace(doc, SPACE.lg);
   doc.moveTo(PAGE.left, doc.y).lineTo(PAGE.left + contentWidth(doc), doc.y)
@@ -1048,20 +1021,20 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
   ), report.comparisons[0]);
   ensureSpace(doc, 42);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.h3)
-    .text('Key Feature Coverage Across Relevant Citations', PAGE.left, doc.y, { width: contentWidth(doc) });
+    .text('Key Feature Mapping Across Relevant Citations', PAGE.left, doc.y, { width: contentWidth(doc) });
   doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.caption)
-    .text('Cell percentages represent feature-level mapped coverage; dashes indicate no mapped evidence.', PAGE.left, doc.y + 4, { width: contentWidth(doc) });
+    .text('Cells indicate whether each feature is mapped, partially mapped, or not mapped in the citation record.', PAGE.left, doc.y + 4, { width: contentWidth(doc) });
   doc.y += SPACE.sm;
 
   const chunkSize = 8;
   for (let start = 0; start < features.length; start += chunkSize) {
     const featureChunk = features.slice(start, start + chunkSize);
     const citationWidth = 90;
-    const coverageWidth = 48;
+    const mappingWidth = 74;
     const signalWidth = 56;
-    const featureWidth = (contentWidth(doc) - citationWidth - coverageWidth - signalWidth) / featureChunk.length;
-    const widths = [citationWidth, coverageWidth, ...featureChunk.map(() => featureWidth), signalWidth];
-    const headers = ['Citation No.', 'Coverage', ...featureChunk.map((_, index) => `KF${start + index + 1}`), 'Signal'];
+    const featureWidth = (contentWidth(doc) - citationWidth - mappingWidth - signalWidth) / featureChunk.length;
+    const widths = [citationWidth, mappingWidth, ...featureChunk.map(() => featureWidth), signalWidth];
+    const headers = ['Citation No.', 'Mapping', ...featureChunk.map((_, index) => `KF${start + index + 1}`), 'Signal'];
     drawFeatureMatrixHeader(doc, headers, widths);
     report.comparisons.forEach((item, itemIndex) => {
       const statusRows = featureChunk.map((_, index) => item.rows[start + index]);
@@ -1132,8 +1105,8 @@ function drawFeatureMatrixRow(
           ellipsis: true,
         });
     } else if (index === 1) {
-      const label = pct(coverageScore);
-      const badgeWidth = Math.min(38, width - 10);
+      const label = overlapDescriptor(coverageScore).replace(' mapped overlap', '');
+      const badgeWidth = Math.min(62, width - 10);
       const badgeX = x + (width - badgeWidth) / 2;
       doc.roundedRect(badgeX, y + 7.5, badgeWidth, 15, 4).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
       doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.micro)
@@ -1162,8 +1135,7 @@ function drawFeatureMatrixBadge(
   const badgeHeight = 15;
   const x = cellX + (cellWidth - badgeWidth) / 2;
   const y = cellY + (cellHeight - badgeHeight) / 2;
-  const score = typeof row?.extentScore === 'number' ? `${Math.round(row.extentScore * 100)}%` : null;
-  const label = status === 'Absent' ? '—' : score || status;
+  const label = status === 'Absent' ? '-' : status === 'Partial' ? 'Part' : 'Map';
 
   const palette = statusPalette(status);
   doc.roundedRect(x, y, badgeWidth, badgeHeight, 4).fillAndStroke(palette.fill, palette.stroke);
@@ -1228,7 +1200,7 @@ function drawFeatureMatrixInsight(
   const featureLabels = mapped.slice(0, 6).map(row => row.featureNumber).join(', ');
   const remaining = Math.max(0, strongestReference.rows.length - mapped.length);
   const insight = mapped.length
-    ? `Closest mapped citation ${strongestReference.publicationNumber} has ${pct(strongestReference.coverage.score)} feature coverage. Mapped features include ${featureLabels}${mapped.length > 6 ? ' and others' : ''}; ${remaining} feature${remaining === 1 ? '' : 's'} remain unmapped in this citation.`
+    ? `Closest mapped citation ${strongestReference.publicationNumber} shows ${overlapDescriptor(strongestReference.coverage.score).toLowerCase()}. Mapped features include ${featureLabels}${mapped.length > 6 ? ' and others' : ''}; ${remaining} feature${remaining === 1 ? '' : 's'} remain unmapped in this citation.`
     : `No extracted feature was mapped to ${strongestReference.publicationNumber} in the available evidence.`;
   const y = doc.y + 7;
   doc.roundedRect(PAGE.left, y, contentWidth(doc), 43, 6).fillAndStroke('#EEF5FF', '#D6E6FF');
@@ -1274,7 +1246,7 @@ function drawCitationCardHeader(
   ensureSpace(doc, height + SPACE.lg);
   const y = doc.y;
   drawCard(doc, x, y, width, height, 7);
-  const coverage = pct(item.coverage.score);
+  const mappingLabel = overlapDescriptor(item.coverage.score);
   const coveragePalette = item.coverage.score >= 0.7 ? STATUS.Present : item.coverage.score >= 0.35 ? STATUS.Partial : STATUS.Absent;
   const riskPalette = verdictPalette(item.noveltyThreat || item.overlapRiskLevel);
   doc.rect(x, y, 5, height).fill(riskPalette.accent);
@@ -1286,7 +1258,7 @@ function drawCitationCardHeader(
     .text(truncate(item.noveltyThreat || item.overlapRiskLevel, 34), x + width - 244, y + 16, { width: 106, height: 8, align: 'center', lineBreak: false, ellipsis: true });
   doc.roundedRect(x + width - 124, y + 9, 110, 23, 5).fillAndStroke(coveragePalette.fill, coveragePalette.stroke);
   doc.fillColor(coveragePalette.text).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(`Feature coverage: ${coverage}`, x + width - 112, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false });
+    .text(mappingLabel, x + width - 112, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false, ellipsis: true });
 
   doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
     .text(`${cleanText(item.citationNo, `D${index + 1}`)}  ${item.publicationNumber}`, x + 18, y + 38, { width: width - 36, height: 16, lineBreak: false, ellipsis: true });
@@ -1529,9 +1501,9 @@ export async function GET(
     startSection('5', 'Claim-Positioning Observations');
     drawMetadataGrid(doc, [
       ['Automated overlap position', report.finalAssessment.decision],
-      ['Automated report confidence', report.finalAssessment.confidence],
-      ['Retrieval confidence', report.reportConfidence.retrievalConfidence],
-      ['Feature-mapping confidence', report.reportConfidence.featureMappingConfidence],
+      ['Automated report status', report.finalAssessment.confidence],
+      ['Retrieval status', report.reportConfidence.retrievalConfidence],
+      ['Feature-mapping status', report.reportConfidence.featureMappingConfidence],
       ['Legal conclusion', report.reportConfidence.legalConclusion],
     ]);
     drawFlowTextBlock(doc, 'Summary', report.finalAssessment.summary);

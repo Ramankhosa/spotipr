@@ -294,7 +294,8 @@ async function main() {
             'PRO_PLAN': plansByCode['PRO_PLAN'],
             'FREE': plansByCode['FREE_PLAN'],
             'FREE_PLAN': plansByCode['FREE_PLAN'],
-            'BASIC': plansByCode['FREE_PLAN'],
+            'BASIC': plansByCode['BASIC_PLAN'] || plansByCode['FREE_PLAN'],
+            'BASIC_PLAN': plansByCode['BASIC_PLAN'] || plansByCode['FREE_PLAN'],
             'TRIAL': plansByCode['TRIAL']
           }
           targetPlan = aliases[tierUpper] || defaultPlan

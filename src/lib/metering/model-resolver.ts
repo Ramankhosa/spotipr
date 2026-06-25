@@ -89,6 +89,10 @@ export async function resolveModel(
       console.log(`[ModelResolver] Found stage config: ${result.modelCode}`)
     } else {
       console.log(`[ModelResolver] No stage config found for planId=${planId}, stageCode=${stageCode}`)
+      result = await getEquivalentPlanStageConfig(planId, stageCode)
+      if (result) {
+        console.log(`[ModelResolver] Found equivalent-plan stage config: ${result.modelCode}`)
+      }
     }
   }
 
@@ -99,6 +103,10 @@ export async function resolveModel(
       console.log(`[ModelResolver] Found task config: ${result.modelCode}`)
     } else {
       console.log(`[ModelResolver] No task config found for planId=${planId}, taskCode=${taskCode}`)
+      result = await getEquivalentPlanTaskConfig(planId, taskCode)
+      if (result) {
+        console.log(`[ModelResolver] Found equivalent-plan task config: ${result.modelCode}`)
+      }
     }
   }
 
@@ -167,6 +175,50 @@ async function getStageConfig(planId: string, stageCode: string): Promise<ModelR
       output: config.model.outputCostPer1M
     }
   }
+}
+
+async function getEquivalentPlanIds(planId: string): Promise<string[]> {
+  const plan = await prisma.plan.findUnique({
+    where: { id: planId },
+    select: { code: true }
+  })
+  if (!plan) return []
+
+  const equivalentCodes: Record<string, string[]> = {
+    BASIC_PLAN: ['FREE_PLAN'],
+    FREE_PLAN: ['BASIC_PLAN']
+  }
+  const codes = equivalentCodes[plan.code] || []
+  if (codes.length === 0) return []
+
+  const plans = await prisma.plan.findMany({
+    where: {
+      code: { in: codes },
+      status: 'ACTIVE'
+    },
+    select: { id: true, code: true },
+    orderBy: { code: 'asc' }
+  })
+
+  return plans.map(p => p.id)
+}
+
+async function getEquivalentPlanStageConfig(planId: string, stageCode: string): Promise<ModelResolutionResult | null> {
+  const equivalentPlanIds = await getEquivalentPlanIds(planId)
+  for (const equivalentPlanId of equivalentPlanIds) {
+    const result = await getStageConfig(equivalentPlanId, stageCode)
+    if (result) return result
+  }
+  return null
+}
+
+async function getEquivalentPlanTaskConfig(planId: string, taskCode: TaskCode): Promise<ModelResolutionResult | null> {
+  const equivalentPlanIds = await getEquivalentPlanIds(planId)
+  for (const equivalentPlanId of equivalentPlanIds) {
+    const result = await getTaskConfig(equivalentPlanId, taskCode)
+    if (result) return result
+  }
+  return null
 }
 
 async function getTaskConfig(planId: string, taskCode: TaskCode): Promise<ModelResolutionResult | null> {

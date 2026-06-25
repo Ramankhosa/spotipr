@@ -479,10 +479,7 @@ OUTPUT JSON SHAPE:
           "evidence_source": "title|abstract|none",
           "extent_score": 0.0,
           "confidence": 0.0,
-          "crisp_remark": "one clear 8-30 word feature-level conclusion for the PDF table",
-          "attorney_remark": "attorney-style feature comparison grounded in the submitted idea and available patent data",
-          "novelty_impact": "specific mapped overlap or difference without legal conclusions",
-          "claim_review_note": "specific claim drafting or attorney-review note"
+          "professional_remark": "one consolidated attorney-grade feature-level observation for the final PDF report"
         }
       ],
       "overlap_features": ["feature"],
@@ -521,15 +518,15 @@ RULES
 - confidence means confidence in the row assessment, not degree of feature disclosure.
 - evidence_source must be title, abstract, or none. Do not cite unavailable claims, descriptions, embodiments, examples, or figures.
 - Do not repeat the source-field limitation in narrative fields; use "available patent data" or "limited available patent data" for user-facing limitation language.
-- crisp_remark is the primary PDF table remark. It must be one meaningful sentence fragment, 8-30 words, specific to the feature and mapped status.
-- crisp_remark must directly answer one question: "Does this reference cover this feature, and what should the reviewer notice?"
-- For Present: state the mapped overlap and the concrete disclosed mechanism.
-- For Partial: state the overlap and the missing element.
-- For Absent: state the missing mechanism that may distinguish the user's invention.
-- For Unknown: state the exact evidence gap to verify.
-- Do not put labels such as "Attorney remark", "Novelty impact", "Claim review note", "Crisp remark", "Status", or "Review note" inside crisp_remark.
-- Do not concatenate attorney_remark, novelty_impact, and claim_review_note into crisp_remark.
-- attorney_remark, novelty_impact, and claim_review_note must be specific to the feature and status, not generic boilerplate.
+- professional_remark is the only final-PDF feature-level remark. Write 1-2 polished sentences for an inventor and patent attorney.
+- professional_remark must explain the mapped teaching, the missing or distinguishable technical point, and the practical claim-review focus where applicable.
+- For Present: identify the concrete disclosed mechanism and why the feature needs careful claim differentiation.
+- For Partial: identify the related teaching and the specific missing element that should be preserved or verified.
+- For Absent: identify the missing mechanism that may support differentiation if confirmed against the closest references.
+- For Unknown: identify the exact record gap to verify before relying on the feature.
+- Do not use labels such as "Crisp remark", "Attorney remark", "Novelty impact", "Claim review note", "Status", "Confidence", "Coverage", or "Review note" inside professional_remark.
+- Do not include percentages, confidence language, evidence scores, or mechanical phrases such as "partial overlap exists" without a concrete technical explanation.
+- Do not output separate attorney_remark, novelty_impact, or claim_review_note fields for comparison_rows.
 - Do not add markdown, comments, citations, or text outside JSON.
 - ASCII only.`;
 
@@ -1168,6 +1165,7 @@ export interface FeatureMapCell {
   novelty_impact?: string;
   claim_review_note?: string;
   crisp_remark?: string;
+  professional_remark?: string;
   evidence?: string | {
     quote: string;
     field: string;
@@ -1347,6 +1345,7 @@ export interface PatentFeatureComparisonRow {
   attorney_remark: string;
   novelty_impact: string;
   claim_review_note: string;
+  professional_remark: string;
 }
 
 export class NoveltySearchService extends BasePatentService {
@@ -4212,6 +4211,13 @@ RESPONSE:`;
         cell?.crisp_remark ||
         this.defaultCrispRemark(status, feature, patentDisclosure, evidenceQuote)
       ).trim();
+      const professionalRemark = String(
+        suppliedRow.professional_remark ||
+        cell?.professional_remark ||
+        crispRemark ||
+        noveltyImpact ||
+        this.defaultProfessionalRemark(status, feature, patentDisclosure, evidenceQuote)
+      ).trim();
 
       return {
         feature_id: String(suppliedRow.feature_id || cell?.feature_id || `KF${index + 1}`),
@@ -4235,6 +4241,7 @@ RESPONSE:`;
           cell?.claim_review_note ||
           this.defaultClaimReviewNote(status, feature)
         ).trim(),
+        professional_remark: professionalRemark,
       };
     });
   }
@@ -4253,6 +4260,7 @@ RESPONSE:`;
       cell.attorney_remark = row.attorney_remark;
       cell.novelty_impact = row.novelty_impact;
       cell.claim_review_note = row.claim_review_note;
+      cell.professional_remark = row.professional_remark;
       if (row.evidence_quote && !cell.quote) cell.quote = row.evidence_quote;
       if (typeof row.extent_score === 'number') cell.extent_score = row.extent_score;
       if (typeof row.confidence === 'number') cell.confidence = row.confidence;
@@ -4313,6 +4321,30 @@ RESPONSE:`;
       return `Potential distinction: ${feature} is not disclosed by this reference.`;
     }
     return `Verification needed: available data does not reliably address ${feature}.`;
+  }
+
+  private defaultProfessionalRemark(
+    status: FeatureMapCell['status'],
+    feature: string,
+    patentDisclosure = '',
+    evidenceQuote = ''
+  ): string {
+    const disclosure = String(evidenceQuote || patentDisclosure || '').replace(/\s+/g, ' ').trim();
+    const shortDisclosure = disclosure.length > 120 ? `${disclosure.slice(0, 117).trim()}...` : disclosure;
+    if (status === 'Present') {
+      return shortDisclosure
+        ? `The reference appears to teach this feature through ${shortDisclosure}. Review the claim wording for narrower technical distinctions before relying on this element.`
+        : `The reference appears to teach ${feature}. Review the claim wording for narrower technical distinctions before relying on this element.`;
+    }
+    if (status === 'Partial') {
+      return shortDisclosure
+        ? `The reference is directionally related through ${shortDisclosure}, but it does not clearly teach the complete submitted mechanism. Preserve the missing technical element as a claim-review focus.`
+        : `The reference is directionally related to ${feature}, but it does not clearly teach the complete submitted mechanism. Preserve the missing technical element as a claim-review focus.`;
+    }
+    if (status === 'Absent') {
+      return `The reviewed citation does not disclose ${feature} in the mapped patent data. This point may support differentiation if confirmed across the closest references and reflected in the invention disclosure.`;
+    }
+    return `The available record does not allow a reliable comparison for ${feature}. Verify the full patent document before assigning claim weight to this point.`;
   }
 
   private defaultClaimReviewNote(status: FeatureMapCell['status'], feature: string): string {
@@ -5237,7 +5269,6 @@ RESPONSE:`;
               {
                 taskCode: TaskCode.LLM5_NOVELTY_ASSESS,
                 stageCode: 'NOVELTY_COMPARISON',
-                modelClass: modelPreference,
                 prompt,
                 parameters: {
                   reasoning_effort: 'low',
@@ -8347,7 +8378,8 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
           crisp_remark: this.defaultCrispRemark(status, featureText, quote || ''),
           attorney_remark: this.defaultAttorneyRemark(status, featureText, patent.canonicalPn),
           novelty_impact: this.defaultNoveltyImpact(status, featureText),
-          claim_review_note: this.defaultClaimReviewNote(status, featureText)
+          claim_review_note: this.defaultClaimReviewNote(status, featureText),
+          professional_remark: this.defaultProfessionalRemark(status, featureText, quote || '', quote || '')
         };
       });
 
@@ -8539,7 +8571,8 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
               crisp_remark: cell.crisp_remark,
               attorney_remark: cell.attorney_remark,
               novelty_impact: cell.novelty_impact,
-              claim_review_note: cell.claim_review_note
+              claim_review_note: cell.claim_review_note,
+              professional_remark: cell.professional_remark
             };
             validatedCells.push(convertedCell);
           } else {

@@ -35,6 +35,7 @@ function featureRow(index: number, overrides: Record<string, unknown> = {}) {
     evidenceSource: 'abstract',
     extentScore: index % 3 === 2 ? 0 : 0.72,
     crispRemark: `Attorney remark for feature ${index + 1}.`,
+    professionalRemark: `Professional consolidated remark for feature ${index + 1}.`,
     attorneyRemark: `Detailed attorney discussion for feature ${index + 1}.`,
     noveltyImpact: `Novelty impact for feature ${index + 1}.`,
     claimReviewNote: `Claim review note for feature ${index + 1}.`,
@@ -167,6 +168,7 @@ describe('GET attorney report PDF', () => {
       patentDisclosure: longText('Long patent disclosure', 'DISCLOSURE_TAIL_MARKER'),
       evidenceQuote: longText('Long mapped evidence', 'EVIDENCE_TAIL_MARKER'),
       crispRemark: longText('Long attorney remark', 'REMARK_TAIL_MARKER'),
+      professionalRemark: longText('Long professional consolidated remark', 'PROFESSIONAL_REMARK_TAIL_MARKER'),
       attorneyRemark: longText('Long detailed attorney discussion', 'ATTORNEY_DISCUSSION_TAIL_MARKER'),
       noveltyImpact: longText('Long novelty impact discussion', 'NOVELTY_IMPACT_TAIL_MARKER'),
       claimReviewNote: longText('Long claim review note', 'CLAIM_REVIEW_TAIL_MARKER'),
@@ -208,22 +210,31 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text).toContain('2.2 List of Other Shortlisted Citations')
     expect(parsed.text).not.toContain('2.3 List of Other Shortlisted Citations')
     expect(parsed.text).toContain('Key Features')
-    expect(normalizedText).toContain('Reference Patent: US-2026-000001-A1')
-    expect(parsed.text).toContain('Relevance / Evidence')
-    expect(parsed.text).toContain('Discussion Points')
+    expect(normalizedText).toContain('Reference Disclosure: US-2026-000001-A1')
+    expect(parsed.text).toContain('Key Feature')
+    expect(parsed.text).toContain('Professional Remark')
+    expect(parsed.text).not.toContain('Relevance / Evidence')
+    expect(parsed.text).not.toContain('Discussion Points')
+    expect(parsed.text).not.toContain('Crisp remark')
+    expect(parsed.text).not.toContain('Novelty impact')
+    expect(parsed.text).not.toContain('Claim review note')
+    expect(parsed.text).not.toContain('Confidence:')
+    expect(parsed.text).not.toContain('Feature coverage:')
     for (const marker of [
       'ABSTRACT_TAIL_MARKER',
       'TECHNICAL_TAIL_MARKER',
       'USER_DISCLOSURE_TAIL_MARKER',
       'DISCLOSURE_TAIL_MARKER',
       'EVIDENCE_TAIL_MARKER',
-      'REMARK_TAIL_MARKER',
-      'ATTORNEY_DISCUSSION_TAIL_MARKER',
-      'NOVELTY_IMPACT_TAIL_MARKER',
-      'CLAIM_REVIEW_TAIL_MARKER',
+      'PROFESSIONAL_REMARK_TAIL_MARKER',
       'REFERENCE_TAIL_MARKER',
       'CLAIM_TAIL_MARKER',
     ]) expect(compactText).toContain(marker)
+    for (const marker of [
+      'ATTORNEY_DISCUSSION_TAIL_MARKER',
+      'NOVELTY_IMPACT_TAIL_MARKER',
+      'CLAIM_REVIEW_TAIL_MARKER',
+    ]) expect(compactText).not.toContain(marker)
   }, 30_000)
 
   test('handles identical disclosure text, missing evidence, and no additional shortlisted citations', async () => {
@@ -246,7 +257,7 @@ describe('GET attorney report PDF', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-disposition')).toContain('attachment;')
-    expect(normalizedText).toContain('No supporting quotation was mapped')
+    expect(normalizedText).toContain('Mapping assessment: Present')
     expect(parsed.text).toContain('No additional shortlisted citations remained')
     expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
   }, 20_000)

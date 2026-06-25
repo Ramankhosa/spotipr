@@ -164,7 +164,10 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       'A feature marked Absent or Unknown in one patent is not automatically unique'
     );
-    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('attorney_remark');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('professional_remark');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).not.toContain('"attorney_remark":');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).not.toContain('"novelty_impact":');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).not.toContain('"claim_review_note":');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       '"novelty_threat": "high_overlap|moderate_overlap|related|low_overlap"'
     );
@@ -222,6 +225,7 @@ describe('novelty search guardrails', () => {
           attorney_remark: 'Direct abstract overlap.',
           novelty_impact: 'This feature is covered.',
           claim_review_note: 'Claim a narrower control rule.',
+          professional_remark: 'The reference teaches the soil moisture measurement loop, so claim drafting should focus on the narrower control rule.',
         },
       ],
       {
@@ -247,6 +251,7 @@ describe('novelty search guardrails', () => {
       extent_score: 0.89,
       attorney_remark: 'Direct abstract overlap.',
       claim_review_note: 'Claim a narrower control rule.',
+      professional_remark: 'The reference teaches the soil moisture measurement loop, so claim drafting should focus on the narrower control rule.',
     });
     expect(rows[1]).toMatchObject({
       feature_id: 'KF2',
@@ -257,6 +262,7 @@ describe('novelty search guardrails', () => {
     expect(rows[1].extent_score).toBeLessThanOrEqual(0.2);
     expect(rows[1].attorney_remark).toContain('IN123A');
     expect(rows[1].claim_review_note).toContain('threshold-based irrigation decision rule');
+    expect(rows[1].professional_remark).toContain('threshold-based irrigation decision rule');
   });
 
   test('preserves Unknown cells in the feature matrix', () => {

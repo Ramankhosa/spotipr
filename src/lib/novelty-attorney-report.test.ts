@@ -154,6 +154,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
                 attorney_remark: 'This is a direct overlap in the abstract.',
                 novelty_impact: 'This feature is materially overlapping.',
                 claim_review_note: 'Do not rely on this loop alone for novelty.',
+                professional_remark: 'The reference teaches soil moisture sensing in the irrigation controller, so claim drafting should focus on the narrower threshold-control rule.',
               },
               {
                 feature_id: 'KF2',
@@ -202,7 +203,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
     ]);
     expect(model.scoringLegend.map(item => item.label)).toEqual(expect.arrayContaining([
       'Retrieval Relevance',
-      'Feature Coverage',
+      'Feature Mapping',
       'Absent',
     ]));
     expect(model.scoringLegend.map(item => item.label)).not.toContain('Evidence Confidence');
@@ -229,6 +230,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       extentScore: 0.88,
       confidence: 0.91,
       crispRemark: 'This is a direct overlap in the abstract.',
+      professionalRemark: 'The reference teaches soil moisture sensing in the irrigation controller, so claim drafting should focus on the narrower threshold-control rule.',
       attorneyRemark: 'This is a direct overlap in the abstract.',
       claimReviewNote: 'Do not rely on this loop alone for novelty.',
     });
@@ -239,9 +241,12 @@ describe('buildNoveltyAttorneyReportModel', () => {
       patentDisclosure: 'The patent controls irrigation without disclosing the submitted threshold decision rule.',
       evidenceSource: 'none',
       extentScore: null,
-      crispRemark: 'The threshold sequence is a mapped technical difference from this reference.',
+      crispRemark: 'The reference lacks the threshold-triggered sequence. potential distinction. emphasize threshold inputs.',
     });
     expect(model.comparisons[0].rows[1].crispRemark).not.toMatch(/Attorney remark|Novelty impact|Claim review note/i);
+    expect(model.comparisons[0].rows[1].professionalRemark).toContain('The reference lacks the threshold-triggered sequence.');
+    expect(model.comparisons[0].rows[1].professionalRemark).toContain('potential distinction.');
+    expect(model.comparisons[0].rows[1].professionalRemark).not.toMatch(/Attorney remark|Novelty impact|Claim review note|Confidence|Coverage|\d+%/i);
     expect(model.comparisons[0].rows[3]).toMatchObject({
       featureNumber: 'KF4',
       status: 'Absent',

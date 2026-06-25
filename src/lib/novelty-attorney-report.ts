@@ -21,6 +21,7 @@ export interface AttorneyReportFeatureRow {
   status: FeatureMapCell['status'];
   statusLabel: string;
   crispRemark: string;
+  professionalRemark: string;
   evidenceQuote: string;
   evidenceSource: string;
   extentScore: number | null;
@@ -535,12 +536,49 @@ function defaultCrispRemark(status: FeatureMapCell['status'], feature: string, p
   return `Verification needed: available data does not reliably address ${feature}.`;
 }
 
-function isUsefulCrispRemark(value: unknown): boolean {
-  const text = cleanText(value);
+function defaultProfessionalRemark(status: FeatureMapCell['status'], feature: string, patentDisclosure: string): string {
+  const disclosure = cleanText(patentDisclosure, '');
+  const shortDisclosure = disclosure.length > 120 ? `${disclosure.slice(0, 117).trim()}...` : disclosure;
+  if (status === 'Present') {
+    return shortDisclosure
+      ? `The reference appears to teach this feature through ${shortDisclosure}. Review the claim wording for narrower technical distinctions before relying on this element.`
+      : `The reference appears to teach ${feature}. Review the claim wording for narrower technical distinctions before relying on this element.`;
+  }
+  if (status === 'Partial') {
+    return shortDisclosure
+      ? `The reference is technically related through ${shortDisclosure}, but it does not clearly disclose the complete submitted mechanism. Preserve the missing element as a claim-review focus.`
+      : `The reference is technically related to ${feature}, but it does not clearly disclose the complete submitted mechanism. Preserve the missing element as a claim-review focus.`;
+  }
+  if (status === 'Absent') {
+    return `The reviewed citation does not disclose ${feature} in the mapped patent data. This point may support differentiation if confirmed across the closest references and reflected in the invention disclosure.`;
+  }
+  return `The available record does not allow a reliable comparison for ${feature}. Verify the full patent document before assigning claim weight to this point.`;
+}
+
+function stripRemarkLabels(value: unknown): string {
+  return cleanText(value)
+    .replace(/\b(?:crisp remark|attorney remark|novelty impact|claim review note|review note|status|mapped overlap|partial overlap|potential distinction|potential differentiator|verification needed|overlap risk|evidence gap)\s*:\s*/gi, '')
+    .replace(/\b(?:confidence|coverage)\s*:\s*\d+(?:\.\d+)?\s*%?/gi, '')
+    .replace(/\b\d+(?:\.\d+)?\s*%\s*(?:confidence|coverage|mapped coverage|evidence confidence)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function reportSafeRemark(value: unknown): string {
+  return reportSafeText(stripRemarkLabels(value))
+    .replace(/\b(?:confidence|coverage)\s*:\s*\d+(?:\.\d+)?\s*%?/gi, '')
+    .replace(/\b\d+(?:\.\d+)?\s*%\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isUsefulRemark(value: unknown, maxWords = 85): boolean {
+  const text = reportSafeRemark(value);
   if (!text) return false;
-  if (/\b(attorney remark|novelty impact|claim review note|crisp remark|review note|status)\s*:/i.test(text)) return false;
+  if (/\b(attorney remark|novelty impact|claim review note|crisp remark|review note|status|confidence|coverage)\s*:/i.test(text)) return false;
+  if (/\b\d+(?:\.\d+)?\s*%\b/.test(text)) return false;
   const words = text.split(/\s+/).filter(Boolean);
-  return words.length >= 4 && words.length <= 30;
+  return words.length >= 4 && words.length <= maxWords;
 }
 
 function rowCrispRemark(
@@ -559,9 +597,39 @@ function rowCrispRemark(
     cell?.novelty_impact,
   ];
   for (const candidate of candidates) {
-    if (isUsefulCrispRemark(candidate)) return reportSafeText(candidate);
+    if (isUsefulRemark(candidate, 30)) return reportSafeRemark(candidate);
   }
   return reportSafeText(defaultCrispRemark(status, feature, patentDisclosure));
+}
+
+function rowProfessionalRemark(
+  supplied: any,
+  cell: FeatureMapCell | undefined,
+  status: FeatureMapCell['status'],
+  feature: string,
+  patentDisclosure: string
+): string {
+  const candidates = [
+    supplied.professional_remark,
+    (cell as any)?.professional_remark,
+    [
+      supplied.attorney_remark || cell?.attorney_remark,
+      supplied.novelty_impact || cell?.novelty_impact,
+      supplied.claim_review_note || cell?.claim_review_note,
+    ].filter(Boolean).join(' '),
+    supplied.crisp_remark,
+    (cell as any)?.crisp_remark,
+    supplied.attorney_remark,
+    cell?.attorney_remark,
+    supplied.novelty_impact,
+    cell?.novelty_impact,
+    supplied.claim_review_note,
+    cell?.claim_review_note,
+  ];
+  for (const candidate of candidates) {
+    if (isUsefulRemark(candidate)) return reportSafeRemark(candidate);
+  }
+  return reportSafeRemark(defaultProfessionalRemark(status, feature, patentDisclosure));
 }
 
 function buildClaimImpactSummary(rows: AttorneyReportFeatureRow[], riskLabel: string): string {
@@ -679,6 +747,7 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       status,
       statusLabel: statusLabel(status),
       crispRemark: rowCrispRemark(supplied, cell, status, feature, patentDisclosure),
+      professionalRemark: rowProfessionalRemark(supplied, cell, status, feature, patentDisclosure),
       evidenceQuote,
       evidenceSource: evidenceQuote ? evidenceSource : 'none',
       extentScore: status === 'Absent' ? null : extentScore,
@@ -844,8 +913,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { label: 'Retrieval Relevance', meaning: 'Ranking score based on semantic and textual overlap, not a legal conclusion.' },
       { label: 'Direct match', meaning: 'Citation appears to overlap the invention-level core mechanism or core feature combination.' },
       { label: 'Component / feature-level match', meaning: 'Citation discloses one or more relevant features or subsystems, but not the full invention as a whole.' },
-      { label: 'Distributed component coverage', meaning: 'Features found across multiple references indicate landscape/obviousness-style risk, not one-reference anticipation by itself.' },
-      { label: 'Feature Coverage', meaning: 'Share of extracted features mapped as Present or Partial for one citation.' },
+      { label: 'Distributed component mapping', meaning: 'Features found across multiple references indicate landscape/obviousness-style risk, not one-reference anticipation by itself.' },
+      { label: 'Feature Mapping', meaning: 'Qualitative indication that a citation maps one or more extracted features.' },
       { label: 'Evidence Source', meaning: 'Mapped support is limited to title, abstract, inference, or none in this report version.' },
     ],
     tableOfContents: [

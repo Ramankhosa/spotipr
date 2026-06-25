@@ -66,8 +66,8 @@ export async function POST(request: NextRequest) {
         'PROFESSIONAL_PLAN': 'PRO_PLAN',
         'FREE': 'FREE_PLAN',
         'FREE_PLAN': 'FREE_PLAN',
-        'BASIC': 'FREE_PLAN',
-        'BASIC_PLAN': 'FREE_PLAN',
+        'BASIC': 'BASIC_PLAN',
+        'BASIC_PLAN': 'BASIC_PLAN',
         'TRIAL': 'TRIAL',
         'TRIAL_PLAN': 'TRIAL'
       }
