@@ -167,6 +167,21 @@ function verdictPalette(decision: string) {
   return { fill: '#EFF6FF', text: '#1E40AF', stroke: '#BFDBFE', accent: COLORS.blue };
 }
 
+function riskAssessmentFor(report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
+  return report.riskAssessment || {
+    noveltyRisk: 'Needs Review',
+    noveltyRiskLabel: 'Novelty / anticipation risk: Needs Review',
+    noveltyRiskExplanation: 'Risk assessment requires the deterministic report model.',
+    combinationRisk: 'Needs Review',
+    combinationRiskLabel: 'Component-combination risk: Needs Review',
+    combinationRiskExplanation: 'Distributed feature coverage requires the deterministic report model.',
+    headline: cleanText(report.finalAssessment?.decision, 'Review required'),
+    coreFeatureCount: 0,
+    strongestSingleReferenceCoreCoverage: 0,
+    distributedCoreCoverage: 0,
+  };
+}
+
 function fitTextToHeight(doc: PdfDoc, value: string, width: number, height: number, lineGap: number) {
   if (doc.heightOfString(value, { width, lineGap }) <= height) return [value, ''] as const;
 
@@ -406,22 +421,20 @@ function drawDecisionFact(
 }
 
 function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
+  const risk = riskAssessmentFor(report);
   const strongest = report.comparisons.find(item => item.publicationNumber === report.publicClosestCitation?.publicationNumber)
     || report.comparisons.reduce((best, item) => (
       Number(item.coverage?.score || 0) > Number(best?.coverage?.score || 0) ? item : best
     ), report.comparisons[0]);
-  const signal = cleanText(report.finalAssessment.decision, 'Review required');
+  const signal = cleanText(risk.headline || report.finalAssessment.decision, 'Review required');
   const palette = verdictPalette(signal);
   const mappedRow = highestMappedRow(report);
   const differentiatorRow = strongestDifferentiatorRow(report);
-  const topMappedFeature = mappedRow
-    ? `${mappedRow.row.featureNumber} - ${mappedRow.row.userFeature}`
-    : 'No mapped overlap feature identified';
   const mainDifferentiator = differentiatorRow
     ? `${differentiatorRow.row.featureNumber} - ${differentiatorRow.row.userFeature}`
     : 'No unmapped differentiator identified';
   const reviewFocus = strongest
-    ? `Review ${strongest.publicationNumber} first; compare ${mappedRow?.row.featureNumber || 'mapped features'} and preserve ${differentiatorRow?.row.featureNumber || 'unmapped distinctions'} in claim drafting.`
+    ? `Review ${strongest.publicationNumber} first; compare ${mappedRow?.row.featureNumber || 'mapped features'} and preserve ${differentiatorRow?.row.featureNumber || 'unmapped distinctions'} in claim-positioning review.`
     : 'Run detailed citation mapping before forming claim-positioning conclusions.';
 
   doc.addNamedDestination('executive-snapshot', 'XYZ', PAGE.left, PAGE.top, null);
@@ -436,13 +449,17 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), 86, 7).fillAndStroke(palette.fill, palette.stroke);
   doc.rect(PAGE.left, verdictY, 4, 86).fill(palette.accent);
   doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text('AUTOMATED OVERLAP VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: 180, lineBreak: false });
+    .text('DETERMINISTIC RISK VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: 180, lineBreak: false });
   doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
     .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: 180, height: 30, ellipsis: true });
   doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(`Review stage: preliminary assessment`, PAGE.left + SPACE.lg, verdictY + 64, { width: 180, height: 9, lineBreak: false, ellipsis: true });
+  const riskLines = [
+    `${risk.noveltyRiskLabel} - ${risk.noveltyRiskExplanation}`,
+    `${risk.combinationRiskLabel} - ${risk.combinationRiskExplanation}`,
+  ].join('\n');
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
-    .text(rationale, PAGE.left + 210, verdictY + SPACE.md, {
+    .text(riskLines || rationale, PAGE.left + 210, verdictY + SPACE.md, {
       width: contentWidth(doc) - 226,
       height: 62,
       lineGap: 1.5,
@@ -452,8 +469,8 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const factsY = verdictY + 98;
   const factGap = SPACE.sm;
   const factWidth = (contentWidth(doc) - factGap * 2) / 3;
-  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Closest citation', strongest ? `${strongest.publicationNumber} - ${strongest.referenceRole}` : 'None mapped', COLORS.blue);
-  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Top mapped feature', topMappedFeature, COLORS.red);
+  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`, COLORS.blue);
+  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`, COLORS.red);
   drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success);
 
   const focusY = factsY + 66;
@@ -504,7 +521,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     .text('Key Takeaway', takeawayX + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
   doc.rect(takeawayX + SPACE.md, detailY + 31, 28, 2).fill(COLORS.success);
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
-    .text(rationale, takeawayX + SPACE.md, detailY + 44, {
+    .text(`${rationale}\n\nPotential Differentiation Space: ${report.potentialDifferentiationSpace}`, takeawayX + SPACE.md, detailY + 44, {
       width: detailWidth - 24,
       height: 88,
       lineGap: 2,
@@ -775,6 +792,7 @@ function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
     [
       cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.'),
       `Mapping assessment: ${statusLabel}`,
+      `Evidence strength: ${cleanText(row.evidenceStrength, 'Weak')} - ${cleanText(row.evidenceStrengthReason, 'Evidence should be confirmed from source records.')}`,
       supportingPassage ? labeledLine('Supporting passage', supportingPassage) : '',
     ].filter(Boolean).join('\n'),
     cleanText(row.professionalRemark || row.crispRemark, 'No professional review note was mapped for this feature.'),
@@ -1054,7 +1072,7 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
       );
     });
     drawFeatureMatrixLegend(doc);
-    if (start + chunkSize >= features.length) drawFeatureMatrixInsight(doc, strongestReference);
+    if (start + chunkSize >= features.length) drawFeatureMatrixInsight(doc, report, strongestReference);
     doc.y += SPACE.sm;
   }
 }
@@ -1197,15 +1215,16 @@ function drawFeatureMatrixLegend(doc: PdfDoc) {
 
 function drawFeatureMatrixInsight(
   doc: PdfDoc,
+  report: ReturnType<typeof buildNoveltyAttorneyReportModel>,
   strongestReference: ReturnType<typeof buildNoveltyAttorneyReportModel>['comparisons'][number],
 ) {
   ensureSpace(doc, 60);
   const mapped = strongestReference.rows.filter(row => row.status === 'Present' || row.status === 'Partial');
   const featureLabels = mapped.slice(0, 6).map(row => row.featureNumber).join(', ');
   const remaining = Math.max(0, strongestReference.rows.length - mapped.length);
-  const insight = mapped.length
+  const insight = report.matrixInsight || (mapped.length
     ? `Closest mapped citation ${strongestReference.publicationNumber} is a ${strongestReference.referenceRole.toLowerCase()}. Mapped features include ${featureLabels}${mapped.length > 6 ? ' and others' : ''}; ${remaining} feature${remaining === 1 ? '' : 's'} remain not expressly taught or require full-text review.`
-    : `No extracted feature was mapped to ${strongestReference.publicationNumber} in the reviewed citation record.`;
+    : `No extracted feature was mapped to ${strongestReference.publicationNumber} in the reviewed citation record.`);
   const y = doc.y + 7;
   doc.roundedRect(PAGE.left, y, contentWidth(doc), 43, 6).fillAndStroke('#EEF5FF', '#D6E6FF');
   doc.circle(PAGE.left + 18, y + 16, 7).fill(COLORS.blue);
@@ -1410,13 +1429,14 @@ export async function GET(
 
     startSection('1.3', 'Key Features', 2);
     drawParagraph(doc, 'The key features are extracted from the submitted disclosure and classified to separate core mechanisms, implementation details, novelty-candidate features, and generic features that should not be relied on alone.');
-    drawTableRow(doc, ['Key Feature', 'Type', 'Feature Description'], [58, 92, contentWidth(doc) - 150], { header: true });
+    drawTableRow(doc, ['Key Feature', 'Importance', 'Type', 'Feature Description'], [58, 122, 92, contentWidth(doc) - 272], { header: true });
     report.featureSummaries.forEach((feature, index) => {
       drawTableRow(doc, [
         feature.featureNumber,
+        feature.importanceLabel,
         feature.typeLabel,
         `${feature.feature}${feature.genericWarning ? `\n${feature.genericWarning}` : ''}`,
-      ], [58, 92, contentWidth(doc) - 150], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined });
+      ], [58, 122, 92, contentWidth(doc) - 272], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined });
     });
     drawFlowTextBlock(doc, 'Generic Feature Risk', report.genericFeatureRisk.summary);
 
@@ -1494,14 +1514,18 @@ export async function GET(
     drawEntityLandscape(doc, report.inventorSignals);
 
     startSection('5', 'Claim-Positioning Observations');
+    const risk = riskAssessmentFor(report);
     drawMetadataGrid(doc, [
       ['Automated overlap position', report.finalAssessment.decision],
+      ['Novelty / anticipation risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`],
+      ['Component-combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`],
       ['Closest mapped citation', report.publicClosestCitation?.publicationNumber || '-'],
       ['Reference role', report.publicClosestCitation?.referenceRole || '-'],
       ['Review priority', report.publicClosestCitation?.reviewPriority || '-'],
       ['Legal conclusion', report.reportConfidence.legalConclusion],
     ]);
     drawFlowTextBlock(doc, 'Summary', report.finalAssessment.summary);
+    drawFlowTextBlock(doc, 'Potential Differentiation Space', report.potentialDifferentiationSpace || 'Potential differentiation space requires mapped feature analysis.');
     drawFlowBulletList(doc, 'Key Risks', report.finalAssessment.risks);
     drawFlowBulletList(doc, 'Recommendations', report.finalAssessment.recommendations);
     drawFlowTextBlock(doc, 'Overall Drafting Direction', report.overallDraftingDirection);

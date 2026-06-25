@@ -35,6 +35,8 @@ function featureRow(index: number, overrides: Record<string, unknown> = {}) {
     publicMappingCode: index % 3 === 0 ? 'D' : index % 3 === 1 ? 'P' : 'N',
     evidenceQuote: `Evidence quotation for feature ${index + 1}.`,
     evidenceSource: 'abstract',
+    evidenceStrength: index % 3 === 0 ? 'Strong' : index % 3 === 1 ? 'Moderate' : 'Weak',
+    evidenceStrengthReason: index % 3 === 0 ? 'Explicit passage directly supports the mapped feature.' : 'Passage requires confirmation from source records.',
     extentScore: index % 3 === 2 ? 0 : 0.72,
     crispRemark: `Attorney remark for feature ${index + 1}.`,
     professionalRemark: `Professional consolidated remark for feature ${index + 1}.`,
@@ -127,8 +129,22 @@ function reportModel(overrides: Record<string, unknown> = {}) {
     assigneeLandscape: { summary: 'One assignee was mapped.', groups: [], repeated: [] },
     inventorSignals: { summary: 'Two inventors were mapped.', groups: [], repeated: [] },
     comparisons: [comparison],
+    riskAssessment: {
+      noveltyRisk: 'Moderate',
+      noveltyRiskLabel: 'Novelty / anticipation risk: Moderate',
+      noveltyRiskExplanation: 'No single reviewed reference maps all core inventive features.',
+      combinationRisk: 'High',
+      combinationRiskLabel: 'Component-combination risk: High',
+      combinationRiskExplanation: 'Core features are distributed across multiple component references.',
+      headline: 'High component-combination risk',
+      coreFeatureCount: 4,
+      strongestSingleReferenceCoreCoverage: 0.72,
+      distributedCoreCoverage: 0.9,
+    },
+    potentialDifferentiationSpace: 'Potential differentiation space appears to lie in the integrated control relationship.',
+    matrixInsight: 'No cited reference maps KF1 + KF2 + KF3 + KF4 together.',
     finalAssessment: {
-      decision: 'High mapped-overlap risk',
+      decision: 'High component-combination risk',
       confidence: 'Medium',
       summary: 'Mapped evidence indicates material overlap. Full records still require attorney review.',
       risks: ['Claim scope may overlap the mapped reference.'],
@@ -209,7 +225,12 @@ describe('GET attorney report PDF', () => {
     expect(response.headers.get('content-disposition')).toContain('inline;')
     expect(buffer.toString('latin1')).toContain('Inter-Regular')
     expect(parsed.numpages).toBeGreaterThan(6)
-    expect(parsed.text).toContain('High mapped-overlap risk')
+    expect(parsed.text).toContain('High component-combination risk')
+    expect(normalizedText).toContain('Novelty / anticipation risk')
+    expect(normalizedText).toContain('Component-combination risk')
+    expect(normalizedText).toContain('Evidence strength')
+    expect(normalizedText).toContain('Potential Differentiation Space')
+    expect(parsed.text).not.toContain('Not Novel determination')
     expect(parsed.text).toContain('1 Search Overview')
     expect(parsed.text).toContain('2 Citation Analysis')
     expect(parsed.text).toContain('2.2 List of Other Shortlisted Citations')

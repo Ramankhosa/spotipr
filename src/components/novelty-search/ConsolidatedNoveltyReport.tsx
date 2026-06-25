@@ -42,6 +42,8 @@ interface FeatureComparisonRow {
   professional_remark?: string;
   evidence_quote?: string;
   evidence_source: string;
+  evidence_strength?: string;
+  evidence_strength_reason?: string;
   extent_score?: number;
   confidence?: number;
   attorney_remark: string;
@@ -544,6 +546,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
         professional_remark: row.professionalRemark,
         evidence_quote: row.evidenceQuote || undefined,
         evidence_source: row.evidenceSource,
+        evidence_strength: row.evidenceStrength,
+        evidence_strength_reason: row.evidenceStrengthReason,
         extent_score: row.extentScore ?? undefined,
         confidence: row.confidence ?? undefined,
         attorney_remark: row.attorneyRemark,
@@ -722,6 +726,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
               <thead>
                 <tr>
                   <HeaderCell className="w-28">Key Feature</HeaderCell>
+                  <HeaderCell className="w-48">Importance</HeaderCell>
                   <HeaderCell className="w-44">Feature Type</HeaderCell>
                   <HeaderCell>Feature Description</HeaderCell>
                 </tr>
@@ -730,6 +735,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 {reportData.featureSummaries.map(feature => (
                   <tr className="print-row" key={feature.featureNumber}>
                     <Cell className="font-semibold text-slate-950">{feature.featureNumber}</Cell>
+                    <Cell>{feature.importanceLabel}</Cell>
                     <Cell>{feature.typeLabel}</Cell>
                     <Cell>
                       <div>{feature.feature}</div>
@@ -853,6 +859,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 </tbody>
               </table>
             </div>
+            <div className="mt-4 rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+              <span className="font-semibold">Matrix interpretation: </span>{reportData.matrixInsight}
+            </div>
           </Section>
 
           <Section id="section-2-1" title="2.1 Details of Relevant Patent Citations" breakBefore>
@@ -901,6 +910,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                             <Cell>
                               <div className={`mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>{row.public_mapping_status || row.status_label || statusLabel(row.status)}</div>
                               <div>{row.patent_disclosure}</div>
+                              <div className="mt-2 text-slate-500">Evidence strength: {row.evidence_strength || 'Weak'}{row.evidence_strength_reason ? ` - ${row.evidence_strength_reason}` : ''}</div>
                               {row.evidence_quote && <div className="mt-2 text-slate-500">Supporting passage: {row.evidence_quote}</div>}
                             </Cell>
                             <Cell>
@@ -967,6 +977,10 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
               <div className="rounded-sm border border-slate-300 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Automated overlap position</div>
                 <div className="mt-2 text-2xl font-bold text-slate-950">{reportData.finalAssessment.decision}</div>
+                <div className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
+                  <p><span className="font-semibold">Novelty / anticipation risk: </span>{reportData.riskAssessment.noveltyRisk} - {reportData.riskAssessment.noveltyRiskExplanation}</p>
+                  <p><span className="font-semibold">Component-combination risk: </span>{reportData.riskAssessment.combinationRisk} - {reportData.riskAssessment.combinationRiskExplanation}</p>
+                </div>
                 <p className="mt-3 text-sm leading-6 text-slate-700">{reportData.finalAssessment.summary}</p>
               </div>
               <div className="rounded-sm border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
@@ -981,6 +995,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
               <ListBlock title="Key Risks" items={reportData.finalAssessment.risks} />
               <ListBlock title="Strategic Recommendations" items={reportData.finalAssessment.recommendations} />
               <ListBlock title="Review Drivers" items={finalRemarks?.confidence_drivers || []} />
+            </div>
+            <div className="mt-5 rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+              <span className="font-semibold">Potential Differentiation Space: </span>{reportData.potentialDifferentiationSpace}
             </div>
             <div className="mt-5 rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
               <span className="font-semibold text-slate-950">Overall drafting direction: </span>{reportData.overallDraftingDirection}

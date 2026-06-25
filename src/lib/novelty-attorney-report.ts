@@ -3,12 +3,17 @@ import { buildNoveltyReportCountSummary } from './novelty-report-counts';
 import { matchCategoryFromDecision, matchCategoryLabel, normalizeRerankDecision } from './novelty-prior-art-visibility';
 
 export type AttorneyReportFeatureType = 'core_technical' | 'implementation' | 'novelty_candidate' | 'generic_weak';
+export type AttorneyReportFeatureImportance = 'core_inventive' | 'secondary_implementation' | 'optional_embodiment';
+export type AttorneyReportRiskLevel = 'Low' | 'Moderate' | 'High' | 'Needs Review';
+export type AttorneyReportEvidenceStrength = 'Strong' | 'Moderate' | 'Weak';
 
 export interface AttorneyReportFeatureSummary {
   featureNumber: string;
   feature: string;
   type: AttorneyReportFeatureType;
   typeLabel: string;
+  importance: AttorneyReportFeatureImportance;
+  importanceLabel: string;
   disclosure: string;
   genericWarning: string;
 }
@@ -26,6 +31,8 @@ export interface AttorneyReportFeatureRow {
   professionalRemark: string;
   evidenceQuote: string;
   evidenceSource: string;
+  evidenceStrength: AttorneyReportEvidenceStrength;
+  evidenceStrengthReason: string;
   extentScore: number | null;
   confidence: number | null;
   attorneyRemark: string;
@@ -132,6 +139,20 @@ export interface AttorneyReportModel {
   assigneeLandscape: AttorneyReportEntityLandscape;
   inventorSignals: AttorneyReportEntityLandscape;
   comparisons: AttorneyReportPatentComparison[];
+  riskAssessment: {
+    noveltyRisk: AttorneyReportRiskLevel;
+    noveltyRiskLabel: string;
+    noveltyRiskExplanation: string;
+    combinationRisk: AttorneyReportRiskLevel;
+    combinationRiskLabel: string;
+    combinationRiskExplanation: string;
+    headline: string;
+    coreFeatureCount: number;
+    strongestSingleReferenceCoreCoverage: number;
+    distributedCoreCoverage: number;
+  };
+  potentialDifferentiationSpace: string;
+  matrixInsight: string;
   finalAssessment: {
     decision: string;
     confidence: string;
@@ -315,16 +336,48 @@ function statusLabel(status: FeatureMapCell['status']): string {
   return 'Requires Full-Text Review';
 }
 
-function visibleStatusForReport(status: FeatureMapCell['status']): FeatureMapCell['status'] {
-  // Trust the model's finding. A mapped feature is reported as a mapped finding
-  // (the front disclaimer already states this is a preliminary assessment), instead
-  // of being silently demoted to an "unsure" status when a verbatim quote is absent.
-  return status;
-}
-
 function publicMapping(rowStatus: FeatureMapCell['status']): { label: string; code: string } {
   const code = rowStatus === 'Present' ? 'D' : rowStatus === 'Partial' ? 'P' : rowStatus === 'Absent' ? 'N' : 'R';
   return { label: statusLabel(rowStatus), code };
+}
+
+function evidenceStrengthFor(
+  status: FeatureMapCell['status'],
+  feature: string,
+  evidenceQuote: string,
+  evidenceSource: string,
+  patentDisclosure: string,
+  confidence: number | null
+): { strength: AttorneyReportEvidenceStrength; reason: string } {
+  if (status === 'Absent' || status === 'Unknown') {
+    return { strength: 'Weak', reason: 'No affirmative mapped evidence was identified for this feature.' };
+  }
+  const source = cleanText(evidenceSource, 'none').toLowerCase();
+  const quote = cleanText(evidenceQuote);
+  const overlap = featureOverlapScore(feature, [quote, patentDisclosure].filter(Boolean).join(' '));
+  if (!quote || source === 'none' || source === 'inference') {
+    return { strength: 'Weak', reason: 'Mapping is inferred or lacks a direct supporting passage.' };
+  }
+  if (source === 'title') {
+    return { strength: 'Weak', reason: 'Title-only support indicates relevance but not full feature disclosure.' };
+  }
+  if (status === 'Present' && overlap >= 0.45 && (confidence ?? 0.7) >= 0.65) {
+    return { strength: 'Strong', reason: 'Explicit passage directly supports the mapped feature.' };
+  }
+  if (overlap >= 0.22 || status === 'Partial') {
+    return { strength: 'Moderate', reason: 'Passage supports a related mechanism but does not prove every feature constraint.' };
+  }
+  return { strength: 'Weak', reason: 'Supporting passage is too generic or indirect for the mapped feature.' };
+}
+
+function visibleStatusForReport(
+  status: FeatureMapCell['status'],
+  evidenceStrength: AttorneyReportEvidenceStrength,
+  evidenceQuote: string
+): FeatureMapCell['status'] {
+  if (status === 'Present' && evidenceStrength === 'Weak') return evidenceQuote ? 'Partial' : 'Unknown';
+  if (status === 'Partial' && evidenceStrength === 'Weak' && !evidenceQuote) return 'Unknown';
+  return status;
 }
 
 function safeOverlapLabel(value: unknown): { label: string; level: AttorneyReportPatentComparison['overlapRiskLevel'] } {
@@ -386,6 +439,23 @@ function featureTypeLabel(type: AttorneyReportFeatureType): string {
   return 'Generic / weak alone';
 }
 
+function featureImportanceFor(type: AttorneyReportFeatureType, feature: string): AttorneyReportFeatureImportance {
+  const text = cleanText(feature).toLowerCase();
+  if (type === 'generic_weak') return 'secondary_implementation';
+  if (/\b(optional|optionally|alternative embodiment|may include)\b/.test(text)) return 'optional_embodiment';
+  if (/\b(qr|barcode|smartphone|mobile|app|readable marker|verification marker|calibration zone|reference calibration)\b/.test(text)) {
+    return 'secondary_implementation';
+  }
+  if (type === 'core_technical' || type === 'novelty_candidate') return 'core_inventive';
+  return 'secondary_implementation';
+}
+
+function featureImportanceLabel(importance: AttorneyReportFeatureImportance): string {
+  if (importance === 'core_inventive') return 'Core inventive feature';
+  if (importance === 'optional_embodiment') return 'Optional embodiment';
+  return 'Secondary implementation feature';
+}
+
 function normalizeFeatureType(value: unknown): AttorneyReportFeatureType | null {
   const text = String(value || '').toLowerCase();
   if (text === 'core_technical' || text === 'core technical') return 'core_technical';
@@ -409,11 +479,14 @@ function buildFeatureSummaries(stage0: NormalizedIdea, inventionDescription: str
     const suppliedType = normalizeFeatureType((detail as any)?.feature_type ?? (detail as any)?.featureType);
     const type: AttorneyReportFeatureType = suppliedType
       || (isGenericFeatureText(feature) ? 'generic_weak' : noveltyFocus.has(cleanText(feature).toLowerCase()) ? 'novelty_candidate' : index < Math.min(3, Math.ceil(features.length / 2)) ? 'core_technical' : 'implementation');
+    const importance = featureImportanceFor(type, feature);
     return {
       featureNumber: `KF${index + 1}`,
       feature,
       type,
       typeLabel: featureTypeLabel(type),
+      importance,
+      importanceLabel: featureImportanceLabel(importance),
       disclosure: disclosureMap.get(feature) || feature,
       genericWarning: type === 'generic_weak'
         ? 'Broad/common feature. Do not rely on this feature alone without a narrower technical mechanism.'
@@ -664,6 +737,128 @@ function buildClaimImpactSummary(rows: AttorneyReportFeatureRow[], riskLabel: st
   );
 }
 
+function deterministicRiskAssessment(
+  comparisons: AttorneyReportPatentComparison[],
+  featureSummaries: AttorneyReportFeatureSummary[],
+  counts: ReturnType<typeof buildNoveltyReportCountSummary>
+): AttorneyReportModel['riskAssessment'] {
+  const coreFeatures = featureSummaries.filter(feature => feature.importance === 'core_inventive');
+  const riskFeatures = coreFeatures.length ? coreFeatures : featureSummaries.filter(feature => feature.importance !== 'optional_embodiment');
+  const riskFeatureNumbers = new Set(riskFeatures.map(feature => feature.featureNumber));
+  const coreFeatureCount = riskFeatures.length;
+  const weightedCoverage = (rows: AttorneyReportFeatureRow[]) => {
+    if (coreFeatureCount === 0) return 0;
+    const relevant = rows.filter(row => riskFeatureNumbers.has(row.featureNumber));
+    const score = relevant.reduce((sum, row) => {
+      if (row.status === 'Present') return sum + (row.evidenceStrength === 'Strong' ? 1 : 0.75);
+      if (row.status === 'Partial') return sum + 0.5;
+      return sum;
+    }, 0);
+    return score / coreFeatureCount;
+  };
+  const strongestSingleReferenceCoreCoverage = comparisons.reduce((best, item) => Math.max(best, weightedCoverage(item.rows)), 0);
+  const distributedCoreCoverage = coreFeatureCount === 0
+    ? 0
+    : riskFeatures.filter(feature => comparisons.some(item => {
+      const row = item.rows.find(candidate => candidate.featureNumber === feature.featureNumber);
+      return row?.status === 'Present' || row?.status === 'Partial';
+    })).length / coreFeatureCount;
+
+  const noveltyRisk: AttorneyReportRiskLevel = coreFeatureCount === 0 || comparisons.length === 0
+    ? 'Needs Review'
+    : strongestSingleReferenceCoreCoverage >= 0.95
+      ? 'High'
+      : strongestSingleReferenceCoreCoverage >= 0.67
+        ? 'Moderate'
+        : 'Low';
+  const combinationRisk: AttorneyReportRiskLevel = coreFeatureCount === 0 || comparisons.length === 0
+    ? 'Needs Review'
+    : distributedCoreCoverage >= 0.8 && (counts.componentMatches > 1 || comparisons.length > 1)
+      ? 'High'
+      : distributedCoreCoverage >= 0.5
+        ? 'Moderate'
+        : 'Low';
+  const noveltyRiskExplanation = noveltyRisk === 'High'
+    ? 'A single reviewed citation maps nearly all core inventive features.'
+    : noveltyRisk === 'Moderate'
+      ? 'One reviewed citation maps a substantial portion, but not all, core inventive features.'
+      : noveltyRisk === 'Low'
+        ? 'No single reviewed citation maps most core inventive features.'
+        : 'Core inventive features were not sufficiently classified for a reliable anticipation-style signal.';
+  const combinationRiskExplanation = combinationRisk === 'High'
+    ? 'Core features are distributed across multiple component references.'
+    : combinationRisk === 'Moderate'
+      ? 'Several core features are mapped across the reviewed citation set, but coverage is incomplete.'
+      : combinationRisk === 'Low'
+        ? 'Reviewed citations do not collectively map most core inventive features.'
+        : 'Distributed feature coverage could not be assessed reliably from the mapped records.';
+  const headline = noveltyRisk === 'High'
+    ? 'High novelty / anticipation risk'
+    : combinationRisk === 'High'
+      ? 'High component-combination risk'
+      : combinationRisk === 'Moderate' || noveltyRisk === 'Moderate'
+        ? 'Moderate mapped-overlap risk'
+        : 'Low mapped-overlap risk';
+
+  return {
+    noveltyRisk,
+    noveltyRiskLabel: `Novelty / anticipation risk: ${noveltyRisk}`,
+    noveltyRiskExplanation,
+    combinationRisk,
+    combinationRiskLabel: `Component-combination risk: ${combinationRisk}`,
+    combinationRiskExplanation,
+    headline,
+    coreFeatureCount,
+    strongestSingleReferenceCoreCoverage: Math.round(strongestSingleReferenceCoreCoverage * 100) / 100,
+    distributedCoreCoverage: Math.round(distributedCoreCoverage * 100) / 100,
+  };
+}
+
+function buildPotentialDifferentiationSpace(comparisons: AttorneyReportPatentComparison[], featureSummaries: AttorneyReportFeatureSummary[]): string {
+  const mappedByFeature = new Map<string, Set<FeatureMapCell['status']>>();
+  for (const item of comparisons) {
+    for (const row of item.rows) {
+      if (!mappedByFeature.has(row.featureNumber)) mappedByFeature.set(row.featureNumber, new Set());
+      mappedByFeature.get(row.featureNumber)?.add(row.status);
+    }
+  }
+  const candidates = featureSummaries
+    .filter(feature => feature.importance !== 'optional_embodiment')
+    .filter(feature => {
+      const statuses = mappedByFeature.get(feature.featureNumber);
+      return !statuses?.has('Present') || statuses?.has('Partial') || statuses?.has('Unknown') || statuses?.has('Absent');
+    })
+    .sort((a, b) => {
+      const weight = (feature: AttorneyReportFeatureSummary) => feature.importance === 'core_inventive' ? 0 : 1;
+      return weight(a) - weight(b);
+    })
+    .slice(0, 5);
+  if (!candidates.length) {
+    return 'No clear potential differentiation space was identified from the mapped records; full claim-level review is required.';
+  }
+  return `Potential differentiation space appears to lie in the specific integration of ${candidates.map(item => `${item.featureNumber} (${item.feature})`).join(', ')}. Treat this as a preliminary claim-positioning signal, not a legal patentability conclusion.`;
+}
+
+function buildMatrixInsight(comparisons: AttorneyReportPatentComparison[], featureSummaries: AttorneyReportFeatureSummary[], risk: AttorneyReportModel['riskAssessment']): string {
+  const core = featureSummaries.filter(feature => feature.importance === 'core_inventive');
+  const coreLabels = core.map(feature => feature.featureNumber).join(' + ');
+  if (!comparisons.length || !core.length) return 'Feature matrix requires mapped citations and classified core features before a reliable interpretation can be stated.';
+  const fullCoreReference = comparisons.find(item => core.every(feature => {
+    const row = item.rows.find(candidate => candidate.featureNumber === feature.featureNumber);
+    return row?.status === 'Present';
+  }));
+  if (fullCoreReference) return `${fullCoreReference.publicationNumber} maps all classified core inventive features; review this reference first at claim level.`;
+  return `No cited reference maps ${coreLabels} together. ${risk.combinationRiskExplanation} The strongest potential differentiation space is the integrated arrangement of the unmapped or partially mapped core features.`;
+}
+
+function sanitizeRiskItem(value: unknown): string {
+  return reportSafeText(value)
+    .replace(/\bNot Novel determination indicates\b/gi, 'Preliminary mapped-overlap assessment indicates')
+    .replace(/\bnot novel determination\b/gi, 'mapped-overlap assessment')
+    .replace(/\bnot novel\b/gi, 'mapped-overlap risk')
+    .replace(/\bnon-patentable\b/gi, 'high mapped-overlap risk');
+}
+
 function splitNames(value: string): string[] {
   return String(value || '')
     .split(/[,|;\n]+/)
@@ -671,16 +866,40 @@ function splitNames(value: string): string[] {
     .filter(item => item && item !== '-');
 }
 
+function normalizeEntityName(name: string, mode: 'assignee' | 'inventor'): string {
+  const cleaned = cleanText(name)
+    .replace(/\s+/g, ' ')
+    .replace(/\b(Mr|Mrs|Ms|Dr|Prof)\.?\s+/gi, '')
+    .trim();
+  if (mode === 'assignee') return cleaned.replace(/\s*,?\s*(inc|corp|ltd|llc|plc|gmbh|ag|ab|s\.?p\.?a\.?)\.?$/i, match => match.toUpperCase().replace(/\s+/g, ' '));
+  return cleaned;
+}
+
+function isCleanEntityName(name: string, mode: 'assignee' | 'inventor'): boolean {
+  const text = cleanText(name);
+  if (!text || text === '-') return false;
+  if (/^(inc|corp|ltd|llc|plc|gmbh|ag|ab|s\.?p\.?a\.?)\.?$/i.test(text)) return false;
+  if (mode === 'inventor') {
+    if (/^[A-Z]\.?$/i.test(text)) return false;
+    if (!/\s/.test(text) && !/^[A-Z]{3,}$/.test(text)) return false;
+    if (/^(thomas|john|michael|david|robert|james|william|richard)$/i.test(text)) return false;
+  }
+  return text.length >= 3;
+}
+
 function entityKind(name: string): 'company' | 'academic' | 'individual' {
   const text = name.toLowerCase();
   if (/\b(university|institute|college|school|research|council|laborator|academy)\b/.test(text)) return 'academic';
-  if (/\b(inc|corp|corporation|company|co\.|limited|ltd|llc|llp|plc|pvt|private|technolog|systems|solutions|industries|labs?)\b/.test(text)) return 'company';
+  if (/\b(inc|corp|corporation|company|co\.|limited|ltd|llc|llp|plc|pvt|private|technolog(?:y|ies)|systems|solutions|industries|labs?|pharmaceuticals?|biotech|gmbh|ag|ab|s\.?p\.?a\.?)\b/.test(text)) return 'company';
   return 'individual';
 }
 
 function buildEntityLandscape(names: string[], mode: 'assignee' | 'inventor'): AttorneyReportEntityLandscape {
   const counts = new Map<string, number>();
-  names.forEach(name => counts.set(name, (counts.get(name) || 0) + 1));
+  names
+    .map(name => normalizeEntityName(name, mode))
+    .filter(name => isCleanEntityName(name, mode))
+    .forEach(name => counts.set(name, (counts.get(name) || 0) + 1));
   const unique = Array.from(counts.keys());
   const repeated = Array.from(counts.entries())
     .filter(([, count]) => count > 1)
@@ -729,12 +948,21 @@ function confidenceFromCounts(counts: AttorneyReportModel['counts'], quality = '
   return 'Low';
 }
 
-function referenceRoleFor(matchCategory: AttorneyReportCitation['matchCategory'], coverageScore: number): string {
+function referenceRoleFor(matchCategory: AttorneyReportCitation['matchCategory'], coverageScore: number, rows: AttorneyReportFeatureRow[] = []): string {
   // Keep the public role consistent with the feature mapping: a citation cannot be
   // presented as an invention-level reference if no feature actually maps to it.
   if (coverageScore <= 0) return 'Background reference for review';
+  const mappedText = rows
+    .filter(row => row.status === 'Present' || row.status === 'Partial')
+    .map(row => `${row.userFeature} ${row.patentDisclosure}`)
+    .join(' ')
+    .toLowerCase();
   if (matchCategory === 'direct') return 'Closest invention-level reference';
-  if (matchCategory === 'component') return coverageScore >= 0.35 ? 'Component-level reference' : 'Background component reference';
+  if (/\b(smartphone|mobile|qr|barcode|optical verification|digital verification|readable)\b/.test(mappedText)) return 'Smart verification reference';
+  if (/\b(indicator|humidity-responsive|colorimetric|visible change|exposure duration|threshold)\b/.test(mappedText)) return 'Indicator / exposure-response reference';
+  if (/\b(desiccant|moisture-proof|moisture control|humidity ingress|barrier|seal|isolation)\b/.test(mappedText)) return 'Desiccant / moisture-control reference';
+  if (/\b(blister|cavity|unit-dose|tablet|capsule|packaging)\b/.test(mappedText)) return 'Closest structural packaging reference';
+  if (matchCategory === 'component') return coverageScore >= 0.35 ? 'Component-level reference' : 'Remote background reference';
   if (matchCategory === 'borderline') return 'Borderline technical reference';
   return 'Shortlisted background reference';
 }
@@ -765,21 +993,22 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       cell?.quote ||
       (typeof (cell as any)?.evidence === 'string' ? (cell as any).evidence : '')
     );
-    const status = visibleStatusForReport(rawStatus);
     const rawEvidenceSource = supplied.evidence_source || cell?.evidence_source || cell?.field || (evidenceQuote ? 'inference' : 'none');
     const evidenceSource = displayEvidenceSource(rawEvidenceSource, 'none');
-    const mapping = publicMapping(status);
     const patentDisclosure = reportSafeText(
       supplied.patent_disclosure ||
       cell?.patent_disclosure ||
       cell?.quote ||
       cell?.reason ||
-      (status === 'Present' || status === 'Partial' ? 'Related patent disclosure identified.' : 'This feature is not expressly taught in the reviewed citation record.')
+      (rawStatus === 'Present' || rawStatus === 'Partial' ? 'Related patent disclosure identified.' : 'This feature is not expressly taught in the reviewed citation record.')
     );
     const rawConfidence = numberScore(supplied.confidence ?? cell?.confidence);
     const confidence = (rawStatus === 'Present' || rawStatus === 'Partial') && !evidenceQuote
       ? Math.min(rawConfidence ?? 0.45, 0.45)
       : rawConfidence;
+    const evidenceStrength = evidenceStrengthFor(rawStatus, feature, evidenceQuote, evidenceSource, patentDisclosure, confidence);
+    const status = visibleStatusForReport(rawStatus, evidenceStrength.strength, evidenceQuote);
+    const mapping = publicMapping(status);
     const extentScore = numberScore(supplied.extent_score ?? supplied.extentScore ?? cell?.extent_score ?? (cell as any)?.extentScore)
       ?? defaultExtentScore(status, feature, patentDisclosure, evidenceQuote, confidence);
     return {
@@ -795,6 +1024,8 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       professionalRemark: rowProfessionalRemark(supplied, cell, status, feature, patentDisclosure),
       evidenceQuote,
       evidenceSource: evidenceQuote ? evidenceSource : 'none',
+      evidenceStrength: evidenceStrength.strength,
+      evidenceStrengthReason: evidenceStrength.reason,
       extentScore: status === 'Absent' ? null : extentScore,
       confidence,
       attorneyRemark: reportSafeText(supplied.attorney_remark || cell?.attorney_remark || defaultAttorneyRemark(status, feature)),
@@ -845,7 +1076,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       evidenceQuality: cleanText(gate.evidence_quality || meta.evidence_quality, 'medium'),
       matchCategory: category,
       matchCategoryLabel: matchCategoryLabel(gateDecision),
-      referenceRole: referenceRoleFor(category, score),
+      referenceRole: referenceRoleFor(category, score, rows),
       reviewPriority: reviewPriorityFor(category, score, relevanceScore),
       link: firstText(map.link, meta.link, meta.url, `https://patents.google.com/patent/${pn}`),
       abstract: firstText(
@@ -907,10 +1138,12 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     }));
   const assigneeSignals = comparisons
     .flatMap(item => item.assignees.split(',').map(value => cleanText(value)))
-    .filter(value => value && value !== '-');
+    .map(value => normalizeEntityName(value, 'assignee'))
+    .filter(value => isCleanEntityName(value, 'assignee'));
   const inventorSignalNames = comparisons
     .flatMap(item => item.inventors.split(',').map(value => cleanText(value)))
-    .filter(value => value && value !== '-');
+    .map(value => normalizeEntityName(value, 'inventor'))
+    .filter(value => isCleanEntityName(value, 'inventor'));
   const assignees = Array.from(new Set(assigneeSignals)).slice(0, 40);
   const inventors = Array.from(new Set(inventorSignalNames)).slice(0, 60);
   const counts = buildNoveltyReportCountSummary(stage1, stage35);
@@ -925,6 +1158,20 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     };
     return priority(b) - priority(a);
   })[0] || null;
+  const riskAssessment = deterministicRiskAssessment(comparisons, featureSummaries, counts);
+  const potentialDifferentiationSpace = buildPotentialDifferentiationSpace(comparisons, featureSummaries);
+  const matrixInsight = buildMatrixInsight(comparisons, featureSummaries, riskAssessment);
+  const llmRisks = (Array.isArray(stage4?.risk_factors) ? stage4.risk_factors : (Array.isArray(stage4?.concluding_remarks?.key_risks) ? stage4.concluding_remarks.key_risks : []))
+    .map((item: any) => sanitizeRiskItem(item))
+    .filter(Boolean);
+  const deterministicRisks = [
+    `${riskAssessment.noveltyRiskLabel} - ${riskAssessment.noveltyRiskExplanation}`,
+    `${riskAssessment.combinationRiskLabel} - ${riskAssessment.combinationRiskExplanation}`,
+  ];
+  const finalSummary = reportSafeText(
+    stage4?.executive_summary?.summary || stage4?.structured_narrative?.verdict || stage4?.message,
+    `${riskAssessment.noveltyRiskExplanation} ${riskAssessment.combinationRiskExplanation}`
+  );
 
   return {
     reportNumber,
@@ -1010,11 +1257,14 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     assigneeLandscape: buildEntityLandscape(assigneeSignals, 'assignee'),
     inventorSignals: buildEntityLandscape(inventorSignalNames, 'inventor'),
     comparisons,
+    riskAssessment,
+    potentialDifferentiationSpace,
+    matrixInsight,
     finalAssessment: {
-      decision: safeAssessmentDecision(stage4?.decision || stage4?.concluding_remarks?.overall_novelty_assessment),
+      decision: riskAssessment.headline,
       confidence: cleanText(stage4?.confidence || stage4?.executive_summary?.confidence, 'Low'),
-      summary: reportSafeText(stage4?.executive_summary?.summary || stage4?.structured_narrative?.verdict || stage4?.message, 'Claim-positioning observations prepared for review.'),
-      risks: (Array.isArray(stage4?.risk_factors) ? stage4.risk_factors : (Array.isArray(stage4?.concluding_remarks?.key_risks) ? stage4.concluding_remarks.key_risks : [])).map((item: any) => reportSafeText(item)).filter(Boolean),
+      summary: finalSummary,
+      risks: Array.from(new Set([...deterministicRisks, ...llmRisks])),
       recommendations: (Array.isArray(stage4?.concluding_remarks?.strategic_recommendations) ? stage4.concluding_remarks.strategic_recommendations : []).map((item: any) => reportSafeText(item)).filter(Boolean),
     },
     publicClosestCitation,

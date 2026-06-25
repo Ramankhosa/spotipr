@@ -236,6 +236,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       evidenceSource: 'abstract',
       extentScore: 0.88,
       confidence: 0.91,
+      evidenceStrength: 'Strong',
       crispRemark: 'This is a direct overlap in the abstract.',
       professionalRemark: 'The reference teaches soil moisture sensing in the irrigation controller, so claim drafting should focus on the narrower threshold-control rule.',
       attorneyRemark: 'This is a direct overlap in the abstract.',
@@ -262,6 +263,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       statusLabel: 'Requires Full-Text Review',
       publicMappingStatus: 'Requires Full-Text Review',
       publicMappingCode: 'R',
+      evidenceStrength: 'Weak',
       evidenceSource: 'none',
     });
     expect(model.comparisons[0].rows[3].professionalRemark).toContain('unsupported dosing signal');
@@ -269,7 +271,21 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.featureSummaries[2]).toMatchObject({
       featureNumber: 'KF3',
       type: 'generic_weak',
+      importance: 'secondary_implementation',
     });
+    expect(model.featureSummaries[0]).toMatchObject({
+      importance: 'core_inventive',
+      importanceLabel: 'Core inventive feature',
+    });
+    expect(model.riskAssessment).toMatchObject({
+      noveltyRisk: 'Low',
+      combinationRisk: 'Moderate',
+      headline: 'Moderate mapped-overlap risk',
+      coreFeatureCount: 2,
+    });
+    expect(model.riskAssessment.noveltyRiskExplanation).toContain('No single reviewed citation maps most core inventive features');
+    expect(model.potentialDifferentiationSpace).toContain('Potential differentiation space');
+    expect(model.matrixInsight).toContain('No cited reference maps');
     expect(model.genericFeatureRisk.features).toContain('sensor');
     expect(model.assigneeLandscape.summary).toContain('repeated entity signal');
     expect(model.inventorSignals.repeated).toEqual([{ name: 'Asha Kumar', count: 2 }]);
@@ -287,5 +303,109 @@ describe('buildNoveltyAttorneyReportModel', () => {
     const renderedModelText = JSON.stringify(model);
     expect(model.publicClosestCitation?.publicationNumber).toBe('IN123A');
     expect(renderedModelText).not.toMatch(/Mapped, needs review|Absent \/ weak signal|Evidence Confidence|limited available patent data|deterministic fallback|available data does not/i);
+  });
+
+  it('uses deterministic distributed-risk logic, evidence downgrades, optional weighting, and entity cleanup', () => {
+    const base = {
+      id: 'distributed123',
+      title: 'Humidity responsive blister package',
+      jurisdiction: 'IN',
+      inventionDescription: 'A blister package uses cavity-level humidity indication, isolation, calibration, and smartphone verification.',
+      config: { searchSource: { mode: 'PQAI_PLUS_INDIAN' } },
+      stage0Results: {
+        searchQuery: 'humidity blister indicator',
+        inventionFeatures: [
+          'cavity-level humidity-responsive indicator',
+          'moisture-isolation micro-seal localizing humidity ingress',
+          'reference calibration zone',
+          'optional smartphone-readable verification marker',
+        ],
+        featureDetails: [
+          { feature: 'cavity-level humidity-responsive indicator', feature_type: 'novelty_candidate' },
+          { feature: 'moisture-isolation micro-seal localizing humidity ingress', feature_type: 'novelty_candidate' },
+          { feature: 'reference calibration zone', feature_type: 'implementation' },
+          { feature: 'optional smartphone-readable verification marker', feature_type: 'implementation' },
+        ],
+      },
+      stage1Results: {
+        retrievedCount: 127,
+        reviewedCount: 58,
+        retrievalCandidates: [
+          { publicationNumber: 'CN1', title: 'Blister package', abstract: 'A blister package has a moisture-proof seal and isolation cavity.', assignees: ['LEVOSIL S.P.A.'], inventors: ['E.', 'Thomas'] },
+          { publicationNumber: 'IN2', title: 'Humidity indicator', abstract: 'A cavity-level humidity-responsive indicator changes color.', assignees: ['INNORESE AG'], inventors: ['Asha Kumar'] },
+          { publicationNumber: 'US3', title: 'Verification marker', abstract: 'A smartphone-readable verification marker is provided.', assignees: ['MULTISORB TECHNOLOGIES'], inventors: ['R.', 'Asha Kumar'] },
+        ],
+        aiRelevance: {
+          accepted: [],
+          component: ['CN1', 'IN2', 'US3'],
+          borderline: [],
+          byPn: {
+            CN1: { decision: 'component', score: 0.7 },
+            IN2: { decision: 'component', score: 0.7 },
+            US3: { decision: 'component', score: 0.7 },
+          },
+        },
+      },
+      stage35Results: {
+        feature_map: [
+          {
+            pn: 'CN1',
+            title: 'Blister package',
+            feature_analysis: [
+              { feature: 'cavity-level humidity-responsive indicator', status: 'Absent', reason: 'No indicator.' },
+              { feature: 'moisture-isolation micro-seal localizing humidity ingress', status: 'Present', quote: 'moisture-proof seal and isolation cavity', field: 'abstract' },
+              { feature: 'reference calibration zone', status: 'Absent', reason: 'No calibration.' },
+              { feature: 'optional smartphone-readable verification marker', status: 'Absent', reason: 'No smartphone marker.' },
+            ],
+          },
+          {
+            pn: 'IN2',
+            title: 'Humidity indicator',
+            feature_analysis: [
+              { feature: 'cavity-level humidity-responsive indicator', status: 'Present', quote: 'cavity-level humidity-responsive indicator changes color', field: 'abstract' },
+              { feature: 'moisture-isolation micro-seal localizing humidity ingress', status: 'Absent', reason: 'No micro-seal.' },
+              { feature: 'reference calibration zone', status: 'Absent', reason: 'No calibration.' },
+              { feature: 'optional smartphone-readable verification marker', status: 'Absent', reason: 'No smartphone marker.' },
+            ],
+          },
+          {
+            pn: 'US3',
+            title: 'Verification marker',
+            feature_analysis: [
+              { feature: 'cavity-level humidity-responsive indicator', status: 'Absent', reason: 'No humidity indicator.' },
+              { feature: 'moisture-isolation micro-seal localizing humidity ingress', status: 'Absent', reason: 'No seal.' },
+              { feature: 'reference calibration zone', status: 'Absent', reason: 'No calibration.' },
+              { feature: 'optional smartphone-readable verification marker', status: 'Present', quote: 'smartphone-readable verification marker', field: 'abstract' },
+            ],
+          },
+        ],
+      },
+      stage4Results: {
+        decision: 'Not Novel',
+        risk_factors: ['Not Novel determination indicates material prior-art overlap requiring claim narrowing.'],
+      },
+    };
+    const first = buildNoveltyAttorneyReportModel(base);
+    const second = buildNoveltyAttorneyReportModel(base);
+
+    expect(second.riskAssessment).toEqual(first.riskAssessment);
+    expect(first.riskAssessment).toMatchObject({
+      noveltyRisk: 'Low',
+      combinationRisk: 'High',
+      headline: 'High component-combination risk',
+      coreFeatureCount: 2,
+    });
+    expect(first.finalAssessment.decision).toBe('High component-combination risk');
+    expect(first.finalAssessment.risks.join(' ')).not.toMatch(/Not Novel determination/i);
+    expect(first.featureSummaries[3]).toMatchObject({
+      importance: 'optional_embodiment',
+      importanceLabel: 'Optional embodiment',
+    });
+    expect(first.comparisons.find(item => item.publicationNumber === 'US3')?.coverage.score).toBeGreaterThan(0);
+    expect(first.riskAssessment.coreFeatureCount).toBe(2);
+    expect(first.assigneeLandscape.groups.find(group => group.label === 'Companies / commercial entities')?.names).toEqual(
+      expect.arrayContaining(['LEVOSIL S.P.A.', 'INNORESE AG', 'MULTISORB TECHNOLOGIES'])
+    );
+    expect(JSON.stringify(first.inventorSignals)).not.toMatch(/\bE\.|\bR\.|Thomas/);
   });
 });
