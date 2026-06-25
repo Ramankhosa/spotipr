@@ -90,7 +90,7 @@ interface QualityMetrics {
 interface IdeaFramePanelProps {
   ideas: IdeaFrame[]
   onSelectIdea: (idea: IdeaFrame) => void
-  onAssessNovelty: (ideaId: string) => void
+  onRunNoveltySearch: (ideaId: string) => void
   onExport: (ideaIds: string[], selectedSuggestions?: Record<string, string[]>) => void
   onClose: () => void
   onDeleteIdea?: (ideaId: string) => void
@@ -132,8 +132,8 @@ interface FullscreenIdeaModalProps {
   onClose: () => void
   onCopy: (idea: IdeaFrame) => void
   copied: boolean
-  onAssessNovelty: (ideaId: string) => void
-  assessingNovelty: string | null
+  onRunNoveltySearch: (ideaId: string) => void
+  runningNoveltySearch: string | null
   onToggleExport: (ideaId: string) => void
   isSelectedForExport: boolean
   selectedSuggestions: Set<string>
@@ -145,8 +145,8 @@ function FullscreenIdeaModal({
   onClose,
   onCopy,
   copied,
-  onAssessNovelty,
-  assessingNovelty,
+  onRunNoveltySearch,
+  runningNoveltySearch,
   onToggleExport,
   isSelectedForExport,
   selectedSuggestions,
@@ -416,24 +416,19 @@ function FullscreenIdeaModal({
         <div className="p-4 md:p-5 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row gap-3 flex-shrink-0">
           <Button
             variant="outline"
-            onClick={() => onAssessNovelty(idea.id)}
-            disabled={assessingNovelty === idea.id || !!idea.noveltyAssessment}
+            onClick={() => onRunNoveltySearch(idea.id)}
+            disabled={runningNoveltySearch === idea.id}
             className="flex-1 border-slate-300"
           >
-            {assessingNovelty === idea.id ? (
+            {runningNoveltySearch === idea.id ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Assessing...
-              </>
-            ) : idea.noveltyAssessment ? (
-              <>
-                <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" />
-                Assessment Complete
+                Opening search...
               </>
             ) : (
               <>
                 <Search className="w-4 h-4 mr-2" />
-                Assess Novelty
+                Run Novelty Search
               </>
             )}
           </Button>
@@ -456,7 +451,7 @@ function FullscreenIdeaModal({
 export default function IdeaFramePanel({
   ideas,
   onSelectIdea,
-  onAssessNovelty,
+  onRunNoveltySearch,
   onExport,
   onClose,
   onDeleteIdea,
@@ -466,7 +461,7 @@ export default function IdeaFramePanel({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set())
   const [selectedSuggestions, setSelectedSuggestions] = useState<Record<string, Set<string>>>({})
-  const [assessingNovelty, setAssessingNovelty] = useState<string | null>(null)
+  const [runningNoveltySearch, setRunningNoveltySearch] = useState<string | null>(null)
   const [fullscreenIdea, setFullscreenIdea] = useState<IdeaFrame | null>(null)
   const [copied, setCopied] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
@@ -500,10 +495,10 @@ export default function IdeaFramePanel({
     }
   }, [ideas])
 
-  const handleNoveltyAssessment = async (ideaId: string) => {
-    setAssessingNovelty(ideaId)
-    await onAssessNovelty(ideaId)
-    setAssessingNovelty(null)
+  const handleRunNoveltySearch = async (ideaId: string) => {
+    setRunningNoveltySearch(ideaId)
+    await onRunNoveltySearch(ideaId)
+    setRunningNoveltySearch(null)
   }
 
   const toggleExportSelection = (ideaId: string) => {
@@ -596,8 +591,8 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
             onClose={() => setFullscreenIdea(null)}
             onCopy={handleCopyToClipboard}
             copied={copied}
-            onAssessNovelty={handleNoveltyAssessment}
-            assessingNovelty={assessingNovelty}
+            onRunNoveltySearch={handleRunNoveltySearch}
+            runningNoveltySearch={runningNoveltySearch}
             onToggleExport={toggleExportSelection}
             isSelectedForExport={selectedForExport.has(fullscreenIdea.id)}
             selectedSuggestions={selectedSuggestions[fullscreenIdea.id] || new Set()}
@@ -816,25 +811,20 @@ ${Array.from(suggestionsList).map(s => `• ${s}`).join('\n')}
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
-                              handleNoveltyAssessment(idea.id)
+                              handleRunNoveltySearch(idea.id)
                             }}
-                            disabled={assessingNovelty === idea.id || !!idea.noveltyAssessment}
+                            disabled={runningNoveltySearch === idea.id}
                             className="text-xs border-slate-300"
                           >
-                            {assessingNovelty === idea.id ? (
+                            {runningNoveltySearch === idea.id ? (
                               <>
                                 <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                                Assessing...
-                              </>
-                            ) : idea.noveltyAssessment ? (
-                              <>
-                                <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-500" />
-                                Assessed
+                                Opening...
                               </>
                             ) : (
                               <>
                                 <Search className="w-3 h-3 mr-1" />
-                                Assess Novelty
+                                Run Novelty Search
                               </>
                             )}
                           </Button>

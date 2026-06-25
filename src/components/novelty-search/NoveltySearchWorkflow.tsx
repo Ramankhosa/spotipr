@@ -98,17 +98,18 @@ const STAGE_ORDER = ['PENDING', 'STAGE_0_COMPLETED', 'STAGE_1_COMPLETED', 'STAGE
 
 const visibleStatusForReport = (status: string | undefined, quote?: string) => {
   if ((status === 'Present' || status === 'Partial') && quote) return status;
+  if (status === 'Unknown') return 'Unknown';
   return 'Absent';
 };
 
 const crispRemarkForStatus = (status: string | undefined) => {
   if (status === 'Present') {
-    return 'This feature is disclosed in the available patent data; consider narrowing claims if it is central.';
+    return 'This feature is disclosed in the reviewed citation record; consider narrowing claims if it is central.';
   }
   if (status === 'Partial') {
     return 'Related disclosure exists, but the full feature is not mapped; differentiate using the missing element.';
   }
-  return 'This feature is absent from the available patent data and may support differentiation against this reference.';
+  return 'This feature is not expressly taught in the reviewed citation record and may support differentiation against this reference.';
 };
 
 const cleanReviewText = (value: any) => String(value || '').replace(/\battorney review\b/gi, 'review').trim();
@@ -458,6 +459,7 @@ export default function NoveltySearchWorkflow({
     noveltyImpact?: string;
     claimReviewNote?: string;
     crispRemark?: string;
+    professionalRemark?: string;
     link?: string;
   }>(null);
 
@@ -3443,7 +3445,7 @@ export default function NoveltySearchWorkflow({
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                     <div className="text-sm font-semibold text-amber-950">Weak evidence areas</div>
                     <div className="mt-2 space-y-1 text-xs text-amber-900">
-                      {weakEvidenceFeatures.length > 0 ? weakEvidenceFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No weak evidence flags.</div>}
+                      {weakEvidenceFeatures.length > 0 ? weakEvidenceFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No full-text review flags.</div>}
                     </div>
                   </div>
                 </div>
@@ -3547,17 +3549,17 @@ export default function NoveltySearchWorkflow({
                               const noveltyImpact = comparisonRow?.novelty_impact || cellObj?.novelty_impact;
                               const claimReviewNote = comparisonRow?.claim_review_note || cellObj?.claim_review_note;
                               const crispRemark = cleanReviewText(comparisonRow?.crisp_remark || cellObj?.crisp_remark) || crispRemarkForStatus(status);
+                              const professionalRemark = cleanReviewText(comparisonRow?.professional_remark || cellObj?.professional_remark) || crispRemark;
                               const link = (patent.link || (pn && `https://patents.google.com/patent/${pn}`)) as string | undefined;
 
                               const tooltip = (() => {
-                                if (crispRemark) {
-                                  return crispRemark.length > 180 ? crispRemark.slice(0, 177) + '...' : crispRemark;
+                                if (professionalRemark) {
+                                  return professionalRemark.length > 180 ? professionalRemark.slice(0, 177) + '...' : professionalRemark;
                                 }
                                  if (status === 'Present' || status === 'Partial') {
                                   const snip = quote ? (quote.length > 160 ? quote.slice(0, 157) + '...' : quote) : 'No evidence provided';
-                                  const extent = (typeof extentScore === 'number') ? ` - extent ${Math.round(extentScore * 100)}%` : '';
                                   const fld = field ? ` (${field})` : '';
-                                  return `${status}${extent}${fld}: "${snip}"`;
+                                  return `${status}${fld}: "${snip}"`;
                                 }
                                 if (status === 'Absent') {
                                   const r = reason || 'No direct supporting citation evidence';
@@ -3589,6 +3591,7 @@ export default function NoveltySearchWorkflow({
                                       noveltyImpact,
                                       claimReviewNote,
                                       crispRemark,
+                                      professionalRemark,
                                       link
                                     })}
                                     className={`
@@ -3600,13 +3603,8 @@ export default function NoveltySearchWorkflow({
                                     <span className="block">
                                       {status === 'Present' ? 'Present' :
                                        status === 'Partial' ? 'Partial' :
-                                       'Absent'}
+                                       status === 'Unknown' ? 'Review' : 'Absent'}
                                     </span>
-                                    {typeof extentScore === 'number' && (
-                                      <span className="mt-0.5 block text-[9px] font-semibold opacity-80">
-                                        {Math.round(extentScore * 100)}%
-                                      </span>
-                                    )}
                                   </button>
                                 </td>
                               );
@@ -3913,7 +3911,7 @@ export default function NoveltySearchWorkflow({
                                     {comparisonRows.map((row: any, rowIndex: number) => {
                                       const quote = String(row.evidence_quote || row.quote || '').trim();
                                       const status = visibleStatusForReport(row.status, quote);
-                                      const crispRemark = cleanReviewText(row.crisp_remark) || crispRemarkForStatus(status);
+                                      const professionalRemark = cleanReviewText(row.professional_remark || row.crisp_remark) || crispRemarkForStatus(status);
                                       return (
                                         <tr key={`${row.feature || rowIndex}-${rowIndex}`}>
                                           <td className="px-3 py-2 align-top font-semibold text-indigo-700">{row.feature_id || `KF${rowIndex + 1}`}</td>
@@ -3922,7 +3920,7 @@ export default function NoveltySearchWorkflow({
                                             <div>{row.patent_disclosure || '-'}</div>
                                             {quote && (
                                               <div className="mt-1 text-[11px] text-slate-500">
-                                                Evidence ({String(row.evidence_source || 'citation record').replace(/title\s*\/\s*abstract|abstract/gi, 'citation record')}): {quote}
+                                                Supporting passage: {quote}
                                               </div>
                                             )}
                                           </td>
@@ -3931,7 +3929,7 @@ export default function NoveltySearchWorkflow({
                                               {status}
                                             </span>
                                           </td>
-                                          <td className="px-3 py-2 align-top text-slate-700">{crispRemark}</td>
+                                          <td className="px-3 py-2 align-top text-slate-700">{professionalRemark}</td>
                                         </tr>
                                       );
                                     })}
@@ -4227,35 +4225,20 @@ export default function NoveltySearchWorkflow({
                 </section>
               )}
 
-              {typeof selectedEvidence.extentScore === 'number' && (
-                <section>
-                  <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-                    <span className="font-medium uppercase tracking-wide">Feature Extent</span>
-                    <span>{Math.round(selectedEvidence.extentScore * 100)}%</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.round(selectedEvidence.extentScore * 100)}%` }} />
-                  </div>
-                </section>
-              )}
-
               {(selectedEvidence.status === 'Present' || selectedEvidence.status === 'Partial') && selectedEvidence.quote && (
                 <section>
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Evidence Quote</div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Supporting Passage</div>
                   <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
                     "{selectedEvidence.quote}"
                   </div>
-                  {selectedEvidence.field && selectedEvidence.field !== 'none' && (
-                    <div className="mt-2 text-xs text-slate-500">Evidence source: {selectedEvidence.field}</div>
-                  )}
                 </section>
               )}
 
-              {selectedEvidence.crispRemark && (
+              {(selectedEvidence.professionalRemark || selectedEvidence.crispRemark) && (
                 <section>
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Remark</div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Professional Remark</div>
                   <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
-                    {selectedEvidence.crispRemark}
+                    {selectedEvidence.professionalRemark || selectedEvidence.crispRemark}
                   </div>
                 </section>
               )}

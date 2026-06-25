@@ -36,7 +36,10 @@ interface FeatureComparisonRow {
   patent_disclosure: string;
   status: FeatureStatus;
   status_label?: string;
+  public_mapping_status?: string;
+  public_mapping_code?: string;
   crisp_remark?: string;
+  professional_remark?: string;
   evidence_quote?: string;
   evidence_source: string;
   extent_score?: number;
@@ -60,6 +63,8 @@ interface CitationView {
   assignees: string;
   relevance: number | null;
   evidenceQuality: string;
+  referenceRole: string;
+  reviewPriority: string;
   matchCategory: 'direct' | 'component' | 'borderline' | 'rejected';
   matchCategoryLabel: string;
   noveltyThreat: string;
@@ -125,28 +130,34 @@ function displayEvidenceSource(value: unknown, fallback = 'citation record') {
 
 function reportSafeText(value: unknown, fallback = '') {
   return cleanText(value, fallback)
-    .replace(/\bno abstract available\.?/gi, 'Limited available patent data; review the full patent document where needed.')
-    .replace(/title\s*\/\s*abstract/gi, 'available patent data')
-    .replace(/title and abstract/gi, 'available patent data')
-    .replace(/patent abstract evidence/gi, 'available patent data')
-    .replace(/abstract evidence/gi, 'available patent data')
-    .replace(/abstract data/gi, 'available patent data')
-    .replace(/abstract text/gi, 'available patent data')
+    .replace(/\bno abstract available\.?/gi, 'Full patent record review is recommended for this point.')
+    .replace(/title\s*\/\s*abstract/gi, 'reviewed patent record')
+    .replace(/title and abstract/gi, 'reviewed patent record')
+    .replace(/patent abstract evidence/gi, 'reviewed patent record')
+    .replace(/abstract evidence/gi, 'reviewed patent record')
+    .replace(/abstract data/gi, 'reviewed patent record')
+    .replace(/abstract text/gi, 'reviewed patent record')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
     .replace(/\binsufficient (?:content|information|data|evidence)\b/gi, 'review recommended')
     .replace(/\btoo limited\b/gi, 'marked for review')
-    .replace(/\blimited (?:data|information|evidence|content)\b/gi, 'limited available patent data')
+    .replace(/\blimited (?:available )?(?:data|information|evidence|content)\b/gi, 'source-record review')
     .replace(/\bweak corpus coverage\b/gi, 'citation review scope')
-    .replace(/\bmissing (?:analysis|evidence|information)\b/gi, 'review item')
+    .replace(/\bmissing (?:analysis|evidence|information|data)\b/gi, 'review item')
     .replace(/\bevidence (?:is|was) too thin\b/gi, 'review is recommended')
-    .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the limited available patent data')
-    .replace(/\bcitation record only\b/gi, 'limited available patent data')
+    .replace(/\b(?:only|solely) (?:the )?citation record\b/gi, 'the reviewed citation record')
+    .replace(/\bcitation record only\b/gi, 'reviewed citation record')
     .replace(/\binsufficient\b/gi, 'marked for review')
-    .replace(/\blow evidence\b/gi, 'Limited Available Data')
+    .replace(/\blow evidence\b/gi, 'Requires Full-Text Review')
+    .replace(/\bweak evidence(?:\s+areas?)?\b/gi, 'features needing full-text confirmation')
+    .replace(/\b(?:available patent data|patent data|data|records?) (?:is|was|are|were) limited\b/gi, 'the reviewed patent records are focused')
+    .replace(/\bevidence[- ]limited\b/gi, 'source-record based')
+    .replace(/\bdeterministic fallback\b/gi, 'record-based review')
+    .replace(/\bfallback\b/gi, 'record-based review')
+    .replace(/\bdeterministic\b/gi, 'record-based')
     .replace(/\bavailable patent record\b/gi, 'reviewed patent record')
-    .replace(/\bavailable citation record\b/gi, 'limited available patent data')
+    .replace(/\bavailable citation record\b/gi, 'reviewed citation record')
     .replace(/\bavailable patent disclosure\b/gi, 'reviewed patent disclosure')
     .replace(/\bavailable patent evidence\b/gi, 'reviewed patent evidence')
     .replace(/\bfinal attorney remarks?\b/gi, 'claim-positioning observations')
@@ -267,7 +278,7 @@ function gateRecordFor(stage1: any, pn: string) {
 
 function defaultAttorneyRemark(status: FeatureStatus, feature: string, pn: string) {
   if (status === 'Present') return `${pn} appears to disclose this feature in the reviewed patent record.`;
-  if (status === 'Partial') return `${pn} is related to this feature, but the available patent data does not show all required elements.`;
+  if (status === 'Partial') return `${pn} is related to this feature, but the reviewed citation record does not show all required elements.`;
   if (status === 'Absent') return `${pn} does not show support for this feature in the reviewed disclosure. Treat as a potential distinction, not confirmed novelty.`;
   return `${pn} should be reviewed for this feature before final claim positioning.`;
 }
@@ -301,6 +312,23 @@ function defaultCrispRemark(status: FeatureStatus, feature = '', patentDisclosur
   return `Verification needed: available data does not reliably address ${feature || 'this feature'}.`;
 }
 
+function defaultProfessionalRemark(status: FeatureStatus, feature = '', patentDisclosure = ''): string {
+  const disclosure = cleanText(patentDisclosure);
+  const shortDisclosure = disclosure.length > 120 ? `${disclosure.slice(0, 117).trim()}...` : disclosure;
+  if (status === 'Present') {
+    return shortDisclosure
+      ? `The reference appears to teach this feature through ${shortDisclosure}. Claim drafting should preserve narrower technical distinctions.`
+      : `The reference appears to teach ${feature || 'this feature'}. Claim drafting should preserve narrower technical distinctions.`;
+  }
+  if (status === 'Partial') {
+    return shortDisclosure
+      ? `The reference is technically related through ${shortDisclosure}, but it does not expressly teach the complete submitted mechanism. Preserve the missing element as a claim-review focus.`
+      : `The reference is technically related to ${feature || 'this feature'}, but it does not expressly teach the complete submitted mechanism.`;
+  }
+  if (status === 'Absent') return `The reviewed citation does not expressly teach ${feature || 'this feature'}. This point may support differentiation if confirmed across the closest references.`;
+  return `Full-text review should verify whether ${feature || 'this feature'} is taught before assigning claim weight to this point.`;
+}
+
 function isUsefulCrispRemark(value: unknown): boolean {
   const text = cleanText(value);
   if (!text) return false;
@@ -322,6 +350,21 @@ function rowCrispRemark(supplied: any, cell: any, status: FeatureStatus, feature
     if (isUsefulCrispRemark(candidate)) return reportSafeText(candidate);
   }
   return reportSafeText(defaultCrispRemark(status, feature, patentDisclosure));
+}
+
+function rowProfessionalRemark(supplied: any, cell: any, status: FeatureStatus, feature: string, patentDisclosure: string): string {
+  const candidates = [
+    supplied.professional_remark,
+    cell.professional_remark,
+    [supplied.attorney_remark || cell.attorney_remark, supplied.novelty_impact || cell.novelty_impact, supplied.claim_review_note || cell.claim_review_note].filter(Boolean).join(' '),
+    supplied.crisp_remark,
+    cell.crisp_remark,
+  ];
+  for (const candidate of candidates) {
+    const text = reportSafeText(candidate).replace(/\b(?:crisp remark|attorney remark|novelty impact|claim review note|review note|status|confidence|coverage)\s*:\s*/gi, '').replace(/\b\d+(?:\.\d+)?\s*%\b/g, '').trim();
+    if (text.split(/\s+/).filter(Boolean).length >= 4) return text;
+  }
+  return reportSafeText(defaultProfessionalRemark(status, feature, patentDisclosure));
 }
 
 function textSpecificityScore(value: string) {
@@ -387,7 +430,7 @@ function buildRows(features: string[], stage0: any, inventionDescription: string
         cell.reason ||
         (status === 'Present' || status === 'Partial'
           ? 'Related patent disclosure identified.'
-          : 'This feature is absent from the available patent data.')
+          : 'This feature is not expressly taught in the reviewed citation record.')
       );
     const extentScore = scoreOrNull(supplied.extent_score ?? supplied.extentScore ?? cell.extent_score ?? cell.extentScore)
       ?? defaultExtentScore(status, feature, patentDisclosure, evidenceQuote, confidence);
@@ -480,6 +523,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
       assignees: item.assignees,
       relevance: item.relevanceScore,
       evidenceQuality: item.evidenceQuality,
+      referenceRole: item.referenceRole,
+      reviewPriority: item.reviewPriority,
       matchCategory: item.matchCategory,
       matchCategoryLabel: item.matchCategoryLabel,
       noveltyThreat: item.noveltyThreat,
@@ -493,7 +538,10 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
         patent_disclosure: row.patentDisclosure,
         status: row.status,
         status_label: row.statusLabel,
+        public_mapping_status: row.publicMappingStatus,
+        public_mapping_code: row.publicMappingCode,
         crisp_remark: row.crispRemark,
+        professional_remark: row.professionalRemark,
         evidence_quote: row.evidenceQuote || undefined,
         evidence_source: row.evidenceSource,
         extent_score: row.extentScore ?? undefined,
@@ -696,11 +744,11 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
             </div>
           </Section>
 
-          <Section id="section-1-4" title="1.4 Scoring Legend">
+          <Section id="section-1-4" title="1.4 Mapping Legend">
             <DenseTable>
               <thead>
                 <tr>
-                  <HeaderCell className="w-48">Score / Status</HeaderCell>
+                  <HeaderCell className="w-48">Mapping Status</HeaderCell>
                   <HeaderCell>Meaning</HeaderCell>
                 </tr>
               </thead>
@@ -722,9 +770,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                   <HeaderCell className="w-16">S.No.</HeaderCell>
                   <HeaderCell className="w-40">Citation No.</HeaderCell>
                   <HeaderCell>Title</HeaderCell>
-                  <HeaderCell className="w-44">Match Category</HeaderCell>
-                  <HeaderCell className="w-40">Retrieval Relevance</HeaderCell>
-                  <HeaderCell className="w-36">Evidence</HeaderCell>
+                  <HeaderCell className="w-56">Reference Role</HeaderCell>
+                  <HeaderCell className="w-32">Priority</HeaderCell>
                 </tr>
               </thead>
               <tbody>
@@ -733,9 +780,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                     <Cell>{index + 1}</Cell>
                     <Cell><a className="font-semibold text-blue-700 underline" href={`#citation-${index + 1}`}>{citation.publicationNumber}</a></Cell>
                     <Cell>{citation.title}</Cell>
-                    <Cell>{citation.matchCategoryLabel}</Cell>
-                    <Cell>{pct(citation.relevance)}</Cell>
-                    <Cell>{citation.evidenceQuality}</Cell>
+                    <Cell>{citation.referenceRole}</Cell>
+                    <Cell>{citation.reviewPriority}</Cell>
                   </tr>
                 ))}
               </tbody>
@@ -754,7 +800,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                     <HeaderCell className="w-40">Citation No.</HeaderCell>
                     <HeaderCell>Title</HeaderCell>
                     <HeaderCell className="w-40">Matched Scope</HeaderCell>
-                    <HeaderCell className="w-40">Retrieval Relevance</HeaderCell>
+                    <HeaderCell className="w-40">Review Priority</HeaderCell>
                   </tr>
                 </thead>
                 <tbody>
@@ -766,7 +812,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                         <Cell><a className="font-semibold text-blue-700 underline" href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`}>{citation.publicationNumber}</a></Cell>
                         <Cell>{citation.title}</Cell>
                         <Cell>{citation.matchCategoryLabel}</Cell>
-                        <Cell>{pct(citation.relevance)}</Cell>
+                        <Cell>{citation.reviewPriority}</Cell>
                       </tr>
                     ))}
                 </tbody>
@@ -780,7 +826,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
 
           <Section id="section-1-7" title="1.7 Key Feature Analysis">
             <p className="mb-4 max-w-4xl text-sm leading-6 text-slate-700">
-              Each cell reflects whether the cited patent record appears to disclose the corresponding key feature. Feature coverage is separate from retrieval relevance and legal conclusions.
+              Each cell reflects whether the cited patent record appears to disclose the corresponding key feature. The matrix is a qualitative mapping aid, not a legal conclusion.
             </p>
             <div className="overflow-x-auto rounded-sm border border-slate-300">
               <table className="min-w-full border-collapse text-xs">
@@ -797,9 +843,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                       {citation.rows.map(row => (
                         <Cell key={row.feature_id} className="text-center">
                           <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>
-                            {row.status_label || statusLabel(row.status)}
+                            {row.public_mapping_code || row.status_label || statusLabel(row.status)}
                           </span>
-                          {typeof row.extent_score === 'number' && <div className="mt-1 text-[10px] text-slate-500">Coverage {pct(row.extent_score)}</div>}
+                          <div className="mt-1 text-[10px] text-slate-500">{row.public_mapping_status || row.status_label || statusLabel(row.status)}</div>
                         </Cell>
                       ))}
                     </tr>
@@ -823,9 +869,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                     <tbody>
                       <tr><Cell className="w-48 font-semibold">Publication No:</Cell><Cell>{citation.publicationNumber}</Cell><Cell className="w-48 font-semibold">Publication Date:</Cell><Cell>{citation.publicationDate}</Cell></tr>
                       <tr><Cell className="font-semibold">Application No:</Cell><Cell>{citation.applicationNumber}</Cell><Cell className="font-semibold">Application Date:</Cell><Cell>{citation.filingDate}</Cell></tr>
-                      <tr><Cell className="font-semibold">Priority Date:</Cell><Cell>{citation.priorityDate}</Cell><Cell className="font-semibold">Match Category:</Cell><Cell>{citation.matchCategoryLabel}</Cell></tr>
-                      <tr><Cell className="font-semibold">Overlap Category:</Cell><Cell><span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${threatClass(citation.noveltyThreat)}`}>{citation.noveltyThreat}</span></Cell><Cell className="font-semibold">Evidence Quality:</Cell><Cell>{citation.evidenceQuality}</Cell></tr>
-                      <tr><Cell className="font-semibold">Feature Coverage:</Cell><Cell>{pct(citation.coverageScore)}</Cell><Cell className="font-semibold">Retrieval Relevance:</Cell><Cell>{pct(citation.relevance)}</Cell></tr>
+                      <tr><Cell className="font-semibold">Priority Date:</Cell><Cell colSpan={3}>{citation.priorityDate}</Cell></tr>
+                      <tr><Cell className="font-semibold">Reference Role:</Cell><Cell>{citation.referenceRole}</Cell><Cell className="font-semibold">Review Priority:</Cell><Cell>{citation.reviewPriority}</Cell></tr>
+                      <tr><Cell className="font-semibold">Overlap Category:</Cell><Cell colSpan={3}><span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${threatClass(citation.noveltyThreat)}`}>{citation.noveltyThreat}</span></Cell></tr>
                       <tr><Cell className="font-semibold">Inventor(s):</Cell><Cell colSpan={3}>{citation.inventors}</Cell></tr>
                       <tr><Cell className="font-semibold">Assignee(s):</Cell><Cell colSpan={3}>{citation.assignees}</Cell></tr>
                       <tr><Cell className="font-semibold">Title:</Cell><Cell colSpan={3}>{citation.title}</Cell></tr>
@@ -853,13 +899,12 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                               <div className="mt-2 text-slate-600">{row.user_invention_disclosure}</div>
                             </Cell>
                             <Cell>
-                              <div className={`mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>{row.status_label || statusLabel(row.status)}</div>
+                              <div className={`mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>{row.public_mapping_status || row.status_label || statusLabel(row.status)}</div>
                               <div>{row.patent_disclosure}</div>
-                              {row.evidence_quote && <div className="mt-2 text-slate-500">Evidence ({row.evidence_source}): {row.evidence_quote}</div>}
-                              {typeof row.extent_score === 'number' && <div className="mt-1 text-slate-500">Feature Coverage: {pct(row.extent_score)}</div>}
+                              {row.evidence_quote && <div className="mt-2 text-slate-500">Supporting passage: {row.evidence_quote}</div>}
                             </Cell>
                             <Cell>
-                              {row.crisp_remark || defaultCrispRemark(row.status, row.feature, row.patent_disclosure)}
+                              {row.professional_remark || defaultProfessionalRemark(row.status, row.feature, row.patent_disclosure)}
                             </Cell>
                           </tr>
                         ))}
@@ -925,17 +970,17 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 <p className="mt-3 text-sm leading-6 text-slate-700">{reportData.finalAssessment.summary}</p>
               </div>
               <div className="rounded-sm border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-                <div className="font-semibold">Report Confidence</div>
-                <p className="mt-2">Automated report confidence: {reportData.reportConfidence.automatedReportConfidence}</p>
-                <p>Retrieval confidence: {reportData.reportConfidence.retrievalConfidence}</p>
-                <p>Feature-mapping confidence: {reportData.reportConfidence.featureMappingConfidence}</p>
+                <div className="font-semibold">Attorney Review Focus</div>
+                <p className="mt-2">Closest mapped citation: {reportData.publicClosestCitation?.publicationNumber || '-'}</p>
+                <p>Reference role: {reportData.publicClosestCitation?.referenceRole || '-'}</p>
+                <p>Review priority: {reportData.publicClosestCitation?.reviewPriority || '-'}</p>
                 <p>Legal conclusion: {reportData.reportConfidence.legalConclusion}</p>
               </div>
             </div>
             <div className="mt-5 grid gap-5 md:grid-cols-2">
               <ListBlock title="Key Risks" items={reportData.finalAssessment.risks} />
               <ListBlock title="Strategic Recommendations" items={reportData.finalAssessment.recommendations} />
-              <ListBlock title="Confidence Drivers" items={finalRemarks?.confidence_drivers || []} />
+              <ListBlock title="Review Drivers" items={finalRemarks?.confidence_drivers || []} />
             </div>
             <div className="mt-5 rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
               <span className="font-semibold text-slate-950">Overall drafting direction: </span>{reportData.overallDraftingDirection}

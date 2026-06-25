@@ -66,6 +66,15 @@ import ContradictionInsightPanel from './ContradictionInsightPanel'
 
 interface IdeationWorkspaceProps {
   onExportToBank: () => void
+  onRunNoveltySearch: (input: {
+    title: string
+    description: string
+    sourceMetadata: {
+      source: 'ideation'
+      sessionId: string
+      ideaFrameId: string
+    }
+  }) => void
 }
 
 // Session status stages (internal only - UI does NOT show these names per SRS)
@@ -211,7 +220,7 @@ function mapStatusToStage(status: string): SessionStage {
   return stageMap[status] || 'exploring'
 }
 
-export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceProps) {
+export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }: IdeationWorkspaceProps) {
   // Session state
   const [sessions, setSessions] = useState<any[]>([])
   const [currentSession, setCurrentSession] = useState<IdeationSession | null>(null)
@@ -1395,76 +1404,46 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
     }
   }
 
-  // Preliminary Novelty Assessment - LLM-ONLY, NO PRIOR ART SEARCH (SRS Section 3.7)
-  const handlePreliminaryAssessment = async (ideaFrameId: string) => {
+  const buildNoveltyDisclosure = (idea: IdeaFrame) => {
+    const sections = [
+      `Generated ideation disclosure for novelty search.`,
+      idea.coreMechanism ? `Core Mechanism:\n${idea.coreMechanism}` : '',
+      idea.inventiveLeap ? `Inventive Leap:\n${idea.inventiveLeap}` : '',
+      idea.whyNotObvious ? `Non-Obviousness Rationale:\n${idea.whyNotObvious}` : '',
+      idea.eliminatedAssumption ? `Eliminated Assumption:\n${idea.eliminatedAssumption}` : '',
+      idea.contradictionResolved ? `Contradiction Resolved:\n${idea.contradictionResolved}` : '',
+      idea.mechanismBoundaryTest?.whatItDoesNotSolve
+        ? `Boundary - Does Not Solve:\n${idea.mechanismBoundaryTest.whatItDoesNotSolve}`
+        : '',
+      idea.mechanismBoundaryTest?.failureByDesign
+        ? `Failure By Design:\n${idea.mechanismBoundaryTest.failureByDesign}`
+        : '',
+      idea.mechanismBoundaryTest?.outOfScope
+        ? `Out Of Scope:\n${idea.mechanismBoundaryTest.outOfScope}`
+        : '',
+    ]
+
+    return sections.filter(Boolean).join('\n\n')
+  }
+
+  const handleRunNoveltySearch = async (ideaFrameId: string) => {
     if (!currentSession) return
 
-    // Set stage to show assessment view
-    setAssessingIdeaId(ideaFrameId)
-    setStage('assessing')
-    
-    // Initialize progress (NO patent database references per SRS)
-    setAssessmentProgress({
-      currentStep: 1,
-      totalSteps: 3,
-      message: 'Analyzing conceptual originality...',
-    })
-
-    try {
-      // Progress simulation for LLM assessment
-      const progressSimulation = setInterval(() => {
-        setAssessmentProgress(prev => {
-          if (!prev) return prev
-          const steps = [
-            { step: 1, msg: 'Analyzing conceptual originality...' },
-            { step: 2, msg: 'Evaluating novelty risk...' },
-            { step: 3, msg: 'Generating preliminary assessment...' },
-          ]
-          const nextStep = Math.min(prev.currentStep + 1, 3)
-          const stepInfo = steps.find(s => s.step === nextStep) || steps[steps.length - 1]
-          return {
-            ...prev,
-            currentStep: nextStep,
-            message: stepInfo.msg,
-          }
-        })
-      }, 1500)
-
-      const response = await fetch(`/api/idea-bank/ideation/${currentSession.id}/novelty`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
-        },
-        body: JSON.stringify({ ideaFrameId }),
-      })
-
-      // Stop progress simulation
-      clearInterval(progressSimulation)
-
-      if (response.ok) {
-        // Final progress state
-        setAssessmentProgress({
-          currentStep: 3,
-          totalSteps: 3,
-          message: 'Assessment complete!',
-        })
-        
-        // Brief delay to show completion
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        
-        await loadSession(currentSession.id, false)
-        setStage('reviewing')
-      } else {
-        throw new Error('Preliminary assessment failed')
-      }
-    } catch (e) {
-      setError('Failed to assess novelty')
-      setStage('reviewing')
-    } finally {
-      setAssessingIdeaId(null)
-      setAssessmentProgress(undefined)
+    const idea = ideaFrames.find(frame => frame.id === ideaFrameId)
+    if (!idea) {
+      setError('Idea not found')
+      return
     }
+
+    onRunNoveltySearch({
+      title: idea.title || idea.coreMechanism?.slice(0, 120) || 'Ideation-generated invention',
+      description: buildNoveltyDisclosure(idea),
+      sourceMetadata: {
+        source: 'ideation',
+        sessionId: currentSession.id,
+        ideaFrameId,
+      },
+    })
   }
 
   // Export to idea bank (with optional selected improvement suggestions)
@@ -2440,7 +2419,7 @@ export default function IdeationWorkspace({ onExportToBank }: IdeationWorkspaceP
             <IdeaFramePanel
               ideas={ideaFrames}
               onSelectIdea={(idea) => setSelectedIdea(idea)}
-              onAssessNovelty={handlePreliminaryAssessment}
+              onRunNoveltySearch={handleRunNoveltySearch}
               onExport={handleExportToBank}
               onClose={() => setShowIdeaPanel(false)}
               onDeleteIdea={handleDeleteIdea}

@@ -3,30 +3,44 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Lightbulb, Database, Sparkles, ArrowRight, Home, ChevronLeft } from 'lucide-react'
+import { Lightbulb, Database, Sparkles, ArrowRight, Home, ChevronLeft, Search } from 'lucide-react'
 import IdeaBankDashboard from './IdeaBankDashboard'
 import IdeationWorkspace from './ideation/IdeationWorkspace'
+import NoveltySearchSubmission from '@/components/novelty-search/NoveltySearchSubmission'
 
-type TabType = 'ideation' | 'idea-bank'
+type TabType = 'ideation' | 'novelty' | 'repository'
+
+type NoveltyPrefill = {
+  title: string
+  description: string
+  sourceMetadata?: {
+    source: string
+    sessionId?: string
+    ideaFrameId?: string
+    ideaId?: string
+    [key: string]: unknown
+  }
+}
 
 export default function IdeaHubPage() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<TabType>('ideation')
+  const [noveltyPrefill, setNoveltyPrefill] = useState<NoveltyPrefill | null>(null)
 
   const tabs = [
     {
       id: 'ideation' as const,
-      label: 'Ideation Engine',
+      label: 'Ideation',
       icon: Sparkles,
       description: 'Generate patent ideas with AI-powered mind mapping',
       gradient: 'from-violet-500 to-purple-600',
       bgGradient: 'from-violet-500/10 to-purple-600/10',
     },
     {
-      id: 'idea-bank' as const,
-      label: 'Idea Bank',
-      icon: Database,
-      description: 'Browse and manage your invention repository',
+      id: 'novelty' as const,
+      label: 'Novelty',
+      icon: Search,
+      description: 'Review search terms and run the novelty pipeline',
       gradient: 'from-cyan-500 to-blue-600',
       bgGradient: 'from-cyan-500/10 to-blue-600/10',
     },
@@ -107,10 +121,19 @@ export default function IdeaHubPage() {
             <div className="flex items-center gap-3">
               {activeTab === 'ideation' && (
                 <button
-                  onClick={() => setActiveTab('idea-bank')}
+                  onClick={() => setActiveTab('repository')}
                   className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-900 transition-colors"
                 >
-                  <span className="hidden sm:inline">View Bank</span>
+                  <Database className="w-4 h-4" />
+                  <span className="hidden sm:inline">Repository</span>
+                </button>
+              )}
+              {activeTab === 'repository' && (
+                <button
+                  onClick={() => setActiveTab('ideation')}
+                  className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-900 transition-colors"
+                >
+                  <span className="hidden sm:inline">Back to Ideation</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               )}
@@ -131,7 +154,20 @@ export default function IdeaHubPage() {
             className="min-h-full"
           >
             {activeTab === 'ideation' ? (
-              <IdeationWorkspace onExportToBank={() => setActiveTab('idea-bank')} />
+              <IdeationWorkspace
+                onExportToBank={() => setActiveTab('repository')}
+                onRunNoveltySearch={(input) => {
+                  setNoveltyPrefill(input)
+                  setActiveTab('novelty')
+                }}
+              />
+            ) : activeTab === 'novelty' ? (
+              <NoveltySearchSubmission
+                key={`${noveltyPrefill?.sourceMetadata?.source || 'manual'}-${noveltyPrefill?.sourceMetadata?.ideaFrameId || noveltyPrefill?.sourceMetadata?.ideaId || 'new'}`}
+                initialTitle={noveltyPrefill?.title}
+                initialDescription={noveltyPrefill?.description}
+                sourceMetadata={noveltyPrefill?.sourceMetadata}
+              />
             ) : (
               <div className="p-8">
                 <IdeaBankDashboard />
@@ -143,4 +179,3 @@ export default function IdeaHubPage() {
     </div>
   )
 }
-

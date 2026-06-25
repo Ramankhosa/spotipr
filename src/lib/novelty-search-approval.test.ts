@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from './prisma'
+import { recordIdeationNoveltyHandoff } from './ideation-novelty-handoff'
 import { NoveltySearchService } from './novelty-search-service'
 
 vi.mock('./metering/gateway', () => ({
@@ -70,6 +71,15 @@ describe('NoveltySearchService approval gate', () => {
     }))
 
     const result = await svc.enqueueNoveltySearch(request({
+      config: {
+        jurisdiction: 'IN',
+        sourceMetadata: {
+          source: 'ideation',
+          sessionId: 'session-1',
+          ideaFrameId: 'idea-frame-1',
+        },
+        searchSource: { mode: 'INDIAN_ONLY', searchMode: 'intelligent', llmExpansion: true },
+      },
       approvedStage0: {
         searchQuery: '  approved sensor query  ',
         inventionFeatures: ['  Approved feature  ', 'Approved feature'],
@@ -88,8 +98,52 @@ describe('NoveltySearchService approval gate', () => {
       inventionFeatures: ['Approved feature'],
       featureDetails: [{ feature: 'Approved feature', user_disclosure: 'Approved feature' }],
     })
+    expect(createRun.mock.calls[0][0].data.config.sourceMetadata).toMatchObject({
+      source: 'ideation',
+      sessionId: 'session-1',
+      ideaFrameId: 'idea-frame-1',
+    })
     expect(createJob).toHaveBeenCalledWith({
       data: { searchId: 'search-1', status: 'QUEUED', currentStep: 'STAGE_1' },
     })
+  })
+
+  it('records queued novelty search metadata on the source ideation frame', async () => {
+    const findFirst = vi.spyOn(prisma.ideaFrame, 'findFirst').mockResolvedValue({
+      id: 'idea-frame-1',
+      noveltySummaryJson: { existing: true },
+    } as any)
+    const update = vi.spyOn(prisma.ideaFrame, 'update').mockResolvedValue({} as any)
+
+    await recordIdeationNoveltyHandoff({
+      searchId: 'search-1',
+      userId: 'user-1',
+      config: {
+        sourceMetadata: {
+          source: 'ideation',
+          sessionId: 'session-1',
+          ideaFrameId: 'idea-frame-1',
+        },
+      },
+    })
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'idea-frame-1',
+        sessionId: 'session-1',
+        session: { userId: 'user-1' },
+      },
+      select: { id: true, noveltySummaryJson: true },
+    })
+    expect(update).toHaveBeenCalledOnce()
+    const noveltySummaryJson = update.mock.calls[0]?.[0].data.noveltySummaryJson as any;
+    expect(noveltySummaryJson).toMatchObject({
+      existing: true,
+      pipeline: {
+        searchId: 'search-1',
+        status: 'QUEUED',
+      },
+    })
+    expect(noveltySummaryJson.pipeline.queuedAt).toEqual(expect.any(String))
   })
 })

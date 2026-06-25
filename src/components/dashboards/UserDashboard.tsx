@@ -280,8 +280,8 @@ export default function UserDashboard() {
                 <div className="p-2 bg-amber-50 rounded-lg text-amber-600 mb-3 group-hover:bg-amber-600 group-hover:text-white transition-colors">
                   <Lightbulb className="w-5 h-5" />
                 </div>
-                <span className="font-semibold text-slate-900">Idea Bank</span>
-                <span className="text-xs text-slate-500 mt-1">Capture concepts</span>
+                <span className="font-semibold text-slate-900">Ideation</span>
+                <span className="text-xs text-slate-500 mt-1">Brainstorm patent ideas</span>
               </button>
 
               <button

@@ -18,6 +18,14 @@ export default function NoveltySearchSubmission(props: {
   initialProjectId?: string
   initialTitle?: string
   initialDescription?: string
+  sourceMetadata?: {
+    source: string
+    sessionId?: string
+    ideaFrameId?: string
+    ideaId?: string
+    [key: string]: unknown
+  }
+  onQueued?: (searchId: string) => void | Promise<void>
 }) {
   const router = useRouter()
   const { authFetch } = useAuth()
@@ -100,6 +108,7 @@ export default function NoveltySearchSubmission(props: {
           jurisdiction,
           config: {
             jurisdiction,
+            ...(props.sourceMetadata ? { sourceMetadata: props.sourceMetadata } : {}),
             searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
           },
         }),
@@ -141,6 +150,7 @@ export default function NoveltySearchSubmission(props: {
           jurisdiction,
           config: {
             jurisdiction,
+            ...(props.sourceMetadata ? { sourceMetadata: props.sourceMetadata } : {}),
             searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
           },
           approvedStage0: {
@@ -152,6 +162,9 @@ export default function NoveltySearchSubmission(props: {
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(body.error || 'Failed to queue novelty search.')
+      if (body.searchId && props.onQueued) {
+        await props.onQueued(String(body.searchId))
+      }
       router.push(`/novelty-search/history?highlight=${encodeURIComponent(body.searchId)}`)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Failed to queue novelty search.')

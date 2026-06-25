@@ -30,7 +30,9 @@ function featureRow(index: number, overrides: Record<string, unknown> = {}) {
     userDisclosure: `Complete submitted disclosure for feature ${index + 1}.`,
     patentDisclosure: `Mapped patent disclosure for feature ${index + 1}.`,
     status: index % 3 === 0 ? 'Present' : index % 3 === 1 ? 'Partial' : 'Absent',
-    statusLabel: index % 3 === 0 ? 'Present' : index % 3 === 1 ? 'Partial' : 'Absent',
+    statusLabel: index % 3 === 0 ? 'Directly Mapped' : index % 3 === 1 ? 'Partially Mapped' : 'Not Expressly Taught',
+    publicMappingStatus: index % 3 === 0 ? 'Directly Mapped' : index % 3 === 1 ? 'Partially Mapped' : 'Not Expressly Taught',
+    publicMappingCode: index % 3 === 0 ? 'D' : index % 3 === 1 ? 'P' : 'N',
     evidenceQuote: `Evidence quotation for feature ${index + 1}.`,
     evidenceSource: 'abstract',
     extentScore: index % 3 === 2 ? 0 : 0.72,
@@ -59,6 +61,8 @@ function citation(rows: ReturnType<typeof featureRow>[], overrides: Record<strin
     link: 'https://example.test/patent/1',
     matchCategoryLabel: 'Direct match',
     evidenceQuality: 'Mapped evidence',
+    referenceRole: 'Closest invention-level reference',
+    reviewPriority: 'High',
     relevanceScore: 0.91,
     noveltyThreat: 'High mapped-overlap risk',
     overlapRiskLevel: 'High',
@@ -77,7 +81,7 @@ function reportModel(overrides: Record<string, unknown> = {}) {
   const comparison = citation(rows)
   return {
     reportNumber: 'PN-NOV-IN-20260622-TEST001',
-    reportTitle: 'Novelty Search Attorney Report',
+    reportTitle: 'Preliminary Novelty Assessment Report',
     inventionTitle: 'Evidence-driven adaptive control platform',
     jurisdiction: 'India',
     sourceMode: 'PQAI_ONLY',
@@ -86,11 +90,11 @@ function reportModel(overrides: Record<string, unknown> = {}) {
     preparedBy: 'PatentNest.ai',
     searchQuery: 'adaptive evidence control',
     inventionFeatures: rows.map(row => row.userFeature),
-    evidenceBasis: 'Automated patent intelligence with mapped evidence',
+    evidenceBasis: 'Preliminary patentability intelligence with mapped support',
     methodology: {
       corpus: 'International patent corpus',
       retrievalMode: 'Semantic and textual retrieval',
-      searchedEvidence: 'Available patent data',
+      searchedEvidence: 'Full patent documents should be reviewed before final conclusions.',
       preliminaryStatus: 'Review required',
       techniques: ['Semantic retrieval', 'Feature mapping'],
     },
@@ -130,6 +134,7 @@ function reportModel(overrides: Record<string, unknown> = {}) {
       risks: ['Claim scope may overlap the mapped reference.'],
       recommendations: ['Review the complete claims.'],
     },
+    publicClosestCitation: comparison,
     reportConfidence: {
       automatedReportConfidence: 'Medium',
       retrievalConfidence: 'Medium',
@@ -214,6 +219,9 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text).toContain('Key Feature')
     expect(parsed.text).toContain('Professional Remark')
     expect(parsed.text).not.toContain('Relevance / Evidence')
+    expect(parsed.text).not.toContain('Retrieval Relevance')
+    expect(parsed.text).not.toContain('Evidence sources')
+    expect(parsed.text).not.toContain('Evidence Quality')
     expect(parsed.text).not.toContain('Discussion Points')
     expect(parsed.text).not.toContain('Crisp remark')
     expect(parsed.text).not.toContain('Novelty impact')
@@ -257,7 +265,7 @@ describe('GET attorney report PDF', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-disposition')).toContain('attachment;')
-    expect(normalizedText).toContain('Mapping assessment: Present')
+    expect(normalizedText).toContain('Mapping assessment: Directly Mapped')
     expect(parsed.text).toContain('No additional shortlisted citations remained')
     expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
   }, 20_000)

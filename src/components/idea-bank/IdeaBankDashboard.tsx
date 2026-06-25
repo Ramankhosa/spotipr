@@ -368,6 +368,7 @@ export default function IdeaBankDashboard() {
     const params = new URLSearchParams({
       title: idea.title,
       description: mergedDescription,
+      source: 'idea_bank',
       ideaId: ideaId
     })
     

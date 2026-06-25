@@ -133,14 +133,14 @@ export default function InsightGrid({ onCardHover }: InsightGridProps) {
     {
       id: 'ideas',
       icon: Lightbulb,
-      title: 'Idea Bank',
+      title: 'Ideation',
       value: ideaStats ? String(ideaStats.totalIdeas || 0) : '0',
       label: 'Concepts',
       description: ideaStats ? `${ideaStats.userReservations} reserved by you` : 'Loading...',
       color: 'text-amber-600',
       bgColor: 'bg-amber-50',
       borderColor: 'border-amber-200',
-      tooltip: `Idea growth rate +20% this week.`,
+      tooltip: `Ideation repository growth rate +20% this week.`,
       navigateTo: '/idea-bank'
     },
     {

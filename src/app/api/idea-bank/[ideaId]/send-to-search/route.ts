@@ -25,7 +25,25 @@ async function getUserFromRequest(request: NextRequest) {
   return user
 }
 
-// POST /api/idea-bank/[ideaId]/send-to-search - Send idea to novelty search
+function buildNoveltyDescription(idea: any) {
+  const parts = [
+    idea.description,
+    idea.abstract ? `\n\nAbstract:\n${idea.abstract}` : '',
+    idea.technicalField ? `\n\nTechnical Field:\n${idea.technicalField}` : '',
+    Array.isArray(idea.keyFeatures) && idea.keyFeatures.length
+      ? `\n\nKey Features:\n${idea.keyFeatures.map((feature: string) => `- ${feature}`).join('\n')}`
+      : '',
+    Array.isArray(idea.potentialApplications) && idea.potentialApplications.length
+      ? `\n\nPotential Applications:\n${idea.potentialApplications.map((application: string) => `- ${application}`).join('\n')}`
+      : '',
+    idea.priorArtSummary ? `\n\nPrior Art Summary:\n${idea.priorArtSummary}` : '',
+  ];
+
+  return parts.filter(Boolean).join('').slice(0, 4000);
+}
+
+// POST /api/idea-bank/[ideaId]/send-to-search
+// Deprecated queueing behavior: returns a prefilled novelty workflow URL so Stage 0 can be reviewed.
 export async function POST(
   request: NextRequest,
   { params }: { params: { ideaId: string } }
@@ -41,12 +59,28 @@ export async function POST(
       requestHeaders[key] = value
     })
 
-    const searchRunId = await ideaBankService.sendToNoveltySearch(requestHeaders, params.ideaId, user)
+    const idea = await ideaBankService.getIdeaById(requestHeaders, params.ideaId, user)
+    if (!idea) {
+      return NextResponse.json({ error: 'Idea not found' }, { status: 404 })
+    }
+    if (!idea._isReservedByCurrentUser) {
+      return NextResponse.json(
+        { error: 'You must reserve this idea before sending it to novelty search' },
+        { status: 400 }
+      )
+    }
+
+    const searchParams = new URLSearchParams({
+      title: idea.title,
+      description: buildNoveltyDescription(idea),
+      source: 'idea_bank',
+      ideaId: params.ideaId,
+    })
 
     return NextResponse.json({
       success: true,
-      searchRunId,
-      message: 'Idea sent to novelty search pipeline'
+      noveltySearchUrl: `/novelty-search?${searchParams.toString()}`,
+      message: 'Open the novelty search workflow to review and approve Stage 0 before queueing.'
     })
   } catch (error) {
     console.error('Failed to send idea to novelty search:', error)

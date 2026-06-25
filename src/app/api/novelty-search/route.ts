@@ -3,6 +3,7 @@ import { NoveltySearchService, NoveltySearchRequest } from '../../../lib/novelty
 import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { enforceServiceAccess } from '@/lib/service-access-middleware';
+import { recordIdeationNoveltyHandoff } from '@/lib/ideation-novelty-handoff';
 
 const noveltySearchService = new NoveltySearchService();
 
@@ -120,6 +121,12 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    await recordIdeationNoveltyHandoff({
+      config,
+      searchId: result.searchId,
+      userId: payload?.sub,
+    });
 
     if (executionMode === 'legacy') {
       return NextResponse.json({

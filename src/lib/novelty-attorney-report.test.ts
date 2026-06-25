@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildNoveltyAttorneyReportModel } from './novelty-attorney-report';
 
 describe('buildNoveltyAttorneyReportModel', () => {
-  it('builds safe limited-data report sections and side-by-side comparison rows', () => {
+  it('builds professional preliminary assessment sections and side-by-side comparison rows', () => {
     const model = buildNoveltyAttorneyReportModel({
       id: 'search123456789',
       title: 'Soil moisture irrigation controller',
@@ -188,12 +188,13 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.tableOfContents).toContainEqual({ number: '2', title: 'Citation Analysis' });
     expect(model.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
     expect(model.tableOfContents.some(item => item.number === '2.3')).toBe(false);
-    expect(model.evidenceBasis).toContain('Automated patent intelligence');
-    expect(model.methodology.searchedEvidence).toContain('limited available patent data');
-    expect(model.methodology.searchedEvidence).toContain('full patent documents');
-    expect(model.methodology.preliminaryStatus).not.toMatch(/preliminary/i);
+    expect(model.reportTitle).toBe('Preliminary Novelty Assessment Report');
+    expect(model.evidenceBasis).toContain('Preliminary patentability intelligence');
+    expect(model.methodology.searchedEvidence).toContain('full claims');
+    expect(model.methodology.searchedEvidence).toContain('legal status');
+    expect(model.methodology.preliminaryStatus).toContain('preliminary assessment');
     expect(model.limitations).toContain('full patent documents');
-    expect(model.limitations).not.toMatch(/preliminary|title\/abstract|title and abstract/i);
+    expect(model.limitations).not.toMatch(/limited available patent data|title\/abstract|title and abstract/i);
     expect(model.countLabels.map(item => item.label)).toEqual([
       'Candidate records retrieved/ranked',
       'Shortlisted candidate citations',
@@ -202,10 +203,12 @@ describe('buildNoveltyAttorneyReportModel', () => {
       'Citations selected for detailed feature mapping',
     ]);
     expect(model.scoringLegend.map(item => item.label)).toEqual(expect.arrayContaining([
-      'Retrieval Relevance',
+      'D - Directly Mapped',
+      'P - Partially Mapped',
       'Feature Mapping',
-      'Absent',
+      'N - Not Expressly Taught',
     ]));
+    expect(model.scoringLegend.map(item => item.label)).not.toContain('Retrieval Relevance');
     expect(model.scoringLegend.map(item => item.label)).not.toContain('Evidence Confidence');
     expect(model.scoringLegend.map(item => item.label)).not.toContain('Absent / weak signal');
 
@@ -213,19 +216,23 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.citations[0]).toMatchObject({
       matchCategory: 'direct',
       matchCategoryLabel: 'Direct invention-level match',
+      referenceRole: 'Closest invention-level reference',
+      reviewPriority: 'High',
     });
     expect(model.componentCitations.map(item => item.publicationNumber)).toEqual(['IN456A']);
     expect(model.comparisons[0].technicalDisclosure).toContain('soil moisture sensor');
     expect(model.comparisons[0].abstract).toBe('A soil moisture sensor controls irrigation.');
     expect(model.comparisons[0].rows).toHaveLength(4);
     expect(model.comparisons[0].noveltyThreat).toBe('Related / moderate-overlap');
-    expect(model.comparisons[0].claimImpactSummary).toContain('Mapped overlap: 2 Present, 0 Partial, 2 Absent.');
+    expect(model.comparisons[0].claimImpactSummary).toContain('Feature mapping: 2 directly mapped, 0 partially mapped, 1 not expressly taught, 1 requiring full-text review.');
     expect(model.comparisons[0].rows[0]).toMatchObject({
       featureNumber: 'KF1',
       userDisclosure: 'The invention measures soil moisture in a feedback loop.',
       patentDisclosure: 'The patent discloses soil moisture sensing.',
       status: 'Present',
-      statusLabel: 'Present',
+      statusLabel: 'Directly Mapped',
+      publicMappingStatus: 'Directly Mapped',
+      publicMappingCode: 'D',
       evidenceSource: 'abstract',
       extentScore: 0.88,
       confidence: 0.91,
@@ -237,7 +244,9 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.comparisons[0].rows[1]).toMatchObject({
       featureNumber: 'KF2',
       status: 'Absent',
-      statusLabel: 'Absent',
+      statusLabel: 'Not Expressly Taught',
+      publicMappingStatus: 'Not Expressly Taught',
+      publicMappingCode: 'N',
       patentDisclosure: 'The patent controls irrigation without disclosing the submitted threshold decision rule.',
       evidenceSource: 'none',
       extentScore: null,
@@ -249,12 +258,13 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.comparisons[0].rows[1].professionalRemark).not.toMatch(/Attorney remark|Novelty impact|Claim review note|Confidence|Coverage|\d+%/i);
     expect(model.comparisons[0].rows[3]).toMatchObject({
       featureNumber: 'KF4',
-      status: 'Absent',
-      statusLabel: 'Absent',
+      status: 'Unknown',
+      statusLabel: 'Requires Full-Text Review',
+      publicMappingStatus: 'Requires Full-Text Review',
+      publicMappingCode: 'R',
       evidenceSource: 'none',
-      extentScore: null,
     });
-    expect(model.comparisons[0].rows[3].crispRemark).toContain('unsupported dosing signal');
+    expect(model.comparisons[0].rows[3].professionalRemark).toContain('unsupported dosing signal');
 
     expect(model.featureSummaries[2]).toMatchObject({
       featureNumber: 'KF3',
@@ -275,6 +285,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       analyzed: 2,
     });
     const renderedModelText = JSON.stringify(model);
-    expect(renderedModelText).not.toMatch(/Mapped, needs review|Absent \/ weak signal|Evidence Confidence|attorney review/i);
+    expect(model.publicClosestCitation?.publicationNumber).toBe('IN123A');
+    expect(renderedModelText).not.toMatch(/Mapped, needs review|Absent \/ weak signal|Evidence Confidence|limited available patent data|deterministic fallback|available data does not/i);
   });
 });

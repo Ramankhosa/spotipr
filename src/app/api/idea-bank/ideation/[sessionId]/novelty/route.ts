@@ -1,9 +1,13 @@
 /**
- * Preliminary Novelty Assessment API (SRS Section 3.7)
+ * DEPRECATED: Preliminary Novelty Assessment API (SRS Section 3.7)
  * 
  * POST - Run LLM-only preliminary novelty assessment on an idea frame
  * 
- * IMPORTANT: This is a PRELIMINARY assessment only.
+ * IMPORTANT: This is retained for backward compatibility only.
+ * The product UI now routes ideation ideas through /api/novelty-search
+ * so users approve Stage 0 search terms before the background pipeline runs.
+ *
+ * This endpoint remains a PRELIMINARY assessment only.
  * NO patent databases are searched. NO legal novelty is claimed.
  */
 

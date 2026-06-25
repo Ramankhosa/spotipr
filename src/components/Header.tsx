@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useTenantView } from '@/lib/tenant-view-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
-import { Settings, FileText } from 'lucide-react'
+import { Settings, FileText, Lightbulb } from 'lucide-react'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
@@ -180,6 +180,14 @@ export default function Header() {
                   🔍 Search
                 </Link>
 
+                <Link
+                  href="/idea-bank"
+                  className="inline-flex items-center gap-1 px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                >
+                  <Lightbulb className="h-4 w-4" />
+                  Ideation
+                </Link>
+
                 {/* Tenant Admin Mode Toggle - Only show for OWNER/ADMIN roles */}
                 {isTenantAdmin && (
                   <div className="flex items-center border-l border-gpt-gray-200 pl-3 ml-1">
@@ -258,6 +266,15 @@ export default function Header() {
                     >
                       <span>🔍</span>
                       <span>Novelty Search</span>
+                    </Link>
+
+                    <Link
+                      href="/idea-bank"
+                      className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                      onClick={closeMenu}
+                    >
+                      <span>💡</span>
+                      <span>Ideation</span>
                     </Link>
 
                     <Link

@@ -12,12 +12,25 @@ function NoveltySearchContent() {
   const projectId = searchParams?.get('projectId');
   const title = searchParams?.get('title');
   const description = searchParams?.get('description');
+  const source = searchParams?.get('source');
+  const sessionId = searchParams?.get('sessionId');
+  const ideaFrameId = searchParams?.get('ideaFrameId');
+  const ideaId = searchParams?.get('ideaId');
+  const sourceMetadata = source
+    ? {
+        source,
+        ...(sessionId ? { sessionId } : {}),
+        ...(ideaFrameId ? { ideaFrameId } : {}),
+        ...(ideaId ? { ideaId } : {}),
+      }
+    : undefined;
 
   return (
     <NoveltySearchSubmission
       initialProjectId={projectId || undefined}
       initialTitle={title || undefined}
       initialDescription={description || undefined}
+      sourceMetadata={sourceMetadata}
     />
   );
 }
