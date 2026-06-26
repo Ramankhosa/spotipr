@@ -411,13 +411,17 @@ function drawDecisionFact(
   label: string,
   value: string,
   accent: string,
+  options: { height?: number; valueHeight?: number; truncateValue?: boolean } = {},
 ) {
-  drawCard(doc, x, y, width, 54, 6);
-  doc.rect(x, y, 3, 54).fill(accent);
+  const height = options.height || 54;
+  const valueHeight = options.valueHeight || 20;
+  drawCard(doc, x, y, width, height, 6);
+  doc.rect(x, y, 3, height).fill(accent);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(label.toUpperCase(), x + SPACE.md, y + 10, { width: width - 20, height: 9, lineBreak: false, ellipsis: true });
+  const text = options.truncateValue === false ? cleanText(value) : truncate(value, 115);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text(truncate(value, 115), x + SPACE.md, y + 24, { width: width - 20, height: 20, ellipsis: true, lineGap: 1.2 });
+    .text(text, x + SPACE.md, y + 24, { width: width - 20, height: valueHeight, ellipsis: options.truncateValue !== false, lineGap: 1.2 });
 }
 
 function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
@@ -471,24 +475,27 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const factWidth = (contentWidth(doc) - factGap * 2) / 3;
   drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`, COLORS.blue);
   drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`, COLORS.red);
-  drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success);
+  drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success, {
+    height: 64,
+    valueHeight: 34,
+    truncateValue: false,
+  });
 
-  const focusY = factsY + 66;
-  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), 46, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
+  const focusY = factsY + 76;
+  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), 58, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
   doc.circle(PAGE.left + 15, focusY + 17, 4).fill(palette.accent);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text('ATTORNEY REVIEW FOCUS', PAGE.left + 28, focusY + 9, { width: 145, height: 9, lineBreak: false });
   doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
-    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, height: 15, lineBreak: false, ellipsis: true });
+    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, height: 28, lineGap: 1.2, ellipsis: true });
 
-  const metricsY = focusY + 58;
+  const metricsY = focusY + 70;
   const gap = SPACE.sm;
-  const metricWidth = (contentWidth(doc) - gap * 4) / 5;
+  const metricWidth = (contentWidth(doc) - gap * 3) / 4;
   const metrics = [
     [String(report.counts.retrieved), 'Candidates', COLORS.blue],
     [String(report.counts.found), 'Shortlisted', COLORS.blue2],
     [strongest ? strongest.referenceRole : 'No mapped reference', 'Top reference', COLORS.success],
-    [String(report.directCitations.length), 'Direct matches', COLORS.red],
     [signal, 'Signal', palette.accent],
   ] as Array<[string, string, string]>;
   metrics.forEach(([value, label, accent], index) => {
@@ -498,7 +505,8 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const detailY = metricsY + 80;
   const detailGap = SPACE.md;
   const detailWidth = (contentWidth(doc) - detailGap) / 2;
-  drawCard(doc, PAGE.left, detailY, detailWidth, 145);
+  const detailCardHeight = 164;
+  drawCard(doc, PAGE.left, detailY, detailWidth, detailCardHeight);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.body)
     .text('Closest Mapped Citation', PAGE.left + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
   doc.rect(PAGE.left + SPACE.md, detailY + 31, 28, 2).fill(COLORS.blue);
@@ -516,19 +524,19 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   }
 
   const takeawayX = PAGE.left + detailWidth + detailGap;
-  drawCard(doc, takeawayX, detailY, detailWidth, 145);
+  drawCard(doc, takeawayX, detailY, detailWidth, detailCardHeight);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.body)
     .text('Key Takeaway', takeawayX + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
   doc.rect(takeawayX + SPACE.md, detailY + 31, 28, 2).fill(COLORS.success);
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
     .text(`${rationale}\n\nPotential Differentiation Space: ${report.potentialDifferentiationSpace}`, takeawayX + SPACE.md, detailY + 44, {
       width: detailWidth - 24,
-      height: 88,
+      height: 108,
       lineGap: 2,
-      ellipsis: true,
+      ellipsis: false,
     });
 
-  const methodY = detailY + 157;
+  const methodY = detailY + detailCardHeight + 12;
   drawCard(doc, PAGE.left, methodY, contentWidth(doc), 86);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
     .text('Report Basis', PAGE.left + SPACE.md, methodY + SPACE.md, { width: 110 });
@@ -1513,7 +1521,73 @@ export async function GET(
     startSection('4', 'Repeated Inventor / Entity Signals');
     drawEntityLandscape(doc, report.inventorSignals);
 
-    startSection('5', 'Claim-Positioning Observations');
+    startSection('5', 'Claim-Positioning Analysis');
+    const claimPositioning = report.claimPositioningAnalysis;
+    if (claimPositioning) {
+      drawFlowTextBlock(doc, 'Primary Claim Focus', claimPositioning.primaryClaimFocus);
+      if (claimPositioning.secondaryClaimFocus) {
+        drawFlowTextBlock(doc, 'Secondary Claim Focus', claimPositioning.secondaryClaimFocus);
+      }
+      drawFlowTextBlock(doc, 'Remaining Inventive Core', claimPositioning.remainingInventiveCore);
+      drawFlowTextBlock(doc, 'Why Still Distinguishable', claimPositioning.whyStillDistinguishable);
+      drawFlowTextBlock(doc, 'Reasoning', claimPositioning.reasoning);
+      drawFlowBulletList(doc, 'Weak Claim Areas', claimPositioning.weakClaimAreas || []);
+      drawFlowBulletList(doc, 'Avoid Relying Solely On', claimPositioning.avoidRelyingSolelyOn || []);
+    } else {
+      drawParagraph(doc, 'Claim-positioning analysis was not generated for this report version.');
+    }
+
+    const conceptCoverage = Array.isArray(report.conceptMappedCoverageSummary) ? report.conceptMappedCoverageSummary : [];
+    if (conceptCoverage.length) {
+      drawFlowLabel(doc, 'Concept Mapped Coverage Summary');
+      const widths = [160, 76, 76, 78, 74, contentWidth(doc) - 464];
+      const header = ['Concept', 'Mapped', 'Single Ref.', 'Distributed', 'Level', 'Closest References'];
+      drawTableRow(doc, header, widths, { header: true });
+      conceptCoverage.forEach(item => drawTableRow(doc, [
+        item.conceptTitle,
+        `${item.mappedCoveragePercent}%`,
+        `${item.singleReferenceMappedCoveragePercent}%`,
+        `${item.distributedMappedCoveragePercent}%`,
+        `${item.mappingLevel}${item.relationshipMapped ? ' + relationship' : ''}`,
+        item.closestReferences.join(', ') || '-',
+      ], widths, { repeatHeader: { cells: header, widths } }));
+      doc.y += SPACE.md;
+    }
+
+    if (report.claimDraftingConsiderations) {
+      drawFlowTextBlock(doc, 'Claim Drafting Considerations', report.claimDraftingConsiderations.independentClaimFocus);
+      drawFlowBulletList(doc, 'Dependent Claim Ideas', report.claimDraftingConsiderations.dependentClaimIdeas || []);
+      drawFlowBulletList(doc, 'Fallback Claim Ideas', report.claimDraftingConsiderations.fallbackClaimIdeas || []);
+      drawFlowBulletList(doc, 'Review Before Drafting', report.claimDraftingConsiderations.reviewBeforeDrafting || []);
+    }
+
+    const draftingOpportunities = Array.isArray(report.draftingOpportunities) ? report.draftingOpportunities : [];
+    if (draftingOpportunities.length) {
+      drawFlowLabel(doc, 'Drafting Opportunities');
+      const widths = [90, 150, contentWidth(doc) - 240];
+      const header = ['Type', 'Title', 'Explanation'];
+      drawTableRow(doc, header, widths, { header: true });
+      draftingOpportunities.forEach(item => drawTableRow(doc, [
+        item.opportunityType.replace(/_/g, ' '),
+        item.title,
+        `${item.explanation}${item.linkedFeatures?.length ? ` Linked features: ${item.linkedFeatures.join(', ')}` : ''}`,
+      ], widths, { repeatHeader: { cells: header, widths } }));
+      doc.y += SPACE.md;
+    }
+
+    if (report.strategicReviewFocus) {
+      drawMetadataGrid(doc, [
+        ['Highest priority reference', report.strategicReviewFocus.highestPriorityReference],
+        ['Review reason', report.strategicReviewFocus.reviewReason],
+        ['Highest overlap', report.strategicReviewFocus.highestOverlap],
+        ['Lowest overlap', report.strategicReviewFocus.lowestOverlap],
+        ['Critical relationship', report.strategicReviewFocus.criticalRelationshipToVerify],
+        ['Full-text review', report.strategicReviewFocus.recommendedFullTextReview.join(', ') || '-'],
+      ]);
+      drawFlowBulletList(doc, 'Remaining Uncertainties', report.strategicReviewFocus.remainingUncertainties || []);
+    }
+
+    startSection('6', 'Claim-Positioning Observations');
     const risk = riskAssessmentFor(report);
     drawMetadataGrid(doc, [
       ['Automated overlap position', report.finalAssessment.decision],
@@ -1545,7 +1619,7 @@ export async function GET(
     drawFlowBulletList(doc, 'Recommendations', report.finalAssessment.recommendations);
     drawFlowTextBlock(doc, 'Overall Drafting Direction', report.overallDraftingDirection);
 
-    startSection('6', 'Limitations and Next Steps');
+    startSection('7', 'Limitations and Next Steps');
     drawParagraph(doc, report.limitations);
     drawFlowBulletList(doc, 'What To Do Next', report.nextSteps);
 

@@ -66,6 +66,54 @@ export interface AttorneyReportEntityLandscape {
   repeated: Array<{ name: string; count: number }>;
 }
 
+export type DraftingOpportunityType = 'primary' | 'secondary' | 'optional' | 'avoid_relying_solely_on';
+export type ConceptMappingLevel = 'High' | 'Moderate' | 'Limited';
+
+export interface ClaimPositioningAnalysis {
+  primaryClaimFocus: string;
+  secondaryClaimFocus?: string;
+  weakClaimAreas: string[];
+  avoidRelyingSolelyOn: string[];
+  remainingInventiveCore: string;
+  whyStillDistinguishable: string;
+  reasoning: string;
+}
+
+export interface ClaimDraftingConsiderations {
+  independentClaimFocus: string;
+  dependentClaimIdeas: string[];
+  fallbackClaimIdeas: string[];
+  reviewBeforeDrafting: string[];
+}
+
+export interface DraftingOpportunity {
+  title: string;
+  opportunityType: DraftingOpportunityType;
+  linkedFeatures: string[];
+  linkedConcept?: string;
+  explanation: string;
+}
+
+export interface ConceptMappedCoverageSummary {
+  conceptTitle: string;
+  mappedCoveragePercent: number;
+  singleReferenceMappedCoveragePercent: number;
+  distributedMappedCoveragePercent: number;
+  relationshipMapped: boolean;
+  mappingLevel: ConceptMappingLevel;
+  closestReferences: string[];
+}
+
+export interface StrategicReviewFocus {
+  highestPriorityReference: string;
+  reviewReason: string;
+  highestOverlap: string;
+  lowestOverlap: string;
+  criticalRelationshipToVerify: string;
+  recommendedFullTextReview: string[];
+  remainingUncertainties: string[];
+}
+
 export interface AttorneyReportPatentComparison extends AttorneyReportCitation {
   link: string;
   abstract: string;
@@ -161,6 +209,11 @@ export interface AttorneyReportModel {
   claimConceptMapping: ClaimConceptMapping[];
   mainDifferentiator: string;
   attorneyReviewFocus: string;
+  claimPositioningAnalysis?: ClaimPositioningAnalysis;
+  claimDraftingConsiderations?: ClaimDraftingConsiderations;
+  draftingOpportunities?: DraftingOpportunity[];
+  conceptMappedCoverageSummary?: ConceptMappedCoverageSummary[];
+  strategicReviewFocus?: StrategicReviewFocus;
   finalAssessment: {
     decision: string;
     confidence: string;
@@ -1005,6 +1058,481 @@ function buildAttorneyReviewFocus(
   ].filter(Boolean).join(' ');
 }
 
+interface ClaimFocusCandidate {
+  title: string;
+  linkedFeatures: string[];
+  linkedConcept?: string;
+  claimableSummary?: string;
+  importance: ClaimConcept['importance'];
+  mappedCoverage: number;
+  distributedCoverage: number;
+  relationshipMapped: boolean;
+  closestReferences: string[];
+  unmappedFeatures: AttorneyReportFeatureSummary[];
+  partiallyMappedFeatures: AttorneyReportFeatureSummary[];
+  score: number;
+}
+
+const CLAIM_DRAFTING_PREFIXES = [
+  'Consider emphasizing',
+  'Consider reviewing',
+  'Consider separating',
+  'Consider protecting',
+  'Consider avoiding reliance on',
+];
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value * 100)));
+}
+
+function featureByText(featureSummaries: AttorneyReportFeatureSummary[], feature: string): AttorneyReportFeatureSummary | undefined {
+  const normalized = cleanText(feature).toLowerCase();
+  return featureSummaries.find(item => item.feature.toLowerCase() === normalized);
+}
+
+function rowsForFeature(comparisons: AttorneyReportPatentComparison[], feature: string): AttorneyReportFeatureRow[] {
+  return comparisons.flatMap(comparison => comparison.rows.filter(row => row.userFeature === feature));
+}
+
+function featureMappedFactor(comparisons: AttorneyReportPatentComparison[], feature: string): number {
+  const rows = rowsForFeature(comparisons, feature);
+  if (!rows.length) return 0;
+  return rows.reduce((best, row) => {
+    const value = row.status === 'Present'
+      ? (row.evidenceStrength === 'Strong' ? 1 : 0.75)
+      : row.status === 'Partial'
+        ? 0.5
+        : row.status === 'Unknown'
+          ? 0.1
+          : 0;
+    return Math.max(best, value);
+  }, 0);
+}
+
+function featurePriorityWeight(feature: AttorneyReportFeatureSummary): number {
+  if (feature.importance === 'core_inventive') return 1.2;
+  if (feature.importance === 'secondary_implementation') return 0.75;
+  return 0.35;
+}
+
+function featureLabel(feature: AttorneyReportFeatureSummary | string): string {
+  if (typeof feature === 'string') return cleanText(feature);
+  return `${feature.featureNumber} (${feature.feature})`;
+}
+
+function conciseList(items: string[], max = 3): string {
+  const values = items.map(item => cleanText(item)).filter(Boolean).slice(0, max);
+  if (!values.length) return '';
+  if (values.length === 1) return values[0];
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values[values.length - 1]}`;
+}
+
+function inventionTypeHint(stage0: NormalizedIdea, featureSummaries: AttorneyReportFeatureSummary[]): string {
+  const text = [
+    (stage0 as any).inventionType,
+    (stage0 as any).invention_type,
+    (stage0 as any).technicalField,
+    (stage0 as any).technical_field,
+    stage0.searchQuery,
+    ...featureSummaries.map(feature => feature.feature),
+  ].join(' ').toLowerCase();
+  if (/\b(software|controller|algorithm|model|data|signal|workflow|processor|ai|machine learning)\b/.test(text)) return 'data/control relationship';
+  if (/\b(mechanical|housing|assembly|linkage|gear|valve|joint|structural|component)\b/.test(text)) return 'structural cooperation between components';
+  if (/\b(chemical|pharma|pharmaceutical|composition|formulation|compound|polymer|release|excipient)\b/.test(text)) return 'composition, release, process, and measurable performance constraints';
+  if (/\b(manufactur|fabricat|synthesis|process sequence|controlled transformation|treatment step)\b/.test(text)) return 'process sequence and controlled transformation';
+  return 'cooperative technical relationship';
+}
+
+function hasMinimumClaimPositioningEvidence(
+  comparisons: AttorneyReportPatentComparison[],
+  featureSummaries: AttorneyReportFeatureSummary[],
+  mapping: ClaimConceptMapping[]
+): boolean {
+  if (!comparisons.length || !featureSummaries.length) return false;
+  const mappedRows = comparisons.flatMap(comparison => comparison.rows)
+    .filter(row => row.status === 'Present' || row.status === 'Partial');
+  const usefulEvidenceRows = mappedRows.filter(row => row.evidenceStrength === 'Strong' || row.evidenceStrength === 'Moderate');
+  if (mapping.some(item => item.totalFeatures > 0 && (item.coverage > 0 || item.distributedCoverage > 0))) return true;
+  return usefulEvidenceRows.length >= 2 || (mappedRows.length >= 1 && featureSummaries.length <= 2);
+}
+
+function buildFallbackFocusCandidates(
+  featureSummaries: AttorneyReportFeatureSummary[],
+  comparisons: AttorneyReportPatentComparison[]
+): ClaimFocusCandidate[] {
+  const groups = new Map<AttorneyReportFeatureType, AttorneyReportFeatureSummary[]>();
+  for (const feature of featureSummaries.filter(item => item.importance !== 'optional_embodiment')) {
+    if (!groups.has(feature.type)) groups.set(feature.type, []);
+    groups.get(feature.type)?.push(feature);
+  }
+  return Array.from(groups.entries()).map(([type, features]) => {
+    const weightedTotal = features.reduce((sum, feature) => sum + featurePriorityWeight(feature), 0) || 1;
+    const weightedMapped = features.reduce((sum, feature) => sum + featurePriorityWeight(feature) * featureMappedFactor(comparisons, feature.feature), 0);
+    const mappedCoverage = Math.max(0, Math.min(1, weightedMapped / weightedTotal));
+    const unmappedFeatures = features.filter(feature => featureMappedFactor(comparisons, feature.feature) < 0.25);
+    const partiallyMappedFeatures = features.filter(feature => {
+      const mapped = featureMappedFactor(comparisons, feature.feature);
+      return mapped >= 0.25 && mapped < 0.9;
+    });
+    const references = Array.from(new Set(features
+      .flatMap(feature => comparisons.filter(comparison => comparison.rows.some(row => row.userFeature === feature.feature && (row.status === 'Present' || row.status === 'Partial'))).map(comparison => comparison.publicationNumber))))
+      .slice(0, 3);
+    const typeLabel = type === 'novelty_candidate'
+      ? 'novelty-candidate features'
+      : type === 'core_technical'
+        ? 'core technical features'
+        : type === 'implementation'
+          ? 'implementation features'
+          : 'generic features needing support';
+    const importance: ClaimConcept['importance'] = type === 'implementation' ? 'secondary' : 'primary';
+    return {
+      title: `Focus on ${typeLabel}: ${conciseList(features.map(featureLabel), 2)}`,
+      linkedFeatures: features.map(feature => feature.feature),
+      importance,
+      mappedCoverage,
+      distributedCoverage: mappedCoverage,
+      relationshipMapped: false,
+      closestReferences: references,
+      unmappedFeatures,
+      partiallyMappedFeatures,
+      score: (1 - mappedCoverage) * 1.4 + features.reduce((sum, feature) => sum + featurePriorityWeight(feature), 0) / Math.max(1, features.length),
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+
+function buildClaimFocusCandidates(
+  concepts: ClaimConcept[],
+  mapping: ClaimConceptMapping[],
+  featureSummaries: AttorneyReportFeatureSummary[],
+  comparisons: AttorneyReportPatentComparison[]
+): ClaimFocusCandidate[] {
+  if (!concepts.length) return buildFallbackFocusCandidates(featureSummaries, comparisons);
+  return concepts.map((concept, index) => {
+    const mapped = mapping.find(item => item.claimConceptTitle === concept.title);
+    const features = concept.linkedFeatures
+      .map(feature => featureByText(featureSummaries, feature))
+      .filter((feature): feature is AttorneyReportFeatureSummary => Boolean(feature));
+    const mappedCoverage = Math.max(0, Math.min(1, mapped?.coverage ?? 0));
+    const distributedCoverage = Math.max(0, Math.min(1, mapped?.distributedCoverage ?? mappedCoverage));
+    const unmappedFeatures = features.filter(feature => featureMappedFactor(comparisons, feature.feature) < 0.25);
+    const partiallyMappedFeatures = features.filter(feature => {
+      const mappedFactor = featureMappedFactor(comparisons, feature.feature);
+      return mappedFactor >= 0.25 && mappedFactor < 0.9;
+    });
+    const importanceWeight = concept.importance === 'primary' ? 1.4 : concept.importance === 'secondary' ? 1 : 0.55;
+    const relationshipGap = mapped?.relationshipMapped ? 0 : 0.55;
+    const noveltyWeight = features.some(feature => feature.type === 'novelty_candidate') ? 0.35 : 0;
+    return {
+      title: concept.claimableSummary || concept.title,
+      linkedFeatures: concept.linkedFeatures,
+      linkedConcept: concept.title,
+      claimableSummary: concept.claimableSummary,
+      importance: concept.importance || (index === 0 ? 'primary' : 'secondary'),
+      mappedCoverage,
+      distributedCoverage,
+      relationshipMapped: Boolean(mapped?.relationshipMapped),
+      closestReferences: [mapped?.bestReference].filter(Boolean) as string[],
+      unmappedFeatures,
+      partiallyMappedFeatures,
+      score: importanceWeight + (1 - mappedCoverage) + relationshipGap + noveltyWeight,
+    };
+  }).sort((a, b) => b.score - a.score);
+}
+
+function conceptOverlap(a: ClaimFocusCandidate, b: ClaimFocusCandidate): number {
+  const left = new Set(a.linkedFeatures.map(item => item.toLowerCase()));
+  const right = new Set(b.linkedFeatures.map(item => item.toLowerCase()));
+  if (!left.size || !right.size) return 0;
+  const intersection = Array.from(left).filter(item => right.has(item)).length;
+  return intersection / Math.min(left.size, right.size);
+}
+
+function focusSentence(candidate: ClaimFocusCandidate, fallbackHint: string): string {
+  const features = candidate.unmappedFeatures.length || candidate.partiallyMappedFeatures.length
+    ? [...candidate.unmappedFeatures, ...candidate.partiallyMappedFeatures].slice(0, 3).map(featureLabel)
+    : candidate.linkedFeatures.slice(0, 3);
+  const base = cleanText(candidate.title || candidate.linkedConcept, conciseList(features, 3));
+  const featurePart = features.length ? ` centered on ${conciseList(features, 3)}` : '';
+  const relationshipPart = candidate.relationshipMapped
+    ? ' while verifying whether the mapped relationship is actually disclosed in the full text'
+    : ` with emphasis on the ${fallbackHint} that remains incompletely mapped`;
+  return reportSafeText(`${base}${featurePart}${relationshipPart}.`);
+}
+
+function manualReviewClaimPositioning(
+  comparisons: AttorneyReportPatentComparison[],
+  publicClosestCitation: AttorneyReportCitation | null
+): {
+  claimPositioningAnalysis: ClaimPositioningAnalysis;
+  claimDraftingConsiderations: ClaimDraftingConsiderations;
+  draftingOpportunities: DraftingOpportunity[];
+  conceptMappedCoverageSummary: ConceptMappedCoverageSummary[];
+  strategicReviewFocus: StrategicReviewFocus;
+} {
+  const reference = publicClosestCitation?.publicationNumber || comparisons[0]?.publicationNumber || 'Requires full-text review';
+  const message = 'Mapped evidence is below the confidence threshold for automated claim-positioning guidance; manual review of the source records is required.';
+  return {
+    claimPositioningAnalysis: {
+      primaryClaimFocus: message,
+      weakClaimAreas: [],
+      avoidRelyingSolelyOn: [],
+      remainingInventiveCore: message,
+      whyStillDistinguishable: message,
+      reasoning: 'The reviewed mappings do not contain enough affirmative feature or concept evidence to generate factual claim-positioning guidance.',
+    },
+    claimDraftingConsiderations: {
+      independentClaimFocus: 'Consider reviewing the complete source records before selecting an independent claim focus.',
+      dependentClaimIdeas: [],
+      fallbackClaimIdeas: [],
+      reviewBeforeDrafting: ['Consider reviewing full claims, detailed descriptions, drawings, family records, and non-patent literature before drafting.'],
+    },
+    draftingOpportunities: [{
+      title: 'Manual review required',
+      opportunityType: 'optional',
+      linkedFeatures: [],
+      explanation: message,
+    }],
+    conceptMappedCoverageSummary: [],
+    strategicReviewFocus: {
+      highestPriorityReference: reference,
+      reviewReason: 'Available mapped evidence is not strong enough to rank claim-positioning opportunities without full-text review.',
+      highestOverlap: reference,
+      lowestOverlap: '-',
+      criticalRelationshipToVerify: 'Manual review required before identifying a critical relationship.',
+      recommendedFullTextReview: [reference].filter(item => item !== 'Requires full-text review'),
+      remainingUncertainties: [message],
+    },
+  };
+}
+
+function buildConceptMappedCoverageSummary(candidates: ClaimFocusCandidate[], mapping: ClaimConceptMapping[]): ConceptMappedCoverageSummary[] {
+  return candidates
+    .filter(candidate => candidate.linkedConcept || mapping.some(item => item.claimConceptTitle === candidate.linkedConcept))
+    .map(candidate => {
+      const mappedCoveragePercent = clampPercent(candidate.distributedCoverage);
+      const singleReferenceMappedCoveragePercent = clampPercent(candidate.mappedCoverage);
+      const distributedMappedCoveragePercent = clampPercent(candidate.distributedCoverage);
+      const mappingLevel: ConceptMappingLevel = candidate.relationshipMapped || singleReferenceMappedCoveragePercent >= 75
+        ? 'High'
+        : singleReferenceMappedCoveragePercent >= 35 || distributedMappedCoveragePercent >= 50
+          ? 'Moderate'
+          : 'Limited';
+      return {
+        conceptTitle: candidate.linkedConcept || candidate.title,
+        mappedCoveragePercent,
+        singleReferenceMappedCoveragePercent,
+        distributedMappedCoveragePercent,
+        relationshipMapped: candidate.relationshipMapped,
+        mappingLevel,
+        closestReferences: candidate.closestReferences,
+      };
+    });
+}
+
+function safeDraftingRecommendation(prefix: typeof CLAIM_DRAFTING_PREFIXES[number], body: string): string {
+  const cleaned = reportSafeText(body)
+    .replace(/\bClaim\s+/gi, 'Address ')
+    .replace(/\bPatent\s+/gi, 'Protect ')
+    .replace(/\bYou should file\b/gi, 'Consider reviewing filing options for')
+    .replace(/\bThis will be patentable\b/gi, 'This requires professional review')
+    .replace(/\bGuaranteed\b/gi, 'Requires review')
+    .trim();
+  return `${prefix} ${cleaned.replace(/^\bconsider\s+/i, '').replace(/\.$/, '')}.`;
+}
+
+function buildRemainingInventiveCore(
+  primary: ClaimFocusCandidate,
+  secondary: ClaimFocusCandidate | undefined,
+  candidates: ClaimFocusCandidate[],
+  comparisons: AttorneyReportPatentComparison[],
+  featureSummaries: AttorneyReportFeatureSummary[]
+): string {
+  const mappedFeatureLabels = featureSummaries
+    .filter(feature => featureMappedFactor(comparisons, feature.feature) >= 0.9)
+    .slice(0, 3)
+    .map(feature => feature.feature);
+  const focusFeatures = [primary, secondary]
+    .filter(Boolean)
+    .flatMap(candidate => [...(candidate?.unmappedFeatures || []), ...(candidate?.partiallyMappedFeatures || [])])
+    .filter((feature, index, array) => array.findIndex(item => item.feature === feature.feature) === index)
+    .slice(0, 4);
+  const fallbackFeatures = featureSummaries
+    .filter(feature => feature.importance === 'core_inventive' || feature.type === 'novelty_candidate')
+    .slice(0, 4);
+  const relationshipGaps = candidates
+    .filter(candidate => !candidate.relationshipMapped)
+    .slice(0, 2)
+    .map(candidate => candidate.linkedConcept || candidate.title);
+  const disclosed = mappedFeatureLabels.length ? conciseList(mappedFeatureLabels, 3) : 'some submitted features';
+  const remaining = (focusFeatures.length ? focusFeatures : fallbackFeatures).map(feature => feature.feature);
+  const interaction = remaining.length ? conciseList(remaining, 4) : (relationshipGaps.length ? conciseList(relationshipGaps, 2) : 'the submitted feature interaction');
+  return reportSafeText(`Although the reviewed references disclose ${disclosed} individually, the retrieved evidence does not identify the complete interaction between ${interaction} as described in the submitted invention.`);
+}
+
+function buildClaimPositioningIntelligence(
+  stage0: NormalizedIdea,
+  concepts: ClaimConcept[],
+  mapping: ClaimConceptMapping[],
+  featureSummaries: AttorneyReportFeatureSummary[],
+  comparisons: AttorneyReportPatentComparison[],
+  publicClosestCitation: AttorneyReportCitation | null
+): {
+  claimPositioningAnalysis: ClaimPositioningAnalysis;
+  claimDraftingConsiderations: ClaimDraftingConsiderations;
+  draftingOpportunities: DraftingOpportunity[];
+  conceptMappedCoverageSummary: ConceptMappedCoverageSummary[];
+  strategicReviewFocus: StrategicReviewFocus;
+} {
+  if (!hasMinimumClaimPositioningEvidence(comparisons, featureSummaries, mapping)) {
+    return manualReviewClaimPositioning(comparisons, publicClosestCitation);
+  }
+
+  const hint = inventionTypeHint(stage0, featureSummaries);
+  const candidates = buildClaimFocusCandidates(concepts, mapping, featureSummaries, comparisons);
+  const primary = candidates[0] || buildFallbackFocusCandidates(featureSummaries, comparisons)[0];
+  if (!primary) return manualReviewClaimPositioning(comparisons, publicClosestCitation);
+  const secondary = candidates.find(candidate =>
+    candidate !== primary &&
+    conceptOverlap(primary, candidate) <= 0.35 &&
+    candidate.score >= primary.score - 0.8 &&
+    (candidate.unmappedFeatures.length > 0 || candidate.partiallyMappedFeatures.length > 0 || !candidate.relationshipMapped)
+  );
+  const weakClaimAreas = featureSummaries
+    .filter(feature => feature.importance !== 'core_inventive' || feature.type === 'generic_weak')
+    .filter(feature => featureMappedFactor(comparisons, feature.feature) >= 0.5 || feature.type === 'generic_weak')
+    .slice(0, 5)
+    .map(featureLabel);
+  const avoidRelyingSolelyOn = featureSummaries
+    .filter(feature => feature.type === 'generic_weak' || featureMappedFactor(comparisons, feature.feature) >= 0.9)
+    .slice(0, 5)
+    .map(feature => `Avoid relying solely on ${featureLabel(feature)} as the broadest claim focus.`);
+  const remainingInventiveCore = buildRemainingInventiveCore(primary, secondary, candidates, comparisons, featureSummaries);
+  const whyStillDistinguishable = remainingInventiveCore;
+
+  const dependentIdeas = [...primary.partiallyMappedFeatures, ...primary.unmappedFeatures]
+    .slice(0, 4)
+    .map(feature => safeDraftingRecommendation('Consider protecting', `${featureLabel(feature)} as a dependent or narrower implementation detail`));
+  const fallbackIdeas = (secondary ? [...secondary.partiallyMappedFeatures, ...secondary.unmappedFeatures] : featureSummaries.filter(feature => feature.importance === 'secondary_implementation'))
+    .slice(0, 3)
+    .map(feature => safeDraftingRecommendation('Consider separating', `${featureLabel(feature)} into fallback embodiments if the primary focus is closely mapped`));
+  const reviewBeforeDrafting = [
+    publicClosestCitation ? safeDraftingRecommendation('Consider reviewing', `${publicClosestCitation.publicationNumber} first because it has the strongest mapped overlap`) : '',
+    ...candidates.filter(candidate => !candidate.relationshipMapped).slice(0, 2).map(candidate =>
+      safeDraftingRecommendation('Consider reviewing', `whether the full text discloses the relationship in ${candidate.linkedConcept || candidate.title}`)
+    ),
+  ].filter(Boolean);
+
+  const opportunities: DraftingOpportunity[] = [
+    {
+      title: primary.linkedConcept || 'Primary claim focus',
+      opportunityType: 'primary',
+      linkedFeatures: primary.linkedFeatures,
+      linkedConcept: primary.linkedConcept,
+      explanation: safeDraftingRecommendation('Consider emphasizing', focusSentence(primary, hint)),
+    },
+    ...(secondary ? [{
+      title: secondary.linkedConcept || 'Secondary claim focus',
+      opportunityType: 'secondary' as const,
+      linkedFeatures: secondary.linkedFeatures,
+      linkedConcept: secondary.linkedConcept,
+      explanation: safeDraftingRecommendation('Consider separating', focusSentence(secondary, hint)),
+    }] : []),
+    ...featureSummaries
+      .filter(feature => feature.importance === 'optional_embodiment')
+      .slice(0, 2)
+      .map(feature => ({
+        title: featureLabel(feature),
+        opportunityType: 'optional' as const,
+        linkedFeatures: [feature.feature],
+        explanation: safeDraftingRecommendation('Consider protecting', `${featureLabel(feature)} as an optional embodiment if supported by the disclosure`),
+      })),
+    ...avoidRelyingSolelyOn.slice(0, 2).map(item => ({
+      title: item.replace(/^Avoid relying solely on\s+/i, '').replace(/\sas the broadest claim focus\.$/i, ''),
+      opportunityType: 'avoid_relying_solely_on' as const,
+      linkedFeatures: [],
+      explanation: safeDraftingRecommendation('Consider avoiding reliance on', item.replace(/^Avoid relying solely on\s+/i, '').replace(/\.$/, '')),
+    })),
+  ];
+
+  const closestComparison = publicClosestCitation
+    ? comparisons.find(item => item.publicationNumber === publicClosestCitation.publicationNumber)
+    : undefined;
+  const lowestOverlap = comparisons.slice().sort((a, b) => a.coverage.score - b.coverage.score)[0];
+  const criticalRelationship = candidates.find(candidate => !candidate.relationshipMapped);
+  const recommendedFullTextReview = Array.from(new Set([
+    publicClosestCitation?.publicationNumber,
+    ...candidates.flatMap(candidate => candidate.closestReferences),
+    ...comparisons.filter(item => item.rows.some(row => row.status === 'Unknown')).map(item => item.publicationNumber),
+  ].filter(Boolean) as string[])).slice(0, 5);
+
+  return {
+    claimPositioningAnalysis: {
+      primaryClaimFocus: focusSentence(primary, hint),
+      secondaryClaimFocus: secondary ? focusSentence(secondary, hint) : undefined,
+      weakClaimAreas,
+      avoidRelyingSolelyOn,
+      remainingInventiveCore,
+      whyStillDistinguishable,
+      reasoning: reportSafeText(`Derived from mapped coverage, relationship gaps, and unmapped core or novelty-candidate features. The guidance identifies areas that appear less mapped by retrieved evidence and is not a legal conclusion.`),
+    },
+    claimDraftingConsiderations: {
+      independentClaimFocus: safeDraftingRecommendation('Consider emphasizing', focusSentence(primary, hint)),
+      dependentClaimIdeas: dependentIdeas,
+      fallbackClaimIdeas: fallbackIdeas,
+      reviewBeforeDrafting,
+    },
+    draftingOpportunities: opportunities,
+    conceptMappedCoverageSummary: buildConceptMappedCoverageSummary(candidates, mapping),
+    strategicReviewFocus: {
+      highestPriorityReference: publicClosestCitation?.publicationNumber || '-',
+      reviewReason: publicClosestCitation
+        ? reportSafeText(`Highest weighted overlap with mapped features and concept coverage${closestComparison ? `; review ${closestComparison.publicationNumber} against ${primary.linkedConcept || primary.title}` : ''}.`)
+        : 'No mapped citation was strong enough to identify a highest-priority reference.',
+      highestOverlap: publicClosestCitation?.publicationNumber || '-',
+      lowestOverlap: lowestOverlap?.publicationNumber || '-',
+      criticalRelationshipToVerify: criticalRelationship
+        ? reportSafeText(`Verify whether the full text discloses the complete relationship for ${criticalRelationship.linkedConcept || criticalRelationship.title}.`)
+        : 'No unmapped concept relationship was identified from the mapped records.',
+      recommendedFullTextReview,
+      remainingUncertainties: [
+        ...candidates.filter(candidate => !candidate.relationshipMapped).slice(0, 2).map(candidate => `Relationship mapping for ${candidate.linkedConcept || candidate.title}`),
+        ...featureSummaries.filter(feature => rowsForFeature(comparisons, feature.feature).some(row => row.status === 'Unknown')).slice(0, 3).map(feature => `${featureLabel(feature)} requires full-text confirmation`),
+      ],
+    },
+  };
+}
+
+function closestCitationPriority(
+  citation: AttorneyReportCitation,
+  comparisons: AttorneyReportPatentComparison[],
+  conceptMapping: ClaimConceptMapping[],
+  featureSummaries: AttorneyReportFeatureSummary[]
+): number {
+  const comparison = comparisons.find(item => item.publicationNumber === citation.publicationNumber);
+  if (!comparison) return Number(citation.relevanceScore || 0);
+  const importantFeatures = featureSummaries.filter(feature => feature.importance === 'core_inventive' || feature.type === 'novelty_candidate');
+  const weightedTotal = importantFeatures.reduce((sum, feature) => sum + featurePriorityWeight(feature), 0) || 1;
+  const weightedAtomicCoverage = importantFeatures.reduce((sum, feature) => {
+    const row = comparison.rows.find(item => item.userFeature === feature.feature);
+    const statusWeight = row?.status === 'Present' ? 1 : row?.status === 'Partial' ? 0.5 : row?.status === 'Unknown' ? 0.1 : 0;
+    const evidenceWeight = row?.evidenceStrength === 'Strong' ? 1 : row?.evidenceStrength === 'Moderate' ? 0.8 : row?.evidenceStrength === 'Weak' ? 0.45 : 0;
+    return sum + featurePriorityWeight(feature) * statusWeight * evidenceWeight;
+  }, 0) / weightedTotal;
+  const conceptScore = conceptMapping.reduce((best, concept) => {
+    const isBestReference = canonicalPatentNumber(concept.bestReference) === canonicalPatentNumber(citation.publicationNumber);
+    const relationshipBoost = isBestReference && concept.relationshipMapped ? 0.25 : 0;
+    return Math.max(best, isBestReference ? concept.coverage + relationshipBoost : 0);
+  }, 0);
+  const evidenceScore = comparison.rows.reduce((sum, row) => {
+    if (row.status !== 'Present' && row.status !== 'Partial') return sum;
+    return sum + (row.evidenceStrength === 'Strong' ? 1 : row.evidenceStrength === 'Moderate' ? 0.7 : 0.35);
+  }, 0) / Math.max(1, comparison.rows.length);
+  const categoryBoost = citation.matchCategory === 'direct' ? 0.15 : citation.matchCategory === 'component' ? 0.08 : citation.matchCategory === 'borderline' ? 0.02 : 0;
+  const rolePenalty = /remote|background/i.test(citation.referenceRole) ? 0.06 : 0;
+  return weightedAtomicCoverage * 4 + conceptScore * 3 + evidenceScore * 1.5 + Number(citation.relevanceScore || 0) + categoryBoost - rolePenalty;
+}
+
 function sanitizeRiskItem(value: unknown): string {
   return reportSafeText(value)
     .replace(/\bNot Novel determination indicates\b/gi, 'Preliminary mapped-overlap assessment indicates')
@@ -1105,20 +1633,21 @@ function confidenceFromCounts(counts: AttorneyReportModel['counts'], quality = '
 function referenceRoleFor(matchCategory: AttorneyReportCitation['matchCategory'], coverageScore: number, rows: AttorneyReportFeatureRow[] = []): string {
   // Keep the public role consistent with the feature mapping: a citation cannot be
   // presented as an invention-level reference if no feature actually maps to it.
-  if (coverageScore <= 0) return 'Background reference for review';
+  if (coverageScore <= 0) return matchCategory === 'borderline' ? 'Requires full-text review' : 'Remote background reference';
   const mappedText = rows
     .filter(row => row.status === 'Present' || row.status === 'Partial')
     .map(row => `${row.userFeature} ${row.patentDisclosure}`)
     .join(' ')
     .toLowerCase();
   if (matchCategory === 'direct') return 'Closest invention-level reference';
-  if (/\b(smartphone|mobile|qr|barcode|optical verification|digital verification|readable)\b/.test(mappedText)) return 'Smart verification reference';
-  if (/\b(indicator|humidity-responsive|colorimetric|visible change|exposure duration|threshold)\b/.test(mappedText)) return 'Indicator / exposure-response reference';
-  if (/\b(desiccant|moisture-proof|moisture control|humidity ingress|barrier|seal|isolation)\b/.test(mappedText)) return 'Desiccant / moisture-control reference';
-  if (/\b(blister|cavity|unit-dose|tablet|capsule|packaging)\b/.test(mappedText)) return 'Closest structural packaging reference';
-  if (matchCategory === 'component') return coverageScore >= 0.35 ? 'Component-level reference' : 'Remote background reference';
-  if (matchCategory === 'borderline') return 'Borderline technical reference';
-  return 'Shortlisted background reference';
+  if (/\b(composition|formulation|compound|polymer|material|chemical|pharma|drug|excipient|release)\b/.test(mappedText)) return 'Material / composition reference';
+  if (/\b(sensor|sensing|monitor|detect|measurement|indicator|threshold|signal)\b/.test(mappedText)) return 'Sensor / monitoring reference';
+  if (/\b(control|controller|software|algorithm|processor|model|data|workflow|logic|machine learning|ai|smartphone|mobile|qr|barcode|readable|verification)\b/.test(mappedText)) return 'Control / software reference';
+  if (/\b(structural|structure|housing|assembly|component|member|layer|seal|barrier|cavity|mechanical|valve|joint)\b/.test(mappedText)) return 'Structural reference';
+  if (/\b(manufactur|process|fabricat|synthesis|curing|treatment|sequence|transformation)\b/.test(mappedText)) return 'Manufacturing / process reference';
+  if (matchCategory === 'component') return coverageScore >= 0.35 ? 'Closest component reference' : 'Remote background reference';
+  if (matchCategory === 'borderline') return coverageScore >= 0.2 ? 'Requires full-text review' : 'Remote background reference';
+  return 'Remote background reference';
 }
 
 function reviewPriorityFor(matchCategory: AttorneyReportCitation['matchCategory'], coverageScore: number, relevanceScore: number | null): string {
@@ -1285,7 +1814,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       title: firstText(item?.title, item?.invention_title, 'Untitled Patent'),
       relevanceScore: numberScore(item?.relevanceScore ?? item?.score ?? item?.relevance),
       evidenceQuality: cleanText(item?.evidence_quality, 'not mapped'),
-      referenceRole: 'Shortlisted background reference',
+      referenceRole: 'Requires full-text review',
       reviewPriority: reviewPriorityFor('rejected', 0, numberScore(item?.relevanceScore ?? item?.score ?? item?.relevance)),
       matchCategory: 'rejected' as const,
       matchCategoryLabel: 'Not mapped / shortlisted',
@@ -1305,17 +1834,14 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
   const featureSummaries = buildFeatureSummaries(stage0, searchRun.inventionDescription || '');
   const genericFeatures = featureSummaries.filter(feature => feature.type === 'generic_weak').map(feature => feature.feature);
   const claimConcepts = normalizeClaimConcepts(stage0);
-  const publicClosestCitation = [...citations].sort((a, b) => {
-    const priority = (citation: AttorneyReportCitation) => {
-      const categoryWeight = citation.matchCategory === 'direct' ? 3 : citation.matchCategory === 'component' ? 2 : citation.matchCategory === 'borderline' ? 1 : 0;
-      const comparison = comparisons.find(item => item.publicationNumber === citation.publicationNumber);
-      return categoryWeight * 10 + Number(comparison?.coverage.score || 0) * 5 + Number(citation.relevanceScore || 0);
-    };
-    return priority(b) - priority(a);
-  })[0] || null;
   const claimConceptMapping = Array.isArray(stage4?.claimConceptMapping) && stage4.claimConceptMapping.length
     ? stage4.claimConceptMapping as ClaimConceptMapping[]
     : buildFallbackConceptMapping(claimConcepts, comparisons, featureSummaries);
+  const publicClosestCitation = [...citations].sort((a, b) =>
+    closestCitationPriority(b, comparisons, claimConceptMapping, featureSummaries) -
+    closestCitationPriority(a, comparisons, claimConceptMapping, featureSummaries)
+  )[0] || null;
+  const claimPositioningIntelligence = buildClaimPositioningIntelligence(stage0, claimConcepts, claimConceptMapping, featureSummaries, comparisons, publicClosestCitation);
   const mainDifferentiator = buildMainDifferentiator(stage0, claimConcepts, claimConceptMapping, featureSummaries);
   const attorneyReviewFocus = buildAttorneyReviewFocus(claimConcepts, claimConceptMapping, featureSummaries, publicClosestCitation);
   const riskAssessment = deterministicRiskAssessment(comparisons, featureSummaries, counts);
@@ -1397,8 +1923,9 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '2.2', title: 'List of Other Shortlisted Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
       { number: '4', title: 'Repeated Inventor / Entity Signals' },
-      { number: '5', title: 'Claim-Positioning Observations' },
-      { number: '6', title: 'Limitations and Next Steps' },
+      { number: '5', title: 'Claim-Positioning Analysis' },
+      { number: '6', title: 'Claim-Positioning Observations' },
+      { number: '7', title: 'Limitations and Next Steps' },
     ],
     featureSummaries,
     genericFeatureRisk: {
@@ -1425,6 +1952,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     claimConceptMapping,
     mainDifferentiator,
     attorneyReviewFocus,
+    claimPositioningAnalysis: claimPositioningIntelligence.claimPositioningAnalysis,
+    claimDraftingConsiderations: claimPositioningIntelligence.claimDraftingConsiderations,
+    draftingOpportunities: claimPositioningIntelligence.draftingOpportunities,
+    conceptMappedCoverageSummary: claimPositioningIntelligence.conceptMappedCoverageSummary,
+    strategicReviewFocus: claimPositioningIntelligence.strategicReviewFocus,
     finalAssessment: {
       decision: riskAssessment.headline,
       confidence: cleanText(stage4?.confidence || stage4?.executive_summary?.confidence, 'Low'),

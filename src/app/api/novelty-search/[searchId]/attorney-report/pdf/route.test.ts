@@ -209,6 +209,47 @@ describe('GET attorney report PDF', () => {
         typeLabel: 'Core technical',
         genericWarning: '',
       })),
+      mainDifferentiator: 'Controller-driven sensing to curing relationship with MAIN_DIFFERENTIATOR_WRAP_MARKER',
+      attorneyReviewFocus: 'Open US-2026-000001-A1 first and compare the mapped control relationship before drafting ATTORNEY_REVIEW_WRAP_MARKER',
+      potentialDifferentiationSpace: 'Potential differentiation space appears to lie in the integrated control relationship with KEY_TAKEAWAY_WRAP_MARKER.',
+      claimPositioningAnalysis: {
+        primaryClaimFocus: 'Controller-driven sensing to curing relationship.',
+        weakClaimAreas: ['Generic sensor alone.'],
+        avoidRelyingSolelyOn: ['Avoid relying solely on generic sensor language as the broadest claim focus.'],
+        remainingInventiveCore: 'Although the reviewed references disclose sensors individually, the retrieved evidence does not identify the complete interaction between sensing, curing, and useful-life updating.',
+        whyStillDistinguishable: 'Although the reviewed references disclose sensors individually, the retrieved evidence does not identify the complete interaction between sensing, curing, and useful-life updating.',
+        reasoning: 'Derived from mapped coverage and relationship gaps.',
+      },
+      claimDraftingConsiderations: {
+        independentClaimFocus: 'Consider emphasizing the controller-driven sensing to curing relationship.',
+        dependentClaimIdeas: ['Consider protecting localized curing as a narrower implementation detail.'],
+        fallbackClaimIdeas: ['Consider separating useful-life updating into fallback embodiments.'],
+        reviewBeforeDrafting: ['Consider reviewing US-2026-000001-A1 first.'],
+      },
+      draftingOpportunities: [{
+        title: 'Controller-driven repair',
+        opportunityType: 'primary',
+        linkedFeatures: ['Submitted feature 1'],
+        explanation: 'Consider emphasizing the controller-driven repair workflow.',
+      }],
+      conceptMappedCoverageSummary: [{
+        conceptTitle: 'Controller-driven repair',
+        mappedCoveragePercent: 60,
+        singleReferenceMappedCoveragePercent: 50,
+        distributedMappedCoveragePercent: 70,
+        relationshipMapped: false,
+        mappingLevel: 'Moderate',
+        closestReferences: ['US-2026-000001-A1'],
+      }],
+      strategicReviewFocus: {
+        highestPriorityReference: 'US-2026-000001-A1',
+        reviewReason: 'Highest overlap with the controller-driven workflow while leaving the sensing-to-curing relationship partially disclosed.',
+        highestOverlap: 'US-2026-000001-A1',
+        lowestOverlap: '-',
+        criticalRelationshipToVerify: 'Verify the sensing-to-curing relationship.',
+        recommendedFullTextReview: ['US-2026-000001-A1'],
+        remainingUncertainties: ['Relationship mapping for controller-driven repair.'],
+      },
       citations: [comparison],
       directCitations: [comparison],
       comparisons: [comparison],
@@ -226,6 +267,12 @@ describe('GET attorney report PDF', () => {
     expect(buffer.toString('latin1')).toContain('Inter-Regular')
     expect(parsed.numpages).toBeGreaterThan(6)
     expect(parsed.text).toContain('High component-combination risk')
+    expect(compactText).toContain('MAIN_DIFFERENTIATOR_WRAP_MARKER')
+    expect(compactText).toContain('ATTORNEY_REVIEW_WRAP_MARKER')
+    expect(compactText).toContain('KEY_TAKEAWAY_WRAP_MARKER')
+    expect(normalizedText).toContain('Claim-Positioning Analysis')
+    expect(normalizedText).toContain('Remaining Inventive Core')
+    expect(normalizedText).toContain('Highest priority reference')
     expect(normalizedText).toContain('Novelty / anticipation risk')
     expect(normalizedText).toContain('Component-combination risk')
     expect(normalizedText).toContain('Evidence strength')

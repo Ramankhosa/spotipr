@@ -183,6 +183,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
 
     expect(model.reportNumber).toMatch(/^PN-NOV-IN-\d{8}-SEARCH12$/);
     expect(model.tableOfContents.map(item => item.title)).toContain('Search Scope and Methodology');
+    expect(model.tableOfContents.map(item => item.title)).toContain('Claim-Positioning Analysis');
     expect(model.tableOfContents.map(item => item.title)).toContain('Claim-Positioning Observations');
     expect(model.tableOfContents).toContainEqual({ number: '1', title: 'Search Overview' });
     expect(model.tableOfContents).toContainEqual({ number: '2', title: 'Citation Analysis' });
@@ -302,6 +303,14 @@ describe('buildNoveltyAttorneyReportModel', () => {
     });
     const renderedModelText = JSON.stringify(model);
     expect(model.publicClosestCitation?.publicationNumber).toBe('IN123A');
+    expect(model.claimPositioningAnalysis?.primaryClaimFocus).toContain('threshold-based irrigation decision rule');
+    expect(model.claimPositioningAnalysis?.remainingInventiveCore).toMatch(/^Although the reviewed references disclose/i);
+    expect(model.claimDraftingConsiderations?.independentClaimFocus).toMatch(/^Consider emphasizing/);
+    expect(model.draftingOpportunities?.some(item => item.opportunityType === 'primary')).toBe(true);
+    expect(model.strategicReviewFocus).toMatchObject({
+      highestPriorityReference: 'IN123A',
+    });
+    expect(model.strategicReviewFocus?.reviewReason).toContain('Highest weighted overlap');
     expect(renderedModelText).not.toMatch(/Mapped, needs review|Absent \/ weak signal|Evidence Confidence|limited available patent data|deterministic fallback|available data does not/i);
   });
 
@@ -407,5 +416,194 @@ describe('buildNoveltyAttorneyReportModel', () => {
       expect.arrayContaining(['LEVOSIL S.P.A.', 'INNORESE AG', 'MULTISORB TECHNOLOGIES'])
     );
     expect(JSON.stringify(first.inventorSignals)).not.toMatch(/\bE\.|\bR\.|Thomas/);
+    expect(first.citations.map(item => item.referenceRole)).not.toEqual(expect.arrayContaining([
+      'Smart verification reference',
+      'Indicator / exposure-response reference',
+      'Desiccant / moisture-control reference',
+      'Closest structural packaging reference',
+    ]));
+    expect(first.citations.map(item => item.referenceRole)).toEqual(expect.arrayContaining([
+      'Structural reference',
+      'Sensor / monitoring reference',
+      'Control / software reference',
+    ]));
+  });
+
+  it('generates primary and secondary claim-positioning guidance from mapped concepts', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'claimfocus123',
+      title: 'Closed-loop coating repair platform',
+      jurisdiction: 'IN',
+      inventionDescription: 'A coating system senses corrosion, estimates repair effect, locally cures a repair material, and updates remaining useful life.',
+      stage0Results: {
+        searchQuery: 'closed loop corrosion coating repair localized curing',
+        inventionFeatures: [
+          'controller-driven healing optimization',
+          'localized UV curing trigger',
+          'self-healing coating chemistry',
+          'remaining useful life update',
+        ],
+        featureDetails: [
+          { feature: 'controller-driven healing optimization', feature_type: 'novelty_candidate' },
+          { feature: 'localized UV curing trigger', feature_type: 'core_technical' },
+          { feature: 'self-healing coating chemistry', feature_type: 'core_technical' },
+          { feature: 'remaining useful life update', feature_type: 'novelty_candidate' },
+        ],
+        claimConcepts: [
+          {
+            title: 'Closed-loop repair control',
+            linkedFeatures: ['controller-driven healing optimization', 'remaining useful life update'],
+            claimableSummary: 'controller-driven closed-loop repair optimization',
+            importance: 'primary',
+          },
+          {
+            title: 'Localized curing subsystem',
+            linkedFeatures: ['localized UV curing trigger'],
+            claimableSummary: 'localized curing trigger subsystem',
+            importance: 'secondary',
+          },
+          {
+            title: 'Coating chemistry',
+            linkedFeatures: ['self-healing coating chemistry'],
+            claimableSummary: 'self-healing coating chemistry',
+            importance: 'fallback',
+          },
+        ],
+      },
+      stage1Results: {
+        retrievalCandidates: [
+          { publicationNumber: 'USCONTROL1', title: 'Corrosion monitoring controller', abstract: 'A controller monitors corrosion and updates useful life.', relevanceScore: 0.88 },
+          { publicationNumber: 'USCURE2', title: 'Localized UV curing', abstract: 'Localized UV curing is triggered for a coating repair region.', relevanceScore: 0.76 },
+        ],
+        aiRelevance: {
+          accepted: [],
+          component: ['USCONTROL1', 'USCURE2'],
+          borderline: [],
+          byPn: {
+            USCONTROL1: { decision: 'component', score: 0.88, rerankScore: 0.88, evidence_quality: 'high' },
+            USCURE2: { decision: 'component', score: 0.76, rerankScore: 0.76, evidence_quality: 'high' },
+          },
+        },
+      },
+      stage35Results: {
+        feature_map: [
+          {
+            pn: 'USCONTROL1',
+            title: 'Corrosion monitoring controller',
+            feature_analysis: [
+              { feature: 'controller-driven healing optimization', status: 'Partial', quote: 'controller monitors corrosion', field: 'abstract' },
+              { feature: 'localized UV curing trigger', status: 'Absent', reason: 'No localized curing.' },
+              { feature: 'self-healing coating chemistry', status: 'Present', quote: 'self-healing coating', field: 'abstract' },
+              { feature: 'remaining useful life update', status: 'Present', quote: 'updates useful life', field: 'abstract' },
+            ],
+          },
+          {
+            pn: 'USCURE2',
+            title: 'Localized UV curing',
+            feature_analysis: [
+              { feature: 'controller-driven healing optimization', status: 'Absent', reason: 'No controller optimization.' },
+              { feature: 'localized UV curing trigger', status: 'Present', quote: 'localized UV curing is triggered', field: 'abstract' },
+              { feature: 'self-healing coating chemistry', status: 'Absent', reason: 'No chemistry.' },
+              { feature: 'remaining useful life update', status: 'Absent', reason: 'No useful life update.' },
+            ],
+          },
+        ],
+      },
+      stage4Results: {
+        claimConceptMapping: [
+          {
+            claimConceptTitle: 'Closed-loop repair control',
+            linkedFeatures: ['controller-driven healing optimization', 'remaining useful life update'],
+            mappedFeatures: 2,
+            totalFeatures: 2,
+            coverage: 0.75,
+            distributedCoverage: 1,
+            bestReference: 'USCONTROL1',
+            relationshipMapped: false,
+            relationshipEvidence: 'Feature overlap without complete closed-loop repair relationship.',
+            relationshipRisk: 'moderate',
+            risk: 'moderate',
+            reason: 'A citation maps most linked features, but the cooperative relationship is not fully disclosed.',
+          },
+          {
+            claimConceptTitle: 'Localized curing subsystem',
+            linkedFeatures: ['localized UV curing trigger'],
+            mappedFeatures: 1,
+            totalFeatures: 1,
+            coverage: 0.5,
+            distributedCoverage: 1,
+            bestReference: 'USCURE2',
+            relationshipMapped: false,
+            relationshipEvidence: '',
+            relationshipRisk: 'moderate',
+            risk: 'moderate',
+            reason: 'Feature is mapped but not integrated with control.',
+          },
+          {
+            claimConceptTitle: 'Coating chemistry',
+            linkedFeatures: ['self-healing coating chemistry'],
+            mappedFeatures: 1,
+            totalFeatures: 1,
+            coverage: 1,
+            distributedCoverage: 1,
+            bestReference: 'USCONTROL1',
+            relationshipMapped: true,
+            relationshipEvidence: 'Self-healing coating is disclosed.',
+            relationshipRisk: 'high',
+            risk: 'high',
+            reason: 'A single reviewed citation maps the linked feature.',
+          },
+        ],
+      },
+    });
+
+    expect(model.claimPositioningAnalysis?.primaryClaimFocus).toContain('controller-driven closed-loop repair optimization');
+    expect(model.claimPositioningAnalysis?.secondaryClaimFocus).toContain('localized curing trigger subsystem');
+    expect(model.claimPositioningAnalysis?.remainingInventiveCore).toMatch(/^Although the reviewed references disclose/i);
+    expect(model.claimPositioningAnalysis?.remainingInventiveCore).toContain('retrieved evidence does not identify the complete interaction');
+    expect(model.claimPositioningAnalysis?.remainingInventiveCore).not.toMatch(/highly innovative|breakthrough|guaranteed|patentable/i);
+    expect(model.conceptMappedCoverageSummary?.find(item => item.conceptTitle === 'Closed-loop repair control')).toMatchObject({
+      mappedCoveragePercent: 100,
+      singleReferenceMappedCoveragePercent: 75,
+      distributedMappedCoveragePercent: 100,
+      mappingLevel: 'High',
+      closestReferences: ['USCONTROL1'],
+    });
+    expect(model.draftingOpportunities?.map(item => item.opportunityType)).toEqual(expect.arrayContaining([
+      'primary',
+      'secondary',
+      'avoid_relying_solely_on',
+    ]));
+    const draftingText = JSON.stringify(model.claimDraftingConsiderations);
+    expect(draftingText).not.toMatch(/\bClaim X\b|\bPatent X\b|You should file|This will be patentable|Guaranteed|Safe to file/i);
+    for (const item of [
+      model.claimDraftingConsiderations?.independentClaimFocus,
+      ...(model.claimDraftingConsiderations?.dependentClaimIdeas || []),
+      ...(model.claimDraftingConsiderations?.fallbackClaimIdeas || []),
+      ...(model.claimDraftingConsiderations?.reviewBeforeDrafting || []),
+    ]) {
+      expect(item).toMatch(/^(Consider emphasizing|Consider reviewing|Consider separating|Consider protecting|Consider avoiding reliance on)/);
+    }
+    expect(model.strategicReviewFocus?.highestPriorityReference).toBe('USCONTROL1');
+    expect(model.strategicReviewFocus?.reviewReason).toContain('Closed-loop repair control');
+  });
+
+  it('marks claim-positioning sections for manual review when mapped evidence is too weak', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'weakevidence123',
+      title: 'Sparse invention',
+      jurisdiction: 'IN',
+      stage0Results: {
+        searchQuery: 'sparse invention',
+        inventionFeatures: ['undocumented control relationship'],
+      },
+      stage1Results: { retrievalCandidates: [] },
+      stage35Results: { feature_map: [] },
+      stage4Results: {},
+    });
+
+    expect(model.claimPositioningAnalysis?.primaryClaimFocus).toContain('manual review');
+    expect(model.claimPositioningAnalysis?.remainingInventiveCore).toContain('manual review');
+    expect(model.strategicReviewFocus?.reviewReason).toContain('not strong enough');
   });
 });

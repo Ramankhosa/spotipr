@@ -682,8 +682,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 ['2.3', 'List of Other Shortlisted Citations'],
                 ['3', 'Applicant / Assignee Landscape'],
                 ['4', 'Repeated Inventor / Entity Signals'],
-                ['5', 'Claim-Positioning Observations'],
-                ['6', 'Limitations and Next Steps'],
+                ['5', 'Claim-Positioning Analysis'],
+                ['6', 'Claim-Positioning Observations'],
+                ['7', 'Limitations and Next Steps'],
               ].map(([number, label]) => (
                 <a key={number} href={`#section-${number.replace('.', '-')}`} className="flex gap-3 text-slate-700 hover:text-blue-700">
                   <span className="w-12 font-semibold">{number}</span>
@@ -973,7 +974,117 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
             <EntityLandscapeBlock landscape={reportData.inventorSignals} />
           </Section>
 
-          <Section id="section-5" title="05 Claim-Positioning Observations" breakBefore>
+          <Section id="section-5" title="05 Claim-Positioning Analysis" breakBefore>
+            {reportData.claimPositioningAnalysis ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">Primary Claim Focus</div>
+                    <p className="mt-2 font-semibold text-slate-950">{reportData.claimPositioningAnalysis.primaryClaimFocus}</p>
+                    {reportData.claimPositioningAnalysis.secondaryClaimFocus && (
+                      <>
+                        <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-blue-700">Secondary Claim Focus</div>
+                        <p className="mt-2 font-semibold text-slate-950">{reportData.claimPositioningAnalysis.secondaryClaimFocus}</p>
+                      </>
+                    )}
+                  </div>
+                  <div className="rounded-sm border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950">
+                    <div className="font-semibold">Remaining Inventive Core</div>
+                    <p className="mt-2">{reportData.claimPositioningAnalysis.remainingInventiveCore}</p>
+                    <p className="mt-3 text-emerald-900">{reportData.claimPositioningAnalysis.reasoning}</p>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-5 md:grid-cols-2">
+                  <ListBlock title="Weak Claim Areas" items={reportData.claimPositioningAnalysis.weakClaimAreas} />
+                  <ListBlock title="Avoid Relying Solely On" items={reportData.claimPositioningAnalysis.avoidRelyingSolelyOn} />
+                </div>
+
+                {(reportData.conceptMappedCoverageSummary || []).length > 0 && (
+                  <div className="mt-5 overflow-x-auto rounded-sm border border-slate-300">
+                    <table className="min-w-full border-collapse text-xs">
+                      <thead>
+                        <tr>
+                          <HeaderCell>Concept</HeaderCell>
+                          <HeaderCell className="w-32">Mapped Coverage</HeaderCell>
+                          <HeaderCell className="w-32">Single Ref.</HeaderCell>
+                          <HeaderCell className="w-32">Distributed</HeaderCell>
+                          <HeaderCell className="w-32">Mapping Level</HeaderCell>
+                          <HeaderCell>Closest References</HeaderCell>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportData.conceptMappedCoverageSummary?.map(item => (
+                          <tr className="print-row" key={item.conceptTitle}>
+                            <Cell className="font-semibold text-slate-950">{item.conceptTitle}</Cell>
+                            <Cell>{item.mappedCoveragePercent}%</Cell>
+                            <Cell>{item.singleReferenceMappedCoveragePercent}%</Cell>
+                            <Cell>{item.distributedMappedCoveragePercent}%</Cell>
+                            <Cell>{item.mappingLevel}{item.relationshipMapped ? ' + relationship' : ''}</Cell>
+                            <Cell>{item.closestReferences.join(', ') || '-'}</Cell>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {reportData.claimDraftingConsiderations && (
+                  <div className="mt-5 rounded-sm border border-slate-300 bg-slate-50 p-4">
+                    <div className="font-semibold text-slate-950">Claim Drafting Considerations</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{reportData.claimDraftingConsiderations.independentClaimFocus}</p>
+                    <div className="mt-4 grid gap-5 md:grid-cols-3">
+                      <ListBlock title="Dependent Claim Ideas" items={reportData.claimDraftingConsiderations.dependentClaimIdeas} />
+                      <ListBlock title="Fallback Claim Ideas" items={reportData.claimDraftingConsiderations.fallbackClaimIdeas} />
+                      <ListBlock title="Review Before Drafting" items={reportData.claimDraftingConsiderations.reviewBeforeDrafting} />
+                    </div>
+                  </div>
+                )}
+
+                {(reportData.draftingOpportunities || []).length > 0 && (
+                  <div className="mt-5 overflow-x-auto rounded-sm border border-slate-300">
+                    <table className="min-w-full border-collapse text-xs">
+                      <thead>
+                        <tr>
+                          <HeaderCell className="w-44">Opportunity Type</HeaderCell>
+                          <HeaderCell className="w-64">Title</HeaderCell>
+                          <HeaderCell>Explanation</HeaderCell>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportData.draftingOpportunities?.map((item, index) => (
+                          <tr className="print-row" key={`${item.title}-${index}`}>
+                            <Cell className="font-semibold text-slate-950">{item.opportunityType.replace(/_/g, ' ')}</Cell>
+                            <Cell>{item.title}</Cell>
+                            <Cell>
+                              <div>{item.explanation}</div>
+                              {item.linkedFeatures.length > 0 && <div className="mt-2 text-slate-500">Linked features: {item.linkedFeatures.join(', ')}</div>}
+                            </Cell>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {reportData.strategicReviewFocus && (
+                  <div className="mt-5 rounded-sm border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+                    <div className="font-semibold">Strategic Review Focus</div>
+                    <p className="mt-2"><span className="font-semibold">Highest priority reference: </span>{reportData.strategicReviewFocus.highestPriorityReference}</p>
+                    <p><span className="font-semibold">Review reason: </span>{reportData.strategicReviewFocus.reviewReason}</p>
+                    <p><span className="font-semibold">Critical relationship to verify: </span>{reportData.strategicReviewFocus.criticalRelationshipToVerify}</p>
+                    <p><span className="font-semibold">Recommended full-text review: </span>{reportData.strategicReviewFocus.recommendedFullTextReview.join(', ') || '-'}</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+                Claim-positioning analysis was not generated for this report version.
+              </div>
+            )}
+          </Section>
+
+          <Section id="section-6" title="06 Claim-Positioning Observations" breakBefore>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="rounded-sm border border-slate-300 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Automated overlap position</div>
@@ -1033,7 +1144,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
             )}
           </Section>
 
-          <Section id="section-6" title="06 Limitations and Next Steps" breakBefore>
+          <Section id="section-7" title="07 Limitations and Next Steps" breakBefore>
             <div className="rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
               {reportData.limitations}
             </div>
