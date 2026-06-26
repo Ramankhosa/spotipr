@@ -38,6 +38,16 @@ export function buildAuthenticatedNoveltyReportUrl(searchId: string): string {
   return `${appUrl}/novelty-search/${encodeURIComponent(searchId)}/pdf`;
 }
 
+function searchSourceIncludesEpo(mode?: string | null): boolean {
+  return mode === 'EPO_ONLY' || mode === 'PQAI_PLUS_EPO' || mode === 'PQAI_PLUS_INDIAN_EPO';
+}
+
+function removeEpoKeywordInstructions(prompt: string): string {
+  return prompt
+    .replace(/\n  "epoTitleKeywords": \["short object\/system phrase likely to appear in a European patent title"\],\n  "epoAbstractKeywords": \["mechanism\/function phrase likely to appear in a European patent abstract"\],\n  "epoCombinedKeywords": \["fallback phrase suitable for either European patent title or abstract"\],/g, '')
+    .replace(/\nEPO TITLE\/ABSTRACT KEYWORD SEARCH:\n- epoTitleKeywords are for EPO OPS title field searches\.[\s\S]*?- Do not duplicate phrases across epoTitleKeywords, epoAbstractKeywords, and epoCombinedKeywords unless the phrase is essential\.\n/g, '\n');
+}
+
 // LLM Prompt Specification for Novelty Search (enhanced versions)
 export const NOVELTY_SEARCH_NORMALIZATION_PROMPT = `
 
@@ -1785,13 +1795,20 @@ export class NoveltySearchService extends BasePatentService {
 
       const config = this.mergeConfig(request.config);
       const intelligentSearch = config.searchSource?.searchMode !== 'manual';
+      const includeEpoKeywords = searchSourceIncludesEpo(config.searchSource?.mode);
       const approvedQuery = String(request.approvedStage0?.searchQuery || '').trim();
       const approvedFeatures = Array.isArray(request.approvedStage0?.inventionFeatures)
         ? Array.from(new Set(request.approvedStage0.inventionFeatures.map(feature => String(feature || '').trim()).filter(Boolean)))
         : [];
-      const approvedEpoTitleKeywords = this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoTitleKeywords ?? (request.approvedStage0 as any)?.epo_title_keywords);
-      const approvedEpoAbstractKeywords = this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoAbstractKeywords ?? (request.approvedStage0 as any)?.epo_abstract_keywords);
-      const approvedEpoCombinedKeywords = this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoCombinedKeywords ?? (request.approvedStage0 as any)?.epo_combined_keywords);
+      const approvedEpoTitleKeywords = includeEpoKeywords
+        ? this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoTitleKeywords ?? (request.approvedStage0 as any)?.epo_title_keywords)
+        : [];
+      const approvedEpoAbstractKeywords = includeEpoKeywords
+        ? this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoAbstractKeywords ?? (request.approvedStage0 as any)?.epo_abstract_keywords)
+        : [];
+      const approvedEpoCombinedKeywords = includeEpoKeywords
+        ? this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoCombinedKeywords ?? (request.approvedStage0 as any)?.epo_combined_keywords)
+        : [];
       if (intelligentSearch && (!approvedQuery || approvedFeatures.length === 0)) {
         return { success: false, error: 'Review and approve the generated search query and invention features before queueing the novelty search.' };
       }
@@ -1804,9 +1821,11 @@ export class NoveltySearchService extends BasePatentService {
             ...request.approvedStage0,
             searchQuery: approvedQuery.slice(0, 1000),
             inventionFeatures: approvedFeatures.slice(0, 30).map(feature => feature.slice(0, 1000)),
-            epoTitleKeywords: approvedEpoTitleKeywords,
-            epoAbstractKeywords: approvedEpoAbstractKeywords,
-            epoCombinedKeywords: approvedEpoCombinedKeywords,
+            ...(includeEpoKeywords ? {
+              epoTitleKeywords: approvedEpoTitleKeywords,
+              epoAbstractKeywords: approvedEpoAbstractKeywords,
+              epoCombinedKeywords: approvedEpoCombinedKeywords,
+            } : {}),
             featureDetails: approvedFeatures.slice(0, 30).map((feature, index) => {
               const exactMatch = suppliedDetails.find(detail => String(detail?.feature || '').trim() === feature);
               const existing = exactMatch || suppliedDetails[index];
@@ -1831,6 +1850,14 @@ export class NoveltySearchService extends BasePatentService {
             inventionText: request.inventionDescription,
           }
         : undefined;
+      if (approvedStage0Raw && !includeEpoKeywords) {
+        delete (approvedStage0Raw as any).epoTitleKeywords;
+        delete (approvedStage0Raw as any).epo_title_keywords;
+        delete (approvedStage0Raw as any).epoAbstractKeywords;
+        delete (approvedStage0Raw as any).epo_abstract_keywords;
+        delete (approvedStage0Raw as any).epoCombinedKeywords;
+        delete (approvedStage0Raw as any).epo_combined_keywords;
+      }
       const approvedStage0: NormalizedIdea | undefined = approvedStage0Raw
         ? this.normalizeStage0Idea(approvedStage0Raw, request.inventionDescription)
         : undefined;
@@ -3570,6 +3597,8 @@ RESPONSE:`;
     try {
       console.log('ðŸ§  Starting Stage 0: Idea Normalization');
 
+      const includeEpoKeywords = searchSourceIncludesEpo(config.searchSource?.mode);
+
       if (config.searchSource?.searchMode === 'manual') {
         const filters = config.searchSource.filters || {};
         const filterValues = Object.values(filters)
@@ -3599,9 +3628,11 @@ RESPONSE:`;
             title: request.title || 'Manual Patent Search',
             inventionText: request.inventionDescription || '',
             inventionType: ['GENERAL'],
-            epoTitleKeywords: titleKeywords,
-            epoAbstractKeywords: abstractKeywords,
-            epoCombinedKeywords: combinedKeywords,
+            ...(includeEpoKeywords ? {
+              epoTitleKeywords: titleKeywords,
+              epoAbstractKeywords: abstractKeywords,
+              epoCombinedKeywords: combinedKeywords,
+            } : {}),
             architecturalInnovation: '',
             claimConcepts: [],
             noveltyFocusInteractions: [],
@@ -3616,7 +3647,12 @@ RESPONSE:`;
       // Build prompt
       console.log('ðŸ“ Stage 0 Input - Title:', request.title, 'Description length:', request.inventionDescription?.length);
 
-      const prompt = config.stage0.customPrompt || NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2
+      const basePrompt = config.stage0.customPrompt || (
+        includeEpoKeywords
+          ? NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2
+          : removeEpoKeywordInstructions(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2)
+      );
+      const prompt = basePrompt
         .replace('{title}', request.title || 'Untitled Invention')
         .replace('{rawIdea}', request.inventionDescription || 'No description provided');
 
@@ -3659,9 +3695,11 @@ RESPONSE:`;
           : (normalizedData?.inventionType ? [normalizedData.inventionType] : ['GENERAL']),
             cpcCodes: Array.isArray(normalizedData?.cpcCodes) ? normalizedData.cpcCodes.filter(Boolean) : [],
             ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : [],
-            epoTitleKeywords: this.normalizeEpoKeywordList(normalizedData?.epoTitleKeywords ?? normalizedData?.epo_title_keywords),
-            epoAbstractKeywords: this.normalizeEpoKeywordList(normalizedData?.epoAbstractKeywords ?? normalizedData?.epo_abstract_keywords),
-            epoCombinedKeywords: this.normalizeEpoKeywordList(normalizedData?.epoCombinedKeywords ?? normalizedData?.epo_combined_keywords),
+            ...(includeEpoKeywords ? {
+              epoTitleKeywords: this.normalizeEpoKeywordList(normalizedData?.epoTitleKeywords ?? normalizedData?.epo_title_keywords),
+              epoAbstractKeywords: this.normalizeEpoKeywordList(normalizedData?.epoAbstractKeywords ?? normalizedData?.epo_abstract_keywords),
+              epoCombinedKeywords: this.normalizeEpoKeywordList(normalizedData?.epoCombinedKeywords ?? normalizedData?.epo_combined_keywords),
+            } : {}),
             noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
         noveltyFocusInteractions: Array.isArray(normalizedData?.novelty_focus_interactions)
           ? normalizedData.novelty_focus_interactions
@@ -3734,6 +3772,7 @@ RESPONSE:`;
 
       const jurisdiction = (config.jurisdiction || searchRun?.jurisdiction || 'IN').toUpperCase();
       const sourceMode = config.searchSource?.mode || (jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY');
+      const includeEpoKeywords = searchSourceIncludesEpo(sourceMode);
       const providerIds = config.searchSource?.providerIds;
       const searchMode = config.searchSource?.searchMode === 'manual' ? 'manual' : 'intelligent';
       const stage0SearchQuery = String(stage0Data.searchQuery || '').trim();
@@ -3741,9 +3780,9 @@ RESPONSE:`;
       const stage0FeatureDetails = this.normalizeFeatureDetails(stage0Data, stage0Data.inventionText || searchRun?.inventionDescription || '');
       const stage0CpcCodes = Array.isArray(stage0Data.cpcCodes) ? stage0Data.cpcCodes.filter(Boolean) : [];
       const stage0IpcCodes = Array.isArray(stage0Data.ipcCodes) ? stage0Data.ipcCodes.filter(Boolean) : [];
-      const stage0EpoTitleKeywords = this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords);
-      const stage0EpoAbstractKeywords = this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords);
-      const stage0EpoCombinedKeywords = this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords);
+      const stage0EpoTitleKeywords = includeEpoKeywords ? this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords) : [];
+      const stage0EpoAbstractKeywords = includeEpoKeywords ? this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords) : [];
+      const stage0EpoCombinedKeywords = includeEpoKeywords ? this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords) : [];
       const stage0SearchExclusions = Array.isArray(stage0Data.searchExclusions) ? stage0Data.searchExclusions.filter(Boolean) : [];
       const stage1Filters = withStage0Exclusions(config.searchSource?.filters || {}, stage0SearchExclusions);
       const stage0QueryPlan: Partial<PatentSearchQueryPlan> | undefined = searchMode === 'manual'
@@ -3761,9 +3800,11 @@ RESPONSE:`;
           cpcCodes: stage0CpcCodes,
           ipcCodes: stage0IpcCodes,
           classificationHints: Array.from(new Set([...stage0CpcCodes, ...stage0IpcCodes])),
-          epoTitleKeywords: stage0EpoTitleKeywords,
-          epoAbstractKeywords: stage0EpoAbstractKeywords,
-          epoCombinedKeywords: stage0EpoCombinedKeywords,
+          ...(includeEpoKeywords ? {
+            epoTitleKeywords: stage0EpoTitleKeywords,
+            epoAbstractKeywords: stage0EpoAbstractKeywords,
+            epoCombinedKeywords: stage0EpoCombinedKeywords,
+          } : {}),
           fieldFilters: stage1Filters,
           explicitFilters: stage1Filters,
           searchVariants: stage0SearchQuery ? [stage0SearchQuery] : [],
@@ -4335,13 +4376,21 @@ RESPONSE:`;
     }));
     const conceptSource = (stage0Data as any).claimConcepts ?? (stage0Data as any).claim_concepts;
     const interactionSource = (stage0Data as any).noveltyFocusInteractions ?? (stage0Data as any).novelty_focus_interactions;
+    const hasEpoKeywordFields = Object.prototype.hasOwnProperty.call(stage0Data as any, 'epoTitleKeywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'epo_title_keywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'epoAbstractKeywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'epo_abstract_keywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'epoCombinedKeywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'epo_combined_keywords');
     return {
       ...stage0Data,
       inventionFeatures: features,
       featureDetails,
-      epoTitleKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords ?? (stage0Data as any).epo_title_keywords),
-      epoAbstractKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords ?? (stage0Data as any).epo_abstract_keywords),
-      epoCombinedKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords ?? (stage0Data as any).epo_combined_keywords),
+      ...(hasEpoKeywordFields ? {
+        epoTitleKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords ?? (stage0Data as any).epo_title_keywords),
+        epoAbstractKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords ?? (stage0Data as any).epo_abstract_keywords),
+        epoCombinedKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords ?? (stage0Data as any).epo_combined_keywords),
+      } : {}),
       architecturalInnovation: this.normalizeStage0Scalar((stage0Data as any).architecturalInnovation ?? (stage0Data as any).architectural_innovation ?? '', 500),
       claimConcepts: this.normalizeClaimConcepts(conceptSource, features, warnings),
       noveltyFocusInteractions: this.normalizeNoveltyFocusInteractions(interactionSource, features, warnings),

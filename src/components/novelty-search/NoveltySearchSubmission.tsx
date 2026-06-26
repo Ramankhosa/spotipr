@@ -134,8 +134,8 @@ export default function NoveltySearchSubmission(props: {
       setReview(proposed)
       setEditedSearchQuery(String(proposed.searchQuery))
       setEditedFeatures(features)
-      setEditedEpoTitleKeywords(stringList(proposed.epoTitleKeywords))
-      setEditedEpoAbstractKeywords(stringList(proposed.epoAbstractKeywords))
+      setEditedEpoTitleKeywords(usesEpoSearch ? stringList(proposed.epoTitleKeywords) : [])
+      setEditedEpoAbstractKeywords(usesEpoSearch ? stringList(proposed.epoAbstractKeywords) : [])
       setNewFeature('')
       setNewEpoTitleKeyword('')
       setNewEpoAbstractKeyword('')
@@ -156,6 +156,21 @@ export default function NoveltySearchSubmission(props: {
     setIsSubmitting(true)
     setError('')
     try {
+      const approvedStage0 = {
+        ...review,
+        searchQuery: approvedQuery,
+        inventionFeatures: approvedFeatures,
+        ...(usesEpoSearch ? {
+          epoTitleKeywords: editedEpoTitleKeywords.map(keyword => keyword.trim()).filter(Boolean),
+          epoAbstractKeywords: editedEpoAbstractKeywords.map(keyword => keyword.trim()).filter(Boolean),
+          epoCombinedKeywords: stringList(review.epoCombinedKeywords),
+        } : {}),
+      }
+      if (!usesEpoSearch) {
+        delete (approvedStage0 as any).epoTitleKeywords
+        delete (approvedStage0 as any).epoAbstractKeywords
+        delete (approvedStage0 as any).epoCombinedKeywords
+      }
       const response = await authFetch('/api/novelty-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -170,14 +185,7 @@ export default function NoveltySearchSubmission(props: {
             ...(props.sourceMetadata ? { sourceMetadata: props.sourceMetadata } : {}),
             searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
           },
-          approvedStage0: {
-            ...review,
-            searchQuery: approvedQuery,
-            inventionFeatures: approvedFeatures,
-            epoTitleKeywords: editedEpoTitleKeywords.map(keyword => keyword.trim()).filter(Boolean),
-            epoAbstractKeywords: editedEpoAbstractKeywords.map(keyword => keyword.trim()).filter(Boolean),
-            epoCombinedKeywords: stringList(review.epoCombinedKeywords),
-          },
+          approvedStage0,
         }),
       })
       const body = await response.json().catch(() => ({}))

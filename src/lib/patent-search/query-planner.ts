@@ -133,8 +133,19 @@ function detectNumbers(text: string): Partial<PatentSearchFilters> {
   }
 }
 
+function requestUsesEpoKeywordSearch(input: PatentSearchRequest) {
+  const sourceMode = String(input.sourceMode || '')
+  if (sourceMode === 'EPO_ONLY' || sourceMode === 'PQAI_PLUS_EPO' || sourceMode === 'PQAI_PLUS_INDIAN_EPO') return true
+  if ((input.providerIds || []).some(providerId => String(providerId).startsWith('epo-ops'))) return true
+  return (input.jurisdictions || []).some(jurisdiction => {
+    const normalized = String(jurisdiction || '').trim().toUpperCase()
+    return normalized === 'EP' || normalized === 'EPO' || normalized === 'WO'
+  })
+}
+
 export function buildDeterministicPatentSearchQueryPlan(input: PatentSearchRequest): PatentSearchQueryPlan {
   const originalQuery = normalizeWhitespace(input.query || '')
+  const includeEpoKeywords = requestUsesEpoKeywordSearch(input)
   const inventionText = normalizeWhitespace(input.inventionText || '')
   const parsed = parseFieldedQuery(originalQuery)
   const detectedClassifications = detectClassifications(`${originalQuery} ${inventionText}`)
@@ -168,9 +179,11 @@ export function buildDeterministicPatentSearchQueryPlan(input: PatentSearchReque
     cpcCodes: detectedClassifications,
     ipcCodes: detectedClassifications,
     classificationHints: detectedClassifications,
-    epoTitleKeywords: [],
-    epoAbstractKeywords: [],
-    epoCombinedKeywords: [],
+    ...(includeEpoKeywords ? {
+      epoTitleKeywords: [],
+      epoAbstractKeywords: [],
+      epoCombinedKeywords: [],
+    } : {}),
     fieldFilters: explicitFilters,
     explicitFilters,
     searchVariants: fallbackQuery ? [fallbackQuery] : [],
@@ -220,6 +233,7 @@ function normalizeManualSearchFilters(filters?: PatentSearchFilters): PatentSear
 
 export function buildManualPatentSearchQueryPlan(input: PatentSearchRequest): PatentSearchQueryPlan {
   const originalQuery = normalizeWhitespace(input.query || '')
+  const includeEpoKeywords = requestUsesEpoKeywordSearch(input)
   const fieldFilters = normalizeManualSearchFilters(input.filters)
   if (originalQuery && !fieldFilters.anyTextContains?.length) {
     fieldFilters.anyTextContains = [originalQuery]
@@ -241,9 +255,9 @@ export function buildManualPatentSearchQueryPlan(input: PatentSearchRequest): Pa
     ...(fieldFilters.cpcCodes || []),
     ...(fieldFilters.ipcCodes || []),
   ]).map(normalizeClassification).filter(Boolean)
-  const epoTitleKeywords = uniqueStrings(fieldFilters.titleContains || []).slice(0, 8)
-  const epoAbstractKeywords = uniqueStrings(fieldFilters.abstractContains || []).slice(0, 8)
-  const epoCombinedKeywords = uniqueStrings(fieldFilters.anyTextContains || []).slice(0, 8)
+  const epoTitleKeywords = includeEpoKeywords ? uniqueStrings(fieldFilters.titleContains || []).slice(0, 8) : []
+  const epoAbstractKeywords = includeEpoKeywords ? uniqueStrings(fieldFilters.abstractContains || []).slice(0, 8) : []
+  const epoCombinedKeywords = includeEpoKeywords ? uniqueStrings(fieldFilters.anyTextContains || []).slice(0, 8) : []
 
   return {
     originalQuery,
@@ -258,9 +272,11 @@ export function buildManualPatentSearchQueryPlan(input: PatentSearchRequest): Pa
     cpcCodes: fieldFilters.cpcCodes || [],
     ipcCodes: fieldFilters.ipcCodes || [],
     classificationHints: classifications,
-    epoTitleKeywords,
-    epoAbstractKeywords,
-    epoCombinedKeywords,
+    ...(includeEpoKeywords ? {
+      epoTitleKeywords,
+      epoAbstractKeywords,
+      epoCombinedKeywords,
+    } : {}),
     fieldFilters,
     explicitFilters: fieldFilters,
     searchVariants: manualText ? [manualText] : [],
@@ -271,6 +287,13 @@ export function buildManualPatentSearchQueryPlan(input: PatentSearchRequest): Pa
 }
 
 function buildPlannerPrompt(input: PatentSearchRequest, deterministic: PatentSearchQueryPlan) {
+  const epoKeywordShape = requestUsesEpoKeywordSearch(input)
+    ? `  "epoTitleKeywords": ["short object or system phrase likely to appear in a European patent title"],
+  "epoAbstractKeywords": ["mechanism or function phrase likely to appear in a European patent abstract"],
+  "epoCombinedKeywords": ["fallback phrase suitable for either title or abstract"],
+`
+    : ''
+
   return `You are a patent search strategist for Indian and global patent databases.
 
 Return ONLY one valid JSON object. No markdown.
@@ -301,9 +324,7 @@ JSON shape:
   "excludedTerms": ["term"],
   "cpcCodes": ["CPC code"],
   "ipcCodes": ["IPC code"],
-  "epoTitleKeywords": ["short object or system phrase likely to appear in a European patent title"],
-  "epoAbstractKeywords": ["mechanism or function phrase likely to appear in a European patent abstract"],
-  "epoCombinedKeywords": ["fallback phrase suitable for either title or abstract"],
+${epoKeywordShape}
   "fieldFilters": {
     "publicationNumber": "",
     "applicationNumber": "",
@@ -388,15 +409,22 @@ export async function createPatentSearchQueryPlan(input: PatentSearchRequest): P
   if (input.searchMode === 'manual') return buildManualPatentSearchQueryPlan(input)
 
   const deterministic = buildDeterministicPatentSearchQueryPlan(input)
+  const includeEpoKeywords = requestUsesEpoKeywordSearch(input)
   const suppliedPlan = input.queryPlan
   if (suppliedPlan?.searchQuery || suppliedPlan?.semanticQuery) {
-    return {
+    const mergedPlan = {
       ...deterministic,
       ...suppliedPlan,
       fieldFilters: mergeFilters(suppliedPlan.fieldFilters, deterministic.explicitFilters),
       explicitFilters: deterministic.explicitFilters,
       warnings: uniqueStrings([...(deterministic.warnings || []), ...((suppliedPlan.warnings as string[]) || [])]),
     } as PatentSearchQueryPlan
+    if (!includeEpoKeywords) {
+      delete mergedPlan.epoTitleKeywords
+      delete mergedPlan.epoAbstractKeywords
+      delete mergedPlan.epoCombinedKeywords
+    }
+    return mergedPlan
   }
 
   if (input.llmExpansion === false) return deterministic
@@ -444,9 +472,9 @@ export async function createPatentSearchQueryPlan(input: PatentSearchRequest): P
       ...deterministic.technicalKeywords,
       ...asStringArray(parsed.technicalKeywords),
     ])
-    const epoTitleKeywords = keywordList(parsed.epoTitleKeywords || parsed.epo_title_keywords)
-    const epoAbstractKeywords = keywordList(parsed.epoAbstractKeywords || parsed.epo_abstract_keywords)
-    const epoCombinedKeywords = keywordList(parsed.epoCombinedKeywords || parsed.epo_combined_keywords)
+    const epoTitleKeywords = includeEpoKeywords ? keywordList(parsed.epoTitleKeywords || parsed.epo_title_keywords) : []
+    const epoAbstractKeywords = includeEpoKeywords ? keywordList(parsed.epoAbstractKeywords || parsed.epo_abstract_keywords) : []
+    const epoCombinedKeywords = includeEpoKeywords ? keywordList(parsed.epoCombinedKeywords || parsed.epo_combined_keywords) : []
     const synonyms = asStringArray(parsed.synonyms)
     const mustHaveTerms = asStringArray(parsed.mustHaveTerms)
     const excludedTerms = asStringArray(parsed.excludedTerms)
@@ -476,9 +504,11 @@ export async function createPatentSearchQueryPlan(input: PatentSearchRequest): P
       cpcCodes,
       ipcCodes,
       classificationHints,
-      epoTitleKeywords,
-      epoAbstractKeywords,
-      epoCombinedKeywords,
+      ...(includeEpoKeywords ? {
+        epoTitleKeywords,
+        epoAbstractKeywords,
+        epoCombinedKeywords,
+      } : {}),
       fieldFilters,
       searchVariants,
       llmExpanded: true,

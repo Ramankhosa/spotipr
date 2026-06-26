@@ -76,4 +76,34 @@ describe('patent search query planner', () => {
     expect(plan.fieldFilters.anyTextContains).toEqual(['milk urea rapid detection'])
     expect(plan.fieldFilters.inventors).toEqual(['Sharma'])
   })
+
+  test('maps manual title and abstract filters to EPO keyword fields only for EPO searches', () => {
+    const epoPlan = buildManualPatentSearchQueryPlan({
+      searchMode: 'manual',
+      sourceMode: 'EPO_ONLY',
+      filters: {
+        titleContains: ['irrigation controller'],
+        abstractContains: ['soil moisture valve control'],
+        anyTextContains: ['water scheduling'],
+      },
+    })
+    const indianPlan = buildManualPatentSearchQueryPlan({
+      searchMode: 'manual',
+      sourceMode: 'INDIAN_ONLY',
+      filters: {
+        titleContains: ['irrigation controller'],
+        abstractContains: ['soil moisture valve control'],
+        anyTextContains: ['water scheduling'],
+      },
+    })
+
+    expect(epoPlan.epoTitleKeywords).toEqual(['irrigation controller'])
+    expect(epoPlan.epoAbstractKeywords).toEqual(['soil moisture valve control'])
+    expect(epoPlan.epoCombinedKeywords).toEqual(['water scheduling'])
+    expect(indianPlan.fieldFilters.titleContains).toEqual(['irrigation controller'])
+    expect(indianPlan.fieldFilters.abstractContains).toEqual(['soil moisture valve control'])
+    expect(indianPlan.epoTitleKeywords).toBeUndefined()
+    expect(indianPlan.epoAbstractKeywords).toBeUndefined()
+    expect(indianPlan.epoCombinedKeywords).toBeUndefined()
+  })
 })

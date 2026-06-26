@@ -1501,8 +1501,9 @@ export default function NoveltySearchWorkflow({
     if (s0) {
       setEditedSearchQuery(s0.searchQuery || '');
       setEditedFeatures([...(s0.inventionFeatures || [])]);
-      setEditedEpoTitleKeywords(Array.isArray(s0.epoTitleKeywords) ? [...s0.epoTitleKeywords] : []);
-      setEditedEpoAbstractKeywords(Array.isArray(s0.epoAbstractKeywords) ? [...s0.epoAbstractKeywords] : []);
+      const includeEpoKeywords = formData.searchSourceMode.includes('EPO');
+      setEditedEpoTitleKeywords(includeEpoKeywords && Array.isArray(s0.epoTitleKeywords) ? [...s0.epoTitleKeywords] : []);
+      setEditedEpoAbstractKeywords(includeEpoKeywords && Array.isArray(s0.epoAbstractKeywords) ? [...s0.epoAbstractKeywords] : []);
       setIsEditingStage0(true);
     }
   };
@@ -1511,19 +1512,23 @@ export default function NoveltySearchWorkflow({
     if (!searchState.searchId) return;
 
     try {
+      const includeEpoKeywords = formData.searchSourceMode.includes('EPO');
+      const patchBody = {
+        stage: 'stage0',
+        searchQuery: editedSearchQuery,
+        inventionFeatures: editedFeatures,
+        ...(includeEpoKeywords ? {
+          epoTitleKeywords: editedEpoTitleKeywords,
+          epoAbstractKeywords: editedEpoAbstractKeywords
+        } : {})
+      };
       const response = await fetch(`/api/novelty-search/${searchState.searchId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         },
-        body: JSON.stringify({
-          stage: 'stage0',
-          searchQuery: editedSearchQuery,
-          inventionFeatures: editedFeatures,
-          epoTitleKeywords: editedEpoTitleKeywords,
-          epoAbstractKeywords: editedEpoAbstractKeywords
-        })
+        body: JSON.stringify(patchBody)
       });
 
       if (!response.ok) {
@@ -1537,15 +1542,24 @@ export default function NoveltySearchWorkflow({
         ...(currentResults?.stage0 || currentResults),
         searchQuery: editedSearchQuery,
         inventionFeatures: editedFeatures,
-        epoTitleKeywords: editedEpoTitleKeywords,
-        epoAbstractKeywords: editedEpoAbstractKeywords
+        ...(includeEpoKeywords ? {
+          epoTitleKeywords: editedEpoTitleKeywords,
+          epoAbstractKeywords: editedEpoAbstractKeywords
+        } : {})
       };
+      if (!includeEpoKeywords) {
+        delete (approvedStage0 as any).epoTitleKeywords;
+        delete (approvedStage0 as any).epoAbstractKeywords;
+        delete (approvedStage0 as any).epoCombinedKeywords;
+      }
       const nextResults = {
         stage0: approvedStage0,
         searchQuery: editedSearchQuery,
         inventionFeatures: editedFeatures,
-        epoTitleKeywords: editedEpoTitleKeywords,
-        epoAbstractKeywords: editedEpoAbstractKeywords
+        ...(includeEpoKeywords ? {
+          epoTitleKeywords: editedEpoTitleKeywords,
+          epoAbstractKeywords: editedEpoAbstractKeywords
+        } : {})
       };
       const nextState = {
         ...currentState,
@@ -2508,7 +2522,7 @@ export default function NoveltySearchWorkflow({
                   </div>
                 </div>
 
-                {(formData.searchSourceMode.includes('EPO') || editedEpoTitleKeywords.length > 0 || editedEpoAbstractKeywords.length > 0) && (
+                {formData.searchSourceMode.includes('EPO') && (
                   <div className="rounded-lg border border-slate-200 bg-white p-4">
                     <div className="mb-4">
                       <h4 className="text-sm font-semibold text-slate-900">European patent keyword search</h4>
@@ -2584,7 +2598,7 @@ export default function NoveltySearchWorkflow({
                     </div>
                   </div>
                 </div>
-                {(Array.isArray(s0.epoTitleKeywords) && s0.epoTitleKeywords.length > 0) || (Array.isArray(s0.epoAbstractKeywords) && s0.epoAbstractKeywords.length > 0) ? (
+                {formData.searchSourceMode.includes('EPO') && ((Array.isArray(s0.epoTitleKeywords) && s0.epoTitleKeywords.length > 0) || (Array.isArray(s0.epoAbstractKeywords) && s0.epoAbstractKeywords.length > 0)) ? (
                   <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
                     <h4 className="font-medium text-slate-900 mb-3">European patent keyword search</h4>
                     <div className="grid gap-4 md:grid-cols-2">

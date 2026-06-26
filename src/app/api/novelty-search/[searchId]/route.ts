@@ -7,6 +7,10 @@ import { NoveltySearchStage, NoveltySearchStatus, Prisma } from '@prisma/client'
 
 const noveltySearchService = new NoveltySearchService();
 
+function searchSourceIncludesEpo(mode: unknown): boolean {
+  return mode === 'EPO_ONLY' || mode === 'PQAI_PLUS_EPO' || mode === 'PQAI_PLUS_INDIAN_EPO';
+}
+
 /**
  * GET /api/novelty-search/[searchId]
  * Get novelty search status and results
@@ -172,26 +176,39 @@ export async function PATCH(
         : (existingStage0.inventionType ? [existingStage0.inventionType] : undefined);
       const cpcCodes = Array.isArray(existingStage0.cpcCodes) ? existingStage0.cpcCodes : undefined;
       const ipcCodes = Array.isArray(existingStage0.ipcCodes) ? existingStage0.ipcCodes : undefined;
+      const includeEpoKeywords = searchSourceIncludesEpo((existing?.config as any)?.searchSource?.mode);
       const approvedSearchQuery = String(searchQuery || '').trim();
       const approvedFeatures = Array.isArray(inventionFeatures)
         ? inventionFeatures.map((feature: unknown) => String(feature || '').trim()).filter(Boolean)
         : [];
-      const normalizedStage0 = noveltySearchService.normalizeApprovedStage0({
+      const stage0Input: Record<string, unknown> = {
         ...existingStage0,
         searchQuery: approvedSearchQuery,
         inventionFeatures: approvedFeatures,
-        epoTitleKeywords: Array.isArray(epoTitleKeywords) ? epoTitleKeywords : existingStage0.epoTitleKeywords,
-        epoAbstractKeywords: Array.isArray(epoAbstractKeywords) ? epoAbstractKeywords : existingStage0.epoAbstractKeywords,
-        epoCombinedKeywords: Array.isArray(epoCombinedKeywords) ? epoCombinedKeywords : existingStage0.epoCombinedKeywords,
         ...(inventionType ? { inventionType } : {}),
         ...(cpcCodes ? { cpcCodes } : {}),
         ...(ipcCodes ? { ipcCodes } : {}),
-      }, String(existing?.inventionDescription || ''));
+      };
+      if (includeEpoKeywords) {
+        stage0Input.epoTitleKeywords = Array.isArray(epoTitleKeywords) ? epoTitleKeywords : existingStage0.epoTitleKeywords;
+        stage0Input.epoAbstractKeywords = Array.isArray(epoAbstractKeywords) ? epoAbstractKeywords : existingStage0.epoAbstractKeywords;
+        stage0Input.epoCombinedKeywords = Array.isArray(epoCombinedKeywords) ? epoCombinedKeywords : existingStage0.epoCombinedKeywords;
+      } else {
+        delete stage0Input.epoTitleKeywords;
+        delete stage0Input.epo_title_keywords;
+        delete stage0Input.epoAbstractKeywords;
+        delete stage0Input.epo_abstract_keywords;
+        delete stage0Input.epoCombinedKeywords;
+        delete stage0Input.epo_combined_keywords;
+      }
+      const normalizedStage0 = noveltySearchService.normalizeApprovedStage0(stage0Input as any, String(existing?.inventionDescription || ''));
       const stage0Changed = approvedSearchQuery !== String(existingStage0.searchQuery || '').trim() ||
         JSON.stringify(approvedFeatures) !== JSON.stringify(existingStage0.inventionFeatures || []) ||
-        JSON.stringify(normalizedStage0.epoTitleKeywords || []) !== JSON.stringify(existingStage0.epoTitleKeywords || []) ||
-        JSON.stringify(normalizedStage0.epoAbstractKeywords || []) !== JSON.stringify(existingStage0.epoAbstractKeywords || []) ||
-        JSON.stringify(normalizedStage0.epoCombinedKeywords || []) !== JSON.stringify(existingStage0.epoCombinedKeywords || []);
+        (includeEpoKeywords && (
+          JSON.stringify(normalizedStage0.epoTitleKeywords || []) !== JSON.stringify(existingStage0.epoTitleKeywords || []) ||
+          JSON.stringify(normalizedStage0.epoAbstractKeywords || []) !== JSON.stringify(existingStage0.epoAbstractKeywords || []) ||
+          JSON.stringify(normalizedStage0.epoCombinedKeywords || []) !== JSON.stringify(existingStage0.epoCombinedKeywords || [])
+        ));
 
       await prisma.noveltySearchRun.update({
         where: { id: searchId, userId: user.id },
