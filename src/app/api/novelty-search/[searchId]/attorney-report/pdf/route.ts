@@ -411,16 +411,18 @@ function drawDecisionFact(
   label: string,
   value: string,
   accent: string,
-  options: { height?: number; valueHeight?: number; truncateValue?: boolean } = {},
+  options: { height?: number; valueHeight?: number; truncateValue?: boolean; valueFontSize?: number } = {},
 ) {
   const height = options.height || 54;
   const valueHeight = options.valueHeight || 20;
+  const valueFontSize = options.valueFontSize || TYPE.caption;
   drawCard(doc, x, y, width, height, 6);
   doc.rect(x, y, 3, height).fill(accent);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(label.toUpperCase(), x + SPACE.md, y + 10, { width: width - 20, height: 9, lineBreak: false, ellipsis: true });
   const text = options.truncateValue === false ? cleanText(value) : truncate(value, 115);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .fontSize(valueFontSize)
     .text(text, x + SPACE.md, y + 24, { width: width - 20, height: valueHeight, ellipsis: options.truncateValue !== false, lineGap: 1.2 });
 }
 
@@ -473,36 +475,35 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   const factsY = verdictY + 98;
   const factGap = SPACE.sm;
   const factWidth = (contentWidth(doc) - factGap * 2) / 3;
-  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`, COLORS.blue);
-  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`, COLORS.red);
-  drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success, {
-    height: 64,
-    valueHeight: 34,
+  const factHeight = 96;
+  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`, COLORS.blue, {
+    height: factHeight,
+    valueHeight: 66,
     truncateValue: false,
+    valueFontSize: TYPE.caption,
+  });
+  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`, COLORS.red, {
+    height: factHeight,
+    valueHeight: 66,
+    truncateValue: false,
+    valueFontSize: TYPE.caption,
+  });
+  drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success, {
+    height: factHeight,
+    valueHeight: 66,
+    truncateValue: false,
+    valueFontSize: TYPE.caption,
   });
 
-  const focusY = factsY + 76;
-  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), 58, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
+  const focusY = factsY + factHeight + 12;
+  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), 68, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
   doc.circle(PAGE.left + 15, focusY + 17, 4).fill(palette.accent);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text('ATTORNEY REVIEW FOCUS', PAGE.left + 28, focusY + 9, { width: 145, height: 9, lineBreak: false });
   doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
-    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, height: 28, lineGap: 1.2, ellipsis: true });
+    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, height: 38, lineGap: 1.2, ellipsis: false });
 
-  const metricsY = focusY + 70;
-  const gap = SPACE.sm;
-  const metricWidth = (contentWidth(doc) - gap * 3) / 4;
-  const metrics = [
-    [String(report.counts.retrieved), 'Candidates', COLORS.blue],
-    [String(report.counts.found), 'Shortlisted', COLORS.blue2],
-    [strongest ? strongest.referenceRole : 'No mapped reference', 'Top reference', COLORS.success],
-    [signal, 'Signal', palette.accent],
-  ] as Array<[string, string, string]>;
-  metrics.forEach(([value, label, accent], index) => {
-    drawSnapshotMetric(doc, PAGE.left + index * (metricWidth + gap), metricsY, metricWidth, value, label, accent);
-  });
-
-  const detailY = metricsY + 80;
+  const detailY = focusY + 82;
   const detailGap = SPACE.md;
   const detailWidth = (contentWidth(doc) - detailGap) / 2;
   const detailCardHeight = 164;

@@ -8,7 +8,15 @@ export type PatentSearchProviderId =
   | 'wipo'
   | string
 
-export type PatentSearchSourceMode = 'INDIAN_ONLY' | 'PQAI_ONLY' | 'PQAI_PLUS_INDIAN'
+export type PatentSearchSourceMode =
+  | 'INDIAN_ONLY'
+  | 'AUSTRALIA_ONLY'
+  | 'EPO_ONLY'
+  | 'PQAI_ONLY'
+  | 'PQAI_PLUS_INDIAN'
+  | 'PQAI_PLUS_AUSTRALIA'
+  | 'PQAI_PLUS_EPO'
+  | 'PQAI_PLUS_INDIAN_EPO'
 
 export type PatentSearchMode = 'intelligent' | 'manual'
 
@@ -83,6 +91,9 @@ export interface PatentSearchQueryPlan {
   cpcCodes: string[]
   ipcCodes: string[]
   classificationHints: string[]
+  epoTitleKeywords?: string[]
+  epoAbstractKeywords?: string[]
+  epoCombinedKeywords?: string[]
   fieldFilters: PatentSearchFilters
   explicitFilters: PatentSearchFilters
   searchVariants: string[]

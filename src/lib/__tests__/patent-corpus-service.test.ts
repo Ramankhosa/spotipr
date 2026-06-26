@@ -27,8 +27,10 @@ vi.mock('@/lib/prisma', () => ({
 import {
   claimNextPatentEmbeddings,
   mergeLocalPatentDataForImport,
+  PATENT_CORPUS_SOURCE_EPO,
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
+  persistPatentResultsToCorpus,
   persistPqaiPatentResults,
   requestOpenAIEmbeddings,
   requestSearchQueryEmbedding,
@@ -270,6 +272,51 @@ describe('patent corpus service', () => {
         ragText: 'enriched rag',
         embeddingText: 'enriched embedding',
         corpusSources: [PATENT_CORPUS_SOURCE_INDIAN, PATENT_CORPUS_SOURCE_PQAI],
+      }),
+    }))
+  })
+
+  it('persists EPO OPS results as European corpus records and queues title/abstract embeddings', async () => {
+    mocks.prisma.localPatent.findUnique.mockResolvedValue(null)
+    mocks.prisma.localPatent.create.mockImplementation(async ({ data }: any) => ({ id: 202, ...data }))
+    mocks.prisma.localPatentEmbedding.findUnique.mockResolvedValue(null)
+    mocks.prisma.localPatentEmbedding.create.mockResolvedValue({ id: 'embedding-epo-1' })
+
+    const stats = await persistPatentResultsToCorpus([
+      {
+        providerId: 'epo-ops',
+        sourceProvider: 'epo-ops',
+        publicationNumber: 'EP1000000A1',
+        jurisdiction: 'EP',
+        title: 'European patent title',
+        abstract: 'European patent abstract for embedding.',
+        classifications: ['A01G 25/16'],
+        relevanceScore: 0.7,
+      },
+    ] as any, {
+      providerId: 'epo-ops',
+      corpusSource: PATENT_CORPUS_SOURCE_EPO,
+      query: 'ta="irrigation"',
+      fetchedAt: new Date('2026-06-26T00:00:00.000Z'),
+    }, mocks.prisma)
+
+    expect(stats).toMatchObject({ created: 1, updated: 0, queuedEmbeddings: 1, skipped: 0 })
+    expect(mocks.prisma.localPatent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        publicationNumber: 'EP1000000A1',
+        country: 'EP',
+        corpusSources: [PATENT_CORPUS_SOURCE_EPO],
+        pqaiDetails: expect.objectContaining({
+          provider: 'epo-ops',
+          query: 'ta="irrigation"',
+        }),
+        embeddingText: expect.stringContaining('European patent title'),
+      }),
+    }))
+    expect(mocks.prisma.localPatentEmbedding.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        localPatentId: 202,
+        status: 'QUEUED',
       }),
     }))
   })

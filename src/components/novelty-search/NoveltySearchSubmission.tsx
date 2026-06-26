@@ -11,6 +11,9 @@ type Stage0Review = {
   searchQuery: string
   inventionFeatures: string[]
   featureDetails?: Array<{ feature: string; [key: string]: unknown }>
+  epoTitleKeywords?: string[]
+  epoAbstractKeywords?: string[]
+  epoCombinedKeywords?: string[]
   [key: string]: unknown
 }
 
@@ -41,6 +44,10 @@ export default function NoveltySearchSubmission(props: {
   const [review, setReview] = useState<Stage0Review | null>(null)
   const [editedSearchQuery, setEditedSearchQuery] = useState('')
   const [editedFeatures, setEditedFeatures] = useState<string[]>([])
+  const [editedEpoTitleKeywords, setEditedEpoTitleKeywords] = useState<string[]>([])
+  const [editedEpoAbstractKeywords, setEditedEpoAbstractKeywords] = useState<string[]>([])
+  const [newEpoTitleKeyword, setNewEpoTitleKeyword] = useState('')
+  const [newEpoAbstractKeyword, setNewEpoAbstractKeyword] = useState('')
   const [newFeature, setNewFeature] = useState('')
   const [isPreparing, setIsPreparing] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -61,6 +68,12 @@ export default function NoveltySearchSubmission(props: {
       }
     }).catch(() => setError('Failed to load search organization options.'))
   }, [authFetch, props.initialProjectId])
+
+  const usesEpoSearch = sourceMode === 'EPO_ONLY' || sourceMode === 'PQAI_PLUS_EPO' || sourceMode === 'PQAI_PLUS_INDIAN_EPO'
+
+  const stringList = (value: unknown) => Array.isArray(value)
+    ? value.map(item => String(item || '').trim()).filter(Boolean)
+    : []
 
   const extractFile = async (file: File) => {
     const allowed = ['.txt', '.md', '.markdown', '.csv', '.tsv', '.xlsx', '.doc', '.docx', '.pdf']
@@ -121,7 +134,11 @@ export default function NoveltySearchSubmission(props: {
       setReview(proposed)
       setEditedSearchQuery(String(proposed.searchQuery))
       setEditedFeatures(features)
+      setEditedEpoTitleKeywords(stringList(proposed.epoTitleKeywords))
+      setEditedEpoAbstractKeywords(stringList(proposed.epoAbstractKeywords))
       setNewFeature('')
+      setNewEpoTitleKeyword('')
+      setNewEpoAbstractKeyword('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Failed to generate search terms.')
     } finally {
@@ -157,6 +174,9 @@ export default function NoveltySearchSubmission(props: {
             ...review,
             searchQuery: approvedQuery,
             inventionFeatures: approvedFeatures,
+            epoTitleKeywords: editedEpoTitleKeywords.map(keyword => keyword.trim()).filter(Boolean),
+            epoAbstractKeywords: editedEpoAbstractKeywords.map(keyword => keyword.trim()).filter(Boolean),
+            epoCombinedKeywords: stringList(review.epoCombinedKeywords),
           },
         }),
       })
@@ -181,6 +201,25 @@ export default function NoveltySearchSubmission(props: {
     if (!value || editedFeatures.some(feature => feature.trim().toLowerCase() === value.toLowerCase())) return
     setEditedFeatures(current => [...current, value])
     setNewFeature('')
+  }
+
+  const updateKeyword = (kind: 'title' | 'abstract', index: number, value: string) => {
+    const setter = kind === 'title' ? setEditedEpoTitleKeywords : setEditedEpoAbstractKeywords
+    setter(current => current.map((keyword, keywordIndex) => keywordIndex === index ? value : keyword))
+  }
+
+  const removeKeyword = (kind: 'title' | 'abstract', index: number) => {
+    const setter = kind === 'title' ? setEditedEpoTitleKeywords : setEditedEpoAbstractKeywords
+    setter(current => current.filter((_, keywordIndex) => keywordIndex !== index))
+  }
+
+  const addKeyword = (kind: 'title' | 'abstract') => {
+    const value = (kind === 'title' ? newEpoTitleKeyword : newEpoAbstractKeyword).trim()
+    if (!value) return
+    const setter = kind === 'title' ? setEditedEpoTitleKeywords : setEditedEpoAbstractKeywords
+    setter(current => current.some(keyword => keyword.trim().toLowerCase() === value.toLowerCase()) ? current : [...current, value])
+    if (kind === 'title') setNewEpoTitleKeyword('')
+    else setNewEpoAbstractKeyword('')
   }
 
   return (
@@ -240,7 +279,7 @@ export default function NoveltySearchSubmission(props: {
           <label className="space-y-2 text-sm font-medium text-slate-700">
             <span>Search Source</span>
             <select value={sourceMode} onChange={event => { setSourceMode(event.target.value); setReview(null) }} disabled={isPreparing || isSubmitting} className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 font-normal disabled:bg-slate-50">
-              <option value="INDIAN_ONLY">Indian database only</option><option value="PQAI_ONLY">International patents only</option><option value="PQAI_PLUS_INDIAN">International + Indian database</option>
+              <option value="INDIAN_ONLY">Indian database only</option><option value="AUSTRALIA_ONLY">Australian database only</option><option value="EPO_ONLY">European patents only</option><option value="PQAI_ONLY">International patents only</option><option value="PQAI_PLUS_INDIAN">International + Indian database</option><option value="PQAI_PLUS_AUSTRALIA">International + Australian database</option><option value="PQAI_PLUS_EPO">International + European patents</option><option value="PQAI_PLUS_INDIAN_EPO">International + Indian + European patents</option>
             </select>
           </label>
         </div>
@@ -278,6 +317,47 @@ export default function NoveltySearchSubmission(props: {
                 <button type="button" onClick={addFeature} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
               </div>
             </div>
+
+            {usesEpoSearch && (
+              <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">European patent keyword search</h3>
+                  <p className="mt-1 text-xs text-slate-600">These phrases are used only for EPO OPS title and abstract searches.</p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-slate-700">Title keywords</div>
+                    {editedEpoTitleKeywords.map((keyword, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <input value={keyword} onChange={event => updateKeyword('title', index, event.target.value)} className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm" />
+                        <button type="button" onClick={() => removeKeyword('title', index)} aria-label={`Remove title keyword ${index + 1}`} className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex gap-2">
+                      <input value={newEpoTitleKeyword} onChange={event => setNewEpoTitleKeyword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addKeyword('title') } }} className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm" placeholder="Add title phrase" />
+                      <button type="button" onClick={() => addKeyword('title')} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-slate-700">Abstract keywords</div>
+                    {editedEpoAbstractKeywords.map((keyword, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <input value={keyword} onChange={event => updateKeyword('abstract', index, event.target.value)} className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm" />
+                        <button type="button" onClick={() => removeKeyword('abstract', index)} aria-label={`Remove abstract keyword ${index + 1}`} className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex gap-2">
+                      <input value={newEpoAbstractKeyword} onChange={event => setNewEpoAbstractKeyword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addKeyword('abstract') } }} className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm" placeholder="Add abstract phrase" />
+                      <button type="button" onClick={() => addKeyword('abstract')} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
               Approval is required because these terms control patent retrieval and feature-by-feature comparison. Internal processing begins only after you approve and queue this plan.

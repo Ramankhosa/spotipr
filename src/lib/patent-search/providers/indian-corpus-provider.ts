@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   PATENT_CORPUS_EMBEDDING_MODEL,
+  PATENT_CORPUS_SOURCE_EPO,
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
   hasSearchEmbeddingApiKey,
@@ -124,6 +125,9 @@ function corpusSourceCondition(corpusSource: string) {
   if (corpusSource === PATENT_CORPUS_SOURCE_PQAI) {
     return Prisma.sql`p."corpusSources" @> ARRAY['pqai']::TEXT[]`
   }
+  if (corpusSource === PATENT_CORPUS_SOURCE_EPO) {
+    return Prisma.sql`p."corpusSources" @> ARRAY['epo-ops']::TEXT[]`
+  }
   return Prisma.sql`p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]`
 }
 
@@ -236,6 +240,15 @@ function searchDocumentExpression() {
   return Prisma.sql`to_tsvector(
     'english'::regconfig,
     coalesce(p."ragText", '') || ' ' ||
+    coalesce(p."title", '') || ' ' ||
+    coalesce(p."abstract", '') || ' ' ||
+    coalesce(p."abstractOriginal", '')
+  )`
+}
+
+function titleAbstractSearchDocumentExpression() {
+  return Prisma.sql`to_tsvector(
+    'english'::regconfig,
     coalesce(p."title", '') || ' ' ||
     coalesce(p."abstract", '') || ' ' ||
     coalesce(p."abstractOriginal", '')
@@ -515,6 +528,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
   enabled = true
   protected corpusSource: string
   protected defaultJurisdiction: string
+  protected semanticSearchEnabled: boolean
+  protected metadataSearchEnabled: boolean
+  protected titleAbstractOnlySearch: boolean
   capabilities: PatentSearchCapabilities = {
     semantic: true,
     fullText: true,
@@ -531,12 +547,22 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     jurisdictions?: string[]
     corpusSource?: string
     defaultJurisdiction?: string
+    semanticSearchEnabled?: boolean
+    metadataSearchEnabled?: boolean
+    titleAbstractOnlySearch?: boolean
   } = {}) {
     this.id = options.id || 'indian-corpus'
     this.label = options.label || 'Indian Patent Corpus'
     this.jurisdictions = options.jurisdictions || ['IN']
     this.corpusSource = options.corpusSource || PATENT_CORPUS_SOURCE_INDIAN
     this.defaultJurisdiction = options.defaultJurisdiction || 'IN'
+    this.semanticSearchEnabled = options.semanticSearchEnabled !== false
+    this.metadataSearchEnabled = options.metadataSearchEnabled !== false
+    this.titleAbstractOnlySearch = options.titleAbstractOnlySearch === true
+    this.capabilities = {
+      ...this.capabilities,
+      semantic: this.semanticSearchEnabled,
+    }
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
@@ -634,7 +660,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const textQuery = normalizeWhitespace(queryPlan.searchQuery || queryPlan.normalizedQuery)
     if (textQuery && !manualMode) {
       try {
-        const searchDocument = searchDocumentExpression()
+        const searchDocument = this.titleAbstractOnlySearch
+          ? titleAbstractSearchDocumentExpression()
+          : searchDocumentExpression()
         const textCandidatePoolLimit = Math.min(Math.max(candidateLimit * 8, 300), TEXT_MATCH_CANDIDATE_CAP)
         const conditions = [
           Prisma.sql`numnode(q.query) > 0`,
@@ -652,7 +680,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             LIMIT ${textCandidatePoolLimit}
           )
           SELECT ${commonSelectSql(Prisma.sql`,
-            ts_rank_cd(${searchDocumentExpression()}, q.query) AS "textScore"`)}
+            ts_rank_cd(${searchDocument}, q.query) AS "textScore"`)}
           FROM hits
           JOIN "local_patents" p ON p."id" = hits."id"
           CROSS JOIN q
@@ -664,35 +692,37 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         console.warn('[IndianCorpusProvider] Full-text search skipped:', error)
       }
 
-      try {
-        const metadataDocument = metadataDocumentExpression()
-        const metadataCandidatePoolLimit = Math.min(Math.max(candidateLimit * 3, 120), METADATA_MATCH_CANDIDATE_CAP)
-        const metadataConditions = [
-          Prisma.sql`numnode(mq.query) > 0`,
-          Prisma.sql`${metadataDocument} @@ mq.query`,
-          ...filterConditions,
-        ]
-        const metadataRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
-          WITH mq AS (
-            SELECT websearch_to_tsquery('simple'::regconfig, ${textQuery}) AS query
-          ),
-          hits AS MATERIALIZED (
-            SELECT p."id"
-            FROM "local_patents" p, mq
-            ${whereSql(metadataConditions)}
-            LIMIT ${metadataCandidatePoolLimit}
-          )
-          SELECT ${commonSelectSql(Prisma.sql`,
-            ts_rank_cd(${metadataDocumentExpression()}, mq.query) AS "textScore"`)}
-          FROM hits
-          JOIN "local_patents" p ON p."id" = hits."id"
-          CROSS JOIN mq
-          ORDER BY "textScore" DESC
-          LIMIT ${Math.min(candidateLimit, metadataCandidatePoolLimit)}
-        `)
-        metadataRows.forEach((row, index) => merge(row, 'textRank', index + 1, 0.45))
-      } catch (error) {
-        console.warn('[IndianCorpusProvider] Metadata text search skipped:', error)
+      if (this.metadataSearchEnabled) {
+        try {
+          const metadataDocument = metadataDocumentExpression()
+          const metadataCandidatePoolLimit = Math.min(Math.max(candidateLimit * 3, 120), METADATA_MATCH_CANDIDATE_CAP)
+          const metadataConditions = [
+            Prisma.sql`numnode(mq.query) > 0`,
+            Prisma.sql`${metadataDocument} @@ mq.query`,
+            ...filterConditions,
+          ]
+          const metadataRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
+            WITH mq AS (
+              SELECT websearch_to_tsquery('simple'::regconfig, ${textQuery}) AS query
+            ),
+            hits AS MATERIALIZED (
+              SELECT p."id"
+              FROM "local_patents" p, mq
+              ${whereSql(metadataConditions)}
+              LIMIT ${metadataCandidatePoolLimit}
+            )
+            SELECT ${commonSelectSql(Prisma.sql`,
+              ts_rank_cd(${metadataDocumentExpression()}, mq.query) AS "textScore"`)}
+            FROM hits
+            JOIN "local_patents" p ON p."id" = hits."id"
+            CROSS JOIN mq
+            ORDER BY "textScore" DESC
+            LIMIT ${Math.min(candidateLimit, metadataCandidatePoolLimit)}
+          `)
+          metadataRows.forEach((row, index) => merge(row, 'textRank', index + 1, 0.45))
+        } catch (error) {
+          console.warn('[IndianCorpusProvider] Metadata text search skipped:', error)
+        }
       }
     }
 
@@ -713,7 +743,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       candidateLimit,
     })
 
-    if (vectorRetrievalQueries.length > 0 && hasSearchEmbeddingApiKey() && !manualMode) {
+    if (this.semanticSearchEnabled && vectorRetrievalQueries.length > 0 && hasSearchEmbeddingApiKey() && !manualMode) {
       let vectorStage = 'openai_embedding_request'
       try {
         const embeddingStartedAt = Date.now()
@@ -789,7 +819,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         }, true)
       }
     } else {
-      const skipReason = manualMode
+      const skipReason = !this.semanticSearchEnabled
+        ? 'semantic_disabled'
+        : manualMode
         ? 'manual_mode'
         : !hasSearchEmbeddingApiKey()
           ? 'missing_openai_api_key'

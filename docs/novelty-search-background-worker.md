@@ -23,6 +23,22 @@ NOVELTY_SEARCH_LOCK_MINUTES=30
 
 Set `NEXTAUTH_URL` (or `NEXT_PUBLIC_APP_URL`) to the public application origin so completion emails point to the protected PDF viewer. The worker also needs the same database, JWT, Mailjet, patent-search, LLM-provider, and metering environment values as the web process.
 
+Optional official patent-source keys:
+
+```bash
+# USPTO PatentsView is temporarily disabled in provider resolution while USPTO
+# completes the ODP migration and a working ODP key is provisioned.
+PATENTSVIEW_API_KEY=...
+# Also accepted:
+USPTO_PATENTSVIEW_API_KEY=...
+
+# Enables IP Australia as an additional source for AU novelty searches.
+# Copy these values from the approved Anypoint application page.
+IP_AUSTRALIA_CLIENT_ID=...
+IP_AUSTRALIA_CLIENT_SECRET=...
+IP_AUSTRALIA_API_ENV=test
+```
+
 Useful commands:
 
 ```bash

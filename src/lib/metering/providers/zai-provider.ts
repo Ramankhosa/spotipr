@@ -109,6 +109,8 @@ export class ZAIProvider implements LLMProvider {
           model: actualModel,
           inputTokens,
           thoughtTokens,
+          thoughtTokensIncludedInOutput: false,
+          totalTokens: response.usage?.total_tokens || 0,
           reasoningContent: response.choices?.[0]?.message?.reasoning_content,
           latencyMs: latency,
           finishReason

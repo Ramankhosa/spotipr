@@ -198,6 +198,8 @@ export class GeminiProvider implements LLMProvider {
             metadata: {
               provider: 'gemini',
               inputTokens: usage?.promptTokenCount || 0,
+              thoughtTokens: usage?.thoughtsTokenCount || 0,
+              thoughtTokensIncludedInOutput: false,
               totalTokens: usage?.totalTokenCount || 0,
               finishReason: response.candidates?.[0]?.finishReason
             }
@@ -366,6 +368,8 @@ export class GeminiProvider implements LLMProvider {
       metadata: {
         provider: 'gemini',
         inputTokens: usage?.promptTokenCount || 0,
+        thoughtTokens: usage?.thoughtsTokenCount || 0,
+        thoughtTokensIncludedInOutput: false,
         totalTokens: usage?.totalTokenCount || 0,
         finishReason: candidate?.finishReason,
         modelUsed: modelClass,

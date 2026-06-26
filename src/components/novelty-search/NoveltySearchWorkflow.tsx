@@ -163,7 +163,15 @@ const STAGE_RUN_LABELS: Record<StageTab, string> = {
 };
 
 type NoveltyPatentSearchMode = 'intelligent' | 'manual';
-type NoveltySearchSourceMode = 'INDIAN_ONLY' | 'PQAI_ONLY' | 'PQAI_PLUS_INDIAN';
+type NoveltySearchSourceMode =
+  | 'INDIAN_ONLY'
+  | 'AUSTRALIA_ONLY'
+  | 'EPO_ONLY'
+  | 'PQAI_ONLY'
+  | 'PQAI_PLUS_INDIAN'
+  | 'PQAI_PLUS_AUSTRALIA'
+  | 'PQAI_PLUS_EPO'
+  | 'PQAI_PLUS_INDIAN_EPO';
 type NoveltySearchPath = 'manual' | 'intelligent';
 
 type ManualPatentSearchFields = {
@@ -475,8 +483,12 @@ export default function NoveltySearchWorkflow({
   const [isEditingStage0, setIsEditingStage0] = useState(false);
   const [editedSearchQuery, setEditedSearchQuery] = useState('');
   const [editedFeatures, setEditedFeatures] = useState<string[]>([]);
+  const [editedEpoTitleKeywords, setEditedEpoTitleKeywords] = useState<string[]>([]);
+  const [editedEpoAbstractKeywords, setEditedEpoAbstractKeywords] = useState<string[]>([]);
   const [editingFeatureIndex, setEditingFeatureIndex] = useState<number | null>(null);
   const [newFeatureText, setNewFeatureText] = useState('');
+  const [newEpoTitleKeyword, setNewEpoTitleKeyword] = useState('');
+  const [newEpoAbstractKeyword, setNewEpoAbstractKeyword] = useState('');
   const [autoMode, setAutoMode] = useState(false);
   const [stage0Approved, setStage0Approved] = useState(false);
   const [isAutoRunning, setIsAutoRunning] = useState(false);
@@ -1489,6 +1501,8 @@ export default function NoveltySearchWorkflow({
     if (s0) {
       setEditedSearchQuery(s0.searchQuery || '');
       setEditedFeatures([...(s0.inventionFeatures || [])]);
+      setEditedEpoTitleKeywords(Array.isArray(s0.epoTitleKeywords) ? [...s0.epoTitleKeywords] : []);
+      setEditedEpoAbstractKeywords(Array.isArray(s0.epoAbstractKeywords) ? [...s0.epoAbstractKeywords] : []);
       setIsEditingStage0(true);
     }
   };
@@ -1506,7 +1520,9 @@ export default function NoveltySearchWorkflow({
         body: JSON.stringify({
           stage: 'stage0',
           searchQuery: editedSearchQuery,
-          inventionFeatures: editedFeatures
+          inventionFeatures: editedFeatures,
+          epoTitleKeywords: editedEpoTitleKeywords,
+          epoAbstractKeywords: editedEpoAbstractKeywords
         })
       });
 
@@ -1520,12 +1536,16 @@ export default function NoveltySearchWorkflow({
       const approvedStage0 = {
         ...(currentResults?.stage0 || currentResults),
         searchQuery: editedSearchQuery,
-        inventionFeatures: editedFeatures
+        inventionFeatures: editedFeatures,
+        epoTitleKeywords: editedEpoTitleKeywords,
+        epoAbstractKeywords: editedEpoAbstractKeywords
       };
       const nextResults = {
         stage0: approvedStage0,
         searchQuery: editedSearchQuery,
-        inventionFeatures: editedFeatures
+        inventionFeatures: editedFeatures,
+        epoTitleKeywords: editedEpoTitleKeywords,
+        epoAbstractKeywords: editedEpoAbstractKeywords
       };
       const nextState = {
         ...currentState,
@@ -1559,6 +1579,8 @@ export default function NoveltySearchWorkflow({
     setIsEditingStage0(false);
     setEditingFeatureIndex(null);
     setNewFeatureText('');
+    setNewEpoTitleKeyword('');
+    setNewEpoAbstractKeyword('');
   };
 
   const addFeature = () => {
@@ -1570,6 +1592,25 @@ export default function NoveltySearchWorkflow({
 
   const removeFeature = (index: number) => {
     setEditedFeatures(editedFeatures.filter((_, i) => i !== index));
+  };
+
+  const addEpoKeyword = (kind: 'title' | 'abstract') => {
+    const value = (kind === 'title' ? newEpoTitleKeyword : newEpoAbstractKeyword).trim();
+    if (!value) return;
+    const setter = kind === 'title' ? setEditedEpoTitleKeywords : setEditedEpoAbstractKeywords;
+    setter(current => current.some(keyword => keyword.toLowerCase() === value.toLowerCase()) ? current : [...current, value]);
+    if (kind === 'title') setNewEpoTitleKeyword('');
+    else setNewEpoAbstractKeyword('');
+  };
+
+  const updateEpoKeyword = (kind: 'title' | 'abstract', index: number, value: string) => {
+    const setter = kind === 'title' ? setEditedEpoTitleKeywords : setEditedEpoAbstractKeywords;
+    setter(current => current.map((keyword, keywordIndex) => keywordIndex === index ? value : keyword));
+  };
+
+  const removeEpoKeyword = (kind: 'title' | 'abstract', index: number) => {
+    const setter = kind === 'title' ? setEditedEpoTitleKeywords : setEditedEpoAbstractKeywords;
+    setter(current => current.filter((_, keywordIndex) => keywordIndex !== index));
   };
 
   const startEditingFeature = (index: number) => {
@@ -1893,7 +1934,7 @@ export default function NoveltySearchWorkflow({
                   setFormData(prev => ({
                     ...prev,
                     jurisdiction,
-                    searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY'
+                    searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : jurisdiction === 'AU' ? 'AUSTRALIA_ONLY' : jurisdiction === 'EP' ? 'EPO_ONLY' : 'PQAI_ONLY'
                   }));
                 }}
                 className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
@@ -1915,8 +1956,13 @@ export default function NoveltySearchWorkflow({
                 className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
               >
                 <option value="INDIAN_ONLY">Indian database only</option>
+                <option value="AUSTRALIA_ONLY">Australian database only</option>
+                <option value="EPO_ONLY">European patents only</option>
                 <option value="PQAI_ONLY">International patents only</option>
                 <option value="PQAI_PLUS_INDIAN">International patents + Indian database</option>
+                <option value="PQAI_PLUS_AUSTRALIA">International patents + Australian database</option>
+                <option value="PQAI_PLUS_EPO">International patents + European patents</option>
+                <option value="PQAI_PLUS_INDIAN_EPO">International patents + Indian + European patents</option>
               </select>
             </div>
           </div>
@@ -2128,7 +2174,7 @@ export default function NoveltySearchWorkflow({
                     setFormData(prev => ({
                       ...prev,
                       jurisdiction,
-                      searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY'
+                      searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : jurisdiction === 'AU' ? 'AUSTRALIA_ONLY' : jurisdiction === 'EP' ? 'EPO_ONLY' : 'PQAI_ONLY'
                     }));
                   }}
                   className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
@@ -2151,8 +2197,13 @@ export default function NoveltySearchWorkflow({
                 className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
               >
                 <option value="INDIAN_ONLY">Indian database only</option>
+                <option value="AUSTRALIA_ONLY">Australian database only</option>
+                <option value="EPO_ONLY">European patents only</option>
                 <option value="PQAI_ONLY">International patents only</option>
                 <option value="PQAI_PLUS_INDIAN">International patents + Indian database</option>
+                <option value="PQAI_PLUS_AUSTRALIA">International patents + Australian database</option>
+                <option value="PQAI_PLUS_EPO">International patents + European patents</option>
+                <option value="PQAI_PLUS_INDIAN_EPO">International patents + Indian + European patents</option>
               </select>
             </div>
             <label className="flex h-11 items-center justify-between self-end rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700">
@@ -2457,6 +2508,51 @@ export default function NoveltySearchWorkflow({
                   </div>
                 </div>
 
+                {(formData.searchSourceMode.includes('EPO') || editedEpoTitleKeywords.length > 0 || editedEpoAbstractKeywords.length > 0) && (
+                  <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-slate-900">European patent keyword search</h4>
+                      <p className="mt-1 text-xs text-slate-600">Used for EPO OPS title and abstract fields.</p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <Label className="text-sm font-medium text-slate-700 mb-2">Title keywords</Label>
+                        <div className="space-y-2 mb-3">
+                          {editedEpoTitleKeywords.map((keyword, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <Input value={keyword} onChange={(event) => updateEpoKeyword('title', idx, event.target.value)} className="rounded-lg" />
+                              <Button onClick={() => removeEpoKeyword('title', idx)} variant="ghost" size="sm" className="h-8 w-8 p-0 text-rose-500 hover:text-rose-600">
+                                <XCircle className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-2">
+                          <Input value={newEpoTitleKeyword} onChange={(event) => setNewEpoTitleKeyword(event.target.value)} placeholder="Add title phrase..." onKeyPress={(event) => { if (event.key === 'Enter') addEpoKeyword('title'); }} className="rounded-lg" />
+                          <Button onClick={() => addEpoKeyword('title')} disabled={!newEpoTitleKeyword.trim()} variant="outline" size="sm" className="rounded-lg">Add</Button>
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-slate-700 mb-2">Abstract keywords</Label>
+                        <div className="space-y-2 mb-3">
+                          {editedEpoAbstractKeywords.map((keyword, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <Input value={keyword} onChange={(event) => updateEpoKeyword('abstract', idx, event.target.value)} className="rounded-lg" />
+                              <Button onClick={() => removeEpoKeyword('abstract', idx)} variant="ghost" size="sm" className="h-8 w-8 p-0 text-rose-500 hover:text-rose-600">
+                                <XCircle className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-2">
+                          <Input value={newEpoAbstractKeyword} onChange={(event) => setNewEpoAbstractKeyword(event.target.value)} placeholder="Add abstract phrase..." onKeyPress={(event) => { if (event.key === 'Enter') addEpoKeyword('abstract'); }} className="rounded-lg" />
+                          <Button onClick={() => addEpoKeyword('abstract')} disabled={!newEpoAbstractKeyword.trim()} variant="outline" size="sm" className="rounded-lg">Add</Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-3 pt-4 border-t">
                   <Button onClick={cancelStage0Edits} variant="outline" className="rounded-lg">Cancel</Button>
                   <Button onClick={saveStage0Edits} className="rounded-lg bg-emerald-600 hover:bg-emerald-700" disabled={!editedSearchQuery.trim() || editedFeatures.length === 0}>
@@ -2488,6 +2584,29 @@ export default function NoveltySearchWorkflow({
                     </div>
                   </div>
                 </div>
+                {(Array.isArray(s0.epoTitleKeywords) && s0.epoTitleKeywords.length > 0) || (Array.isArray(s0.epoAbstractKeywords) && s0.epoAbstractKeywords.length > 0) ? (
+                  <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+                    <h4 className="font-medium text-slate-900 mb-3">European patent keyword search</h4>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Title</div>
+                        <div className="flex flex-wrap gap-2">
+                          {(s0.epoTitleKeywords || []).map((keyword: string, index: number) => (
+                            <span key={index} className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-700">{keyword}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Abstract</div>
+                        <div className="flex flex-wrap gap-2">
+                          {(s0.epoAbstractKeywords || []).map((keyword: string, index: number) => (
+                            <span key={index} className="rounded-full bg-emerald-50 px-3 py-1 text-xs text-emerald-700">{keyword}</span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {Array.isArray(s0.warnings) && s0.warnings.length > 0 && (
                   <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                     <div className="font-semibold">Stage 0 review warnings</div>

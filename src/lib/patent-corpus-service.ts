@@ -16,6 +16,7 @@ export const PATENT_CORPUS_EMBEDDING_MODEL = process.env.PATENT_CORPUS_EMBEDDING
 export const PATENT_CORPUS_EMBEDDING_DIMENSIONS = 1536
 export const PATENT_CORPUS_SOURCE_INDIAN = 'indian-corpus'
 export const PATENT_CORPUS_SOURCE_PQAI = 'pqai'
+export const PATENT_CORPUS_SOURCE_EPO = 'epo-ops'
 export const PATENT_CORPUS_MAX_PDFS_PER_BATCH = Math.max(
   1,
   Number(process.env.PATENT_CORPUS_MAX_PDFS_PER_BATCH || '100') || 100
@@ -164,7 +165,7 @@ function inferPatentCountry(publicationNumber: string, fallback?: unknown) {
   return match?.[1] || null
 }
 
-function pqaiPatentText(result: NormalizedPatentResult) {
+function externalPatentText(result: NormalizedPatentResult) {
   return compactPatentText([
     result.title,
     result.abstract || result.snippet,
@@ -842,7 +843,12 @@ async function findLocalPatentForPqai(publicationNumber: string, db: any = prism
   })
 }
 
-function buildPqaiPatentData(result: NormalizedPatentResult, existing: any, fetchedAt: Date, context?: { query?: string }) {
+function buildExternalPatentData(
+  result: NormalizedPatentResult,
+  existing: any,
+  fetchedAt: Date,
+  context: { query?: string; providerId?: string; corpusSource?: string } = {}
+) {
   const publicationNumber = compactPatentText(result.publicationNumber || result.pn || result.publication_number)
   const title = compactPatentText(result.title) || publicationNumber || 'Untitled Patent'
   const abstract = compactPatentText(result.abstract || result.snippet) || null
@@ -852,9 +858,11 @@ function buildPqaiPatentData(result: NormalizedPatentResult, existing: any, fetc
     ...asStringList(result.ipcCodes),
   ])
   const inventors = uniqueStringList(asStringList(result.inventors))
-  const embeddingText = pqaiPatentText(result) || title
+  const embeddingText = externalPatentText(result) || title
   const existingHasRicherCapture = Boolean(existing?.ipIndiaCapturedAt || existing?.claimsText || existing?.descriptionText)
   const raw = (result.raw && typeof result.raw === 'object') ? result.raw : null
+  const providerId = context.providerId || String(result.providerId || result.sourceProvider || 'pqai')
+  const corpusSource = context.corpusSource || PATENT_CORPUS_SOURCE_PQAI
 
   const data: Record<string, any> = {
     publicationNumber: existing?.publicationNumber || publicationNumber,
@@ -869,15 +877,15 @@ function buildPqaiPatentData(result: NormalizedPatentResult, existing: any, fetc
     classifications: existing?.classifications?.length ? mergeCorpusSources(existing.classifications, classifications) : classifications,
     ragText: existingHasRicherCapture ? (existing?.ragText || embeddingText) : (embeddingText || existing?.ragText || null),
     embeddingText: existingHasRicherCapture ? (existing?.embeddingText || embeddingText) : (embeddingText || existing?.embeddingText || null),
-    corpusSources: mergeCorpusSources(existing?.corpusSources, PATENT_CORPUS_SOURCE_PQAI),
+    corpusSources: mergeCorpusSources(existing?.corpusSources, corpusSource),
     pqaiDetails: {
-      provider: 'pqai',
+      provider: providerId,
       fetchedAt: fetchedAt.toISOString(),
       query: context?.query || null,
       link: result.link || result.sourceUrl || null,
       sourceUrl: result.sourceUrl || result.link || null,
       score: result.relevanceScore ?? result.hybridScore ?? null,
-      sourceProviders: result.sourceProviders || [result.sourceProvider || result.providerId || 'pqai'],
+      sourceProviders: result.sourceProviders || [result.sourceProvider || result.providerId || providerId],
       normalized: {
         publicationNumber,
         applicationNumber: result.applicationNumber || result.applicationNumberRaw || null,
@@ -904,9 +912,9 @@ function buildPqaiPatentData(result: NormalizedPatentResult, existing: any, fetc
   return sanitizePostgresText(data)
 }
 
-export async function persistPqaiPatentResults(
+export async function persistPatentResultsToCorpus(
   results: NormalizedPatentResult[],
-  context: { query?: string; fetchedAt?: Date } = {},
+  context: { query?: string; fetchedAt?: Date; providerId?: string; corpusSource?: string } = {},
   db: any = prisma
 ) {
   const fetchedAt = context.fetchedAt || new Date()
@@ -924,7 +932,7 @@ export async function persistPqaiPatentResults(
     }
 
     const existing = await findLocalPatentForPqai(publicationNumber, db)
-    const data = buildPqaiPatentData(result, existing, fetchedAt, context)
+    const data = buildExternalPatentData(result, existing, fetchedAt, context)
     const patent = existing
       ? await db.localPatent.update({ where: { id: existing.id }, data })
       : await db.localPatent.create({ data })
@@ -940,6 +948,18 @@ export async function persistPqaiPatentResults(
   }
 
   return { created, updated, queuedEmbeddings, skipped }
+}
+
+export async function persistPqaiPatentResults(
+  results: NormalizedPatentResult[],
+  context: { query?: string; fetchedAt?: Date } = {},
+  db: any = prisma
+) {
+  return persistPatentResultsToCorpus(results, {
+    ...context,
+    providerId: 'pqai',
+    corpusSource: PATENT_CORPUS_SOURCE_PQAI,
+  }, db)
 }
 
 export function patentWhereForImportFile(file: { id: string; fileHash?: string | null; originalName?: string | null }) {

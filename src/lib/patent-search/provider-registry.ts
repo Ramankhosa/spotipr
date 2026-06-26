@@ -3,9 +3,13 @@ import type {
   PatentSearchProvider,
   PatentSearchProviderId,
 } from './types'
+import { EpoOpsCorpusProvider } from './providers/epo-ops-corpus-provider'
+import { EpoOpsProvider, hasEpoOpsCredentials } from './providers/epo-ops-provider'
 import { IndianCorpusProvider } from './providers/indian-corpus-provider'
+import { IpAustraliaProvider, hasIpAustraliaCredentials } from './providers/ip-australia-provider'
 import { PqaiCorpusProvider } from './providers/pqai-corpus-provider'
 import { PqaiProvider } from './providers/pqai-provider'
+import { PatentsViewProvider } from './providers/patentsview-provider'
 
 class PlaceholderProvider implements PatentSearchProvider {
   enabled = false
@@ -34,9 +38,10 @@ const providers: PatentSearchProvider[] = [
   new IndianCorpusProvider(),
   new PqaiCorpusProvider(),
   new PqaiProvider(),
-  new PlaceholderProvider('epo-ops', 'EPO OPS', ['EP', 'WO', '*']),
-  new PlaceholderProvider('uspto', 'USPTO', ['US']),
-  new PlaceholderProvider('ip-australia', 'IP Australia', ['AU']),
+  new PatentsViewProvider(),
+  new EpoOpsCorpusProvider(),
+  new EpoOpsProvider(),
+  new IpAustraliaProvider(),
   new PlaceholderProvider('wipo', 'WIPO PATENTSCOPE', ['WO']),
 ]
 
@@ -61,14 +66,28 @@ export function resolveProviderIds(params: {
 }) {
   if (params.providerIds?.length) return params.providerIds
 
-  if (params.sourceMode === 'INDIAN_ONLY') return ['indian-corpus']
-  if (params.sourceMode === 'PQAI_ONLY') return ['pqai-corpus', 'pqai']
-  if (params.sourceMode === 'PQAI_PLUS_INDIAN') return ['indian-corpus', 'pqai-corpus', 'pqai']
-
   const jurisdictions = (params.jurisdictions || []).map(value => value.toUpperCase())
+  const officialProviderIds: PatentSearchProviderId[] = []
+  if (jurisdictions.includes('AU') && hasIpAustraliaCredentials()) officialProviderIds.push('ip-australia')
+  const epoProviderIds: PatentSearchProviderId[] = ['epo-ops-corpus']
+  if (hasEpoOpsCredentials()) epoProviderIds.push('epo-ops')
+  if (jurisdictions.some(value => value === 'EP' || value === 'WO')) {
+    officialProviderIds.push(...epoProviderIds)
+  }
+
+  if (params.sourceMode === 'INDIAN_ONLY') return ['indian-corpus']
+  if (params.sourceMode === 'AUSTRALIA_ONLY') return ['ip-australia']
+  if (params.sourceMode === 'EPO_ONLY') return epoProviderIds
+  if (params.sourceMode === 'PQAI_ONLY') return [...officialProviderIds, 'pqai-corpus', 'pqai']
+  if (params.sourceMode === 'PQAI_PLUS_INDIAN') return ['indian-corpus', ...officialProviderIds, 'pqai-corpus', 'pqai']
+  if (params.sourceMode === 'PQAI_PLUS_AUSTRALIA') return [...officialProviderIds, 'pqai-corpus', 'pqai']
+  if (params.sourceMode === 'PQAI_PLUS_EPO') return [...epoProviderIds, 'pqai-corpus', 'pqai']
+  if (params.sourceMode === 'PQAI_PLUS_INDIAN_EPO') return ['indian-corpus', ...epoProviderIds, 'pqai-corpus', 'pqai']
+
   if (jurisdictions.length) {
     const ids: PatentSearchProviderId[] = []
     if (jurisdictions.includes('IN')) ids.push('indian-corpus')
+    ids.push(...officialProviderIds)
     if (jurisdictions.some(value => value !== 'IN')) ids.push('pqai-corpus', 'pqai')
     return ids.length ? ids : ['pqai-corpus', 'pqai']
   }

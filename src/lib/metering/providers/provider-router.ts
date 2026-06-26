@@ -7,6 +7,7 @@ import { MeteringError } from '../index'
 import type { LLMProvider } from './llm-provider'
 import { createLLMProvider, getProviderFromModelCode, type ProviderConfig, type ProviderType } from './llm-provider'
 import { logLLMCost, calculateCost, type CostBreakdown, ensurePricingLoaded, isPricingLoaded } from '../cost-calculator'
+import { areMetaThoughtTokensIncludedInOutput } from '@/lib/usage-log-cost'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 
@@ -114,6 +115,19 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'glm-4.5-flash': { maxInput: 128000, maxOutput: 96000 },
   'glm-4.5v': { maxInput: 128000, maxOutput: 16000 },
   'glm-4-32b-0414-128k': { maxInput: 128000, maxOutput: 16000 }
+}
+
+function normalizeThoughtTokens(metadata: Record<string, any> | undefined): number {
+  const value = metadata?.thoughtTokens ?? metadata?.reasoningTokens
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0
+}
+
+function getSeparateThoughtTokens(metadata: Record<string, any> | undefined): number {
+  const thoughtTokens = normalizeThoughtTokens(metadata)
+  if (thoughtTokens <= 0) return 0
+  return areMetaThoughtTokensIncludedInOutput(metadata) ? 0 : thoughtTokens
 }
 
 // All supported provider configurations
@@ -270,21 +284,24 @@ export class LLMProviderRouter {
       // Use ?? (nullish coalescing) instead of || to handle 0 as a valid value
       const inputTokens = response.metadata?.inputTokens ?? request.inputTokens ?? 0
       const outputTokens = response.outputTokens ?? 0
-      const thoughtTokens = response.metadata?.thoughtTokens
+      const thoughtTokens = normalizeThoughtTokens(response.metadata)
+      const thoughtTokensIncludedInOutput = areMetaThoughtTokensIncludedInOutput(response.metadata)
+      const separateThoughtTokens = getSeparateThoughtTokens(response.metadata)
       
       const costBreakdown = logLLMCost(
         request.taskCode || 'LLM_CALL',
         actualModelCode,
         inputTokens,
         outputTokens,
-        thoughtTokens,
+        thoughtTokens || undefined,
         {
           taskCode: request.taskCode,
           stageCode: (request as any).stageCode,
           patentId: request.metadata?.patentId,
           userId: request.metadata?.userId,
           tenantId: request.metadata?.tenantId,
-          duration
+          duration,
+          thoughtTokensIncludedInOutput
         }
       )
 
@@ -301,6 +318,8 @@ export class LLMProviderRouter {
             inputTokens,
             outputTokens,
             thoughtTokens,
+            thoughtTokensIncludedInOutput,
+            billableOutputTokens: outputTokens + separateThoughtTokens,
             totalTokens: costBreakdown.totalTokens,
             actualCost: costBreakdown.actualCost,
             contingencyCost: costBreakdown.contingencyCost,
@@ -483,21 +502,24 @@ export class LLMProviderRouter {
       // Use ?? (nullish coalescing) instead of || to handle 0 as a valid value
       const inputTokens = response.metadata?.inputTokens ?? request.inputTokens ?? 0
       const outputTokens = response.outputTokens ?? 0
-      const thoughtTokens = response.metadata?.thoughtTokens
+      const thoughtTokens = normalizeThoughtTokens(response.metadata)
+      const thoughtTokensIncludedInOutput = areMetaThoughtTokensIncludedInOutput(response.metadata)
+      const separateThoughtTokens = getSeparateThoughtTokens(response.metadata)
       
       const costBreakdown = logLLMCost(
         `${request.taskCode || 'LLM_CALL'}${isFallback ? ' [FALLBACK]' : ''}`,
         modelCode,
         inputTokens,
         outputTokens,
-        thoughtTokens,
+        thoughtTokens || undefined,
         {
           taskCode: request.taskCode,
           stageCode: (request as any).stageCode,
           patentId: request.metadata?.patentId,
           userId: request.metadata?.userId,
           tenantId: request.metadata?.tenantId,
-          duration
+          duration,
+          thoughtTokensIncludedInOutput
         }
       )
       
@@ -513,6 +535,8 @@ export class LLMProviderRouter {
             inputTokens,
             outputTokens,
             thoughtTokens,
+            thoughtTokensIncludedInOutput,
+            billableOutputTokens: outputTokens + separateThoughtTokens,
             totalTokens: costBreakdown.totalTokens,
             actualCost: costBreakdown.actualCost,
             contingencyCost: costBreakdown.contingencyCost,

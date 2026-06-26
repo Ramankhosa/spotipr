@@ -169,6 +169,9 @@ OUTPUT JSON SHAPE:
   "inventionType": ["MECHANICAL|SOFTWARE|CHEMICAL|ELECTRICAL|BIO|GENERAL"],
   "cpcCodes": ["optional CPC class hint, or empty array"],
   "ipcCodes": ["optional IPC class hint, or empty array"],
+  "epoTitleKeywords": ["short object/system phrase likely to appear in a European patent title"],
+  "epoAbstractKeywords": ["mechanism/function phrase likely to appear in a European patent abstract"],
+  "epoCombinedKeywords": ["fallback phrase suitable for either European patent title or abstract"],
   "novelty_focus": ["feature most likely to drive novelty"],
   "novelty_focus_interactions": [
     {
@@ -247,6 +250,13 @@ SEARCH QUERY DISCIPLINE:
 - The search query must describe what the invention is and how it works, not its market benefit.
 - Keep searchQuery broad and self-contained; do not stuff it with every feature.
 - Prefer recall-oriented technical terms and preserve only the most central operating mechanism needed to find close prior art; avoid packing searchQuery with secondary refinements that belong in novelty_focus.
+
+EPO TITLE/ABSTRACT KEYWORD SEARCH:
+- epoTitleKeywords are for EPO OPS title field searches. Use 1-6 short noun phrases naming the technical object, system, device, composition, process, or controller likely to appear in patent titles.
+- epoAbstractKeywords are for EPO OPS abstract field searches. Use 1-8 mechanism/function phrases likely to appear in abstracts, including operating mechanism, transformation, control relationship, material relationship, or process sequence.
+- epoCombinedKeywords are fallback phrases useful in either title or abstract when the field is uncertain.
+- Keep each EPO keyword phrase concise, normally 2-8 words. Do not use boolean syntax, wildcards, punctuation-heavy expressions, or full sentences.
+- Do not duplicate phrases across epoTitleKeywords, epoAbstractKeywords, and epoCombinedKeywords unless the phrase is essential.
 
 NOVELTY FOCUS RULES:
 - novelty_focus must contain 1-4 features from invention_features that are most likely to distinguish over prior art.
@@ -1085,6 +1095,9 @@ export interface NormalizedIdea {
   inventionType?: string[];
   cpcCodes?: string[];
   ipcCodes?: string[];
+  epoTitleKeywords?: string[];
+  epoAbstractKeywords?: string[];
+  epoCombinedKeywords?: string[];
   noveltyFocus?: string[];
   noveltyFocusInteractions?: NoveltyFocusInteraction[];
   architecturalInnovation?: string;
@@ -1776,6 +1789,9 @@ export class NoveltySearchService extends BasePatentService {
       const approvedFeatures = Array.isArray(request.approvedStage0?.inventionFeatures)
         ? Array.from(new Set(request.approvedStage0.inventionFeatures.map(feature => String(feature || '').trim()).filter(Boolean)))
         : [];
+      const approvedEpoTitleKeywords = this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoTitleKeywords ?? (request.approvedStage0 as any)?.epo_title_keywords);
+      const approvedEpoAbstractKeywords = this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoAbstractKeywords ?? (request.approvedStage0 as any)?.epo_abstract_keywords);
+      const approvedEpoCombinedKeywords = this.normalizeEpoKeywordList((request.approvedStage0 as any)?.epoCombinedKeywords ?? (request.approvedStage0 as any)?.epo_combined_keywords);
       if (intelligentSearch && (!approvedQuery || approvedFeatures.length === 0)) {
         return { success: false, error: 'Review and approve the generated search query and invention features before queueing the novelty search.' };
       }
@@ -1788,6 +1804,9 @@ export class NoveltySearchService extends BasePatentService {
             ...request.approvedStage0,
             searchQuery: approvedQuery.slice(0, 1000),
             inventionFeatures: approvedFeatures.slice(0, 30).map(feature => feature.slice(0, 1000)),
+            epoTitleKeywords: approvedEpoTitleKeywords,
+            epoAbstractKeywords: approvedEpoAbstractKeywords,
+            epoCombinedKeywords: approvedEpoCombinedKeywords,
             featureDetails: approvedFeatures.slice(0, 30).map((feature, index) => {
               const exactMatch = suppliedDetails.find(detail => String(detail?.feature || '').trim() === feature);
               const existing = exactMatch || suppliedDetails[index];
@@ -3558,6 +3577,9 @@ RESPONSE:`;
           .map((value: any) => String(value || '').trim())
           .filter(Boolean);
         const searchText = filterValues.join(' ').replace(/\s+/g, ' ').trim();
+        const titleKeywords = this.normalizeEpoKeywordList((filters as any).titleContains);
+        const abstractKeywords = this.normalizeEpoKeywordList((filters as any).abstractContains);
+        const combinedKeywords = this.normalizeEpoKeywordList((filters as any).anyTextContains);
         const featureSeeds = filterValues
           .flatMap(value => value.split(/[,;\n]/))
           .map(value => value.trim())
@@ -3577,6 +3599,9 @@ RESPONSE:`;
             title: request.title || 'Manual Patent Search',
             inventionText: request.inventionDescription || '',
             inventionType: ['GENERAL'],
+            epoTitleKeywords: titleKeywords,
+            epoAbstractKeywords: abstractKeywords,
+            epoCombinedKeywords: combinedKeywords,
             architecturalInnovation: '',
             claimConcepts: [],
             noveltyFocusInteractions: [],
@@ -3632,9 +3657,12 @@ RESPONSE:`;
         inventionType: Array.isArray(normalizedData?.inventionType) 
           ? normalizedData.inventionType 
           : (normalizedData?.inventionType ? [normalizedData.inventionType] : ['GENERAL']),
-        cpcCodes: Array.isArray(normalizedData?.cpcCodes) ? normalizedData.cpcCodes.filter(Boolean) : [],
-        ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : [],
-        noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
+            cpcCodes: Array.isArray(normalizedData?.cpcCodes) ? normalizedData.cpcCodes.filter(Boolean) : [],
+            ipcCodes: Array.isArray(normalizedData?.ipcCodes) ? normalizedData.ipcCodes.filter(Boolean) : [],
+            epoTitleKeywords: this.normalizeEpoKeywordList(normalizedData?.epoTitleKeywords ?? normalizedData?.epo_title_keywords),
+            epoAbstractKeywords: this.normalizeEpoKeywordList(normalizedData?.epoAbstractKeywords ?? normalizedData?.epo_abstract_keywords),
+            epoCombinedKeywords: this.normalizeEpoKeywordList(normalizedData?.epoCombinedKeywords ?? normalizedData?.epo_combined_keywords),
+            noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
         noveltyFocusInteractions: Array.isArray(normalizedData?.novelty_focus_interactions)
           ? normalizedData.novelty_focus_interactions
           : [],
@@ -3713,6 +3741,9 @@ RESPONSE:`;
       const stage0FeatureDetails = this.normalizeFeatureDetails(stage0Data, stage0Data.inventionText || searchRun?.inventionDescription || '');
       const stage0CpcCodes = Array.isArray(stage0Data.cpcCodes) ? stage0Data.cpcCodes.filter(Boolean) : [];
       const stage0IpcCodes = Array.isArray(stage0Data.ipcCodes) ? stage0Data.ipcCodes.filter(Boolean) : [];
+      const stage0EpoTitleKeywords = this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords);
+      const stage0EpoAbstractKeywords = this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords);
+      const stage0EpoCombinedKeywords = this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords);
       const stage0SearchExclusions = Array.isArray(stage0Data.searchExclusions) ? stage0Data.searchExclusions.filter(Boolean) : [];
       const stage1Filters = withStage0Exclusions(config.searchSource?.filters || {}, stage0SearchExclusions);
       const stage0QueryPlan: Partial<PatentSearchQueryPlan> | undefined = searchMode === 'manual'
@@ -3730,6 +3761,9 @@ RESPONSE:`;
           cpcCodes: stage0CpcCodes,
           ipcCodes: stage0IpcCodes,
           classificationHints: Array.from(new Set([...stage0CpcCodes, ...stage0IpcCodes])),
+          epoTitleKeywords: stage0EpoTitleKeywords,
+          epoAbstractKeywords: stage0EpoAbstractKeywords,
+          epoCombinedKeywords: stage0EpoCombinedKeywords,
           fieldFilters: stage1Filters,
           explicitFilters: stage1Filters,
           searchVariants: stage0SearchQuery ? [stage0SearchQuery] : [],
@@ -4129,6 +4163,26 @@ RESPONSE:`;
     return Math.round(Math.max(0, Math.min(1, scaled)) * 100) / 100;
   }
 
+  private normalizeEpoKeywordList(value: unknown, maxItems = 8): string[] {
+    const values = Array.isArray(value)
+      ? value.flatMap(item => String(item || '').split(/[,;\n]/))
+      : (typeof value === 'string' ? value.split(/[,;\n]/) : []);
+    const seen = new Set<string>();
+    const keywords: string[] = [];
+    for (const item of values) {
+      const raw = String(item || '').replace(/\s+/g, ' ').trim();
+      if (!raw || raw.split(/\s+/).filter(Boolean).length > 10) continue;
+      const text = normalizeRetrievalText(raw, 10);
+      if (!text || text.length < 3 || text.length > 120) continue;
+      const key = text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keywords.push(text);
+      if (keywords.length >= maxItems) break;
+    }
+    return keywords;
+  }
+
   private normalizedFeatureKey(value: unknown): string {
     return String(value || '')
       .toLowerCase()
@@ -4285,6 +4339,9 @@ RESPONSE:`;
       ...stage0Data,
       inventionFeatures: features,
       featureDetails,
+      epoTitleKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords ?? (stage0Data as any).epo_title_keywords),
+      epoAbstractKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords ?? (stage0Data as any).epo_abstract_keywords),
+      epoCombinedKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords ?? (stage0Data as any).epo_combined_keywords),
       architecturalInnovation: this.normalizeStage0Scalar((stage0Data as any).architecturalInnovation ?? (stage0Data as any).architectural_innovation ?? '', 500),
       claimConcepts: this.normalizeClaimConcepts(conceptSource, features, warnings),
       noveltyFocusInteractions: this.normalizeNoveltyFocusInteractions(interactionSource, features, warnings),

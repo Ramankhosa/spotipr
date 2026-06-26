@@ -290,6 +290,9 @@ export class LLMGateway {
             stageCode: llmRequest.stageCode,
             providerInputTokens: responseInputTokens ?? null,
             providerOutputTokens: response.outputTokens ?? response.metadata?.outputTokens ?? null,
+            thoughtTokens: response.metadata?.thoughtTokens ?? response.metadata?.reasoningTokens ?? 0,
+            thoughtTokensIncludedInOutput: response.metadata?.thoughtTokensIncludedInOutput === true,
+            costBreakdown: response.metadata?.costBreakdown,
             modelSource: explicitModelCode ? 'explicit' : modelResolution?.source
           }
         }

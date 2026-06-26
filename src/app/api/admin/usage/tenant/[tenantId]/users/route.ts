@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getMetaActualCost } from '@/lib/usage-log-cost'
+import { getBillableOutputTokens, getMetaActualCost } from '@/lib/usage-log-cost'
 import { normalizeUsageDateRange, toInclusiveDateRange } from '@/lib/usage-periods'
 import { z } from 'zod'
 
@@ -136,7 +136,7 @@ export async function GET(
 
     const calcCost = (log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null; meta?: unknown }) => {
       const inputTokens = log.inputTokens || 0
-      const outputTokens = log.outputTokens || 0
+      const outputTokens = getBillableOutputTokens(log.outputTokens, log.meta)
       const metaCost = getMetaActualCost(log.meta)
       if (metaCost !== null && (metaCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
         return metaCost
@@ -165,7 +165,7 @@ export async function GET(
       }
       const bucket = buckets.get(log.userId)!
       const input = log.inputTokens || 0
-      const output = log.outputTokens || 0
+      const output = getBillableOutputTokens(log.outputTokens, log.meta)
       const calls = log.apiCalls || 0
       const cost = calcCost(log)
 

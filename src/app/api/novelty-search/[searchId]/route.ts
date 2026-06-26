@@ -159,7 +159,7 @@ export async function PATCH(
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
 
     const body = await request.json();
-    const { stage, searchQuery, inventionFeatures } = body;
+    const { stage, searchQuery, inventionFeatures, epoTitleKeywords, epoAbstractKeywords, epoCombinedKeywords } = body;
 
     if (stage === 'stage0') {
       // Preserve LLM-detected archetype so user edits don't wipe it out
@@ -180,12 +180,18 @@ export async function PATCH(
         ...existingStage0,
         searchQuery: approvedSearchQuery,
         inventionFeatures: approvedFeatures,
+        epoTitleKeywords: Array.isArray(epoTitleKeywords) ? epoTitleKeywords : existingStage0.epoTitleKeywords,
+        epoAbstractKeywords: Array.isArray(epoAbstractKeywords) ? epoAbstractKeywords : existingStage0.epoAbstractKeywords,
+        epoCombinedKeywords: Array.isArray(epoCombinedKeywords) ? epoCombinedKeywords : existingStage0.epoCombinedKeywords,
         ...(inventionType ? { inventionType } : {}),
         ...(cpcCodes ? { cpcCodes } : {}),
         ...(ipcCodes ? { ipcCodes } : {}),
       }, String(existing?.inventionDescription || ''));
       const stage0Changed = approvedSearchQuery !== String(existingStage0.searchQuery || '').trim() ||
-        JSON.stringify(approvedFeatures) !== JSON.stringify(existingStage0.inventionFeatures || []);
+        JSON.stringify(approvedFeatures) !== JSON.stringify(existingStage0.inventionFeatures || []) ||
+        JSON.stringify(normalizedStage0.epoTitleKeywords || []) !== JSON.stringify(existingStage0.epoTitleKeywords || []) ||
+        JSON.stringify(normalizedStage0.epoAbstractKeywords || []) !== JSON.stringify(existingStage0.epoAbstractKeywords || []) ||
+        JSON.stringify(normalizedStage0.epoCombinedKeywords || []) !== JSON.stringify(existingStage0.epoCombinedKeywords || []);
 
       await prisma.noveltySearchRun.update({
         where: { id: searchId, userId: user.id },

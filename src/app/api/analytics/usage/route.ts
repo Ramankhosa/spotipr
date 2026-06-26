@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 // Force dynamic rendering for API routes that use headers
 export const dynamic = 'force-dynamic'
 import { prisma } from '@/lib/prisma'
-import { getMetaActualCost } from '@/lib/usage-log-cost'
+import { getBillableOutputTokens, getMetaActualCost } from '@/lib/usage-log-cost'
 import { z } from 'zod'
 
 const AnalyticsQuerySchema = z.object({
@@ -242,10 +242,13 @@ function processUsageData(
   }>()
 
   for (const log of usageLogs) {
+    const inputTokens = log.inputTokens || 0
+    const outputTokens = getBillableOutputTokens(log.outputTokens, log.meta)
+
     // Update summary
-    summary.inputTokens += log.inputTokens || 0
-    summary.outputTokens += log.outputTokens || 0
-    summary.totalTokens += (log.inputTokens || 0) + (log.outputTokens || 0)
+    summary.inputTokens += inputTokens
+    summary.outputTokens += outputTokens
+    summary.totalTokens += inputTokens + outputTokens
     summary.cost += calculateCost(log, priceMap)
 
     // Group by entity
@@ -298,9 +301,9 @@ function processUsageData(
 
     const group = groupedData.get(entityKey)!
     group.logs.push(log)
-    group.metrics.inputTokens += log.inputTokens || 0
-    group.metrics.outputTokens += log.outputTokens || 0
-    group.metrics.totalTokens += (log.inputTokens || 0) + (log.outputTokens || 0)
+    group.metrics.inputTokens += inputTokens
+    group.metrics.outputTokens += outputTokens
+    group.metrics.totalTokens += inputTokens + outputTokens
     group.metrics.apiCalls += 1
     group.metrics.requests += 1
     group.metrics.cost += calculateCost(log, priceMap)
@@ -333,7 +336,7 @@ function calculateCost(
   priceMap?: Map<string, { input: number; output: number }>
 ): number {
   const inputTokens = log.inputTokens || 0
-  const outputTokens = log.outputTokens || 0
+  const outputTokens = getBillableOutputTokens(log.outputTokens, log.meta)
   const metaCost = getMetaActualCost(log.meta)
   if (metaCost !== null && (metaCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
     return metaCost
@@ -376,9 +379,11 @@ function generateTrendsData(
     }
 
     const metrics = trends.get(period)!
-    metrics.inputTokens += log.inputTokens || 0
-    metrics.outputTokens += log.outputTokens || 0
-    metrics.totalTokens += (log.inputTokens || 0) + (log.outputTokens || 0)
+    const inputTokens = log.inputTokens || 0
+    const outputTokens = getBillableOutputTokens(log.outputTokens, log.meta)
+    metrics.inputTokens += inputTokens
+    metrics.outputTokens += outputTokens
+    metrics.totalTokens += inputTokens + outputTokens
     metrics.apiCalls += 1
     metrics.requests += 1
     metrics.cost += calculateCost(log, priceMap)
@@ -414,9 +419,11 @@ function getTopUsers(
     }
 
     const data = userMetrics.get(userId)!
-    data.metrics.inputTokens += log.inputTokens || 0
-    data.metrics.outputTokens += log.outputTokens || 0
-    data.metrics.totalTokens += (log.inputTokens || 0) + (log.outputTokens || 0)
+    const inputTokens = log.inputTokens || 0
+    const outputTokens = getBillableOutputTokens(log.outputTokens, log.meta)
+    data.metrics.inputTokens += inputTokens
+    data.metrics.outputTokens += outputTokens
+    data.metrics.totalTokens += inputTokens + outputTokens
     data.metrics.apiCalls += 1
     data.metrics.requests += 1
     data.metrics.cost += calculateCost(log, priceMap)

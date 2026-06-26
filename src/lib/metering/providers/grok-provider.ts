@@ -51,6 +51,7 @@ export class GrokProvider implements LLMProvider {
       // This may need adjustment based on actual Grok API
       const choice = data.choices?.[0] || data
       const usage = data.usage
+      const thoughtTokens = usage?.completion_tokens_details?.reasoning_tokens || 0
 
       return {
         output: choice.message?.content || choice.content || '',
@@ -59,6 +60,8 @@ export class GrokProvider implements LLMProvider {
         metadata: {
           provider: 'grok',
           inputTokens: usage?.prompt_tokens || 0,
+          thoughtTokens,
+          thoughtTokensIncludedInOutput: false,
           totalTokens: usage?.total_tokens || 0,
           finishReason: choice.finish_reason
         }

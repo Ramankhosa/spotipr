@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getMetaActualCost } from '@/lib/usage-log-cost'
+import { getBillableOutputTokens, getMetaActualCost } from '@/lib/usage-log-cost'
 import { z } from 'zod'
 import { normalizeUsageDateRange, toInclusiveDateRange } from '@/lib/usage-periods'
 
@@ -161,7 +161,7 @@ export async function GET(request: NextRequest) {
 
       const userEntry = usersMap.get(uid)!
       const input = log.inputTokens || 0
-      const output = log.outputTokens || 0
+      const output = getBillableOutputTokens(log.outputTokens, log.meta)
       const calls = log.apiCalls || 1
 
       const modelKey = log.modelClass || 'UNKNOWN_MODEL'

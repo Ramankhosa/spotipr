@@ -18,6 +18,7 @@
 import { prisma } from './prisma'
 import type { ServiceType } from '@prisma/client'
 import { getCurrentUtcPeriods } from './usage-periods'
+import { getMetaSeparatelyBilledThoughtTokens } from './usage-log-cost'
 
 // ============================================================================
 // Types
@@ -436,8 +437,10 @@ export async function trackServiceUsage(params: TrackUsageParams): Promise<{
     metadata
   } = params
   
-  const totalTokens = inputTokens + outputTokens
-  const cost = await calculateCost(inputTokens, outputTokens, modelClass)
+  const separateThoughtTokens = getMetaSeparatelyBilledThoughtTokens(metadata)
+  const billableOutputTokens = outputTokens + separateThoughtTokens
+  const totalTokens = inputTokens + billableOutputTokens
+  const cost = await calculateCost(inputTokens, billableOutputTokens, modelClass)
   
   // Use transaction for atomic read-modify-write to prevent race conditions
   const result = await prisma.$transaction(async (tx) => {
@@ -473,14 +476,14 @@ export async function trackServiceUsage(params: TrackUsageParams): Promise<{
         completionMonth: isCompleted ? currentMonth : null,
         completedAt: isCompleted ? new Date() : null,
         inputTokensUsed: inputTokens,
-        outputTokensUsed: outputTokens,
+        outputTokensUsed: billableOutputTokens,
         totalTokensUsed: totalTokens,
         estimatedCostUsd: cost,
         metadata: metadata ? JSON.parse(JSON.stringify(metadata)) : null
       },
       update: {
         inputTokensUsed: { increment: inputTokens },
-        outputTokensUsed: { increment: outputTokens },
+        outputTokensUsed: { increment: billableOutputTokens },
         totalTokensUsed: { increment: totalTokens },
         estimatedCostUsd: { increment: cost },
         isCompleted: isCompleted || undefined,

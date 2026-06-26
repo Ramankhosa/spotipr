@@ -6,6 +6,7 @@ import { MeteringErrorUtils, MeteringError } from './errors'
 import { prisma } from '@/lib/prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER } from './cost-calculator'
 import { getUtcDayWindow, getUtcMonthWindow } from '@/lib/usage-periods'
+import { getMetaSeparatelyBilledThoughtTokens } from '@/lib/usage-log-cost'
 
 function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date, end: Date } {
   const now = new Date()
@@ -28,7 +29,10 @@ function getCurrentPeriod(type: 'DAILY' | 'MONTHLY'): { key: string, start: Date
 }
 
 function getUsageUnits(stats: UsageStats): number {
-  const totalTokens = (stats.inputTokens ?? 0) + (stats.outputTokens ?? 0)
+  const totalTokens =
+    (stats.inputTokens ?? 0) +
+    (stats.outputTokens ?? 0) +
+    getMetaSeparatelyBilledThoughtTokens(stats.metadata)
   return totalTokens > 0 ? totalTokens : (stats.apiCalls || 1)
 }
 
@@ -55,19 +59,33 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
 
         // Calculate cost using the model class
         // Use ?? (nullish coalescing) instead of || to handle 0 as a valid token count
-        let costData: { actualCost: number; contingencyCost: number; inputCost: number; outputCost: number } | null = null
+        let costData: {
+          actualCost: number
+          contingencyCost: number
+          inputCost: number
+          outputCost: number
+          thoughtCost?: number
+          thoughtTokens?: number
+          totalTokens: number
+          thoughtTokensIncludedInOutput?: boolean
+        } | null = null
         if (stats.modelClass) {
+          const separateThoughtTokens = getMetaSeparatelyBilledThoughtTokens(stats.metadata)
           const costBreakdown = calculateCost(
             stats.modelClass,
             stats.inputTokens ?? 0,
             stats.outputTokens ?? 0,
-            stats.metadata?.thoughtTokens
+            separateThoughtTokens || undefined
           )
           costData = {
             actualCost: costBreakdown.actualCost,
             contingencyCost: costBreakdown.contingencyCost,
             inputCost: costBreakdown.inputCost,
-            outputCost: costBreakdown.outputCost
+            outputCost: costBreakdown.outputCost,
+            thoughtCost: costBreakdown.thoughtCost,
+            thoughtTokens: stats.metadata?.thoughtTokens,
+            totalTokens: costBreakdown.totalTokens,
+            thoughtTokensIncludedInOutput: stats.metadata?.thoughtTokensIncludedInOutput === true
           }
         }
 

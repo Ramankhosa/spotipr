@@ -135,6 +135,7 @@ export interface CostBreakdown {
   inputTokens: number
   outputTokens: number
   thoughtTokens?: number
+  thoughtTokensIncludedInOutput?: boolean
   totalTokens: number
   
   // Cost components in USD
@@ -213,16 +214,19 @@ export function calculateCost(
   modelCode: string,
   inputTokens: number,
   outputTokens: number,
-  thoughtTokens?: number
+  thoughtTokens?: number,
+  options?: { thoughtTokensIncludedInOutput?: boolean }
 ): CostBreakdown {
   const pricing = getModelPricingSync(modelCode)
   const provider = getProviderFromModel(modelCode)
+  const thoughtTokensIncludedInOutput = options?.thoughtTokensIncludedInOutput === true
   
   // Calculate individual costs
   const inputCost = inputTokens * pricing.input
   const outputCost = outputTokens * pricing.output
-  const thoughtCost = thoughtTokens && pricing.thoughtTokenCost
-    ? thoughtTokens * pricing.thoughtTokenCost
+  const thoughtPrice = pricing.thoughtTokenCost ?? pricing.output
+  const thoughtCost = thoughtTokens && !thoughtTokensIncludedInOutput
+    ? thoughtTokens * thoughtPrice
     : 0
   
   // Total actual cost
@@ -236,7 +240,8 @@ export function calculateCost(
     inputTokens,
     outputTokens,
     thoughtTokens: thoughtTokens || undefined,
-    totalTokens: inputTokens + outputTokens + (thoughtTokens || 0),
+    thoughtTokensIncludedInOutput: thoughtTokensIncludedInOutput || undefined,
+    totalTokens: inputTokens + outputTokens + (thoughtTokensIncludedInOutput ? 0 : (thoughtTokens || 0)),
     
     // Costs
     inputCost,
@@ -252,7 +257,7 @@ export function calculateCost(
     // Per-million rates
     inputPricePerMillion: pricing.input * 1_000_000,
     outputPricePerMillion: pricing.output * 1_000_000,
-    thoughtPricePerMillion: pricing.thoughtTokenCost ? pricing.thoughtTokenCost * 1_000_000 : undefined,
+    thoughtPricePerMillion: thoughtTokens ? thoughtPrice * 1_000_000 : undefined,
   }
 }
 
@@ -307,8 +312,12 @@ export function generateCostLogMessage(
   message += `📥 INPUT TOKENS:   ${costBreakdown.inputTokens.toLocaleString().padStart(10)} × $${(costBreakdown.inputPricePerMillion).toFixed(2)}/M = ${formatCost(costBreakdown.inputCost)}\n`
   message += `📤 OUTPUT TOKENS:  ${costBreakdown.outputTokens.toLocaleString().padStart(10)} × $${(costBreakdown.outputPricePerMillion).toFixed(2)}/M = ${formatCost(costBreakdown.outputCost)}\n`
   
-  if (costBreakdown.thoughtTokens && costBreakdown.thoughtCost) {
-    message += `🧠 THOUGHT TOKENS: ${costBreakdown.thoughtTokens.toLocaleString().padStart(10)} × $${(costBreakdown.thoughtPricePerMillion || 0).toFixed(2)}/M = ${formatCost(costBreakdown.thoughtCost)}\n`
+  if (costBreakdown.thoughtTokens) {
+    if (costBreakdown.thoughtTokensIncludedInOutput) {
+      message += `🧠 THOUGHT TOKENS: ${costBreakdown.thoughtTokens.toLocaleString().padStart(10)} (included in output tokens/cost)\n`
+    } else {
+      message += `🧠 THOUGHT TOKENS: ${costBreakdown.thoughtTokens.toLocaleString().padStart(10)} × $${(costBreakdown.thoughtPricePerMillion || 0).toFixed(2)}/M = ${formatCost(costBreakdown.thoughtCost || 0)}\n`
+    }
   }
   
   message += `📊 TOTAL TOKENS:   ${costBreakdown.totalTokens.toLocaleString().padStart(10)}\n`
@@ -343,9 +352,12 @@ export function logLLMCost(
     userId?: string
     tenantId?: string
     duration?: number
+    thoughtTokensIncludedInOutput?: boolean
   }
 ): CostBreakdown {
-  const costBreakdown = calculateCost(modelCode, inputTokens, outputTokens, thoughtTokens)
+  const costBreakdown = calculateCost(modelCode, inputTokens, outputTokens, thoughtTokens, {
+    thoughtTokensIncludedInOutput: metadata?.thoughtTokensIncludedInOutput
+  })
   const logMessage = generateCostLogMessage(operationType, costBreakdown, metadata)
   console.log(logMessage)
   return costBreakdown

@@ -1,6 +1,6 @@
 import { prisma } from './prisma'
 import { calculateCost, CONTINGENCY_MULTIPLIER, ensurePricingLoaded } from './metering/cost-calculator'
-import { getMetaActualCost } from './usage-log-cost'
+import { getBillableOutputTokens, getMetaActualCost, getMetaSeparatelyBilledThoughtTokens } from './usage-log-cost'
 import { normalizeUsageDateRange, toInclusiveDateRange } from './usage-periods'
 
 export interface TenantUsageMetrics {
@@ -108,14 +108,19 @@ function calculateCostForLog(
   // Use the centralized cost-calculator which reads from LLMModel table (llm-config)
   // This ensures consistent pricing across terminal logs and admin reports
   if (log.modelClass) {
-    const costBreakdown = calculateCost(log.modelClass, inputTokens, outputTokens)
+    const costBreakdown = calculateCost(
+      log.modelClass,
+      inputTokens,
+      outputTokens,
+      getMetaSeparatelyBilledThoughtTokens(log.meta) || undefined
+    )
     return costBreakdown.actualCost
   }
 
   // Fallback for logs without model class (shouldn't happen normally)
   // Uses DEFAULT_PRICING from cost-calculator.ts ($1/$4 per million)
   const inputCost = inputTokens * 0.000001
-  const outputCost = outputTokens * 0.000004
+  const outputCost = getBillableOutputTokens(outputTokens, log.meta) * 0.000004
   return inputCost + outputCost
 }
 
@@ -224,7 +229,7 @@ export async function computeUsageSummary(
 
     // Use ?? (nullish coalescing) to handle 0 as a valid value
     const input = log.inputTokens ?? 0
-    const output = log.outputTokens ?? 0
+    const output = getBillableOutputTokens(log.outputTokens, log.meta)
     const calls = log.apiCalls ?? 0
     const cost = calculateCostForLog(log)
 
@@ -517,7 +522,7 @@ export async function computeUnifiedAdminUsage(
 
   for (const log of usageLogs) {
     const input = log.inputTokens ?? 0
-    const output = log.outputTokens ?? 0
+    const output = getBillableOutputTokens(log.outputTokens, log.meta)
     const calls = log.apiCalls ?? 0
     const cost = calculateCostForLog(log)
 
@@ -739,7 +744,7 @@ export async function computeUserCostsByTenant(
 
     // Use ?? (nullish coalescing) to handle 0 as a valid value
     const input = log.inputTokens ?? 0
-    const output = log.outputTokens ?? 0
+    const output = getBillableOutputTokens(log.outputTokens, log.meta)
     const calls = log.apiCalls ?? 0
 
     bucket.totalInputTokens += input
@@ -972,7 +977,7 @@ export async function computePatentCosts(
     const metrics = patentMap.get(patentId)!
     // Use ?? (nullish coalescing) to handle 0 as a valid value
     const input = log.inputTokens ?? 0
-    const output = log.outputTokens ?? 0
+    const output = getBillableOutputTokens(log.outputTokens, log.meta)
     const calls = log.apiCalls ?? 1
 
     metrics.totalInputTokens += input
@@ -985,7 +990,12 @@ export async function computePatentCosts(
     if (metaCost && typeof metaCost.actualCost === 'number') {
       actualCost = metaCost.actualCost
     } else if (log.modelClass) {
-      const costBreakdown = calculateCost(log.modelClass, input, output)
+      const costBreakdown = calculateCost(
+        log.modelClass,
+        input,
+        log.outputTokens ?? 0,
+        getMetaSeparatelyBilledThoughtTokens(meta) || undefined
+      )
       actualCost = costBreakdown.actualCost
     } else {
       // Fallback pricing: matches DEFAULT_PRICING in cost-calculator.ts ($1/$4 per million)

@@ -168,6 +168,9 @@ export function buildDeterministicPatentSearchQueryPlan(input: PatentSearchReque
     cpcCodes: detectedClassifications,
     ipcCodes: detectedClassifications,
     classificationHints: detectedClassifications,
+    epoTitleKeywords: [],
+    epoAbstractKeywords: [],
+    epoCombinedKeywords: [],
     fieldFilters: explicitFilters,
     explicitFilters,
     searchVariants: fallbackQuery ? [fallbackQuery] : [],
@@ -238,6 +241,9 @@ export function buildManualPatentSearchQueryPlan(input: PatentSearchRequest): Pa
     ...(fieldFilters.cpcCodes || []),
     ...(fieldFilters.ipcCodes || []),
   ]).map(normalizeClassification).filter(Boolean)
+  const epoTitleKeywords = uniqueStrings(fieldFilters.titleContains || []).slice(0, 8)
+  const epoAbstractKeywords = uniqueStrings(fieldFilters.abstractContains || []).slice(0, 8)
+  const epoCombinedKeywords = uniqueStrings(fieldFilters.anyTextContains || []).slice(0, 8)
 
   return {
     originalQuery,
@@ -252,6 +258,9 @@ export function buildManualPatentSearchQueryPlan(input: PatentSearchRequest): Pa
     cpcCodes: fieldFilters.cpcCodes || [],
     ipcCodes: fieldFilters.ipcCodes || [],
     classificationHints: classifications,
+    epoTitleKeywords,
+    epoAbstractKeywords,
+    epoCombinedKeywords,
     fieldFilters,
     explicitFilters: fieldFilters,
     searchVariants: manualText ? [manualText] : [],
@@ -292,6 +301,9 @@ JSON shape:
   "excludedTerms": ["term"],
   "cpcCodes": ["CPC code"],
   "ipcCodes": ["IPC code"],
+  "epoTitleKeywords": ["short object or system phrase likely to appear in a European patent title"],
+  "epoAbstractKeywords": ["mechanism or function phrase likely to appear in a European patent abstract"],
+  "epoCombinedKeywords": ["fallback phrase suitable for either title or abstract"],
   "fieldFilters": {
     "publicationNumber": "",
     "applicationNumber": "",
@@ -364,6 +376,14 @@ function filtersFromLlm(value: unknown): PatentSearchFilters {
   })
 }
 
+function keywordList(value: unknown, maxItems = 8) {
+  return asStringArray(value)
+    .filter(value => normalizeWhitespace(value).split(/\s+/).filter(Boolean).length <= 10)
+    .map(value => normalizeWhitespace(value).split(/\s+/).join(' '))
+    .filter(value => value.length >= 3 && value.length <= 120)
+    .slice(0, maxItems)
+}
+
 export async function createPatentSearchQueryPlan(input: PatentSearchRequest): Promise<PatentSearchQueryPlan> {
   if (input.searchMode === 'manual') return buildManualPatentSearchQueryPlan(input)
 
@@ -424,6 +444,9 @@ export async function createPatentSearchQueryPlan(input: PatentSearchRequest): P
       ...deterministic.technicalKeywords,
       ...asStringArray(parsed.technicalKeywords),
     ])
+    const epoTitleKeywords = keywordList(parsed.epoTitleKeywords || parsed.epo_title_keywords)
+    const epoAbstractKeywords = keywordList(parsed.epoAbstractKeywords || parsed.epo_abstract_keywords)
+    const epoCombinedKeywords = keywordList(parsed.epoCombinedKeywords || parsed.epo_combined_keywords)
     const synonyms = asStringArray(parsed.synonyms)
     const mustHaveTerms = asStringArray(parsed.mustHaveTerms)
     const excludedTerms = asStringArray(parsed.excludedTerms)
@@ -453,6 +476,9 @@ export async function createPatentSearchQueryPlan(input: PatentSearchRequest): P
       cpcCodes,
       ipcCodes,
       classificationHints,
+      epoTitleKeywords,
+      epoAbstractKeywords,
+      epoCombinedKeywords,
       fieldFilters,
       searchVariants,
       llmExpanded: true,

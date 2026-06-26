@@ -1619,8 +1619,13 @@ function buildEntityLandscape(names: string[], mode: 'assignee' | 'inventor'): A
 function sourceModeLabel(value: unknown): string {
   const mode = cleanText(value, 'Selected patent sources');
   if (mode === 'PQAI_PLUS_INDIAN') return 'International patent corpus + local Indian patent corpus';
+  if (mode === 'PQAI_PLUS_AUSTRALIA') return 'International patent corpus + IP Australia patent search';
+  if (mode === 'PQAI_PLUS_EPO') return 'International patent corpus + EPO OPS European patent search';
+  if (mode === 'PQAI_PLUS_INDIAN_EPO') return 'International patent corpus + local Indian patent corpus + EPO OPS European patent search';
   if (mode === 'PQAI_ONLY') return 'International patent corpus';
   if (mode === 'INDIAN_ONLY') return 'Local Indian patent corpus';
+  if (mode === 'AUSTRALIA_ONLY') return 'IP Australia patent search';
+  if (mode === 'EPO_ONLY') return 'EPO OPS European patent search';
   return mode;
 }
 

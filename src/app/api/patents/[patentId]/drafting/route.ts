@@ -1481,7 +1481,14 @@ function buildRelatedArtRetrievalQueries(searchQuery: string, inventionFeatures:
 }
 
 function normalizeRelatedArtSourceMode(value: unknown): PatentSearchSourceMode {
-  return value === 'INDIAN_ONLY' || value === 'PQAI_ONLY' || value === 'PQAI_PLUS_INDIAN'
+  return value === 'INDIAN_ONLY' ||
+    value === 'AUSTRALIA_ONLY' ||
+    value === 'EPO_ONLY' ||
+    value === 'PQAI_ONLY' ||
+    value === 'PQAI_PLUS_INDIAN' ||
+    value === 'PQAI_PLUS_AUSTRALIA' ||
+    value === 'PQAI_PLUS_EPO' ||
+    value === 'PQAI_PLUS_INDIAN_EPO'
     ? value
     : 'PQAI_PLUS_INDIAN'
 }

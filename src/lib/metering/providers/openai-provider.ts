@@ -171,6 +171,7 @@ export class OpenAIProvider implements LLMProvider {
 
       const choice = data.choices[0]
       const usage = data.usage
+      const thoughtTokens = usage?.completion_tokens_details?.reasoning_tokens || 0
 
       return {
         output: choice.message.content,
@@ -179,6 +180,8 @@ export class OpenAIProvider implements LLMProvider {
         metadata: {
           provider: 'openai',
           inputTokens: usage?.prompt_tokens || 0,
+          thoughtTokens,
+          thoughtTokensIncludedInOutput: true,
           totalTokens: usage?.total_tokens || 0,
           finishReason: choice.finish_reason,
           modelUsed: modelToUse
@@ -240,6 +243,7 @@ export class OpenAIProvider implements LLMProvider {
     const data = await response.json()
     const usage = data.usage
     const outputText = this.extractResponsesText(data)
+    const thoughtTokens = usage?.output_tokens_details?.reasoning_tokens || 0
 
     return {
       output: outputText,
@@ -248,6 +252,8 @@ export class OpenAIProvider implements LLMProvider {
       metadata: {
         provider: 'openai',
         inputTokens: usage?.input_tokens || 0,
+        thoughtTokens,
+        thoughtTokensIncludedInOutput: true,
         totalTokens: usage?.total_tokens || 0,
         finishReason: data.status,
         modelUsed: modelToUse
