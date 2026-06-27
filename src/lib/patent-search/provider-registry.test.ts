@@ -70,4 +70,21 @@ describe('patent search provider registry', () => {
     process.env.Serp_API_KEY = 'test-serp'
     expect(resolveProviderIds({ providerIds: ['indian-corpus', 'google-patents'], sourceMode: 'PQAI_ONLY' })).toEqual(['indian-corpus', 'google-patents'])
   })
+
+  test('links explicit European corpus selection to live OPS when credentials exist', () => {
+    process.env.EPO_KEY = 'test-key'
+    process.env.EPO_SECRET = 'test-secret'
+
+    expect(resolveProviderIds({
+      providerIds: ['epo-ops-corpus'],
+      sourceMode: 'EPO_ONLY',
+    })).toEqual(['epo-ops', 'epo-ops-corpus'])
+  })
+
+  test('uses stored European corpus when explicit OPS selection has no credentials', () => {
+    expect(resolveProviderIds({
+      providerIds: ['epo-ops'],
+      sourceMode: 'EPO_ONLY',
+    })).toEqual(['epo-ops-corpus'])
+  })
 })

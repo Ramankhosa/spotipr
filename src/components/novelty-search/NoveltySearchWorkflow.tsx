@@ -1036,8 +1036,7 @@ export default function NoveltySearchWorkflow({
               reportFormat: 'JSON',
               includeExecutiveSummary: true,
               includeTechnicalDetails: true,
-              colorCoding: true,
-              modelPreference: 'gemini-2.5-flash-lite'
+              colorCoding: true
             }
           }
         })

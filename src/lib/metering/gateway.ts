@@ -123,6 +123,22 @@ export class LLMGateway {
         llmRequest.modelClass = explicitModelCode
         console.log(`[Gateway] Explicit model requested: ${explicitModelCode}`)
       }
+
+      if (!tenantContext.planId && llmRequest.stageCode && !explicitModelCode) {
+        const message = `No planId available for configured LLM stage ${llmRequest.stageCode}`
+        console.error(`[Gateway] ${message}`)
+        if (decision.reservationId) {
+          try {
+            await this.system.reservation.releaseReservation(decision.reservationId)
+          } catch (releaseError) {
+            console.warn('[Gateway] Failed to release reservation after missing planId:', releaseError)
+          }
+        }
+        return {
+          success: false,
+          error: new MeteringError('CONFIGURATION_ERROR', message)
+        }
+      }
       
       if (tenantContext.planId) {
         try {
@@ -185,8 +201,7 @@ export class LLMGateway {
           console.warn('[Gateway] ⚠️ Falling back to DEFAULT PROVIDER ROUTING (model resolution error)')
         }
       } else {
-        console.warn('[Gateway] ⚠️ No planId in tenant context - using DEFAULT PROVIDER ROUTING')
-        console.warn('[Gateway]   This will NOT honor plan-specific LLM configurations!')
+        console.warn('[Gateway] No planId in tenant context - using default routing for a task-only call')
       }
 
       if (!modelResolution) {

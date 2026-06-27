@@ -176,6 +176,20 @@ export default function NoveltySearchSubmission(props: {
   const sourceMode = sourceModeFromProviders(selectedProviderIds)
   const usesEpoSearch = selectedProviderIds.some(id => id.includes('epo'))
   const selectedProvidersEnabled = selectedProviderIds.length > 0
+  const selectableProviders = useMemo(() => {
+    const storedEpo = providers.find(provider => provider.id === 'epo-ops-corpus')
+    return providers
+      .filter(provider => provider.id !== 'epo-ops-corpus')
+      .map(provider => provider.id === 'epo-ops'
+        ? {
+            ...provider,
+            enabled: provider.enabled || Boolean(storedEpo?.enabled),
+            label: provider.enabled
+              ? 'European patents (EPO OPS + stored corpus)'
+              : 'European patents (stored corpus)',
+          }
+        : provider)
+  }, [providers])
   const searchSourceConfig = {
     mode: sourceMode,
     providerIds: selectedProviderIds,
@@ -430,7 +444,7 @@ export default function NoveltySearchSubmission(props: {
         <div className="mt-1 text-xs text-slate-500">Choose one or more sources for retrieval. Google Patents is basic retrieval only in this release.</div>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        {providers.map(provider => {
+        {selectableProviders.map(provider => {
           const checked = selectedProviderIds.includes(provider.id)
           return (
             <label key={provider.id} className={`flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2 text-sm ${provider.enabled ? 'border-slate-200 bg-white text-slate-800' : 'border-slate-200 bg-slate-100 text-slate-400'}`}>

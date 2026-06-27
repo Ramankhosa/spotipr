@@ -3,7 +3,7 @@
 // Now supports flexible model configuration via super admin
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
-import { MeteringError } from '../index'
+import { MeteringError } from '../errors'
 import type { LLMProvider } from './llm-provider'
 import { createLLMProvider, getProviderFromModelCode, type ProviderConfig, type ProviderType } from './llm-provider'
 import { logLLMCost, calculateCost, type CostBreakdown, ensurePricingLoaded, isPricingLoaded } from '../cost-calculator'
@@ -438,10 +438,11 @@ export class LLMProviderRouter {
       throw new Error(`All fallback models failed: ${errors.map(e => e.message).join('; ')}`)
     }
     
-    // No fallbacks - use default routing as last resort
-    console.warn('[ProviderRouter] ⚠️ No fallback models configured, falling back to DEFAULT PROVIDER ROUTING (hardcoded priorities)')
-    console.warn('[ProviderRouter] This may not honor your plan-specific LLM configuration!')
-    return this.routeAndExecute(request, limits)
+    // Never bypass the fallback chain configured by Super Admin.
+    throw new MeteringError(
+      'CONFIGURATION_ERROR',
+      'Selected model provider is unavailable and no fallback models are configured'
+    )
   }
 
   /**
@@ -585,9 +586,6 @@ export class LLMProviderRouter {
     // Special handling for multimodal requests (text + images)
     const isMultimodal = request.content && request.content.parts.some(part => part.type === 'image')
 
-    // Special handling for relevance analysis (PRIOR_ART_SEARCH) - use Flash-Lite
-    const isRelevanceAnalysis = request.taskCode === 'LLM5_NOVELTY_ASSESS' && !isMultimodal
-
     // Special handling for diagram generation - use GPT-4o for PlantUML code generation
     const isDiagramGeneration = request.taskCode === 'LLM3_DIAGRAM'
 
@@ -606,14 +604,6 @@ export class LLMProviderRouter {
         { provider: 'openai', priority: 1, fallback: true },
         { provider: 'gemini', priority: 2, fallback: true },
         { provider: 'anthropic', priority: 3, fallback: true }
-      ]
-    } else if (isRelevanceAnalysis) {
-      // For relevance analysis: fast, cost-effective models
-      activePriorities = [
-        { provider: 'gemini-flash-lite', priority: 1, fallback: true },
-        { provider: 'groq', priority: 2, fallback: true },
-        { provider: 'deepseek', priority: 3, fallback: true },
-        { provider: 'openai', priority: 4, fallback: true }
       ]
     } else {
       // Default priority order

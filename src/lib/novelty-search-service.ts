@@ -1015,7 +1015,6 @@ export interface NoveltySearchConfig {
   };
   // Stage 1.5 - AI Relevance gate on PQAI results
   stage15: {
-    modelPreference: 'gemini-2.5-flash-lite' | 'gemini-2.5-pro' | 'gemini-2.0-flash-lite' | 'gpt-4o-mini' | 'gpt-4o' | 'claude-2.5';
     thresholds: { high: number; medium: number };
     borderlineQuota: number; // number of borderline items to keep for diversity/recall
     maxCandidates: number;   // upper bound of PQAI items to gate
@@ -1042,7 +1041,6 @@ export interface NoveltySearchConfig {
     thresholdPresent: number;
     thresholdPartial: number;
     criticalFeatures: string[];
-    modelPreference: 'gpt-4o' | 'gpt-4o-mini' | 'claude-2.5' | 'gemini-2.0-flash-lite' | 'gemini-2.5-flash-lite' | 'gemini-2.5-pro';
     // When Stage 1.5 accepts more than the 50% quota, allow extra mapping capacity
     acceptedOverflowRatio?: number;   // default 0.15 (15% of total PQAI)
     borderlineOverflowRatio?: number; // default 0.10 (10% of total PQAI)
@@ -1052,7 +1050,6 @@ export interface NoveltySearchConfig {
     // Deterministic - no config needed
   };
   stage35c?: {
-    modelPreference: 'gpt-4o' | 'gpt-4o-mini' | 'claude-2.5' | 'gemini-2.0-flash-lite' | 'gemini-2.5-flash-lite' | 'gemini-2.5-pro';
     maxPatentsForRemarks?: number; // Optional cap; default: all in feature_map
     batchSize?: number; // Number of patents per LLM call
     concurrency?: number;
@@ -1071,7 +1068,6 @@ export interface NoveltySearchConfig {
     colorCoding: boolean;
     maxRefsForReportMain: number;
     maxRefsForUI: number;
-    modelPreference: 'gpt-4o' | 'gpt-4o-mini' | 'claude-2.5' | 'gemini-2.0-flash-lite' | 'gemini-2.5-flash-lite' | 'gemini-2.5-pro';
   };
 }
 
@@ -1491,7 +1487,6 @@ export class NoveltySearchService extends BasePatentService {
     },
     // New Stage 1.5 (AI Relevance) defaults
     stage15: {
-      modelPreference: 'gemini-2.5-flash-lite',
       thresholds: { high: 0.7, medium: 0.45 },
       borderlineQuota: 5,
       maxCandidates: 120,
@@ -1514,13 +1509,11 @@ export class NoveltySearchService extends BasePatentService {
       thresholdPresent: 0.70,
       thresholdPartial: 0.40,
       criticalFeatures: [],
-      modelPreference: 'gemini-2.5-flash-lite',
       acceptedOverflowRatio: 0.15,
       borderlineOverflowRatio: 0.10
     },
     stage35b: {},
     stage35c: {
-      modelPreference: 'gemini-2.5-flash-lite',
       maxPatentsForRemarks: undefined,
       batchSize: 8,
       concurrency: 3
@@ -1538,9 +1531,7 @@ export class NoveltySearchService extends BasePatentService {
       includeTechnicalDetails: true,
       colorCoding: true,
       maxRefsForReportMain: 10,
-      maxRefsForUI: 12,
-      // Default LLM for final Stage 4 analysis
-      modelPreference: 'gemini-2.5-pro'
+      maxRefsForUI: 12
     }
   };
 
@@ -3451,7 +3442,7 @@ export class NoveltySearchService extends BasePatentService {
 
   /**
    * Filter patents for relevance to invention before including in report
-   * Uses Gemini 2.5 Flash-Lite model to assess if each patent is actually related to the invention
+   * Uses the Super Admin model configured for NOVELTY_RELEVANCE_SCORING.
    */
   private async filterRelevantPatentsForReport(
     stage0Data: NormalizedIdea,
@@ -3501,7 +3492,7 @@ export class NoveltySearchService extends BasePatentService {
   }
 
   /**
-   * Assess if a patent is relevant to the invention using Gemini 2.5 Flash-Lite
+   * Assess if a patent is relevant using the configured stage model.
    */
   private async assessPatentRelevance(
     stage0Data: NormalizedIdea,
@@ -5252,7 +5243,7 @@ RESPONSE:`;
   }
 
   /**
-   * Stage 1.5: AI Relevance gate on PQAI results (Gemini 2.5 Flash-Lite)
+   * Stage 1.5: AI relevance gate on retrieved patent results.
    * Produces a compact accept/borderline/reject list and a byPn map of scores.
    */
   private parseStage15GateResponse(output: string): any[] | null {
@@ -5451,7 +5442,6 @@ RESPONSE:`;
       if (candidatePool.length === 0) return { success: true, data: { accepted: [], component: [], borderline: [], rejected: [], byPn: {} } };
 
       const {
-        modelPreference,
         thresholds,
         borderlineQuota,
         maxCandidates,
@@ -8576,7 +8566,7 @@ ${candidatesText}`;
   ): Promise<{ success: boolean; featureMaps?: PatentFeatureMap[]; error?: string }> {
     try {
       // Check cache first
-      const batchHash = this.createBatchHash(batch, inventionFeatures, config.stage35a.modelPreference);
+      const batchHash = this.createBatchHash(batch, inventionFeatures);
       const ideaHash = this.createIdeaHash(inventionFeatures);
       const cached = await this.checkFeatureMappingCache(searchId, ideaHash, batchHash);
 
@@ -8719,14 +8709,14 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     };
   }
 
-  private createBatchHash(batch: any[], inventionFeatures: string[], modelPreference = ''): string {
+  private createBatchHash(batch: any[], inventionFeatures: string[], modelConfigKey = ''): string {
     const batchData = batch
       .map(p => `${p.canonicalPn}:${p.title || ''}:${p.abstract || ''}`)
       .join('|');
     const featuresData = inventionFeatures.join('|');
     return crypto
       .createHash('sha1')
-      .update(`${FEATURE_MAPPING_CACHE_VERSION}||${modelPreference}||${batchData}||${featuresData}`)
+      .update(`${FEATURE_MAPPING_CACHE_VERSION}||${modelConfigKey}||${batchData}||${featuresData}`)
       .digest('hex');
   }
 
@@ -9397,26 +9387,6 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     }
   }
 
-  private async callLLMWithPreferredModel(
-    prompt: string,
-    preference: 'gpt-4o' | 'gpt-4o-mini' | 'claude-2.5' | 'gemini-2.0-flash-lite' | 'gemini-2.5-pro',
-    requestHeaders?: Record<string, string>
-  ): Promise<LLMResult> {
-    // Model and fallbacks are now configured via admin console (NOVELTY_REPORT_GENERATION stage)
-    // The gateway handles model resolution and fallbacks automatically
-    console.log(`🤖 Using admin-configured model via NOVELTY_REPORT_GENERATION stage`);
-
-    const result = await llmGateway.executeLLMOperation(
-      { headers: requestHeaders || {} },
-      {
-        taskCode: TaskCode.LLM6_REPORT_GENERATION,
-        stageCode: 'NOVELTY_REPORT_GENERATION',
-        prompt
-      }
-    );
-
-    return result;
-  }
 }
 
 

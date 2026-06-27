@@ -4,6 +4,8 @@
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 
+const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
+
 export class GeminiProvider implements LLMProvider {
   name = 'gemini'
   supportedModels = [
@@ -58,10 +60,10 @@ export class GeminiProvider implements LLMProvider {
     // Initialize Google Generative AI client
     if (typeof window === 'undefined') {
       // Only initialize on server side
-      console.log(`Initializing Gemini provider (${name || 'gemini'}) with API key present: ${!!config.apiKey}`)
-      if (config.apiKey) {
-        console.log(`API key length: ${config.apiKey.length}`)
-      } else {
+      if (SHOULD_LOG_PROVIDER_INIT) {
+        console.log(`Initializing Gemini provider (${name || 'gemini'}) with API key present: ${!!config.apiKey}`)
+      }
+      if (!config.apiKey) {
         console.error('No API key provided for Gemini provider!')
       }
 
@@ -69,7 +71,9 @@ export class GeminiProvider implements LLMProvider {
         // Dynamic import to avoid client-side issues
         const { GoogleGenerativeAI } = require('@google/generative-ai')
         this.client = new GoogleGenerativeAI(config.apiKey)
-        console.log('Gemini client initialized successfully')
+        if (SHOULD_LOG_PROVIDER_INIT) {
+          console.log(`Gemini provider initialized (${name || 'gemini'})`)
+        }
       } catch (error) {
         console.warn('Google Generative AI not available:', error)
       }

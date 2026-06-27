@@ -372,9 +372,17 @@ export class EpoOpsProvider implements PatentSearchProvider {
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
+    const startedAt = Date.now()
     const maxResults = clampLimit(request.limit, 25, 100)
     const cql = buildEpoOpsCqlForTests(request)
     if (!cql) return []
+
+    console.info('[EpoOpsProvider]', JSON.stringify({
+      event: 'search_request',
+      searchMode: request.searchMode || 'intelligent',
+      cql,
+      maxResults,
+    }))
 
     const token = await requestEpoAccessToken()
     const controller = new AbortController()
@@ -400,6 +408,12 @@ export class EpoOpsProvider implements PatentSearchProvider {
     }
 
     const normalizedResults = await enrichEpoSearchResults(xml, cql, token, maxResults)
+    console.info('[EpoOpsProvider]', JSON.stringify({
+      event: 'search_completed',
+      status: response.status,
+      resultCount: normalizedResults.length,
+      durationMs: Date.now() - startedAt,
+    }))
     try {
       await persistPatentResultsToCorpus(normalizedResults, {
         query: cql,

@@ -66,7 +66,25 @@ export function resolveProviderIds(params: {
   sourceMode?: string
   jurisdictions?: string[]
 }) {
-  if (params.providerIds?.length) return params.providerIds
+  if (params.providerIds?.length) {
+    const hasEuropeanSelection = params.providerIds.some(id => id === 'epo-ops' || id === 'epo-ops-corpus')
+    if (!hasEuropeanSelection) return params.providerIds
+
+    const linkedEpoProviders: PatentSearchProviderId[] = hasEpoOpsCredentials()
+      ? ['epo-ops', 'epo-ops-corpus']
+      : ['epo-ops-corpus']
+    const resolved: PatentSearchProviderId[] = []
+    let epoProvidersAdded = false
+    for (const providerId of params.providerIds) {
+      if (providerId === 'epo-ops' || providerId === 'epo-ops-corpus') {
+        if (!epoProvidersAdded) resolved.push(...linkedEpoProviders)
+        epoProvidersAdded = true
+      } else if (!resolved.includes(providerId)) {
+        resolved.push(providerId)
+      }
+    }
+    return resolved
+  }
 
   const jurisdictions = (params.jurisdictions || []).map(value => value.toUpperCase())
   const googleProviderIds: PatentSearchProviderId[] = hasGooglePatentsCredentials() ? ['google-patents'] : []
