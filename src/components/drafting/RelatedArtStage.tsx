@@ -25,6 +25,7 @@ interface RelatedArtStageProps {
       inventors?: string[]
       assignees?: string[]
       runId?: string // Added runId to selection
+      userNotes?: string
     }>
     ideaRecord?: any
     manualPriorArt?: {
@@ -56,6 +57,9 @@ type AIAnalysisEntry = {
   relevantParts?: string[]
   irrelevantParts?: string[]
   noveltyComparison?: string
+  analysisStatus?: 'analyzed' | 'unknown'
+  evidenceBasis?: 'title_abstract'
+  failureReason?: string
 }
 
 type AnalysisProgressState = {
@@ -560,7 +564,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
     // CRITICAL: Always load AI analysis data from session if not already in state
     // This ensures AI review results persist across stage navigation
-    if ((session as any)?.aiAnalysisData && Object.keys(aiAnalysis).length === 0) {
+    if (!latestRunId && (session as any)?.aiAnalysisData && Object.keys(aiAnalysis).length === 0) {
       const storedAiAnalysis = (session as any).aiAnalysisData
       if (storedAiAnalysis && typeof storedAiAnalysis === 'object' && Object.keys(storedAiAnalysis).length > 0) {
       setAiAnalysis(storedAiAnalysis)
@@ -615,6 +619,32 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
     if (latestRunId && session?.relatedArtSelections && session.relatedArtSelections.length > 0) {
       const allRunSelections = session.relatedArtSelections.filter((sel: any) => sel.runId === latestRunId)
+
+      const currentRunAnalysis: Record<string, AIAnalysisEntry> = {}
+      allRunSelections.forEach((sel: any) => {
+        const tags = Array.isArray(sel.tags) ? sel.tags : []
+        const analyzed = tags.includes('AI_REVIEWED')
+        const unknown = tags.includes('AI_ANALYSIS_UNKNOWN')
+        if (!analyzed && !unknown) return
+        let details: any = {}
+        try { details = sel.userNotes ? JSON.parse(sel.userNotes) : {} } catch { details = { summary: sel.userNotes || '' } }
+        const noveltyThreat = unknown ? 'unknown' :
+          tags.includes('AI_ANTICIPATES') ? 'anticipates' :
+          tags.includes('AI_OBVIOUS') ? 'obvious' :
+          tags.includes('AI_ADJACENT') ? 'adjacent' :
+          tags.includes('AI_REMOTE') ? 'remote' : 'unknown'
+        currentRunAnalysis[sel.patentNumber] = {
+          aiSummary: details.summary || '',
+          noveltyThreat,
+          relevantParts: Array.isArray(details.relevant_parts) ? details.relevant_parts : [],
+          irrelevantParts: Array.isArray(details.irrelevant_parts) ? details.irrelevant_parts : [],
+          noveltyComparison: details.novelty_comparison || '',
+          analysisStatus: unknown ? 'unknown' : 'analyzed',
+          evidenceBasis: 'title_abstract',
+          failureReason: details.failure_reason,
+        }
+      })
+      if (Object.keys(currentRunAnalysis).length > 0) setAiAnalysis(currentRunAnalysis)
 
       // Prefer only user-confirmed selections (USER_SELECTED tag); if none, load none
       const userConfirmed = allRunSelections.filter((sel: any) => Array.isArray(sel.tags) && sel.tags.includes('USER_SELECTED'))
@@ -769,7 +799,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       const canonical = canonicalizePatentNumber(pn) || pn.toUpperCase()
       if (seen.has(canonical)) return
       seen.add(canonical)
-      if (!getAnalysisForPatentNumber(pn)) missing.push(pn)
+      const analysis = getAnalysisForPatentNumber(pn)
+      if (!analysis || analysis.analysisStatus === 'unknown' || analysis.noveltyThreat === 'unknown') missing.push(pn)
     })
 
     return missing
@@ -782,7 +813,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     const obvious = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'obvious').length
     const adjacent = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'adjacent').length
     const remote = Object.values(aiAnalysis).filter(a => a.noveltyThreat === 'remote').length
-    return { total, anticipates, obvious, adjacent, remote }
+    const unknown = Object.values(aiAnalysis).filter(a => a.analysisStatus === 'unknown' || a.noveltyThreat === 'unknown').length
+    return { total, anticipates, obvious, adjacent, remote, unknown }
   }, [aiAnalysis])
 
   // Get section visibility for a patent (defaults to all visible)
@@ -1094,7 +1126,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       console.log('  - Source mode:', selectedSearchSourceMode)
 
       // Sophisticated search progress simulation
-      const progressSteps = [
+      /*
         '🔍 Scanning through 12M+ global patent database...',
         '🎯 Applying advanced semantic analysis to your invention...',
         '🧠 Using proprietary AI algorithms for relevance matching...',
@@ -1103,16 +1135,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         '⚡ Filtering results through novelty assessment engine...',
         '✨ Ranking patents by technical relevance and impact...',
         '📋 Preparing final results with comprehensive metadata...'
-      ]
-
-      // Show progress with artificial delays to impress the user
-      for (let i = 0; i < progressSteps.length; i++) {
-        setSearchProgress(progressSteps[i])
-        await new Promise(resolve => setTimeout(resolve, 1800)) // 1.8 seconds per step
-      }
+      */
 
       // Execute actual search
       setSearchProgress('💡 Finalizing patent analysis and generating comprehensive report...')
+      setSearchProgress('Searching configured patent sources...')
       const resp = await onComplete({
         action: 'related_art_search',
         sessionId: session?.id,
@@ -1127,8 +1154,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       // Show final result count
       setSearchProgress(`✨ Analysis complete! Found ${items.length} highly relevant patent${items.length !== 1 ? 's' : ''} from millions of global records.`)
 
+      setSearchProgress(`Search complete. Found ${items.length} potential prior-art candidate${items.length !== 1 ? 's' : ''}.`)
       // Brief pause to show the result
-      await new Promise(resolve => setTimeout(resolve, 2500))
 
       // Reset AI analysis and selections for new search to ensure fresh workflow
       setAiAnalysis({})
@@ -1184,7 +1211,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     console.log('Decisions count:', resp.decisions?.length || 0)
     console.log('IdeaBankSuggestions count:', resp.ideaBankSuggestions?.length || 0)
 
-    const decisions: Array<{ pn: string; title: string; relevance: number; decision: string; summary: string }> = Array.isArray(resp?.decisions) ? resp.decisions : []
+    const decisions: Array<{ pn: string; title: string; relevance: number | null; novelty_threat?: string; summary: string; analysis_status?: 'analyzed' | 'unknown'; evidence_basis?: 'title_abstract'; failure_reason?: string; detailedAnalysis?: any }> = Array.isArray(resp?.decisions) ? resp.decisions : []
 
     let ideas: any[] = []
     if (Array.isArray(resp?.ideaBankSuggestions)) {
@@ -1209,18 +1236,21 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setIdeaBankVersion(prev => prev + 1)
     }
 
-    const byPn: Record<string, { relevance: number; novelty_threat: string; summary: string; title: string; relevant_parts?: string[]; irrelevant_parts?: string[]; novelty_comparison?: string }> = {}
-    const byCanonicalPn: Record<string, { relevance: number; novelty_threat: string; summary: string; title: string; relevant_parts?: string[]; irrelevant_parts?: string[]; novelty_comparison?: string }> = {}
+    const byPn: Record<string, any> = {}
+    const byCanonicalPn: Record<string, any> = {}
     for (const d of decisions) {
       if (!d?.pn) continue
       const decision = {
-        relevance: typeof d.relevance === 'number' ? d.relevance : 0,
+        relevance: typeof d.relevance === 'number' ? d.relevance : null,
         novelty_threat: String((d as any).novelty_threat || 'remote'),
         summary: String(d.summary || '').slice(0, 260),
         title: d.title || '',
         relevant_parts: (d as any).detailedAnalysis?.relevant_parts || [],
         irrelevant_parts: (d as any).detailedAnalysis?.irrelevant_parts || [],
-        novelty_comparison: (d as any).detailedAnalysis?.novelty_comparison || ''
+        novelty_comparison: (d as any).detailedAnalysis?.novelty_comparison || '',
+        analysis_status: d.analysis_status || 'analyzed',
+        evidence_basis: d.evidence_basis || 'title_abstract',
+        failure_reason: d.failure_reason,
       }
       byPn[d.pn] = decision
       byCanonicalPn[canonicalizePatentNumber(d.pn)] = decision
@@ -1238,7 +1268,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         noveltyThreat: dec.novelty_threat,
         relevantParts: Array.isArray(dec.relevant_parts) ? dec.relevant_parts : [],
         irrelevantParts: Array.isArray(dec.irrelevant_parts) ? dec.irrelevant_parts : [],
-        noveltyComparison: String(dec.novelty_comparison || '').trim()
+        noveltyComparison: String(dec.novelty_comparison || '').trim(),
+        analysisStatus: dec.analysis_status,
+        evidenceBasis: dec.evidence_basis,
+        failureReason: dec.failure_reason,
       }
     })
 
@@ -1247,13 +1280,6 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       : newAiAnalysis
 
     setAiAnalysis(mergedAiAnalysis)
-
-    try {
-      await onComplete({ action: 'save_ai_analysis', sessionId: session?.id, aiAnalysisData: mergedAiAnalysis })
-      console.log('AI analysis data saved to database')
-    } catch (e) {
-      console.error('Failed to save AI analysis data:', e)
-    }
 
     setSelected(prev => {
       const next = { ...prev }
@@ -1264,27 +1290,35 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             ...next[key],
             aiSummary: dec.summary,
             noveltyThreat: dec.novelty_threat,
-            tags: ['AI_REVIEWED'].concat(
-              dec.novelty_threat === 'anticipates' ? ['AI_ANTICIPATES'] :
-              dec.novelty_threat === 'obvious' ? ['AI_OBVIOUS'] :
-              dec.novelty_threat === 'adjacent' ? ['AI_ADJACENT'] :
-              ['AI_REMOTE']
-            )
+            tags: dec.analysis_status === 'unknown'
+              ? ['AI_ANALYSIS_UNKNOWN']
+              : ['AI_REVIEWED'].concat(
+                  dec.novelty_threat === 'anticipates' ? ['AI_ANTICIPATES'] :
+                  dec.novelty_threat === 'obvious' ? ['AI_OBVIOUS'] :
+                  dec.novelty_threat === 'adjacent' ? ['AI_ADJACENT'] :
+                  ['AI_REMOTE']
+                )
           }
         }
       })
       return next
     })
 
-    const reviewedCount = decisions.length
+    const reviewedCount = typeof resp?.reviewed === 'number'
+      ? resp.reviewed
+      : decisions.filter(decision => decision.analysis_status !== 'unknown').length
+    const unknownCount = typeof resp?.unknown === 'number'
+      ? resp.unknown
+      : decisions.length - reviewedCount
+    const attemptedCount = typeof resp?.attempted === 'number' ? resp.attempted : decisions.length
     setAnalysisProgress(prev => ({
-      processed: reviewedCount,
+      processed: attemptedCount,
       total: prev?.total || results.length,
       currentBatch: prev?.totalBatches || prev?.currentBatch || 1,
       totalBatches: prev?.totalBatches || prev?.currentBatch || 1,
-      message: `Analysis complete for ${reviewedCount} patent${reviewedCount !== 1 ? 's' : ''}.`
+      message: `${reviewedCount} analyzed; ${unknownCount} unknown after retry.`
     }))
-    setReviewInfo(`AI reviewed ${reviewedCount} items${resp?.batches ? ` in ${resp.batches} batch(es)` : ''}.`)
+    setReviewInfo(`${reviewedCount} analyzed, ${unknownCount} unknown${resp?.batches ? ` in ${resp.batches} batch(es)` : ''}.`)
     return true
   }
 
@@ -2313,9 +2347,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 <div className="flex items-start gap-6">
                   <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center text-4xl">🧠</div>
                   <div className="flex-1">
-                    <h3 className="text-2xl font-bold mb-2">Run AI Analysis</h3>
+                    <h3 className="text-2xl font-bold mb-2">Run Initial Potential Novelty Analysis</h3>
                     <p className="text-emerald-100 mb-4">
-                      Our AI will analyze {results.length} patents against your invention to identify novelty threats, 
+                      The AI will screen {results.length} patent title-and-abstract records for potential novelty signals,
                       extract relevant disclosures, and provide actionable insights.
                     </p>
                     <button
@@ -2377,7 +2411,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               <>
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <h3 className="font-semibold text-gray-900">AI Analysis Complete</h3>
+                    <h3 className="font-semibold text-gray-900">Initial Potential Novelty Analysis</h3>
                     <p className="text-sm text-gray-500 mt-1">
                       {missingAnalysisPatentNumbers.length > 0
                         ? `${missingAnalysisPatentNumbers.length} current patent${missingAnalysisPatentNumbers.length !== 1 ? 's are' : ' is'} missing AI relevance analysis.`
@@ -2427,7 +2461,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 </div>
 
                 {/* Threat Level Summary Cards */}
-                <div className="grid grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                   <div className="bg-red-50 rounded-2xl p-6 border border-red-100">
                     <div className="text-4xl font-bold text-red-600">{analysisSummary.anticipates}</div>
                     <div className="text-sm font-medium text-red-800 mt-1">🛑 Anticipates</div>
@@ -2447,6 +2481,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     <div className="text-4xl font-bold text-gray-600">{analysisSummary.remote}</div>
                     <div className="text-sm font-medium text-gray-800 mt-1">⚪ Remote</div>
                     <div className="text-xs text-gray-500 mt-0.5">Safe</div>
+                  </div>
+                  <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200">
+                    <div className="text-4xl font-bold text-slate-600">{analysisSummary.unknown}</div>
+                    <div className="text-sm font-medium text-slate-800 mt-1">Unknown</div>
+                    <div className="text-xs text-slate-500 mt-0.5">Retry available</div>
                   </div>
                 </div>
 
@@ -2580,6 +2619,15 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                     </h4>
                                     {analysis ? (
                                       <div className="space-y-3">
+                                        <div className="flex flex-wrap gap-2 text-xs">
+                                          <span className="rounded-full bg-indigo-100 px-2.5 py-1 text-indigo-700">Evidence: title + abstract</span>
+                                          <span className={`rounded-full px-2.5 py-1 ${analysis.analysisStatus === 'unknown' ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                            {analysis.analysisStatus === 'unknown' ? 'Unknown — retry available' : 'Initial potential assessment'}
+                                          </span>
+                                        </div>
+                                        {analysis.failureReason && (
+                                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">{analysis.failureReason}</div>
+                                        )}
                                         {analysis.aiSummary && (
                                           <div className="bg-white rounded-lg p-4 border border-gray-200">
                                             <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-1">Summary</div>

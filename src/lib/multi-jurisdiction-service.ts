@@ -1237,9 +1237,13 @@ export async function generateReferenceDraft(
     // Follows same logic as DraftingService.generateSections()
     // ======================================================================
     const manualPriorArt = (session as any).manualPriorArt || null
-    const rawRelatedArtSelections = Array.isArray(session.relatedArtSelections)
+    const allRelatedArtSelections = Array.isArray(session.relatedArtSelections)
       ? session.relatedArtSelections
       : []
+    const latestRelatedArtRunId = Array.isArray(session.relatedArtRuns) ? session.relatedArtRuns[0]?.id : null
+    const rawRelatedArtSelections = latestRelatedArtRunId
+      ? allRelatedArtSelections.filter((selection: any) => selection.runId === latestRelatedArtRunId)
+      : allRelatedArtSelections
     const aiAnalysis = (session as any).aiAnalysisData || {}
     
     // Check for prior art selections from Stage 3.5 workflow
@@ -1259,8 +1263,8 @@ export async function generateReferenceDraft(
     
     // Helper: Safe sort by score
     const safeScoreSort = (a: any, b: any): number => {
-      const aScore = typeof a.score === 'number' ? a.score : 0
-      const bScore = typeof b.score === 'number' ? b.score : 0
+      const aScore = Number.isFinite(Number(a.score)) ? Number(a.score) : 0
+      const bScore = Number.isFinite(Number(b.score)) ? Number(b.score) : 0
       return bScore - aScore
     }
     
@@ -2062,9 +2066,13 @@ export async function generateReferenceDraftSection(
     // Critical for background and crossReference sections
     // ======================================================================
     const manualPriorArt = (session as any).manualPriorArt || null
-    const rawRelatedArtSelections = Array.isArray(session.relatedArtSelections)
+    const allRelatedArtSelections = Array.isArray(session.relatedArtSelections)
       ? session.relatedArtSelections
       : []
+    const latestRelatedArtRunId = Array.isArray(session.relatedArtRuns) ? session.relatedArtRuns[0]?.id : null
+    const rawRelatedArtSelections = latestRelatedArtRunId
+      ? allRelatedArtSelections.filter((selection: any) => selection.runId === latestRelatedArtRunId)
+      : allRelatedArtSelections
     const aiAnalysis = (session as any).aiAnalysisData || {}
     
     const priorArtConfig = (session as any).priorArtConfig || {}
@@ -2079,8 +2087,8 @@ export async function generateReferenceDraftSection(
     const normalizePN = (pn: string | undefined | null): string => 
       pn ? pn.replace(/[-\s]/g, '').toUpperCase().trim() : ''
     const safeScoreSort = (a: any, b: any): number => {
-      const aScore = typeof a.score === 'number' ? a.score : 0
-      const bScore = typeof b.score === 'number' ? b.score : 0
+      const aScore = Number.isFinite(Number(a.score)) ? Number(a.score) : 0
+      const bScore = Number.isFinite(Number(b.score)) ? Number(b.score) : 0
       return bScore - aScore
     }
     const processPatents = (patents: any[], enrichSource: any[], preferConfigData: boolean = false): any[] => {

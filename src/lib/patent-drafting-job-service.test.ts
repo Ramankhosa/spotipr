@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAutomationIdeaText } from './patent-drafting-job-service'
+import { buildAutomationIdeaText, selectReviewedPriorArtDecisions } from './patent-drafting-job-service'
 
 describe('buildAutomationIdeaText', () => {
   it('combines structured idea details with novelty text', () => {
@@ -28,5 +28,19 @@ describe('buildAutomationIdeaText', () => {
 
     expect(text).toContain('Title: Smart valve')
     expect(text).toContain('changes restriction based on sensed vibration')
+  })
+})
+
+describe('selectReviewedPriorArtDecisions', () => {
+  it('sorts usable potential threats and excludes remote, unknown, and low relevance decisions', () => {
+    const selected = selectReviewedPriorArtDecisions([
+      { pn: 'ADJ', relevance: 0.6, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
+      { pn: 'ANT', relevance: 0.95, novelty_threat: 'anticipates', analysis_status: 'analyzed' },
+      { pn: 'OBV', relevance: 0.8, novelty_threat: 'obvious', analysis_status: 'analyzed' },
+      { pn: 'REM', relevance: 0.99, novelty_threat: 'remote', analysis_status: 'analyzed' },
+      { pn: 'UNK', relevance: null, novelty_threat: 'unknown', analysis_status: 'unknown' },
+      { pn: 'LOW', relevance: 0.2, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
+    ])
+    expect(selected.map(decision => decision.pn)).toEqual(['ANT', 'OBV', 'ADJ'])
   })
 })

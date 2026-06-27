@@ -105,12 +105,9 @@ function stringifyIdeaDetails(value: unknown) {
 }
 
 export function buildAutomationIdeaText(payload: PatentDraftingAutomationPayload) {
-  if (typeof payload.rawIdea === 'string' && payload.rawIdea.trim()) {
-    return payload.rawIdea
-  }
-
   const parts = [
-    stringifyIdeaDetails(payload.ideaDetails),
+    normalizeText(payload.title) ? `Title: ${normalizeText(payload.title)}` : '',
+    normalizeText(payload.rawIdea) || stringifyIdeaDetails(payload.ideaDetails),
     normalizeText(payload.novelty) ? `Novelty / inventive contribution:\n${normalizeText(payload.novelty)}` : '',
   ].filter(Boolean)
   return parts.join('\n\n').trim()
@@ -410,6 +407,19 @@ function mergePriorArtSelections(existing: any[], additions: any[]) {
     })
   }
   return Array.from(byNumber.values())
+}
+
+export function selectReviewedPriorArtDecisions(decisions: any[], limit = BATCH_PRIOR_ART_LIMIT) {
+  return decisions
+    .filter((decision: any) => {
+      const relevance = typeof decision?.relevance === 'number' ? decision.relevance : 0
+      const noveltyThreat = String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase()
+      return decision?.analysis_status !== 'unknown' &&
+        relevance >= 0.3 &&
+        (noveltyThreat === 'anticipates' || noveltyThreat === 'obvious' || noveltyThreat === 'adjacent')
+    })
+    .sort((a: any, b: any) => Number(b?.relevance || 0) - Number(a?.relevance || 0))
+    .slice(0, limit)
 }
 
 function addDraftingStageContext(action: unknown, message: string) {
@@ -894,7 +904,7 @@ async function runBatchPriorArtSearchAndReview(params: {
   }))
 
   const rawResults = Array.isArray(searchResult.json?.results) ? searchResult.json.results : []
-  if (!rawResults.length || !searchResult.json?.runId) return []
+  if (!rawResults.length || !searchResult.json?.runId) return { selections: [], unknownCount: 0 }
 
   const review = await withHeartbeat(params.job.id, params.workerId, () => invokeDraftingAction({
     user: params.user,
@@ -913,13 +923,10 @@ async function runBatchPriorArtSearchAndReview(params: {
       .filter(([key]: [string, any]) => key)
   )
   const decisions = Array.isArray(review.json?.decisions) ? review.json.decisions : []
-  const reviewedSelections = decisions
-    .filter((decision: any) => {
-      const relevance = typeof decision?.relevance === 'number' ? decision.relevance : 0
-      const noveltyThreat = String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase()
-      return relevance >= 0.3 && (noveltyThreat === 'adjacent' || noveltyThreat === 'obvious')
-    })
-    .slice(0, BATCH_PRIOR_ART_LIMIT)
+  const unknownCount = decisions.filter((decision: any) =>
+    decision?.analysis_status === 'unknown' || String(decision?.novelty_threat || '').toLowerCase() === 'unknown'
+  ).length
+  const reviewedSelections = selectReviewedPriorArtDecisions(decisions)
     .map((decision: any) => {
       const source = resultsByNumber.get(compactPatentNumber(patentNumberOf(decision)))
       return normalizeReviewedPriorArtSelection(decision, source)
@@ -938,27 +945,9 @@ async function runBatchPriorArtSearchAndReview(params: {
       },
     })
 
-    const aiAnalysisData = Object.fromEntries(reviewedSelections.map((selection: any) => [
-      patentNumberOf(selection),
-      {
-        aiSummary: selection.aiSummary,
-        noveltyComparison: selection.noveltyComparison,
-        noveltyThreat: selection.noveltyThreat,
-        score: selection.score,
-      }
-    ]))
-    await invokeDraftingAction({
-      user: params.user,
-      patentId: params.patentId,
-      body: {
-        action: 'save_ai_analysis',
-        sessionId: params.sessionId,
-        aiAnalysisData,
-      },
-    })
   }
 
-  return reviewedSelections
+  return { selections: reviewedSelections, unknownCount }
 }
 
 async function runPipeline(job: any, workerId: string) {
@@ -1091,16 +1080,19 @@ async function runPipeline(job: any, workerId: string) {
   }
   if (priorArtHandling !== 'use only') {
     try {
-      const reviewedSelections = await runBatchPriorArtSearchAndReview({
+      const priorArtReview = await runBatchPriorArtSearchAndReview({
         job,
         workerId,
         user,
         patentId: job.patentId,
         sessionId,
       })
-      if (reviewedSelections.length) {
-        selectedPatents = mergePriorArtSelections(selectedPatents, reviewedSelections)
+      if (priorArtReview.selections.length) {
+        selectedPatents = mergePriorArtSelections(selectedPatents, priorArtReview.selections)
       }
+      if (priorArtReview.unknownCount > 0) pipelineWarnings.push(
+        `Prior art analysis: ${priorArtReview.unknownCount} candidate${priorArtReview.unknownCount === 1 ? '' : 's'} remained unknown after retry.`
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Prior art search failed'
       pipelineWarnings.push(`Prior art search: ${message}`)
@@ -1127,41 +1119,61 @@ async function runPipeline(job: any, workerId: string) {
   session = await loadSession(sessionId)
   const components = getIdeaComponents(session)
   if (components.length) {
-    await invokeDraftingAction({
-      user,
-      patentId: job.patentId,
-      body: {
-        action: 'update_component_map',
-        sessionId,
-        components,
-        autoAssign: true,
-      },
-    })
+    try {
+      await invokeDraftingAction({
+        user,
+        patentId: job.patentId,
+        body: {
+          action: 'update_component_map',
+          sessionId,
+          components,
+          autoAssign: true,
+        },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Component validation failed'
+      pipelineWarnings.push(`Component planning: ${message}`)
+    }
   }
 
   await setStep(job.id, workerId, 'FIGURES')
+  let figuresUsable = payload.figureMode !== 'skip'
   session = await loadSession(sessionId)
   const hasDiagram = (session?.diagramSources || []).some((source: any) => String(source.plantumlCode || '').trim())
   if (payload.figureMode === 'skip') {
     await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'skip_figures', sessionId } })
   } else if (!hasDiagram) {
-    await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
-      user,
-      patentId: job.patentId,
-      body: {
-        action: 'plan_and_generate_diagrams_llm',
-        sessionId,
-        figureCount: payload.figureCount,
-        figureRemarks: payload.figureRemarks,
-        skipSketchSuggestions: true,
-      },
-    }))
+    try {
+      await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
+        user,
+        patentId: job.patentId,
+        body: {
+          action: 'plan_and_generate_diagrams_llm',
+          sessionId,
+          figureCount: payload.figureCount,
+          figureRemarks: payload.figureRemarks,
+          skipSketchSuggestions: true,
+        },
+      }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Figure generation failed'
+      pipelineWarnings.push(`Figure generation: ${message}`)
+      figuresUsable = false
+    }
   }
   session = await loadSession(sessionId)
   const diagramCount = (session?.diagramSources || []).filter((source: any) => String(source.plantumlCode || '').trim()).length
   if (diagramCount > 0 && !session?.figureSequenceFinalized) {
-    await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'get_combined_figures', sessionId } })
-    await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'finalize_figure_sequence', sessionId } })
+    try {
+      await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'get_combined_figures', sessionId } })
+      await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'finalize_figure_sequence', sessionId } })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Figure finalization failed'
+      pipelineWarnings.push(`Figure finalization: ${message}`)
+      figuresUsable = false
+    }
+  } else if (payload.figureMode !== 'skip' && diagramCount === 0) {
+    figuresUsable = false
   }
 
   await setStep(job.id, workerId, 'DRAFTING')
@@ -1185,7 +1197,7 @@ async function runPipeline(job: any, workerId: string) {
     }
   }
   session = await loadSession(sessionId)
-  const includeDrawingSections = payload.figureMode !== 'skip'
+  const includeDrawingSections = payload.figureMode !== 'skip' && figuresUsable
   for (const jurisdiction of jurisdictions) {
     await withHeartbeat(job.id, workerId, () => ensureDraftSectionsForJurisdiction({
       user,

@@ -20,6 +20,19 @@ import {
   type PatentSearchQueryPlan,
   type PatentSearchSourceMode
 } from '@/lib/patent-search';
+import {
+  RelatedArtReviewRequestSchema,
+  buildRelatedArtClaimsContext,
+  buildRelatedArtReviewPrompt,
+  canonicalizeRelatedArtPatentNumber,
+  dedupeRelatedArtCandidates,
+  mergeRelatedArtAIAnalysisData,
+  parseRelatedArtReviewOutput,
+  relatedArtRunOwnershipWhere,
+  unknownRelatedArtDecision,
+  type RelatedArtReviewCandidate,
+  type RelatedArtReviewDecision,
+} from '@/lib/drafting-related-art-review';
 // NOTE: Old document-based style learning (getGatedStyleInstructions) has been removed
 // The new Writing Personas system uses writing samples directly in DraftingService
 import { getDocumentTypeConfig, getSupportedCountryCodes, getCountryProfile, getDraftingPrompts, getSectionRules, getBaseStyle } from '@/lib/country-profile-service';
@@ -1200,18 +1213,24 @@ export async function POST(
 
 async function handleClearRelatedArtSelections(user: any, patentId: string, data: any) {
   const { sessionId, runId } = data
-  if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+  if (!sessionId || !runId) return NextResponse.json({ error: 'sessionId and runId required' }, { status: 400 })
 
   const session = await prisma.draftingSession.findFirst({ where: { id: sessionId, patentId, userId: user.id } })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
 
-  // Delete all related art selections for this session and run
-  await (prisma as any).relatedArtSelection.deleteMany({
-    where: {
-      sessionId,
-      runId: runId || null
+  const run = await prisma.relatedArtRun.findFirst({ where: relatedArtRunOwnershipWhere(sessionId, runId) })
+  if (!run) return NextResponse.json({ error: 'Related art run not found or access denied' }, { status: 404 })
+
+  // Clear only the user's selection marker. AI analysis records are the
+  // run-scoped source of truth and must survive checkbox changes.
+  const records = await (prisma as any).relatedArtSelection.findMany({ where: { sessionId, runId } })
+  await prisma.$transaction(records.map((record: any) => {
+    const tags = Array.isArray(record.tags) ? record.tags.filter((tag: string) => tag !== 'USER_SELECTED') : []
+    if (tags.length === 0) {
+      return (prisma as any).relatedArtSelection.delete({ where: { id: record.id } })
     }
-  })
+    return (prisma as any).relatedArtSelection.update({ where: { id: record.id }, data: { tags } })
+  }))
 
   return NextResponse.json({ success: true })
 }
@@ -1240,7 +1259,7 @@ async function handleSaveAIAnalysis(user: any, patentId: string, data: any) {
 
   const updated = await prisma.draftingSession.update({
     where: { id: sessionId },
-    data: { aiAnalysisData: aiAnalysisData || null } as any
+    data: { aiAnalysisData: mergeRelatedArtAIAnalysisData(session.aiAnalysisData, aiAnalysisData) } as any
   })
 
   return NextResponse.json({ session: updated })
@@ -1670,14 +1689,9 @@ function getRelatedArtCandidateAbstract(result: any): string {
     result?.abstract ||
     result?.snippet ||
     result?.summary ||
-    result?.description ||
     result?.abstractOriginal ||
     result?.raw?.abstract ||
     result?.raw?.abstractOriginal ||
-    result?.raw?.ragText ||
-    result?.raw?.claimsText ||
-    result?.matchReasons ||
-    result?.retrievalMatches?.map((match: any) => match?.queryText).filter(Boolean).join('; ') ||
     '',
     220
   )
@@ -1744,8 +1758,21 @@ function handleRelatedArtLLMReviewStream(user: any, patentId: string, data: any,
 }
 
 async function handleRelatedArtLLMReview(user: any, patentId: string, data: any, requestHeaders: Record<string, string>, onProgress?: RelatedArtReviewProgressSink) {
-  const { sessionId, runId, batchSize, claimsContext } = data
-  if (!sessionId) return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+  const requestValidation = RelatedArtReviewRequestSchema.safeParse(data)
+  if (!requestValidation.success) {
+    return NextResponse.json({
+      error: 'Invalid related art review request',
+      details: requestValidation.error.flatten(),
+    }, { status: 400 })
+  }
+  const {
+    sessionId,
+    runId,
+    batchSize,
+    claimsContext,
+    candidatePatentNumbers,
+    reviewPatentNumbers,
+  } = requestValidation.data
 
   let sessionData = await prisma.draftingSession.findFirst({
     where: { id: sessionId, patentId, userId: user.id },
@@ -1765,24 +1792,20 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   const useRunId = runId || session.relatedArtRuns?.[0]?.id
   if (!useRunId) return NextResponse.json({ error: 'No related art run found. Run a search first.' }, { status: 400 })
 
-  const run = await prisma.relatedArtRun.findUnique({ where: { id: useRunId as string } }) as any
-  if (!run) return NextResponse.json({ error: 'Related art run not found' }, { status: 404 })
+  const run = await prisma.relatedArtRun.findFirst({ where: relatedArtRunOwnershipWhere(sessionId, useRunId as string) }) as any
+  if (!run) return NextResponse.json({ error: 'Related art run not found or access denied' }, { status: 404 })
 
   const results: any[] = Array.isArray(run.resultsJson) ? run.resultsJson : []
   if (results.length === 0) return NextResponse.json({ error: 'No results to review' }, { status: 400 })
 
-  const requestedPatentNumbers = Array.isArray(data?.candidatePatentNumbers)
-    ? data.candidatePatentNumbers
-    : Array.isArray(data?.reviewPatentNumbers)
-      ? data.reviewPatentNumbers
-      : []
+  const requestedPatentNumbers = candidatePatentNumbers || reviewPatentNumbers || []
   const requestedPatentNumberSet = new Set(
     requestedPatentNumbers
-      .map((value: unknown) => compactRelatedArtCandidateNumber(value))
+      .map((value: unknown) => canonicalizeRelatedArtPatentNumber(value))
       .filter(Boolean)
   )
   const reviewResults = requestedPatentNumberSet.size > 0
-    ? results.filter((result: any) => requestedPatentNumberSet.has(compactRelatedArtCandidateNumber(getRelatedArtCandidatePatentNumber(result))))
+    ? results.filter((result: any) => requestedPatentNumberSet.has(canonicalizeRelatedArtPatentNumber(getRelatedArtCandidatePatentNumber(result))))
     : results
 
   if (requestedPatentNumberSet.size > 0 && reviewResults.length === 0) {
@@ -1802,39 +1825,17 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
   // Get frozen claims from session for claim-aware analysis
   const normalizedData = normalizeClaimsForSession((session?.ideaRecord?.normalizedData as any) || {})
   const authoritativeClaims = getAuthoritativeClaims(normalizedData)
-  const frozenClaims = claimsContext?.claims || authoritativeClaims.structured
+  const claimsContextData = claimsContext as any
+  const frozenClaims = claimsContextData?.claims || authoritativeClaims.structured
   const claimsText = authoritativeClaims.html
-  const hasClaimsContext = claimsContext?.frozenAt || normalizedData.claimsApprovedAt || claimsText
+  const hasClaimsContext = claimsContextData?.frozenAt || normalizedData.claimsApprovedAt || claimsText
   const manualPriorArtText = (session?.manualPriorArt as any)?.manualPriorArtText || (session?.manualPriorArt as any)?.text || ''
-  const manualPriorArtSection = manualPriorArtText
-    ? `\n\nUSER-SUPPLIED PRIOR ART & ANALYSIS (treat as highly relevant):\n${manualPriorArtText}`
-    : ''
-  
-  // Build claims summary for the prompt
-  let claimsSection = ''
-  if (hasClaimsContext) {
-    if (Array.isArray(frozenClaims) && frozenClaims.length > 0) {
-      const claimsSummary = frozenClaims.slice(0, 8).map((c: any) => 
-        `Claim ${c.number} (${c.type}): ${(c.text || '').substring(0, 200)}...`
-      ).join('\n')
-      const heading = normalizedData.claimsApprovedAt ? 'OUR FROZEN PATENT CLAIMS' : 'OUR CURRENT CLAIMS'
-      claimsSection = `\n\n${heading} (analyze prior art against these specific claims):\n${claimsSummary}`
-      if (frozenClaims.length > 8) {
-        claimsSection += `\n(+ ${frozenClaims.length - 8} additional claims)`
-      }
-    } else if (typeof frozenClaims === 'string' && frozenClaims.trim()) {
-      // Handle string claims (HTML)
-      const plainClaims = frozenClaims.replace(/<[^>]*>/g, '').substring(0, 1000)
-      const heading = normalizedData.claimsApprovedAt ? 'OUR FROZEN PATENT CLAIMS' : 'OUR CURRENT CLAIMS'
-      claimsSection = `\n\n${heading} (analyze prior art against these specific claims):\n${plainClaims}...`
-    } else if (claimsText) {
-      const plainClaims = claimsText.replace(/<[^>]*>/g, '').substring(0, 1000)
-      const heading = normalizedData.claimsApprovedAt ? 'OUR FROZEN PATENT CLAIMS' : 'OUR CURRENT CLAIMS'
-      claimsSection = `\n\n${heading} (analyze prior art against these specific claims):\n${plainClaims}...`
-    }
-  }
+  const structuredClaims = Array.isArray(frozenClaims) ? frozenClaims : authoritativeClaims.structured
+  const claimsForReview = hasClaimsContext
+    ? buildRelatedArtClaimsContext(structuredClaims, typeof frozenClaims === 'string' ? frozenClaims : claimsText)
+    : { text: '', omitted: 0 }
 
-  const candidates = reviewResults.map((r: any) => {
+  const candidates = dedupeRelatedArtCandidates(reviewResults.map((r: any) => {
     const pn = getRelatedArtCandidatePatentNumber(r)
     return {
       pn,
@@ -1842,7 +1843,7 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
       abstract: getRelatedArtCandidateAbstract(r),
       source: getRelatedArtCandidateSource(r),
     }
-  }).filter(x => x.pn && x.title)
+  }).filter(x => canonicalizeRelatedArtPatentNumber(x.pn) && x.title))
 
   if (candidates.length === 0) {
     return NextResponse.json({ error: 'No reviewable patent candidates found in this related art run.' }, { status: 400 })
@@ -1855,34 +1856,9 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
     sample: candidates.slice(0, 5).map(candidate => ({ pn: candidate.pn, source: candidate.source })),
   })
 
-  // Process all candidates at once instead of in batches
   const request = { headers: requestHeaders || {} }
-  const allDecisions: Array<{
-    pn: string;
-    title: string;
-    relevance: number;
-    novelty_threat: 'anticipates'|'obvious'|'adjacent'|'remote';
-    summary: string;
-    detailedAnalysis: {
-      summary: string;
-      relevant_parts: string[];
-      irrelevant_parts: string[];
-      novelty_comparison: string;
-    };
-    noveltyInsights?: {
-      differences?: string;
-      improvementSuggestions?: string;
-    }
-  }> = []
-
-  // Create candidate text for all patents
-  const candidatesText = candidates.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nSource: ${b.source}\nTitle: ${b.title}\nAbstract: ${b.abstract || 'Not available'}`).join('\n\n')
-
-  // STEP 1: Relevance Analysis (in batches to avoid token limits)
-  console.log('Starting relevance analysis with Gemini 2.5 Flash-Lite...')
-  const effectiveBatchSize = batchSize || 6 // Use provided batchSize or default to 6
-  const totalBatches = Math.max(1, Math.ceil(candidates.length / effectiveBatchSize))
-  let relevanceData: any[] = []
+  const allDecisions: RelatedArtReviewDecision[] = []
+  const totalBatches = Math.max(1, Math.ceil(candidates.length / batchSize))
 
   await emitRelatedArtReviewProgress(onProgress, {
     type: 'start',
@@ -1892,10 +1868,9 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
     message: `Starting AI analysis for ${candidates.length} patents`
   })
 
-  for (let i = 0; i < candidates.length; i += effectiveBatchSize) {
-    const batch = candidates.slice(i, i + effectiveBatchSize)
-    const batchNumber = Math.floor(i / effectiveBatchSize) + 1
-    const batchText = batch.map((b, idx) => `#${idx+1}. PN:${b.pn||'N/A'}\nSource: ${b.source}\nTitle: ${b.title}\nAbstract: ${b.abstract || 'Not available'}`).join('\n\n')
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize)
+    const batchNumber = Math.floor(i / batchSize) + 1
 
     await emitRelatedArtReviewProgress(onProgress, {
       type: 'batch_started',
@@ -1906,109 +1881,50 @@ async function handleRelatedArtLLMReview(user: any, patentId: string, data: any,
       message: `Analyzing batch ${batchNumber} of ${totalBatches}`
     })
 
-    const batchRelevancePrompt = `You are an expert patent attorney. Analyze these patent candidates for relevance to our invention and assess novelty threat to our specific claims.
+    let unresolved: RelatedArtReviewCandidate[] = batch
+    const batchDecisions: RelatedArtReviewDecision[] = []
+    let lastFailure = 'The AI service did not return a valid candidate-specific result.'
 
-INVENTION: ${title} | SEARCH: ${query}${claimsSection}${manualPriorArtSection}
+    // Salvage valid results and retry only unresolved candidates once.
+    for (let attempt = 1; attempt <= 2 && unresolved.length > 0; attempt += 1) {
+      const prompt = buildRelatedArtReviewPrompt({
+        title,
+        query,
+        claimsText: claimsForReview.text,
+        omittedClaims: claimsForReview.omitted,
+        manualPriorArtText,
+        candidates: unresolved,
+      })
+      const relevanceResult = await llmGateway.executeLLMOperation(request, {
+        taskCode: 'LLM1_PRIOR_ART',
+        stageCode: 'NOVELTY_RELEVANCE_SCORING',
+        prompt,
+        idempotencyKey: `${sessionId}:${useRunId}:batch:${batchNumber}:attempt:${attempt}:${crypto.randomUUID()}`,
+        inputTokens: Math.ceil(prompt.length / 4),
+        parameters: { maxOutputTokens: 3000 },
+        metadata: {
+          patentId,
+          sessionId,
+          runId: useRunId,
+          batch: batchNumber,
+          attempt,
+          purpose: 'related_art_relevance_batch',
+        },
+      })
 
-For each patent candidate listed below, including Indian Patent Corpus candidates, provide exactly one result using the exact PN value shown:
-- relevance: 0.0-1.0 score
-- novelty_threat: "anticipates" | "obvious" | "adjacent" | "remote"
-  * "anticipates" = This prior art discloses ALL elements of at least one of our claims
-  * "obvious" = Combining this with common knowledge would render our claims obvious
-  * "adjacent" = Related technology but doesn't threaten our specific claim scope
-  * "remote" = Different field, minimal relevance to our claims
-- summary: 1-2 sentence explanation of how this relates to our claims
-- relevant_parts: List specific elements/claims/aspects of the patent that overlap with OUR claims
-- irrelevant_parts: List specific elements/claims/aspects of the patent that DON'T overlap with our claims
-- novelty_comparison: Explain what makes our claims novel compared to this patent (specific claim elements not disclosed)
-${hasClaimsContext ? '\nIMPORTANT: Focus analysis on whether prior art anticipates or renders obvious our SPECIFIC CLAIMS listed above.' : ''}
-
-Return ONLY JSON:
-{
-  "relevance_results": [
-    {
-      "pn": "patent_number",
-      "title": "patent_title",
-      "relevance": 0.8,
-      "novelty_threat": "adjacent",
-      "summary": "analysis",
-      "relevant_parts": ["specific element 1", "specific element 2"],
-      "irrelevant_parts": ["unrelated element 1", "different aspect 1"],
-      "novelty_comparison": "detailed explanation of novelty differences"
-    }
-  ]
-}
-
-PATENTS:
-${batchText}`
-
-    const relevanceResult = await llmGateway.executeLLMOperation(request, {
-      taskCode: 'LLM1_PRIOR_ART',
-      stageCode: 'NOVELTY_RELEVANCE_SCORING', // Use stage config for admin-configured model/limits
-      prompt: batchRelevancePrompt,
-      idempotencyKey: crypto.randomUUID(),
-      inputTokens: Math.ceil(batchRelevancePrompt.length / 4),
-      parameters: { maxOutputTokens: 3000 },
-      metadata: {
-        patentId,
-        sessionId,
-        runId: useRunId,
-        purpose: 'related_art_relevance_batch'
+      if (!relevanceResult.success || !relevanceResult.response) {
+        lastFailure = 'The AI service was unavailable for this candidate after retry.'
+        continue
       }
-    })
-
-    console.log(`Relevance analysis batch ${batchNumber} model used:`, relevanceResult?.response?.modelClass || 'unknown')
-
-    if (relevanceResult.success && relevanceResult.response) {
-      try {
-        const txt = (relevanceResult.response.output || '').trim()
-        const start = txt.indexOf('{')
-        const end = txt.lastIndexOf('}')
-        const json = start !== -1 && end !== -1 && end > start ? txt.substring(start, end + 1) : txt
-
-        const parsed = JSON.parse(json)
-        const batchResults = Array.isArray(parsed?.relevance_results) ? parsed.relevance_results : []
-        const returnedPns = new Set(
-          batchResults
-            .map((item: any) => compactRelatedArtCandidateNumber(item?.pn || item?.patent_number || item?.publicationNumber || item?.publication_number))
-            .filter(Boolean)
-        )
-        const missingResults = batch
-          .filter(candidate => !returnedPns.has(compactRelatedArtCandidateNumber(candidate.pn)))
-          .map(candidate => ({
-            pn: candidate.pn,
-            title: candidate.title,
-            relevance: 0.5,
-            novelty_threat: 'adjacent',
-            summary: `The AI relevance response did not include a separate result for this ${candidate.source} candidate; it is retained for user review because it was returned by the patent search stage.`,
-            relevant_parts: [],
-            irrelevant_parts: [],
-            novelty_comparison: 'No candidate-specific AI comparison was returned for this reference.'
-          }))
-        relevanceData.push(...batchResults, ...missingResults)
-        console.log(`Batch ${batchNumber} successful:`, batchResults.length, 'patents analyzed', missingResults.length ? `(${missingResults.length} retained from missing LLM output)` : '')
-      } catch (e) {
-        console.log(`Batch ${batchNumber} JSON parse failed:`, e instanceof Error ? e.message : String(e))
-        // Fallback for this batch
-        const fallbackResults = batch.map(c => ({
-          pn: c.pn,
-          title: c.title,
-          relevance: 0.5,
-          novelty_threat: 'adjacent',
-          summary: 'Basic relevance analysis - detailed analysis failed'
-        }))
-        relevanceData.push(...fallbackResults)
-      }
-    } else {
-      const fallbackResults = batch.map(c => ({
-        pn: c.pn,
-        title: c.title,
-        relevance: 0.5,
-        novelty_threat: 'adjacent',
-        summary: 'Basic relevance analysis - AI response was unavailable for this batch'
-      }))
-      relevanceData.push(...fallbackResults)
+      const parsed = parseRelatedArtReviewOutput(relevanceResult.response.output || '', unresolved)
+      batchDecisions.push(...parsed.decisions)
+      unresolved = parsed.unresolved
+      if (unresolved.length > 0) lastFailure = 'The AI response was invalid or omitted this candidate after one retry.'
     }
+
+    batchDecisions.push(...unresolved.map(candidate => unknownRelatedArtDecision(candidate, lastFailure)))
+    const byNumber = new Map(batchDecisions.map(decision => [canonicalizeRelatedArtPatentNumber(decision.pn), decision]))
+    allDecisions.push(...batch.map(candidate => byNumber.get(canonicalizeRelatedArtPatentNumber(candidate.pn)) || unknownRelatedArtDecision(candidate, lastFailure)))
 
     await emitRelatedArtReviewProgress(onProgress, {
       type: 'batch_completed',
@@ -2020,10 +1936,8 @@ ${batchText}`
     })
   }
 
-  console.log('Total relevance analysis completed:', relevanceData.length, 'patents analyzed')
-
-  // If no relevance data was collected, something went wrong with the LLM calls
-  if (relevanceData.length === 0) {
+  /* Legacy fabricated fallback processing removed. The validated batch parser
+     above now owns all decision construction.
     console.error('❌ No relevance data collected from LLM calls')
     return NextResponse.json({
       error: 'AI analysis failed: The AI service did not return any results. This may be due to API limits, network issues, or invalid API keys. Please try again in a few moments.'
@@ -2060,7 +1974,7 @@ ${batchText}`
       summary: sum,
       detailedAnalysis
     })
-  }
+  */
 
   // STEP 2: Idea Generation moved to async Idea Bank Funnel
   // The funnel runs silently in the background after we return results to user
@@ -2068,11 +1982,12 @@ ${batchText}`
 
   const autoUse: string[] = []
   const tagsFor = (d: typeof allDecisions[number]) => {
+    if (d.analysis_status === 'unknown') return ['AI_ANALYSIS_UNKNOWN']
     const base = ['AI_REVIEWED']
     if (d.novelty_threat === 'anticipates') base.push('AI_ANTICIPATES')
     else if (d.novelty_threat === 'obvious') base.push('AI_OBVIOUS')
     else if (d.novelty_threat === 'adjacent') base.push('AI_ADJACENT')
-    else base.push('AI_REMOTE')
+    else if (d.novelty_threat === 'remote') base.push('AI_REMOTE')
     return base
   }
 
@@ -2085,17 +2000,31 @@ ${batchText}`
     message: 'Saving AI analysis results'
   })
 
+  const existingAnalysisRecords = await (prisma as any).relatedArtSelection.findMany({ where: { sessionId, runId: useRunId } })
+  const existingByNumber = new Map(existingAnalysisRecords.map((record: any) => [canonicalizeRelatedArtPatentNumber(record.patentNumber), record]))
   for (const d of allDecisions) {
     if (!d.pn) continue
-    try {
-      await (prisma as any).relatedArtSelection.upsert({
-        where: { sessionId_patentNumber_runId: { sessionId, patentNumber: d.pn, runId: useRunId } },
-        update: { score: d.relevance, tags: tagsFor(d), userNotes: JSON.stringify(d.detailedAnalysis), title: d.title || undefined },
-        create: { sessionId, runId: useRunId, patentNumber: d.pn, title: d.title || undefined, score: d.relevance, tags: tagsFor(d), userNotes: JSON.stringify(d.detailedAnalysis) }
-      })
-    } catch {}
-    // Auto-select everything except those that anticipate the invention (very high threat)
-    if (d.novelty_threat !== 'anticipates') autoUse.push(d.pn)
+    const existing = existingByNumber.get(canonicalizeRelatedArtPatentNumber(d.pn)) as any
+    const tags = Array.from(new Set([
+      ...tagsFor(d),
+      ...(Array.isArray(existing?.tags) && existing.tags.includes('USER_SELECTED') ? ['USER_SELECTED'] : []),
+    ]))
+    const userNotes = JSON.stringify({
+      ...d.detailedAnalysis,
+      analysis_status: d.analysis_status,
+      evidence_basis: d.evidence_basis,
+      failure_reason: d.failure_reason,
+    })
+    await (prisma as any).relatedArtSelection.upsert({
+      where: { sessionId_patentNumber_runId: { sessionId, patentNumber: d.pn, runId: useRunId } },
+      update: { score: d.relevance, tags, userNotes, title: d.title || undefined },
+      create: { sessionId, runId: useRunId, patentNumber: d.pn, title: d.title || undefined, score: d.relevance, tags, userNotes }
+    })
+    if (
+      d.analysis_status === 'analyzed' &&
+      typeof d.relevance === 'number' && d.relevance >= 0.3 &&
+      d.novelty_threat !== 'remote'
+    ) autoUse.push(d.pn)
   }
 
   await emitRelatedArtReviewProgress(onProgress, {
@@ -2111,8 +2040,12 @@ ${batchText}`
   // Now handled asynchronously by unified Idea Bank Funnel (Stream A, B, C)
   const ideaFunnelEnabled = isIdeaBankGenerationEnabled()
 
+  const reviewed = allDecisions.filter(decision => decision.analysis_status === 'analyzed').length
+  const unknown = allDecisions.length - reviewed
   const response = {
-    reviewed: allDecisions.length,
+    attempted: candidates.length,
+    reviewed,
+    unknown,
     decisions: allDecisions,
     autoSelect: autoUse,
     runId: useRunId,
@@ -2142,11 +2075,11 @@ ${batchText}`
         searchQuery: query || ''
       },
       priorArtAnalysis: allDecisions
-        .filter(d => d.pn && d.relevance >= 0.3) // Only include relevant patents with valid PN
+        .filter(d => d.pn && d.analysis_status === 'analyzed' && typeof d.relevance === 'number' && d.relevance >= 0.3)
         .map(d => ({
           pn: d.pn || '',
           title: d.title || 'Untitled Patent',
-          relevance: typeof d.relevance === 'number' ? d.relevance : 0.5,
+          relevance: d.relevance as number,
           novelty_threat: d.novelty_threat || 'adjacent',
           summary: d.summary || '',
           detailedAnalysis: d.detailedAnalysis || {
@@ -8443,28 +8376,40 @@ async function handleRelatedArtSearch(user: any, patentId: string, data: any, re
 
 async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
   const { sessionId, runId, selections } = data
-  if (!sessionId || !Array.isArray(selections)) return NextResponse.json({ error: 'sessionId and selections[] required' }, { status: 400 })
+  if (!sessionId || !runId || !Array.isArray(selections)) return NextResponse.json({ error: 'sessionId, runId, and selections[] required' }, { status: 400 })
 
   const session = await prisma.draftingSession.findFirst({ where: { id: sessionId, patentId, userId: user.id } })
   if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  const run = await prisma.relatedArtRun.findFirst({ where: relatedArtRunOwnershipWhere(sessionId, runId) })
+  if (!run) return NextResponse.json({ error: 'Related art run not found or access denied' }, { status: 404 })
 
   const created: any[] = []
   for (const sel of selections) {
+    const patentNumber = String(sel.patent_number || sel.pn || '').trim()
+    if (!canonicalizeRelatedArtPatentNumber(patentNumber)) continue
     try {
+      const existing = await (prisma as any).relatedArtSelection.findUnique({
+        where: { sessionId_patentNumber_runId: { sessionId, patentNumber, runId } }
+      })
+      const existingTags = Array.isArray(existing?.tags) ? existing.tags : []
+      const incomingTags = Array.isArray(sel.tags) ? sel.tags : []
+      const tags = Array.from(new Set([...existingTags, ...incomingTags]))
+      const preserveAnalysis = existingTags.some((tag: string) => tag === 'AI_REVIEWED' || tag === 'AI_ANALYSIS_UNKNOWN')
+      const userNotes = preserveAnalysis && existing?.userNotes ? existing.userNotes : (sel.user_notes || existing?.userNotes || undefined)
       const rec = await (prisma as any).relatedArtSelection.upsert({
         where: {
           sessionId_patentNumber_runId: {
             sessionId,
-            patentNumber: String(sel.patent_number || sel.pn || '').trim(),
-            runId: runId || null
+            patentNumber,
+            runId
           }
         },
         update: {
           title: sel.title || undefined,
           snippet: sel.snippet || undefined,
           score: typeof sel.score === 'number' ? sel.score : undefined,
-          tags: Array.isArray(sel.tags) ? sel.tags : [],
-          userNotes: sel.user_notes || undefined,
+          tags,
+          userNotes,
           publicationDate: sel.publication_date || undefined,
           cpcCodes: sel.cpc_codes || undefined,
           ipcCodes: sel.ipc_codes || undefined,
@@ -8473,13 +8418,13 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
         },
         create: {
           sessionId,
-          runId: runId || null,
-          patentNumber: String(sel.patent_number || sel.pn || '').trim(),
+          runId,
+          patentNumber,
           title: sel.title || undefined,
           snippet: sel.snippet || undefined,
           score: typeof sel.score === 'number' ? sel.score : undefined,
-          tags: Array.isArray(sel.tags) ? sel.tags : [],
-          userNotes: sel.user_notes || undefined,
+          tags,
+          userNotes,
           publicationDate: sel.publication_date || undefined,
           cpcCodes: sel.cpc_codes || undefined,
           ipcCodes: sel.ipc_codes || undefined,
@@ -8489,7 +8434,7 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
       })
       created.push(rec)
     } catch (e) {
-      // ignore duplicates errors due to constraint race
+      console.warn('[Related Art] Failed to save user selection:', e)
     }
   }
 
@@ -9680,10 +9625,11 @@ async function handlePlanAndGenerateDiagramsLLM(
 // It focuses ONLY on code quality, rule compliance, and syntax correctness.
 
 async function handleGenerateDiagramsLLM(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
-  const { sessionId, prompt, replaceExisting, usePlan, figureRemarks } = data
+  const { sessionId, prompt, replaceExisting, usePlan, figureRemarks, mode, figureInstructions } = data
+  const hasManualInstructions = mode === 'manual' || Array.isArray(figureInstructions)
 
   // When using plan, prompt is optional (we build it from plan)
-  if (!sessionId || (!prompt && !usePlan)) {
+  if (!sessionId || (!prompt && !usePlan && !hasManualInstructions)) {
     return NextResponse.json({ error: 'Session ID and prompt are required' }, { status: 400 })
   }
 
@@ -9878,6 +9824,77 @@ Return JSON only. No markdown. No commentary.
 `
   }
 
+  if (!usePlan && hasManualInstructions) {
+    const instructions = (Array.isArray(figureInstructions) ? figureInstructions : [])
+      .map((item: unknown) => typeof item === 'string' ? item.trim() : '')
+      .filter(Boolean)
+      .slice(0, 10)
+      .map((item: string) => item.slice(0, 800))
+
+    if (instructions.length === 0) {
+      return NextResponse.json({ error: 'At least one figure instruction is required' }, { status: 400 })
+    }
+
+    const figureScope = filterComponentsByScopeForFigures(
+      extractComponentsArray(session.referenceMap),
+      normalizedIdea?.scopeRecommendations
+    )
+    const components = figureScope.components
+    const componentsContext = components.length > 0
+      ? components.map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`).join('\n')
+      : '- No approved components are available.'
+    const claimLinkedComponentsContext = components
+      .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
+      .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
+      .join('\n') || '- No claim-linked components identified for mandatory figure coverage.'
+
+    const existingFigures = data?.includeExistingFigures === true
+      ? await prisma.figurePlan.findMany({ where: { sessionId }, orderBy: { figureNo: 'asc' }, select: { figureNo: true, title: true, description: true } })
+      : []
+    const existingFiguresBlock = existingFigures.length > 0
+      ? `\nEXISTING FIGURES (do not duplicate; make new figures logically follow these):\n${existingFigures.map((f: any) => `Fig.${f.figureNo}: ${sanitizeFigureTitleInput(f.title) || `Figure ${f.figureNo}`}${f.description ? ` - ${String(f.description).slice(0, 120)}` : ''}`).join('\n')}\n`
+      : ''
+
+    effectivePrompt = `SYSTEM ROLE — Patent Figure Diagram Generator (PlantUML)
+
+Generate patent-office-friendly diagrams in PlantUML. User figure instructions define the requested content, but backend safety, component, syntax, and jurisdiction rules cannot be overridden.
+
+OUTPUT FORMAT (MANDATORY)
+Return a JSON array of exactly ${instructions.length} objects.
+Each object must be:
+{
+  "title": "Fig.X - <short title>",
+  "purpose": "<one sentence>",
+  "styleUsed": "STYLE_1" or "STYLE_2" or "SEQUENCE" or "ACTIVITY",
+  "layoutPlan": "One sentence describing the spatial arrangement",
+  "patternsUsed": ["only patterns actually used"],
+  "plantuml": "<PlantUML code from @startuml to @enduml>"
+}
+Return JSON only. No markdown. No commentary.
+
+USER FIGURE INSTRUCTIONS
+${instructions.map((instruction, index) => `Fig.${index + 1}: ${instruction}`).join('\n')}
+${existingFiguresBlock}
+APPROVED COMPONENTS / NUMERALS
+${componentsContext}
+
+REQUIRED CLAIM-LINKED FIGURE COMPONENTS
+${claimLinkedComponentsContext}
+
+${generationFigureScopeBlock ? `${generationFigureScopeBlock}\n` : ''}
+${sourceFactLedgerBlock ? `${sourceFactLedgerBlock}\n` : ''}
+
+RULES
+- Use only approved numbered components and their exact reference labels.
+- Do not invent numbered components or numerals.
+- Un-numbered helper nodes are allowed only for routing clarity, such as "Power bus", "Comms bus", "Data bus", or "Interface bus".
+- Every component label must include its approved reference label in parentheses.
+- Do not generate skinparam lines; the backend injects canonical patent styling.
+- Do not include !include, !theme, !pragma, title, caption, sprites, or icons unless specifically allowed by backend rules.
+- Avoid arrow labels; use simple connections.
+- Keep diagrams linear and readable.`
+  }
+
   // Get active jurisdiction for this session
   const activeJurisdiction = (session as any).activeJurisdiction || 
     ((session as any).draftingJurisdictions?.[0]) || 'US'
@@ -10010,7 +10027,7 @@ ${compatibility.compatibilityNotes.map(n => `⚠️ ${n}`).join('\n')}
     nomenclature += ' Use: Reagent, Compound, Stage, Phase, Catalyst, Reactor (and similar domain entities).'
   }
 
-  if (!usePlan && (sourceFactLedgerBlock || generationFigureScopeBlock)) {
+  if (!usePlan && !hasManualInstructions && (sourceFactLedgerBlock || generationFigureScopeBlock)) {
     effectivePrompt = [
       effectivePrompt,
       generationFigureScopeBlock,
@@ -10237,28 +10254,10 @@ If in doubt about a non-required element, OMIT rather than add.
 
   const shouldReplace = replaceExisting !== false
 
-  // Optionally clear existing figures before generating new ones
-  if (shouldReplace) {
-    try {
-      await prisma.figurePlan.deleteMany({ where: { sessionId } })
-      await prisma.diagramSource.deleteMany({ where: { sessionId } })
-      // Also reset the frozen figure sequence since we're replacing all diagrams
-      await prisma.draftingSession.update({
-        where: { id: sessionId },
-        data: { 
-          figureSequence: [],
-          figureSequenceFinalized: false
-        }
-      })
-    } catch (clearErr) {
-      console.error('Error clearing old figures:', clearErr)
-      // Continue with generation even if clearing fails
-    }
-  }
-
-  // Persist immediately: assign figure numbers and save PlantUML + titles
+  // Process generated figures before persistence. Replacement mode must not delete
+  // existing diagrams unless the full replacement set is valid.
   try {
-    const saved: Array<{ figureNo: number; title: string; plantuml: string; purpose: string; diagramType: string; hasValidationWarnings: boolean }> = []
+    const saved: Array<{ figureNo: number; title: string; plantuml: string; purpose: string; diagramType: string; hasValidationWarnings: boolean; checksum: string }> = []
     const warnings: string[] = []
     const failedFigures: DiagramProcessingFailure[] = []
     const repairSummary = emptyRepairSummary()
@@ -10266,7 +10265,7 @@ If in doubt about a non-required element, OMIT rather than add.
       .map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`)
 
     // When appending, continue numbering after existing figures; when replacing, start fresh
-    const existingPlans = await prisma.figurePlan.findMany({ where: { sessionId } })
+    const existingPlans = shouldReplace ? [] : await prisma.figurePlan.findMany({ where: { sessionId } })
     const used = new Set(existingPlans.map(fp => fp.figureNo))
     let figureNoCounter = 1
     const nextNo = () => {
@@ -10339,34 +10338,59 @@ If in doubt about a non-required element, OMIT rather than add.
       const cleanedTitle = sanitizeFigureTitleInput(title)
       const safeTitle = updateFigureTitleNumber(cleanedTitle, figureNo) || `Figure ${figureNo}`
 
-      await prisma.figurePlan.upsert({
-        where: { sessionId_figureNo: { sessionId, figureNo } },
-        update: { title: safeTitle, ...(description ? { description } : {}) },
-        create: { sessionId, figureNo, title: safeTitle, ...(description ? { description } : {}), nodes: [], edges: [] }
-      })
-
-      await prisma.diagramSource.upsert({
-        where: { sessionId_figureNo_language: { sessionId, figureNo, language: 'en' } },
-        update: { plantumlCode: code, checksum },
-        create: { sessionId, figureNo, plantumlCode: code, checksum, language: 'en' }
-      })
-
       saved.push({ 
         figureNo, 
         title: safeTitle, 
         plantuml: code,
         purpose: description || '',
         diagramType: figureType,
-        hasValidationWarnings: hasValidationErrors
+        hasValidationWarnings: hasValidationErrors,
+        checksum
       })
     }
 
     if (saved.length === 0) {
       return buildDiagramFailureResponse(failedFigures, repairSummary)
     }
+    if (shouldReplace && failedFigures.length > 0) {
+      return NextResponse.json({
+        error: 'Replacement aborted because one or more generated diagrams failed validation. Existing diagrams were kept unchanged.',
+        replacementAborted: true,
+        failedFigures,
+        repairSummary: shouldExposeRepairSummary(repairSummary) ? repairSummary : undefined
+      }, { status: 422 })
+    }
     if (failedFigures.length > 0) {
       warnings.push(`${failedFigures.length} diagram(s) could not be repaired and were skipped.`)
     }
+
+    await prisma.$transaction(async (tx) => {
+      if (shouldReplace) {
+        await tx.diagramSource.deleteMany({ where: { sessionId } })
+        await tx.figurePlan.deleteMany({ where: { sessionId } })
+        await tx.draftingSession.update({
+          where: { id: sessionId },
+          data: {
+            figureSequence: [],
+            figureSequenceFinalized: false
+          }
+        })
+      }
+
+      for (const s of saved) {
+        await tx.figurePlan.upsert({
+          where: { sessionId_figureNo: { sessionId, figureNo: s.figureNo } },
+          update: { title: s.title, ...(s.purpose ? { description: s.purpose } : {}) },
+          create: { sessionId, figureNo: s.figureNo, title: s.title, ...(s.purpose ? { description: s.purpose } : {}), nodes: [], edges: [] }
+        })
+
+        await tx.diagramSource.upsert({
+          where: { sessionId_figureNo_language: { sessionId, figureNo: s.figureNo, language: 'en' } },
+          update: { plantumlCode: s.plantuml, checksum: s.checksum },
+          create: { sessionId, figureNo: s.figureNo, plantumlCode: s.plantuml, checksum: s.checksum, language: 'en' }
+        })
+      }
+    })
 
     // Build response with processed code
     const responseFigures = saved.map((s: any) => ({
@@ -13030,25 +13054,8 @@ async function handleGetCombinedFigures(user: any, patentId: string, data: any) 
       return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
     }
 
-    // Debug: Log sketch records loaded via session relation
-    let loadedSketches = session.sketchRecords || []
-    console.log(`[GetCombinedFigures] Session ${sessionId} has ${loadedSketches.length} sketches via session relation`)
-    
-    // Fallback: If no sketches via session relation, load from patent directly
-    if (loadedSketches.length === 0) {
-      const patentSketches = await prisma.sketchRecord.findMany({
-        where: { 
-          patentId,
-          isDeleted: false,
-          status: 'SUCCESS'
-        },
-        orderBy: { createdAt: 'asc' }
-      })
-      if (patentSketches.length > 0) {
-        console.log(`[GetCombinedFigures] Loaded ${patentSketches.length} sketches from patent directly (session relation was empty)`)
-        loadedSketches = patentSketches
-      }
-    }
+    const loadedSketches = session.sketchRecords || []
+    console.log(`[GetCombinedFigures] Session ${sessionId} has ${loadedSketches.length} current-session sketches`)
 
     const projectId = session.patent?.projectId
 
@@ -13194,20 +13201,7 @@ async function handleSaveFigureSequence(user: any, patentId: string, data: any) 
       return NextResponse.json({ error: 'Sequence is finalized. Unlock to make changes.' }, { status: 400 })
     }
 
-    // Fallback: If session relation does not include sketches (legacy), allow patent-level sketches
-    let allowedSketchIds = new Set<string>(((session as any).sketchRecords || []).map((s: any) => s.id))
-    if (allowedSketchIds.size === 0) {
-      const patentSketches = await prisma.sketchRecord.findMany({
-        where: {
-          patentId,
-          isDeleted: false,
-          status: 'SUCCESS'
-        },
-        select: { id: true },
-        orderBy: { createdAt: 'asc' }
-      })
-      allowedSketchIds = new Set<string>(patentSketches.map(s => s.id))
-    }
+    const allowedSketchIds = new Set<string>(((session as any).sketchRecords || []).map((s: any) => s.id))
 
     const availableFigures = [
       ...(((session as any).figurePlans || []) as any[]).map((fp: any) => ({
@@ -13280,22 +13274,7 @@ async function handleAIArrangeFigures(user: any, patentId: string, data: any, re
     }
     await reactivateFiguresForSession(sessionId)
 
-    // Fallback: If no sketches via session relation, load from patent directly
-    let loadedSketches = session.sketchRecords || []
-    if (loadedSketches.length === 0) {
-      const patentSketches = await prisma.sketchRecord.findMany({
-        where: { 
-          patentId,
-          isDeleted: false,
-          status: 'SUCCESS'
-        },
-        orderBy: { createdAt: 'asc' }
-      })
-      if (patentSketches.length > 0) {
-        console.log(`[AIArrangeFigures] Loaded ${patentSketches.length} sketches from patent directly`)
-        loadedSketches = patentSketches
-      }
-    }
+    const loadedSketches = session.sketchRecords || []
 
     // Build figure descriptions for AI analysis
     const projectId = session.patent?.projectId
@@ -13523,7 +13502,7 @@ async function handleFinalizeFigureSequence(user: any, patentId: string, data: a
     }
     await reactivateFiguresForSession(sessionId)
 
-    const sequence = session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>
+    let sequence = session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>
     if (!sequence || sequence.length === 0) {
       return NextResponse.json({ error: 'No figure sequence to finalize' }, { status: 400 })
     }
@@ -13538,6 +13517,43 @@ async function handleFinalizeFigureSequence(user: any, patentId: string, data: a
       })
     }
 
+    const availableFigures = [
+      ...session.figurePlans.map((fp: any) => ({
+        id: `diagram-${fp.figureNo}`,
+        type: 'diagram' as const,
+        sourceId: fp.id
+      })),
+      ...session.sketchRecords.map((sr: any) => ({
+        id: `sketch-${sr.id}`,
+        type: 'sketch' as const,
+        sourceId: sr.id
+      }))
+    ]
+    const { normalized: normalizedSequence, meta: normalizationMeta } = normalizeFigureSequence(sequence, availableFigures)
+    const hasDirtySequence =
+      normalizationMeta.droppedUnknownCount > 0 ||
+      normalizationMeta.droppedTypeMismatchCount > 0 ||
+      normalizationMeta.droppedSourceMismatchCount > 0 ||
+      normalizationMeta.dedupedCount > 0
+
+    if (hasDirtySequence) {
+      return NextResponse.json({
+        error: 'Figure sequence contains stale, duplicate, or mismatched entries. Refresh the figure planner and save the sequence again.',
+        normalized: normalizedSequence,
+        normalizationMeta
+      }, { status: 400 })
+    }
+
+    if (normalizationMeta.appendedMissingCount > 0) {
+      return NextResponse.json({
+        error: 'Figure sequence is missing current-session figures. Refresh the figure planner and save the sequence again.',
+        normalized: normalizedSequence,
+        normalizationMeta
+      }, { status: 400 })
+    }
+
+    sequence = normalizedSequence
+
     // Validate that all figures in the sequence exist in the session
     const sequenceDiagramSourceIds = new Set(
       sequence.filter(s => s.type === 'diagram').map(s => s.sourceId)
@@ -13546,19 +13562,9 @@ async function handleFinalizeFigureSequence(user: any, patentId: string, data: a
       sequence.filter(s => s.type === 'sketch').map(s => s.sourceId)
     )
     const existingPlanIds = new Set(session.figurePlans.map(p => p.id))
-    // Validate sketches against the exact IDs referenced in the sequence.
-    // This covers legacy sessions where sketchRecords relation may be empty even though sketches exist on the patent.
+    // Validate sketches against current-session records only.
     const sketchIdsInSequence = Array.from(sequenceSketchSourceIds)
-    const sketchesBySequence = sketchIdsInSequence.length > 0
-      ? await prisma.sketchRecord.findMany({
-          where: {
-            id: { in: sketchIdsInSequence },
-            patentId,
-            isDeleted: false,
-            status: 'SUCCESS'
-          }
-        })
-      : []
+    const sketchesBySequence = session.sketchRecords.filter((s: any) => sequenceSketchSourceIds.has(s.id))
     const existingSketchIds = new Set(sketchesBySequence.map(s => s.id))
 
     // Warn about orphaned sequence entries (entries that reference non-existent figures)
@@ -14186,7 +14192,8 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
         where: { isDeleted: false, status: 'SUCCESS' }
       },
       // Include related art selections for prior art in drafting
-      relatedArtSelections: true
+      relatedArtSelections: true,
+      relatedArtRuns: { orderBy: { ranAt: 'desc' }, take: 1 }
     }
   });
 
@@ -14626,6 +14633,7 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
       diagramSources: true, // Needed for figure merging in DraftingService
       // Needed for prior-art selection logic in DraftingService
       relatedArtSelections: true,
+      relatedArtRuns: { orderBy: { ranAt: 'desc' }, take: 1 },
       // Needed for unified figure sequence (diagrams + sketches)
       sketchRecords: {
         where: { isDeleted: false, status: 'SUCCESS' }
@@ -14991,6 +14999,7 @@ async function handleCheckWarnings(user: any, patentId: string, data: any, reque
       figurePlans: true,
       diagramSources: true,
       relatedArtSelections: true,
+      relatedArtRuns: { orderBy: { ranAt: 'desc' }, take: 1 },
       sketchRecords: {
         where: { isDeleted: false, status: 'SUCCESS' }
       }
@@ -15431,7 +15440,8 @@ async function handleGenerateReferenceDraft(
         where: { isDeleted: false, status: 'SUCCESS' }
       },
       // Include related art selections for prior art in background/crossReference sections
-      relatedArtSelections: true
+      relatedArtSelections: true,
+      relatedArtRuns: { orderBy: { ranAt: 'desc' }, take: 1 }
     }
   })
 

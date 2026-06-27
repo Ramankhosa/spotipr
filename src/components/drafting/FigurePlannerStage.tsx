@@ -912,16 +912,20 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         }
       }
       
-      // Auto-save the sequence
-      await saveSequence(updatedOrder)
+      // Auto-save the sequence; refetch if persistence fails so UI stays backend-aligned.
+      const saved = await saveSequence(updatedOrder)
+      if (!saved) {
+        await loadCombinedFigures()
+      }
     }
   }
 
-  const saveSequence = async (figures: any[]) => {
-    if (!session?.id) return
+  const saveSequence = async (figures: any[]): Promise<boolean> => {
+    if (!session?.id) return false
     
     try {
       setSavingSequence(true)
+      setArrangeError(null)
       const sequence = figures.map(f => ({
         id: f.id,
         type: f.type,
@@ -929,7 +933,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         finalFigNo: f.finalFigNo
       }))
 
-      await fetch(`/api/patents/${patent.id}/drafting`, {
+      const res = await fetch(`/api/patents/${patent.id}/drafting`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -941,8 +945,24 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           sequence
         })
       })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to save figure sequence')
+      }
+      if (Array.isArray(data?.sequence)) {
+        setArrangedFigures((current) => {
+          const byId = new Map(current.map((f: any) => [f.id, f]))
+          return data.sequence.map((item: any) => ({
+            ...(byId.get(item.id) || {}),
+            ...item
+          }))
+        })
+      }
+      return true
     } catch (err) {
       console.error('Failed to save sequence:', err)
+      setArrangeError(err instanceof Error ? err.message : 'Failed to save figure sequence')
+      return false
     } finally {
       setSavingSequence(false)
     }
@@ -995,7 +1015,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       
       // Save the AI-suggested sequence
       if (data.sequence) {
-        await saveSequence(data.sequence)
+        const saved = await saveSequence(data.sequence)
+        if (!saved) await loadCombinedFigures()
       }
     } catch (err) {
       setArrangeError(err instanceof Error ? err.message : 'Failed to arrange figures')
@@ -1564,6 +1585,30 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       // If user chose to decide and provided an override list, generate exactly those figures instead of auto list
       const overrideList = overrideInputs.filter(Boolean)
       if (mode === 'manual' && overrideCount > 0 && overrideList.length > 0) {
+        const manualResp = await onComplete({
+          action: 'generate_diagrams_llm',
+          sessionId: session?.id,
+          mode: 'manual',
+          figureInstructions: overrideList,
+          figureCount: overrideList.length,
+          includeExistingFigures,
+          replaceExisting: false
+        })
+        if (!manualResp) throw new Error('LLM did not return valid figure list')
+        if (manualResp.error) {
+          const baseError = manualResp.details
+            ? `${manualResp.error}: ${typeof manualResp.details === 'string' ? manualResp.details : JSON.stringify(manualResp.details)}`
+            : manualResp.error
+          const repairDetails = formatDiagramGenerationWarnings(manualResp)
+          const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
+          throw new Error(errorMsg)
+        }
+        setGenerationWarning(formatDiagramGenerationWarnings(manualResp))
+        setOverrideCount(0)
+        setOverrideInputs([])
+        await onRefresh()
+        return
+
         // Build the same rich context and prompt as AI mode, but use user-provided instructions
         const normalizedIdea = session?.ideaRecord?.normalizedData || {}
         const figureScope = filterComponentsByScopeForFigures(
@@ -1747,7 +1792,10 @@ Now output the JSON array.`
         const resp = await onComplete({
           action: 'generate_diagrams_llm',
           sessionId: session?.id,
-          prompt: customPrompt,
+          mode: 'manual',
+          figureInstructions: overrideList,
+          figureCount: overrideList.length,
+          includeExistingFigures,
           // In manual AI mode, append to existing figures instead of replacing them
           replaceExisting: false
         })
@@ -1895,9 +1943,12 @@ Now output the JSON array.`
       const controller = new AbortController()
       renderAbortControllersRef.current[key] = controller
 
-      const resp = await fetch('/api/test/plantuml-proxy', {
+      const resp = await fetch(`/api/patents/${patent.id}/drafting/plantuml-render`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
         signal: controller.signal,
         body: JSON.stringify({
           code: plantumlCode,

@@ -38,6 +38,29 @@ describe('figure-sequence', () => {
     expect(result.meta.appendedMissingCount).toBe(1)
   })
 
+  test('reports all dirty sequence metadata needed for finalization rejection', () => {
+    const available = [
+      { id: 'diagram-1', type: 'diagram' as const, sourceId: 'fp1' },
+      { id: 'sketch-s1', type: 'sketch' as const, sourceId: 's1' },
+    ]
+    const input = [
+      { id: 'diagram-1', type: 'diagram', sourceId: 'fp1' },
+      { id: 'diagram-1', type: 'diagram', sourceId: 'fp1' },
+      { id: 'sketch-s1', type: 'diagram', sourceId: 's1' },
+      { id: 'sketch-s1', type: 'sketch', sourceId: 'wrong' },
+      { id: 'sketch-old', type: 'sketch', sourceId: 'old' },
+    ]
+
+    const result = normalizeFigureSequence(input, available)
+
+    expect(result.normalized.map(s => s.id)).toEqual(['diagram-1', 'sketch-s1'])
+    expect(result.meta.dedupedCount).toBe(1)
+    expect(result.meta.droppedTypeMismatchCount).toBe(1)
+    expect(result.meta.droppedSourceMismatchCount).toBe(1)
+    expect(result.meta.droppedUnknownCount).toBe(1)
+    expect(result.meta.appendedMissingCount).toBe(1)
+  })
+
   test('appends a newly uploaded external image after existing figures when no sequence exists', () => {
     const existing = [
       { id: 'diagram-1', type: 'diagram' as const, sourceId: 'fp1' },

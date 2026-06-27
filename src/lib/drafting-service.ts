@@ -91,6 +91,12 @@ export type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABE
 export type PatentTypePrimary = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION';
 export type InventionArchetype = 'MECHANICAL' | 'ELECTRICAL' | 'SOFTWARE' | 'CHEMICAL' | 'BIO' | 'GENERAL';
 
+export const VALID_NUMBERING_STYLES = ['NUMERIC_BUCKET', 'STEP_LABEL', 'CONSTITUENT_LABEL'] as const;
+
+export function isValidNumberingStyle(value: unknown): value is NumberingStyle {
+  return typeof value === 'string' && (VALID_NUMBERING_STYLES as readonly string[]).includes(value);
+}
+
 /**
  * Derives the numbering style from the patent type
  * SYSTEM/PRODUCT -> NUMERIC_BUCKET (100, 200, 300...)
@@ -890,9 +896,13 @@ export class DraftingService {
 
       // Gather prior art data for background section
       const manualPriorArt = (session as any).manualPriorArt || null
-      const rawRelatedArtSelections = Array.isArray(session.relatedArtSelections)
+      const allRelatedArtSelections = Array.isArray(session.relatedArtSelections)
         ? session.relatedArtSelections
         : []
+      const latestRelatedArtRunId = Array.isArray(session.relatedArtRuns) ? session.relatedArtRuns[0]?.id : null
+      const rawRelatedArtSelections = latestRelatedArtRunId
+        ? allRelatedArtSelections.filter((selection: any) => selection.runId === latestRelatedArtRunId)
+        : allRelatedArtSelections
       // Only treat USER_SELECTED records as approved prior art for drafting
       const relatedArtSelections = rawRelatedArtSelections.filter(
         (sel: any) => Array.isArray(sel.tags) && sel.tags.includes('USER_SELECTED')
@@ -923,8 +933,8 @@ export class DraftingService {
 
       // Helper: Safe sort by score (handles missing/non-numeric scores)
       const safeScoreSort = (a: any, b: any): number => {
-        const aScore = typeof a.score === 'number' ? a.score : 0
-        const bScore = typeof b.score === 'number' ? b.score : 0
+        const aScore = Number.isFinite(Number(a.score)) ? Number(a.score) : 0
+        const bScore = Number.isFinite(Number(b.score)) ? Number(b.score) : 0
         return bScore - aScore
       }
 
@@ -960,9 +970,9 @@ export class DraftingService {
             ...(preferConfigData ? sel : {}),
             patentNumber: rawPN || fullPatentData.patentNumber, // Keep original format
             // Prefer non-empty values for AI analysis fields
-            aiSummary: sel.aiSummary || fullPatentData.aiSummary || aiAnalysis[rawPN]?.aiSummary || '',
-            noveltyComparison: sel.noveltyComparison || fullPatentData.noveltyComparison || aiAnalysis[rawPN]?.noveltyComparison || '',
-            noveltyThreat: sel.noveltyThreat || fullPatentData.noveltyThreat || aiAnalysis[rawPN]?.noveltyThreat || 'unknown'
+            aiSummary: sel.aiSummary || fullPatentData.aiSummary || aiAnalysis[rawPN]?.aiSummary || aiAnalysis[normalizedPN]?.aiSummary || '',
+            noveltyComparison: sel.noveltyComparison || fullPatentData.noveltyComparison || aiAnalysis[rawPN]?.noveltyComparison || aiAnalysis[normalizedPN]?.noveltyComparison || '',
+            noveltyThreat: sel.noveltyThreat || fullPatentData.noveltyThreat || aiAnalysis[rawPN]?.noveltyThreat || aiAnalysis[normalizedPN]?.noveltyThreat || 'unknown'
           }
           
           uniqueMap.set(normalizedPN, merged)
@@ -1125,6 +1135,8 @@ export class DraftingService {
           priorArtSource,
           priorArtConfigPatentsCount: configSelectedPatents.length,
           relatedArtSelectionsCount: rawRelatedArtSelections.length,
+          relatedArtSelectionsTotalCount: allRelatedArtSelections.length,
+          latestRelatedArtRunId,
           userSelectedCount: userSelectedPool.length,
           selectedPriorArtPatentsCount: selectedPriorArtPatents.length,
           selectedPriorArtPreview: selectedPriorArtPatents.slice(0, 6).map((p: any) => ({
@@ -3156,6 +3168,13 @@ Use the Super Admin panel to add the missing prompt.
       return { valid: false, errors: ['Maximum 100 components allowed'] };
     }
 
+    if (userNumberingStyleOverride !== null && userNumberingStyleOverride !== undefined && !isValidNumberingStyle(userNumberingStyleOverride)) {
+      return {
+        valid: false,
+        errors: [`Invalid numbering style '${String(userNumberingStyleOverride)}' - must be one of: ${VALID_NUMBERING_STYLES.join(', ')}`]
+      };
+    }
+
     // Determine numbering style: user override > patent type > default
     const numberingStyle: NumberingStyle = userNumberingStyleOverride || deriveNumberingStyle(patentTypePrimary);
 
@@ -3241,21 +3260,26 @@ Use the Super Admin panel to add the missing prompt.
       }
     });
 
-    // Check for circular references
-    const detectCycle = (nodeId: string, visited: Set<string> = new Set()): boolean => {
-      if (visited.has(nodeId)) return true;
-      visited.add(nodeId);
+    // Check for circular references across every node, including rootless cycles.
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const detectCycle = (nodeId: string): boolean => {
+      if (visiting.has(nodeId)) return true;
+      if (visited.has(nodeId)) return false;
+      visiting.add(nodeId);
       const node = nodes[nodeId];
-      if (node && node.children) {
+      if (node && Array.isArray(node.children)) {
         for (const child of node.children) {
-          if (detectCycle(child.id, new Set(visited))) return true;
+          if (detectCycle(child.id)) return true;
         }
       }
+      visiting.delete(nodeId);
+      visited.add(nodeId);
       return false;
     };
 
-    for (const root of roots) {
-      if (detectCycle(root.id)) {
+    for (const nodeId of Object.keys(nodes)) {
+      if (detectCycle(nodeId)) {
         errors.push(`Circular reference detected in component hierarchy`);
         break;
       }
@@ -3445,6 +3469,14 @@ Use the Super Admin panel to add the missing prompt.
 
     if (errors.length > 0) {
       return { valid: false, errors };
+    }
+
+    const acceptedNodeCount = Object.keys(nodes).length;
+    if (processedComponents.length !== acceptedNodeCount) {
+      return {
+        valid: false,
+        errors: [`Component numbering produced ${processedComponents.length} component(s) from ${acceptedNodeCount} accepted component(s); check hierarchy and numbering style`]
+      };
     }
 
     return { valid: true, components: processedComponents, numberingStyle };
