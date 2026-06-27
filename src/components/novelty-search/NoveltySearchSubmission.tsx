@@ -1,12 +1,19 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { CheckCircle2, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
+import { CheckCircle2, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 
 type Project = { id: string; name: string }
 type MatterGroup = { id: string; name: string; referenceCode?: string | null; client: { id: string; name: string } }
+type SearchPath = 'automatic' | 'manual'
+type ProviderInfo = {
+  id: string
+  label: string
+  enabled: boolean
+  jurisdictions?: string[]
+}
 type Stage0Review = {
   searchQuery: string
   inventionFeatures: string[]
@@ -15,6 +22,90 @@ type Stage0Review = {
   epoAbstractKeywords?: string[]
   epoCombinedKeywords?: string[]
   [key: string]: unknown
+}
+type ManualFields = {
+  anyText: string
+  title: string
+  abstract: string
+  patentText: string
+  applicant: string
+  inventor: string
+  publicationNumber: string
+  applicationNumber: string
+  classifications: string
+  filingFrom: string
+  filingTo: string
+  publicationFrom: string
+  publicationTo: string
+  excludeTerms: string
+}
+type ManualResult = {
+  publicationNumber: string
+  title: string
+  abstract?: string | null
+  publicationDate?: string | null
+  filingDate?: string | null
+  applicants?: unknown
+  inventors?: string[]
+  sourceProvider?: string
+  sourceProviders?: string[]
+  link?: string | null
+  relevanceScore?: number | null
+}
+
+const defaultManualFields: ManualFields = {
+  anyText: '',
+  title: '',
+  abstract: '',
+  patentText: '',
+  applicant: '',
+  inventor: '',
+  publicationNumber: '',
+  applicationNumber: '',
+  classifications: '',
+  filingFrom: '',
+  filingTo: '',
+  publicationFrom: '',
+  publicationTo: '',
+  excludeTerms: '',
+}
+
+function splitValues(value: string) {
+  return value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean)
+}
+
+function defaultProviderIds(providers: ProviderInfo[]) {
+  const ids = providers
+    .filter(provider => provider.enabled && (provider.id === 'indian-corpus' || provider.id === 'google-patents'))
+    .map(provider => provider.id)
+  return ids.length ? ids : providers.filter(provider => provider.enabled).slice(0, 1).map(provider => provider.id)
+}
+
+function sourceModeFromProviders(providerIds: string[]) {
+  if (providerIds.includes('indian-corpus') && providerIds.some(id => id.includes('epo'))) return 'PQAI_PLUS_INDIAN_EPO'
+  if (providerIds.includes('indian-corpus') && providerIds.some(id => id === 'pqai' || id === 'pqai-corpus')) return 'PQAI_PLUS_INDIAN'
+  if (providerIds.some(id => id.includes('epo')) && providerIds.some(id => id === 'pqai' || id === 'pqai-corpus')) return 'PQAI_PLUS_EPO'
+  if (providerIds.some(id => id.includes('epo'))) return 'EPO_ONLY'
+  if (providerIds.includes('ip-australia')) return 'AUSTRALIA_ONLY'
+  if (providerIds.includes('indian-corpus')) return 'INDIAN_ONLY'
+  return 'PQAI_ONLY'
+}
+
+function listText(value: unknown, limit = 4) {
+  if (!value) return ''
+  const values = Array.isArray(value)
+    ? value.map(item => {
+      if (typeof item === 'string') return item
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>
+        return String(record.name || record.applicant || record.value || '').trim()
+      }
+      return String(item || '').trim()
+    })
+    : typeof value === 'object'
+      ? Object.values(value as Record<string, unknown>).map(item => String(item || '').trim())
+      : [String(value)]
+  return values.filter(Boolean).slice(0, limit).join(', ')
 }
 
 export default function NoveltySearchSubmission(props: {
@@ -38,7 +129,9 @@ export default function NoveltySearchSubmission(props: {
   const [projectId, setProjectId] = useState(props.initialProjectId || '')
   const [groupId, setGroupId] = useState('')
   const jurisdiction = 'IN'
-  const [sourceMode, setSourceMode] = useState('INDIAN_ONLY')
+  const [searchPath, setSearchPath] = useState<SearchPath>('automatic')
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [selectedProviderIds, setSelectedProviderIds] = useState<string[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [groups, setGroups] = useState<MatterGroup[]>([])
   const [review, setReview] = useState<Stage0Review | null>(null)
@@ -54,22 +147,61 @@ export default function NoveltySearchSubmission(props: {
   const [isExtracting, setIsExtracting] = useState(false)
   const [uploadedName, setUploadedName] = useState('')
   const [error, setError] = useState('')
+  const [manualFields, setManualFields] = useState<ManualFields>(defaultManualFields)
+  const [manualResults, setManualResults] = useState<ManualResult[]>([])
+  const [manualWarnings, setManualWarnings] = useState<string[]>([])
+  const [manualProviderStats, setManualProviderStats] = useState<any[]>([])
+  const [manualHasSearched, setManualHasSearched] = useState(false)
+  const [isManualSearching, setIsManualSearching] = useState(false)
 
   useEffect(() => {
     Promise.all([
       authFetch('/api/projects').then(response => response.ok ? response.json() : { projects: [] }),
       authFetch('/api/novelty-search/groups').then(response => response.ok ? response.json() : { groups: [] }),
-    ]).then(([projectData, groupData]) => {
+      authFetch('/api/patent-search/advanced').then(response => response.ok ? response.json() : { providers: [] }),
+    ]).then(([projectData, groupData, providerData]) => {
       const nextProjects = projectData.projects || []
       setProjects(nextProjects)
       setGroups(groupData.groups || [])
+      const nextProviders = Array.isArray(providerData.providers) ? providerData.providers : []
+      setProviders(nextProviders)
+      setSelectedProviderIds(current => current.length ? current : defaultProviderIds(nextProviders))
       if (!props.initialProjectId && nextProjects.length) {
         setProjectId(nextProjects.find((project: Project) => project.name === 'Default Project')?.id || nextProjects[0].id)
       }
     }).catch(() => setError('Failed to load search organization options.'))
   }, [authFetch, props.initialProjectId])
 
-  const usesEpoSearch = sourceMode === 'EPO_ONLY' || sourceMode === 'PQAI_PLUS_EPO' || sourceMode === 'PQAI_PLUS_INDIAN_EPO'
+  const sourceMode = sourceModeFromProviders(selectedProviderIds)
+  const usesEpoSearch = selectedProviderIds.some(id => id.includes('epo'))
+  const selectedProvidersEnabled = selectedProviderIds.length > 0
+  const searchSourceConfig = {
+    mode: sourceMode,
+    providerIds: selectedProviderIds,
+    searchMode: 'intelligent' as const,
+    llmExpansion: true,
+  }
+
+  const manualFilters = useMemo(() => ({
+    anyTextContains: splitValues(manualFields.anyText),
+    titleContains: splitValues(manualFields.title),
+    abstractContains: splitValues(manualFields.abstract),
+    patentTextContains: splitValues(manualFields.patentText),
+    publicationNumber: manualFields.publicationNumber.trim() || undefined,
+    applicationNumber: manualFields.applicationNumber.trim() || undefined,
+    applicants: splitValues(manualFields.applicant),
+    inventors: splitValues(manualFields.inventor),
+    classifications: splitValues(manualFields.classifications),
+    filingDateFrom: manualFields.filingFrom || undefined,
+    filingDateTo: manualFields.filingTo || undefined,
+    publicationDateFrom: manualFields.publicationFrom || undefined,
+    publicationDateTo: manualFields.publicationTo || undefined,
+    excludeTerms: splitValues(manualFields.excludeTerms),
+  }), [manualFields])
+
+  const manualHasCriteria = useMemo(() => Object.values(manualFilters).some(value => (
+    Array.isArray(value) ? value.length > 0 : value !== undefined && value !== ''
+  )), [manualFilters])
 
   const stringList = (value: unknown) => Array.isArray(value)
     ? value.map(item => String(item || '').trim()).filter(Boolean)
@@ -109,6 +241,10 @@ export default function NoveltySearchSubmission(props: {
       setError('Invention title and description are required.')
       return
     }
+    if (!selectedProvidersEnabled) {
+      setError('Select at least one enabled patent source.')
+      return
+    }
     setIsPreparing(true)
     setError('')
     try {
@@ -122,7 +258,7 @@ export default function NoveltySearchSubmission(props: {
           config: {
             jurisdiction,
             ...(props.sourceMetadata ? { sourceMetadata: props.sourceMetadata } : {}),
-            searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
+            searchSource: searchSourceConfig,
           },
         }),
       })
@@ -151,6 +287,10 @@ export default function NoveltySearchSubmission(props: {
     const approvedFeatures = editedFeatures.map(feature => feature.trim()).filter(Boolean)
     if (!review || !approvedQuery || approvedFeatures.length === 0) {
       setError('Review and approve a search query and at least one invention feature.')
+      return
+    }
+    if (!selectedProvidersEnabled) {
+      setError('Select at least one enabled patent source.')
       return
     }
     setIsSubmitting(true)
@@ -183,7 +323,7 @@ export default function NoveltySearchSubmission(props: {
           config: {
             jurisdiction,
             ...(props.sourceMetadata ? { sourceMetadata: props.sourceMetadata } : {}),
-            searchSource: { mode: sourceMode, searchMode: 'intelligent', llmExpansion: true },
+            searchSource: searchSourceConfig,
           },
           approvedStage0,
         }),
@@ -230,6 +370,222 @@ export default function NoveltySearchSubmission(props: {
     else setNewEpoAbstractKeyword('')
   }
 
+  const toggleProvider = (providerId: string) => {
+    setSelectedProviderIds(current => {
+      const next = current.includes(providerId)
+        ? current.filter(id => id !== providerId)
+        : [...current, providerId]
+      return next
+    })
+    setReview(null)
+  }
+
+  const updateManualField = (field: keyof ManualFields, value: string) => {
+    setManualFields(current => ({ ...current, [field]: value }))
+  }
+
+  const runManualSearch = async () => {
+    if (!manualHasCriteria) {
+      setError('Enter at least one manual patent search field.')
+      return
+    }
+    if (!selectedProvidersEnabled) {
+      setError('Select at least one enabled patent source.')
+      return
+    }
+    setIsManualSearching(true)
+    setError('')
+    setManualHasSearched(true)
+    try {
+      const response = await authFetch('/api/patent-search/advanced', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          searchMode: 'manual',
+          filters: manualFilters,
+          providerIds: selectedProviderIds,
+          jurisdictions: [jurisdiction],
+          sourceMode,
+          llmExpansion: false,
+          limit: 50,
+        }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Manual patent search failed.')
+      setManualResults(Array.isArray(body.results) ? body.results : [])
+      setManualWarnings(Array.isArray(body.warnings) ? body.warnings : [])
+      setManualProviderStats(Array.isArray(body.providerStats) ? body.providerStats : [])
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Manual patent search failed.')
+    } finally {
+      setIsManualSearching(false)
+    }
+  }
+
+  const renderSourceSelection = () => (
+    <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div>
+        <div className="text-sm font-semibold text-slate-900">Patent Sources</div>
+        <div className="mt-1 text-xs text-slate-500">Choose one or more sources for retrieval. Google Patents is basic retrieval only in this release.</div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {providers.map(provider => {
+          const checked = selectedProviderIds.includes(provider.id)
+          return (
+            <label key={provider.id} className={`flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2 text-sm ${provider.enabled ? 'border-slate-200 bg-white text-slate-800' : 'border-slate-200 bg-slate-100 text-slate-400'}`}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={!provider.enabled || isPreparing || isSubmitting || isManualSearching}
+                onChange={() => toggleProvider(provider.id)}
+                className="h-4 w-4"
+              />
+              <span className="flex-1">
+                <span className="font-medium">{provider.label}</span>
+                {!provider.enabled && <span className="ml-2 text-xs">not configured</span>}
+              </span>
+            </label>
+          )
+        })}
+      </div>
+      {!providers.length && <div className="text-xs text-slate-500">Loading available patent sources...</div>}
+      {providers.length > 0 && !selectedProvidersEnabled && <div className="text-xs font-medium text-red-600">Select at least one enabled source.</div>}
+    </section>
+  )
+
+  const renderManualInput = (field: keyof ManualFields, label: string, placeholder = '', multiline = false) => (
+    <label className="text-xs font-medium text-slate-600">
+      {label}
+      {multiline ? (
+        <textarea
+          value={manualFields[field]}
+          onChange={event => updateManualField(field, event.target.value)}
+          rows={2}
+          placeholder={placeholder}
+          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900 outline-none focus:border-indigo-500"
+        />
+      ) : (
+        <input
+          value={manualFields[field]}
+          onChange={event => updateManualField(field, event.target.value)}
+          placeholder={placeholder}
+          type={field.endsWith('From') || field.endsWith('To') ? 'date' : 'text'}
+          className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-500"
+        />
+      )}
+    </label>
+  )
+
+  const renderManualSearch = () => (
+    <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      {renderSourceSelection()}
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Manual Patent Search</h2>
+          <p className="mt-1 text-sm text-slate-500">Search selected patent sources using fielded criteria. This does not fetch full Google patent details yet.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          {renderManualInput('anyText', 'Any text', 'Keywords across patent fields', true)}
+          {renderManualInput('title', 'Patent title', 'Title keywords', true)}
+          {renderManualInput('abstract', 'Abstract', 'Abstract keywords', true)}
+          {renderManualInput('publicationNumber', 'Publication no.', 'US2024...', false)}
+          {renderManualInput('applicationNumber', 'Application no.', 'Application number', false)}
+          {renderManualInput('applicant', 'Applicant / assignee', 'Company or assignee', false)}
+          {renderManualInput('inventor', 'Inventor', 'Inventor name', false)}
+          {renderManualInput('classifications', 'IPC/CPC', 'A61B, G06F...', false)}
+          {renderManualInput('patentText', 'Patent text', 'Claims/specification keywords', true)}
+          {renderManualInput('filingFrom', 'Filing from')}
+          {renderManualInput('filingTo', 'Filing to')}
+          {renderManualInput('publicationFrom', 'Published from')}
+          {renderManualInput('publicationTo', 'Published to')}
+          {renderManualInput('excludeTerms', 'Exclude terms', 'Comma-separated terms', true)}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void runManualSearch()}
+            disabled={isManualSearching || !manualHasCriteria || !selectedProvidersEnabled}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {isManualSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            {isManualSearching ? 'Searching patents...' : 'Search Patents'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setManualFields(defaultManualFields)
+              setManualResults([])
+              setManualWarnings([])
+              setManualProviderStats([])
+              setManualHasSearched(false)
+              setError('')
+            }}
+            className="inline-flex h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Clear
+          </button>
+        </div>
+      </section>
+
+      {(manualProviderStats.length > 0 || manualWarnings.length > 0 || manualHasSearched) && (
+        <section className="space-y-4 border-t border-slate-200 pt-5">
+          {manualProviderStats.length > 0 && (
+            <div className="grid gap-3 md:grid-cols-3">
+              {manualProviderStats.map((stat: any) => (
+                <div key={stat.providerId} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <div className="font-medium text-slate-900">{stat.label}</div>
+                  <div className="mt-1 text-xs text-slate-500">{stat.enabled ? `${stat.resultCount} results` : 'Not enabled'}</div>
+                  {stat.error && <div className="mt-1 text-xs text-amber-700">{stat.error}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {manualWarnings.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
+              {manualWarnings.join(' ')}
+            </div>
+          )}
+          <div className="rounded-lg border border-slate-200">
+            <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+              Results ({manualResults.length})
+            </div>
+            <div className="divide-y divide-slate-100">
+              {manualResults.map((result, index) => (
+                <article key={`${result.publicationNumber}-${index}`} className="p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-medium uppercase text-slate-500">
+                      {result.publicationNumber} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+                    </div>
+                    {typeof result.relevanceScore === 'number' && (
+                      <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                        {Math.round(result.relevanceScore * 100)}%
+                      </div>
+                    )}
+                  </div>
+                  <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
+                    {result.title}
+                  </a>
+                  {result.abstract && <p className="mt-2 text-sm leading-6 text-slate-700">{result.abstract}</p>}
+                  <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+                    {result.publicationDate && <div><span className="font-medium text-slate-700">Published:</span> {String(result.publicationDate).slice(0, 10)}</div>}
+                    {result.filingDate && <div><span className="font-medium text-slate-700">Filed:</span> {String(result.filingDate).slice(0, 10)}</div>}
+                    {listText(result.applicants) && <div><span className="font-medium text-slate-700">Applicant:</span> {listText(result.applicants)}</div>}
+                    {result.inventors?.length ? <div><span className="font-medium text-slate-700">Inventor:</span> {result.inventors.join(', ')}</div> : null}
+                  </div>
+                </article>
+              ))}
+              {!manualResults.length && (
+                <div className="p-8 text-center text-sm text-slate-500">
+                  {manualHasSearched ? 'No matching patents found for the current filters.' : 'Run a manual search to see matching patents.'}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  )
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -242,6 +598,40 @@ export default function NoveltySearchSubmission(props: {
         </button>
       </div>
 
+      <div className="mb-5 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+        <div className="grid gap-1 sm:grid-cols-2" role="tablist" aria-label="Novelty search mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={searchPath === 'automatic'}
+            onClick={() => {
+              setSearchPath('automatic')
+              setError('')
+            }}
+            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'automatic' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+          >
+            <Search className="h-4 w-4" />
+            Automatic Search
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={searchPath === 'manual'}
+            onClick={() => {
+              setSearchPath('manual')
+              setError('')
+            }}
+            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'manual' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Manual Search
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+      {searchPath === 'manual' ? renderManualSearch() : (
       <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-2 text-sm font-medium text-slate-700">
@@ -283,14 +673,7 @@ export default function NoveltySearchSubmission(props: {
           {uploadedName && <p className="mt-2 text-xs text-emerald-700">Loaded {uploadedName}</p>}
         </div>
 
-        <div>
-          <label className="space-y-2 text-sm font-medium text-slate-700">
-            <span>Search Source</span>
-            <select value={sourceMode} onChange={event => { setSourceMode(event.target.value); setReview(null) }} disabled={isPreparing || isSubmitting} className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 font-normal disabled:bg-slate-50">
-              <option value="INDIAN_ONLY">Indian database only</option><option value="AUSTRALIA_ONLY">Australian database only</option><option value="EPO_ONLY">European patents only</option><option value="PQAI_ONLY">International patents only</option><option value="PQAI_PLUS_INDIAN">International + Indian database</option><option value="PQAI_PLUS_AUSTRALIA">International + Australian database</option><option value="PQAI_PLUS_EPO">International + European patents</option><option value="PQAI_PLUS_INDIAN_EPO">International + Indian + European patents</option>
-            </select>
-          </label>
-        </div>
+        {renderSourceSelection()}
 
         {review && (
           <section className="space-y-5 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5">
@@ -383,21 +766,20 @@ export default function NoveltySearchSubmission(props: {
           </section>
         )}
 
-        {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-
         {!review ? (
-          <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+          <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting || !selectedProvidersEnabled} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
             {isPreparing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
             {isPreparing ? 'Generating search plan…' : 'Generate Search Query & Features'}
           </button>
         ) : (
-          <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+          <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !selectedProvidersEnabled || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
             {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
             {isSubmitting ? 'Queueing approved search…' : 'Approve & Queue Novelty Search'}
           </button>
         )}
         <div className="flex items-center justify-center gap-2 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" /> After approval, processing continues in the background.</div>
       </div>
+      )}
     </div>
   )
 }

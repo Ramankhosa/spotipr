@@ -2,6 +2,7 @@ export type PatentSearchProviderId =
   | 'indian-corpus'
   | 'pqai-corpus'
   | 'pqai'
+  | 'google-patents'
   | 'epo-ops'
   | 'uspto'
   | 'ip-australia'

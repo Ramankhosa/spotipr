@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { resolveProviderIds } from './provider-registry'
 
 describe('patent search provider registry', () => {
-  afterEach(() => {
+  const clearEnv = () => {
     delete process.env.PATENTSVIEW_API_KEY
     delete process.env.USPTO_PATENTSVIEW_API_KEY
     delete process.env.IP_AUSTRALIA_CLIENT_ID
@@ -11,7 +11,13 @@ describe('patent search provider registry', () => {
     delete process.env.EPO_SECRET
     delete process.env.EPO_OPS_CONSUMER_KEY
     delete process.env.EPO_OPS_CONSUMER_SECRET
-  })
+    delete process.env.Serp_API_KEY
+    delete process.env.SERP_API_KEY
+    delete process.env.SERPAPI_API_KEY
+  }
+
+  beforeEach(clearEnv)
+  afterEach(clearEnv)
 
   test('resolves PQAI-only mode to stored PQAI corpus plus live PQAI', () => {
     expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY' })).toEqual(['pqai-corpus', 'pqai'])
@@ -52,5 +58,16 @@ describe('patent search provider registry', () => {
     process.env.EPO_KEY = 'test-key'
     process.env.EPO_SECRET = 'test-secret'
     expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY', jurisdictions: ['EP'] })).toEqual(['epo-ops-corpus', 'epo-ops', 'pqai-corpus', 'pqai'])
+  })
+
+  test('adds Google Patents to default source-mode resolution when SerpApi is configured', () => {
+    process.env.Serp_API_KEY = 'test-serp'
+    expect(resolveProviderIds({ sourceMode: 'INDIAN_ONLY' })).toEqual(['indian-corpus', 'google-patents'])
+    expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY' })).toEqual(['pqai-corpus', 'pqai', 'google-patents'])
+  })
+
+  test('honors explicit provider ids for checkbox source selection', () => {
+    process.env.Serp_API_KEY = 'test-serp'
+    expect(resolveProviderIds({ providerIds: ['indian-corpus', 'google-patents'], sourceMode: 'PQAI_ONLY' })).toEqual(['indian-corpus', 'google-patents'])
   })
 })
