@@ -1868,7 +1868,12 @@ export default function NoveltySearchWorkflow({
                       </Badge>
                     </div>
 
-                    {abstract && <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-600">{abstract}</p>}
+                    {abstract && (
+                      <div className="mt-3">
+                        <div className="text-xs font-semibold uppercase text-slate-500">Abstract</div>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">{abstract}</p>
+                      </div>
+                    )}
 
                     <div className="mt-3 flex flex-wrap gap-2">
                       {matchedFields.slice(0, 6).map((field: string) => (
@@ -3123,7 +3128,7 @@ export default function NoveltySearchWorkflow({
                         {abstract && (
                           <div className="mt-3">
                             <div className="text-xs font-semibold uppercase text-slate-500">Abstract</div>
-                            <p className="mt-1 text-xs leading-5 text-slate-600">{abstract}</p>
+                            <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-600">{abstract}</p>
                           </div>
                         )}
                         <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">

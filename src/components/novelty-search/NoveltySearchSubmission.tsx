@@ -43,6 +43,7 @@ type ManualResult = {
   publicationNumber: string
   title: string
   abstract?: string | null
+  snippet?: string | null
   publicationDate?: string | null
   filingDate?: string | null
   applicants?: unknown
@@ -550,30 +551,38 @@ export default function NoveltySearchSubmission(props: {
               Results ({manualResults.length})
             </div>
             <div className="divide-y divide-slate-100">
-              {manualResults.map((result, index) => (
-                <article key={`${result.publicationNumber}-${index}`} className="p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-medium uppercase text-slate-500">
-                      {result.publicationNumber} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+              {manualResults.map((result, index) => {
+                const abstract = result.abstract || result.snippet || ''
+                return (
+                  <article key={`${result.publicationNumber}-${index}`} className="p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs font-medium uppercase text-slate-500">
+                        {result.publicationNumber} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+                      </div>
+                      {typeof result.relevanceScore === 'number' && (
+                        <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                          {Math.round(result.relevanceScore * 100)}%
+                        </div>
+                      )}
                     </div>
-                    {typeof result.relevanceScore === 'number' && (
-                      <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                        {Math.round(result.relevanceScore * 100)}%
+                    <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
+                      {result.title}
+                    </a>
+                    {abstract && (
+                      <div className="mt-3">
+                        <div className="text-xs font-semibold uppercase text-slate-500">Abstract</div>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{abstract}</p>
                       </div>
                     )}
-                  </div>
-                  <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
-                    {result.title}
-                  </a>
-                  {result.abstract && <p className="mt-2 text-sm leading-6 text-slate-700">{result.abstract}</p>}
-                  <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
-                    {result.publicationDate && <div><span className="font-medium text-slate-700">Published:</span> {String(result.publicationDate).slice(0, 10)}</div>}
-                    {result.filingDate && <div><span className="font-medium text-slate-700">Filed:</span> {String(result.filingDate).slice(0, 10)}</div>}
-                    {listText(result.applicants) && <div><span className="font-medium text-slate-700">Applicant:</span> {listText(result.applicants)}</div>}
-                    {result.inventors?.length ? <div><span className="font-medium text-slate-700">Inventor:</span> {result.inventors.join(', ')}</div> : null}
-                  </div>
-                </article>
-              ))}
+                    <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+                      {result.publicationDate && <div><span className="font-medium text-slate-700">Published:</span> {String(result.publicationDate).slice(0, 10)}</div>}
+                      {result.filingDate && <div><span className="font-medium text-slate-700">Filed:</span> {String(result.filingDate).slice(0, 10)}</div>}
+                      {listText(result.applicants) && <div><span className="font-medium text-slate-700">Applicant:</span> {listText(result.applicants)}</div>}
+                      {result.inventors?.length ? <div><span className="font-medium text-slate-700">Inventor:</span> {result.inventors.join(', ')}</div> : null}
+                    </div>
+                  </article>
+                )
+              })}
               {!manualResults.length && (
                 <div className="p-8 text-center text-sm text-slate-500">
                   {manualHasSearched ? 'No matching patents found for the current filters.' : 'Run a manual search to see matching patents.'}

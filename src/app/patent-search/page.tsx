@@ -35,6 +35,7 @@ type SearchResult = {
   applicationNumber?: string | null
   title: string
   abstract?: string | null
+  snippet?: string | null
   applicants?: unknown
   inventors?: string[]
   classifications?: string[]
@@ -428,7 +429,7 @@ export default function PatentSearchPage() {
         result.jurisdiction || '',
         (result.sourceProviders || [result.sourceProvider]).filter(Boolean).join('; '),
         result.title,
-        result.abstract || '',
+        result.abstract || result.snippet || '',
         listText(result.applicants, 10),
         (result.inventors || []).join('; '),
         (result.classifications || []).join('; '),
@@ -1085,37 +1086,40 @@ function ResultsPanel({
           </button>
         </div>
         <div className="divide-y divide-slate-100">
-          {results.map(result => (
-            <article key={`${result.sourceProvider}-${result.publicationNumber}`} className="p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs font-medium uppercase text-slate-500">
-                  {result.publicationNumber} / {result.jurisdiction || 'Patent'} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+          {results.map(result => {
+            const abstract = result.abstract || result.snippet || ''
+            return (
+              <article key={`${result.sourceProvider}-${result.publicationNumber}`} className="p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-medium uppercase text-slate-500">
+                    {result.publicationNumber} / {result.jurisdiction || 'Patent'} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+                  </div>
+                  <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                    {Math.round((result.relevanceScore || 0) * 100)}%
+                  </div>
                 </div>
-                <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                  {Math.round((result.relevanceScore || 0) * 100)}%
-                </div>
-              </div>
-              <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
-                {result.title}
-              </a>
-              {result.abstract && (
-                <div className="mt-3">
-                  <div className="text-xs font-semibold uppercase text-slate-500">Abstract</div>
-                  <p className="mt-1 text-sm leading-6 text-slate-700">{result.abstract}</p>
-                </div>
-              )}
-              {visibleDetailFields.size > 0 && <HighlightedResultMetadata result={result} fields={visibleDetailFields} />}
-              <details className="mt-3 rounded-md border border-slate-200 px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium text-slate-700">Patent details</summary>
-                <div className="mt-3">
-                  <ResultMetadata result={result} fields={allResultDetailFields} />
-                </div>
-              </details>
-              {!!result.matchedFields?.length && (
-                <div className="mt-2 text-xs text-slate-500">Matched: {result.matchedFields.join(', ')}</div>
-              )}
-            </article>
-          ))}
+                <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
+                  {result.title}
+                </a>
+                {abstract && (
+                  <div className="mt-3">
+                    <div className="text-xs font-semibold uppercase text-slate-500">Abstract</div>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{abstract}</p>
+                  </div>
+                )}
+                {visibleDetailFields.size > 0 && <HighlightedResultMetadata result={result} fields={visibleDetailFields} />}
+                <details className="mt-3 rounded-md border border-slate-200 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium text-slate-700">Patent details</summary>
+                  <div className="mt-3">
+                    <ResultMetadata result={result} fields={allResultDetailFields} />
+                  </div>
+                </details>
+                {!!result.matchedFields?.length && (
+                  <div className="mt-2 text-xs text-slate-500">Matched: {result.matchedFields.join(', ')}</div>
+                )}
+              </article>
+            )
+          })}
           {!results.length && (
             <div className="p-8 text-center text-sm text-slate-500">
               {hasSearched ? 'No matching patents found for the current filters.' : 'Run a search to see matching patents.'}
