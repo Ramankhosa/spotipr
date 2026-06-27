@@ -18,14 +18,7 @@ function safeReportText(value: any) {
   return value
     .normalize('NFKC')
     .replace(/\uFFFD/g, '')
-    .replace(/\bno abstract available\.?/gi, 'Limited available patent data; review the full patent document where needed.')
-    .replace(/title\s*\/\s*abstract/gi, 'available patent data')
-    .replace(/title and abstract/gi, 'available patent data')
-    .replace(/patent abstract evidence/gi, 'available patent data')
-    .replace(/abstract evidence/gi, 'available patent data')
-    .replace(/abstract data/gi, 'available patent data')
-    .replace(/abstract text/gi, 'available patent data')
-    .replace(/\babstracts?\b/gi, 'available patent data')
+    .replace(/\bno abstract available\.?/gi, 'No abstract was available; review the full patent document where needed.')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
@@ -41,7 +34,13 @@ function safeReportText(value: any) {
     .replace(/\bpreliminary review report\b/gi, 'patent intelligence report')
     .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
     .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
-    .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence');
+    .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence')
+    .replace(/\banticipated by\b/gi, 'shows high abstract-level overlap with')
+    .replace(/\banticipates?\b/gi, 'shows high abstract-level overlap')
+    .replace(/\bexact match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\bdecisive match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\bnot novel\b/gi, 'high mapped-overlap risk')
+    .replace(/\bno prior art (?:was )?found\b/gi, 'no high abstract-level overlap candidate was identified among screened title/abstract records');
 }
 
 export default function Stage4ResultsDisplay({
@@ -73,16 +72,25 @@ export default function Stage4ResultsDisplay({
   const aiComponent = trail.ai_relevance_component ?? r?.search_metadata?.ai_relevance_component ?? undefined;
   const aiBorderline = trail.ai_relevance_borderline ?? r?.search_metadata?.ai_relevance_borderline ?? undefined;
   const deepAnalyzed = trail.deeply_analyzed_count ?? (Array.isArray(remarks) ? remarks.length : undefined);
+  const adaptive = r.adaptiveScreening || {};
+  const adaptiveReason = r.screeningStopReason || r.projectedScreeningStopReason || adaptive.terminalStopReason || adaptive.projectedStopReason;
   const displayCardLabel = (key: string) => key === 'Unique Features' ? 'Potential Differentiators' : key;
+  const publicAssessment = overallAssessment === 'Novel'
+    ? 'No High Abstract-Level Overlap Identified'
+    : overallAssessment === 'Partially Novel'
+      ? 'Moderate Abstract-Level Overlap'
+      : overallAssessment === 'Not Novel'
+        ? 'High Abstract-Level Overlap Risk'
+        : overallAssessment;
 
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-slate-200 border-t-indigo-500 border-t-4 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <div className="text-sm font-medium text-slate-500">AI Novelty Assessment</div>
+            <div className="text-sm font-medium text-slate-500">AI Title/Abstract Screening</div>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-              {metadata.title || 'AI-Backed Novelty Assessment Report'}
+              {metadata.title || 'Title/Abstract-Based Patent Screening Report'}
             </h2>
             <div className="mt-2 text-sm text-slate-500">
               Search ID: {metadata.search_id || searchId} | {metadata.date || new Date().toISOString().slice(0, 10)}
@@ -91,7 +99,7 @@ export default function Stage4ResultsDisplay({
 
           {overallAssessment && (
             <span className={`inline-flex rounded-full border px-3 py-1 text-sm font-medium ${assessmentBadgeClass(overallAssessment)}`}>
-              {sanitize(overallAssessment)}
+              {sanitize(publicAssessment)}
             </span>
           )}
         </div>
@@ -134,6 +142,24 @@ export default function Stage4ResultsDisplay({
           {sanitize(exec.summary) || 'Summary to be confirmed.'}
         </div>
       </section>
+
+      {adaptive.mode && adaptive.mode !== 'off' && (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-5">
+          <h3 className="text-base font-semibold text-blue-950">Adaptive Screening Trail</h3>
+          <div className="mt-3 grid gap-3 text-sm text-blue-900 md:grid-cols-4">
+            <div><span className="font-medium">Mode:</span> {String(adaptive.mode)}</div>
+            <div><span className="font-medium">Gated:</span> {adaptive.gatedCount ?? '-'}</div>
+            <div><span className="font-medium">Deeply analyzed:</span> {adaptive.analyzedCount ?? '-'}</div>
+            <div><span className="font-medium">Token saving estimate:</span> {Number(adaptive.projectedTokensSaved || 0).toLocaleString()}</div>
+          </div>
+          {adaptiveReason && (
+            <p className="mt-3 text-sm text-blue-900">
+              <span className="font-medium">{adaptive.terminalStopReason ? 'Stop reason' : 'Observed projected stop'}:</span>{' '}
+              {String(adaptiveReason).replace(/_/g, ' ')}
+            </p>
+          )}
+        </section>
+      )}
 
       {honestAssessment && (
         <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-5">

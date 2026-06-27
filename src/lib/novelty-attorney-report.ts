@@ -305,6 +305,7 @@ function sourceAbstractFields(value: any): unknown[] {
 function displayEvidenceSource(value: unknown, fallback = 'citation record'): string {
   const text = cleanText(value, fallback).toLowerCase();
   if (!text || text === 'none' || text === 'citation record') return 'none';
+  if (/\btitle\b/.test(text) && new RegExp(`\\b${sourceDisclosureTerm()}\\b`, 'i').test(text)) return 'title/abstract';
   if (new RegExp(`\\b${sourceDisclosureTerm()}\\b`, 'i').test(text)) return sourceDisclosureTerm();
   if (/\btitle\b/.test(text)) return 'title';
   return 'inference';
@@ -313,14 +314,7 @@ function displayEvidenceSource(value: unknown, fallback = 'citation record'): st
 function reportSafeText(value: unknown, fallback = ''): string {
   const sourceTerm = sourceDisclosureTerm();
   return cleanText(value, fallback)
-    .replace(new RegExp(`\\bno ${sourceTerm} available\\.?`, 'gi'), 'Full patent record review is recommended for this point.')
-    .replace(new RegExp(`title\\s*\\/\\s*${sourceTerm}`, 'gi'), 'reviewed patent record')
-    .replace(new RegExp(`title and ${sourceTerm}`, 'gi'), 'reviewed patent record')
-    .replace(new RegExp(`patent ${sourceTerm} evidence`, 'gi'), 'reviewed patent record')
-    .replace(/\bpatent abstract evidence\b/gi, 'reviewed patent record')
-    .replace(/\babstract evidence\b/gi, 'reviewed patent record')
-    .replace(/\babstract data\b/gi, 'reviewed patent record')
-    .replace(/\babstract text\b/gi, 'reviewed patent record')
+    .replace(new RegExp(`\\bno ${sourceTerm} available\\.?`, 'gi'), 'No abstract was available; full-text review is recommended for this point.')
     .replace(/\bavailable data\b/gi, 'reviewed record')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
@@ -361,7 +355,13 @@ function reportSafeText(value: unknown, fallback = ''): string {
     .replace(/\bobviousness\b/gi, 'overlap-risk')
     .replace(/\bobvious\b/gi, 'high-overlap risk')
     .replace(/\bclear novelty\b/gi, 'potential novelty space')
-    .replace(/\bdefinite novelty\b/gi, 'potential novelty space');
+    .replace(/\bdefinite novelty\b/gi, 'potential novelty space')
+    .replace(/\banticipated by\b/gi, 'shows high abstract-level overlap with')
+    .replace(/\banticipates?\b/gi, 'shows high abstract-level overlap')
+    .replace(/\bexact match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\bdecisive match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\bnot novel\b/gi, 'high mapped-overlap risk')
+    .replace(/\bno prior art (?:was )?found\b/gi, 'no high abstract-level overlap candidate was identified among screened title/abstract records');
 }
 
 function formatDate(value: unknown): string {
@@ -1863,10 +1863,12 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     stage4?.executive_summary?.summary || stage4?.structured_narrative?.verdict || stage4?.message,
     `${riskAssessment.noveltyRiskExplanation} ${riskAssessment.combinationRiskExplanation}`
   );
+  const adaptiveScreening = stage4?.adaptiveScreening || stage35?.adaptiveScreening;
+  const stopReason = cleanText(stage4?.screeningStopReason || adaptiveScreening?.terminalStopReason || adaptiveScreening?.projectedStopReason);
 
   return {
     reportNumber,
-    reportTitle: 'Preliminary Novelty Assessment Report',
+    reportTitle: 'Title/Abstract-Based Patent Screening Report',
     inventionTitle: cleanText(searchRun.title, 'Untitled Invention'),
     jurisdiction: cleanText(searchRun.jurisdiction, 'IN'),
     sourceMode,
@@ -1875,16 +1877,17 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     preparedBy: 'PatentNest.ai Patent Intelligence',
     searchQuery: cleanText(stage0.searchQuery, '-'),
     inventionFeatures: stage0.inventionFeatures || [],
-    evidenceBasis: 'Preliminary patentability intelligence prepared for inventor and attorney review.',
+    evidenceBasis: 'Preliminary title/abstract screening prepared for inventor and attorney review; claims and specifications were not assessed.',
     methodology: {
       corpus: sourceModeLabel(sourceMode),
       retrievalMode: 'Hybrid retrieval/ranking with AI relevance gating and feature mapping',
-      searchedEvidence: 'This preliminary assessment is prepared from patent records available to the system, including titles, abstracts, bibliographic metadata, family information, and retrieved citation text where available. The full claims, specifications, drawings, prosecution history, legal status, and family members should be reviewed before final patentability, validity, enforcement, or freedom-to-operate conclusions.',
+      searchedEvidence: `This screening is based on patent titles, abstracts, bibliographic metadata, and retrieval signals. Claims, specifications, drawings, prosecution history, legal status, and complete family records were not assessed and require professional review.${stopReason ? ` Adaptive workflow status: ${stopReason.replace(/_/g, ' ')}.` : ''}`,
       techniques: [
         'LLM-assisted invention normalization and key-feature extraction',
         'Patent candidate retrieval and ranking',
         'AI relevance gating before detailed mapping',
         'Feature-by-feature evidence mapping using explicit source labels',
+        adaptiveScreening ? `Adaptive screening in ${cleanText(adaptiveScreening.mode, 'observe')} mode` : 'Fixed screening workflow',
       ],
       preliminaryStatus: 'AI-assisted preliminary assessment for professional review; not a legal opinion unless separately reviewed by qualified counsel.',
     },
@@ -1905,13 +1908,13 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { label: 'Citations selected for detailed feature mapping', value: counts.detailedCitations },
     ],
     scoringLegend: [
-      { label: 'D - Directly Mapped', meaning: 'The citation discloses the same mechanism for this feature.' },
+      { label: 'D - Directly Mapped', meaning: 'The reviewed abstract explicitly states the mapped mechanism for this feature.' },
       { label: 'P - Partially Mapped', meaning: 'The citation discloses a related mechanism; at least one required element remains distinct.' },
-      { label: 'N - Not Expressly Taught', meaning: 'The citation does not disclose this feature.' },
+      { label: 'N - Not Found', meaning: 'The feature was not found in the reviewed title/abstract record.' },
       { label: 'R - Requires Full-Text Review', meaning: 'The full patent text should be checked before assigning claim weight to this feature.' },
-      { label: 'Direct match', meaning: 'Citation appears to overlap the invention-level core mechanism or core feature combination.' },
+      { label: 'High abstract-level overlap', meaning: 'The abstract explicitly maps the core mechanism or core feature combination; full-text review remains required.' },
       { label: 'Component / feature-level match', meaning: 'Citation discloses one or more relevant features or subsystems, but not the full invention as a whole.' },
-      { label: 'Distributed component mapping', meaning: 'Features found across multiple references indicate landscape/obviousness-style risk, not one-reference anticipation by itself.' },
+      { label: 'Distributed component mapping', meaning: 'Features found across multiple references indicate combination risk, not one-reference disclosure by itself.' },
       { label: 'Feature Mapping', meaning: 'Qualitative indication that a citation maps one or more extracted features.' },
     ],
     tableOfContents: [

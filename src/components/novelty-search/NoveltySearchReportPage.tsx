@@ -13,7 +13,7 @@ interface NoveltySearchReportPageProps {
 export default function NoveltySearchReportPage({ 
   searchId, 
   searchData,
-  title = 'Novelty Search Report'
+  title = 'Title/Abstract-Based Patent Screening Report'
 }: NoveltySearchReportPageProps) {
   const reportRef = useRef<HTMLDivElement>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);

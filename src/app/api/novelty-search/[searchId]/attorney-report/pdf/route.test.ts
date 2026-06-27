@@ -83,7 +83,7 @@ function reportModel(overrides: Record<string, unknown> = {}) {
   const comparison = citation(rows)
   return {
     reportNumber: 'PN-NOV-IN-20260622-TEST001',
-    reportTitle: 'Preliminary Novelty Assessment Report',
+    reportTitle: 'Title/Abstract-Based Patent Screening Report',
     inventionTitle: 'Evidence-driven adaptive control platform',
     jurisdiction: 'India',
     sourceMode: 'PQAI_ONLY',

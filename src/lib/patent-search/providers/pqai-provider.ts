@@ -117,6 +117,7 @@ export class PqaiProvider implements PatentSearchProvider {
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
+    const startedAt = Date.now()
     const token = process.env.PQAI_API_TOKEN || process.env.PQAI_TOKEN || ''
     if (!token) throw new Error('No international patent search token configured.')
 
@@ -133,6 +134,15 @@ export class PqaiProvider implements PatentSearchProvider {
       token,
     })
     const url = `https://api.projectpq.ai/search/102?${params.toString()}`
+
+    console.info('[PqaiProvider]', JSON.stringify({
+      event: 'rest_request',
+      endpoint: 'https://api.projectpq.ai/search/102',
+      method: 'GET',
+      query,
+      maxResults,
+      patentOnly: true,
+    }))
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
@@ -180,6 +190,15 @@ export class PqaiProvider implements PatentSearchProvider {
       .map(normalizePqaiResult)
       .sort((a: NormalizedPatentResult, b: NormalizedPatentResult) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
       .slice(0, maxResults)
+
+    console.info('[PqaiProvider]', JSON.stringify({
+      event: 'rest_response',
+      status: response.status,
+      rawResultCount: results.length,
+      resultCount: normalizedResults.length,
+      durationMs: Date.now() - startedAt,
+      publicationNumbers: normalizedResults.map((result: NormalizedPatentResult) => result.publicationNumber),
+    }))
 
     try {
       await persistPqaiPatentResults(normalizedResults, { query })

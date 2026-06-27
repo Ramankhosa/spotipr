@@ -410,6 +410,40 @@ describe('NoveltySearchService Stage 1.5 helpers', () => {
     expect(selected.slice(0, 2).map((item: any) => item.rerankDecision)).toEqual(['accept', 'accept']);
   });
 
+  test('does not let the five-item borderline UI quota cap deep analysis at five', () => {
+    const svc = service();
+    const retrievalCandidates = Array.from({ length: 20 }, (_, index) => ({
+      publicationNumber: `IN_QUOTA_${index + 1}`,
+      title: `Borderline quota candidate ${index + 1}`,
+    }));
+    const byPn = Object.fromEntries(retrievalCandidates.map((candidate, index) => [
+      candidate.publicationNumber,
+      {
+        pn: candidate.publicationNumber,
+        decision: 'borderline',
+        score: 0.8 - index * 0.01,
+        evidence_quality: 'medium',
+        reviewStatus: 'reviewed',
+      },
+    ]));
+    const stage1Data = {
+      retrievalCandidates,
+      aiRelevance: {
+        accepted: [],
+        component: [],
+        borderline: retrievalCandidates.slice(0, 5).map(candidate => candidate.publicationNumber),
+        rejected: [],
+        byPn,
+        gateStatus: 'complete',
+      },
+    };
+
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 60);
+
+    expect(selected).toHaveLength(10);
+    expect(selected.every((item: any) => item.rerankDecision === 'borderline')).toBe(true);
+  });
+
   test('keeps no-high-confidence path when accepted and borderline are both empty', () => {
     const svc = service();
     const stage1Data = {

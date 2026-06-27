@@ -49,7 +49,10 @@ async function requestEpoAccessToken() {
     throw new Error('No EPO OPS credentials configured. Set EPO_KEY/EPO_SECRET or EPO_OPS_CONSUMER_KEY/EPO_OPS_CONSUMER_SECRET.')
   }
 
-  const response = await fetch(epoAuthUrl(), {
+  const authEndpoint = epoAuthUrl()
+  const authStartedAt = Date.now()
+  console.info('[EpoOpsProvider]', JSON.stringify({ event: 'oauth_request', endpoint: authEndpoint, method: 'POST' }))
+  const response = await fetch(authEndpoint, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -61,6 +64,11 @@ async function requestEpoAccessToken() {
   })
 
   const text = await response.text()
+  console.info('[EpoOpsProvider]', JSON.stringify({
+    event: 'oauth_response',
+    status: response.status,
+    durationMs: Date.now() - authStartedAt,
+  }))
   const json = text ? JSON.parse(text) : {}
   if (!response.ok) {
     const message = json?.error_description || json?.error || response.statusText
@@ -379,6 +387,8 @@ export class EpoOpsProvider implements PatentSearchProvider {
 
     console.info('[EpoOpsProvider]', JSON.stringify({
       event: 'search_request',
+      endpoint: `${epoBaseUrl()}/published-data/search/biblio`,
+      method: 'GET',
       searchMode: request.searchMode || 'intelligent',
       cql,
       maxResults,

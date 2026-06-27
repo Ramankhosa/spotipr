@@ -9,6 +9,20 @@ import { createPatentSearchQueryPlan } from './query-planner'
 import { getPatentSearchProvider, listPatentSearchProviders, resolveProviderIds } from './provider-registry'
 import { canonicalPatentResultKey, clampLimit, uniqueStrings } from './utils'
 
+function logSearchEvent(event: string, details: Record<string, unknown>) {
+  console.info('[PatentSearch]', JSON.stringify({ event, ...details }))
+}
+
+function resultLogSummary(result: NormalizedPatentResult) {
+  return {
+    publicationNumber: result.publicationNumber,
+    title: result.title,
+    relevanceScore: result.relevanceScore,
+    sourceProvider: result.sourceProvider,
+    sourceProviders: result.sourceProviders,
+  }
+}
+
 function normalizeCombinedScores(results: NormalizedPatentResult[]) {
   const max = Math.max(...results.map(result => result.hybridScore || 0), 0.0001)
   return results.map(result => {
@@ -154,13 +168,31 @@ function mergeProviderResults(providerResults: Array<{ providerId: PatentSearchP
     })
   }
 
-  const merged = Array.from(byKey.entries())
+  const ranked = Array.from(byKey.entries())
     .map(([key, result]) => ({
       ...result,
       hybridScore: Number((scores.get(key) || result.hybridScore || 0).toFixed(6)),
     }))
     .sort((a, b) => (b.hybridScore || 0) - (a.hybridScore || 0))
-    .slice(0, limit)
+
+  // A single large corpus must not crowd every other selected source out of the
+  // bounded candidate pool. Reserve the best distinct hit from each source,
+  // then fill the rest in global rank order.
+  const promoted: NormalizedPatentResult[] = []
+  const promotedKeys = new Set<string>()
+  for (const { providerId } of providerResults) {
+    const candidate = ranked.find(result => {
+      const sources = result.sourceProviders || [result.sourceProvider]
+      return sources.includes(providerId) && !promotedKeys.has(canonicalPatentResultKey(result))
+    })
+    if (!candidate) continue
+    promoted.push(candidate)
+    promotedKeys.add(canonicalPatentResultKey(candidate))
+  }
+  const merged = [
+    ...promoted,
+    ...ranked.filter(result => !promotedKeys.has(canonicalPatentResultKey(result))),
+  ].slice(0, limit)
 
   return normalizeCombinedScores(merged)
 }
@@ -182,6 +214,18 @@ export class PatentSearchOrchestrator {
     const warnings = [...queryPlan.warnings]
     const providerStats: PatentSearchProviderStats[] = []
     const providerResults: Array<{ providerId: PatentSearchProviderId; results: NormalizedPatentResult[] }> = []
+
+    logSearchEvent('dispatch', {
+      searchMode: input.searchMode,
+      sourceMode: input.sourceMode,
+      providerIds,
+      query: queryPlan.searchQuery,
+      inventionFeatures: queryPlan.inventionFeatures,
+      epoTitleKeywords: queryPlan.epoTitleKeywords,
+      epoAbstractKeywords: queryPlan.epoAbstractKeywords,
+      displayLimit: limit,
+      candidateLimit,
+    })
 
     if (input.searchMode === 'manual') {
       if (providerIds.includes('indian-corpus')) {
@@ -220,11 +264,25 @@ export class PatentSearchOrchestrator {
       }
 
       try {
+        const startedAt = Date.now()
+        logSearchEvent('provider_started', {
+          providerId,
+          label: provider.label,
+          query: queryPlan.searchQuery,
+          requestedLimit: candidateLimit,
+        })
         const results = await provider.search({
           ...input,
           limit: candidateLimit,
           candidateLimit,
           queryPlan,
+        })
+        logSearchEvent('provider_completed', {
+          providerId,
+          label: provider.label,
+          resultCount: results.length,
+          durationMs: Date.now() - startedAt,
+          results: results.map(resultLogSummary),
         })
         providerStats.push({
           providerId,
@@ -236,6 +294,7 @@ export class PatentSearchOrchestrator {
         providerResults.push({ providerId, results })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        logSearchEvent('provider_failed', { providerId, label: provider.label, error: message })
         providerStats.push({
           providerId,
           label: provider.label,
@@ -248,8 +307,74 @@ export class PatentSearchOrchestrator {
       }
     }))
 
+    // Live PQAI/EPO searches persist their normalized results into the matching
+    // local corpus. Because providers run concurrently, an empty corpus search
+    // can finish before that persistence. Retry only that empty corpus once,
+    // after the corresponding live provider has completed successfully.
+    const corpusRefreshPairs: Array<{
+      corpusId: PatentSearchProviderId
+      liveId: PatentSearchProviderId
+    }> = [
+      { corpusId: 'pqai-corpus', liveId: 'pqai' },
+      { corpusId: 'epo-ops-corpus', liveId: 'epo-ops' },
+    ]
+    for (const { corpusId, liveId } of corpusRefreshPairs) {
+      const corpusResult = providerResults.find(result => result.providerId === corpusId)
+      const liveResult = providerResults.find(result => result.providerId === liveId)
+      if (!corpusResult || corpusResult.results.length > 0 || !liveResult?.results.length) continue
+      const provider = getPatentSearchProvider(corpusId)
+      if (!provider?.enabled) continue
+
+      const startedAt = Date.now()
+      logSearchEvent('provider_refresh_started', {
+        providerId: corpusId,
+        afterProviderId: liveId,
+        reason: 'live_results_persisted_after_empty_corpus_search',
+      })
+      try {
+        const refreshedResults = await provider.search({
+          ...input,
+          limit: candidateLimit,
+          candidateLimit,
+          queryPlan,
+        })
+        corpusResult.results = refreshedResults
+        const stat = providerStats.find(item => item.providerId === corpusId)
+        if (stat) stat.resultCount = refreshedResults.length
+        logSearchEvent('provider_refresh_completed', {
+          providerId: corpusId,
+          afterProviderId: liveId,
+          resultCount: refreshedResults.length,
+          durationMs: Date.now() - startedAt,
+          results: refreshedResults.map(resultLogSummary),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        warnings.push(`${provider.label} refresh after ${liveId} persistence failed: ${message}`)
+        logSearchEvent('provider_refresh_failed', {
+          providerId: corpusId,
+          afterProviderId: liveId,
+          error: message,
+        })
+      }
+    }
+
+    providerResults.sort((a, b) => providerIds.indexOf(a.providerId) - providerIds.indexOf(b.providerId))
     const candidateResults = mergeProviderResults(providerResults, candidateLimit)
     const results = candidateResults.slice(0, limit)
+    const providerContributionCounts = Object.fromEntries(providerIds.map(providerId => [
+      providerId,
+      candidateResults.filter(result => (result.sourceProviders || [result.sourceProvider]).includes(providerId)).length,
+    ])) as Partial<Record<PatentSearchProviderId, number>>
+
+    logSearchEvent('aggregate_completed', {
+      providerStats,
+      providerContributionCounts,
+      providerCandidateCount: providerResults.reduce((count, providerResult) => count + providerResult.results.length, 0),
+      candidateResultCount: candidateResults.length,
+      displayResultCount: results.length,
+      candidatePublicationNumbers: candidateResults.map(result => result.publicationNumber),
+    })
 
     return {
       queryPlan,
@@ -263,6 +388,7 @@ export class PatentSearchOrchestrator {
         resultCount: results.length,
         candidateResultCount: candidateResults.length,
         providerCandidateCount: providerResults.reduce((count, providerResult) => count + providerResult.results.length, 0),
+        providerContributionCounts,
       },
     }
   }

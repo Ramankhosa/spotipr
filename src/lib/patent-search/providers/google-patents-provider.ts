@@ -177,6 +177,7 @@ export class GooglePatentsProvider implements PatentSearchProvider {
   }
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
+    const startedAt = Date.now()
     const apiKey = serpApiKey()
     if (!apiKey) throw new Error('No SerpApi key configured for Google Patents.')
 
@@ -208,6 +209,17 @@ export class GooglePatentsProvider implements PatentSearchProvider {
     if (before) params.set('before', before)
     if (sort) params.set('sort', sort)
 
+    console.info('[GooglePatentsProvider]', JSON.stringify({
+      event: 'serpapi_request',
+      endpoint: SERPAPI_ENDPOINT,
+      engine: 'google_patents',
+      query,
+      maxResults,
+      after: after || undefined,
+      before: before || undefined,
+      sort,
+    }))
+
     await enforceSerpApiRateLimit()
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 20000)
@@ -231,9 +243,18 @@ export class GooglePatentsProvider implements PatentSearchProvider {
     }
 
     const results = Array.isArray(json?.organic_results) ? json.organic_results : []
-    return results
+    const normalizedResults = results
       .map((result: any, index: number) => normalizeGooglePatentsResult(result, index))
       .filter((result: NormalizedPatentResult | null): result is NormalizedPatentResult => Boolean(result))
       .slice(0, maxResults)
+    console.info('[GooglePatentsProvider]', JSON.stringify({
+      event: 'serpapi_response',
+      status: response.status,
+      rawResultCount: results.length,
+      resultCount: normalizedResults.length,
+      durationMs: Date.now() - startedAt,
+      publicationNumbers: normalizedResults.map((result: NormalizedPatentResult) => result.publicationNumber),
+    }))
+    return normalizedResults
   }
 }

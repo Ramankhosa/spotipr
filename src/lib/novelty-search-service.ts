@@ -646,7 +646,7 @@ OUTPUT JSON STRUCTURE:
     ]
   },
  "report_metadata": {
-   "title": "Preliminary Novelty Assessment Report",
+   "title": "Title/Abstract-Based Patent Screening Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
    "analyst": "SpotIPR AI",
@@ -788,7 +788,7 @@ Hard constraints:
 Output JSON shape (exact keys):
 {
   "report_metadata": {
-    "title": "Preliminary Novelty Assessment Report",
+    "title": "Title/Abstract-Based Patent Screening Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
     "jurisdiction": "SEARCH_JURISDICTION",
@@ -860,7 +860,7 @@ Strict rules:
 Output JSON shape (exact keys):
 {
   "report_metadata": {
-    "title": "Preliminary Novelty Assessment Report",
+    "title": "Title/Abstract-Based Patent Screening Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
     "jurisdiction": "SEARCH_JURISDICTION",
@@ -947,7 +947,7 @@ STRICT RULES
 OUTPUT JSON SHAPE:
 {
   "report_metadata": {
-    "title": "Preliminary Novelty Assessment Report",
+    "title": "Title/Abstract-Based Patent Screening Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
     "jurisdiction": "SEARCH_JURISDICTION",
@@ -1060,6 +1060,16 @@ export interface NoveltySearchConfig {
     batchSize: number;
     concurrency: number;
     maxPatentsForAttorneyReport: number;
+  };
+  adaptiveAnalysis?: {
+    mode: 'off' | 'observe' | 'enforce';
+    gateCeiling: number;
+    deepAnalysisCeiling: number;
+    confirmationBatches: number;
+    screeningConfidenceThreshold: number;
+    importantCoverageThreshold: number;
+    componentScoreThreshold: number;
+    saturationPlateauBatches: number;
   };
   stage4: {
     reportFormat: 'PDF' | 'JSON' | 'HTML';
@@ -1284,6 +1294,10 @@ export interface FeatureMapCell {
   patent_disclosure?: string;
   extent_score?: number;
   confidence?: number;
+  mappingConfidence?: number;
+  evidenceDepth?: EvidenceDepth;
+  legalEvidenceStrength?: number;
+  qaDowngraded?: boolean;
   quote?: string;
   field?: string;
   evidence_source?: string;
@@ -1319,6 +1333,69 @@ export interface PatentFeatureMap {
   remarks?: string; // 2â€“4 sentences, no legalese
   model_decision?: 'potential_novelty_space' | 'mapped_overlap' | 'high_overlap' | 'novel' | 'partial_novelty' | 'obvious';
   decision?: 'potential_novelty_space' | 'mapped_overlap' | 'high_overlap' | 'novel' | 'partial_novelty' | 'obvious'; // deterministic server computation
+  screeningConfidence?: number;
+  evidenceDepth?: EvidenceDepth;
+  legalEvidenceStrength?: number;
+  domainTier?: DomainTier;
+  domainTierReason?: string;
+  domainTierEvidenceQuote?: string;
+  matchCategory?: PatentScreeningMatchCategory;
+  genericMappedFeatureCount?: number;
+  domainSpecificMappedFeatureCount?: number;
+  noveltyCandidateMappedFeatureCount?: number;
+  genericityRiskLevel?: GenericityRiskLevel;
+  genericityRiskReasons?: string[];
+  genericFeatureOnlyMatch?: boolean;
+  cooperativeRelationshipPresentInSameAbstract?: boolean;
+  cooperativeRelationshipEvidenceQuote?: string;
+  importantFeatureCoverage?: number;
+  importantUnknownRatio?: number;
+  queryClusterIds?: string[];
+}
+
+export type EvidenceDepth = 'TITLE_ONLY' | 'ABSTRACT_ONLY' | 'TITLE_AND_ABSTRACT' | 'FULL_TEXT' | 'CLAIMS_AND_SPECIFICATION' | 'NONE';
+export type DomainTier = 1 | 2 | 3 | 4 | 5;
+export type GenericityRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+export type PatentScreeningMatchCategory =
+  | 'HIGH_ABSTRACT_OVERLAP'
+  | 'COMPONENT_LEVEL_OVERLAP'
+  | 'ADJACENT_DOMAIN_ANALOGY'
+  | 'WEAK_ANALOGY'
+  | 'NOT_RELEVANT';
+export type AdaptiveStopReason =
+  | 'abstract_level_high_overlap_candidate_confirmed'
+  | 'coverage_saturation'
+  | 'candidate_pool_exhausted'
+  | 'hard_ceiling_reached'
+  | 'provider_or_cluster_coverage_incomplete'
+  | 'safe_report_due_to_qa_failure';
+
+export interface ScreeningQueryCluster {
+  id: string;
+  label: string;
+  terms: string[];
+  critical: boolean;
+}
+
+export interface AdaptiveScreeningProgress {
+  mode: 'off' | 'observe' | 'enforce';
+  complexity: 'simple' | 'moderate' | 'complex' | 'crowded';
+  gatedCount: number;
+  analyzedCount: number;
+  remainingCount: number;
+  batchesCompleted: number;
+  projectedStopReason?: AdaptiveStopReason;
+  terminalStopReason?: AdaptiveStopReason;
+  decisivePatentNumber?: string;
+  confirmationBatchCompleted: boolean;
+  confirmationStable?: boolean;
+  evidenceQualityLow: boolean;
+  evidenceQualityReasons: string[];
+  queryClusterCoverage: Record<string, { gated: number; analyzed: number }>;
+  inputTokens: number;
+  outputTokens: number;
+  thoughtTokens: number;
+  projectedTokensSaved: number;
 }
 
 type NoveltyStageProgress = {
@@ -1350,6 +1427,7 @@ export interface FeatureMapBatchResult {
   retrievedCount?: number;
   reviewedCount?: number;
   progress?: NoveltyStageProgress;
+  adaptiveScreening?: AdaptiveScreeningProgress;
 }
 
 export interface PerPatentCoverage {
@@ -1525,6 +1603,16 @@ export class NoveltySearchService extends BasePatentService {
       concurrency: 3,
       maxPatentsForAttorneyReport: 60
     },
+    adaptiveAnalysis: {
+      mode: 'observe',
+      gateCeiling: 180,
+      deepAnalysisCeiling: 60,
+      confirmationBatches: 1,
+      screeningConfidenceThreshold: 0.75,
+      importantCoverageThreshold: 0.90,
+      componentScoreThreshold: 0.55,
+      saturationPlateauBatches: 2
+    },
     stage4: {
       reportFormat: 'PDF',
       includeExecutiveSummary: true,
@@ -1559,6 +1647,7 @@ export class NoveltySearchService extends BasePatentService {
       stage35b: { ...this.defaultConfig.stage35b, ...(requestConfig.stage35b || {}) },
       stage35c: { ...this.defaultConfig.stage35c, ...(requestConfig.stage35c || {}) },
       consolidatedAnalysis: { ...this.defaultConfig.consolidatedAnalysis, ...(requestConfig.consolidatedAnalysis || {}) },
+      adaptiveAnalysis: { ...this.defaultConfig.adaptiveAnalysis, ...(requestConfig.adaptiveAnalysis || {}) },
       stage4: { ...this.defaultConfig.stage4, ...(requestConfig.stage4 || {}) },
     } as NoveltySearchConfig;
   }
@@ -3228,7 +3317,7 @@ export class NoveltySearchService extends BasePatentService {
         summary: 'The configured search completed without identifying sufficiently relevant patent records for detailed feature mapping.',
       },
       concluding_remarks: {
-        summary: 'No sufficiently relevant mapped citations were identified in this search run. This result is not a legal conclusion and does not establish novelty.',
+        summary: 'No high abstract-level overlap candidate was identified among the screened title/abstract records. This is not a legal conclusion and does not establish novelty.',
       },
       per_patent_remarks: [],
       risks: [
@@ -3826,7 +3915,24 @@ RESPONSE:`;
       const pqaiResults: any[] = [];
 
       // Return raw PQAI results for UI
-      console.log(' Stage 1 completed successfully - found', retrievalCandidates.length, 'candidate patents');
+      console.log('[NoveltyPipeline] stage1_provider_retrieval_completed', JSON.stringify({
+        searchId: searchRun?.id,
+        stage0SearchQuery,
+        stage0Features,
+        requestedProviderIds: providerIds,
+        resolvedProviders: searchResponse.providerStats.map(stat => stat.providerId),
+        providerStats: searchResponse.providerStats,
+        diagnostics: searchResponse.diagnostics,
+        warnings: searchResponse.warnings,
+        candidateCount: retrievalCandidates.length,
+        candidates: retrievalCandidates.map(candidate => ({
+          publicationNumber: candidate.publicationNumber,
+          title: candidate.title,
+          relevanceScore: candidate.relevanceScore,
+          sourceProvider: candidate.sourceProvider,
+          sourceProviders: candidate.sourceProviders,
+        })),
+      }));
       return {
         success: true,
         data: {
@@ -4102,7 +4208,16 @@ RESPONSE:`;
     const component = selectByDecision('component');
     const gateAcceptedCount = Array.isArray(gate?.accepted) ? gate.accepted.length : accepted.length;
     const gateComponentCount = Array.isArray(gate?.component) ? gate.component.length : component.length;
-    const gateBorderlineCount = Array.isArray(gate?.borderline) ? gate.borderline.length : 0;
+    // gate.borderline is intentionally a UI-sized list. Count every reviewed
+    // borderline decision in byPn so that the historical quota of five does
+    // not silently cap deep analysis at five patents.
+    const gateBorderlineCount = candidatePool.reduce((count, candidate) => {
+      const pn = getPriorArtPublicationNumber(candidate);
+      const record = pn ? this.getGateRecordForPublication(gate?.byPn || {}, pn) : undefined;
+      return normalizeRerankDecision(record?.rerankDecision || record?.decision) === 'borderline'
+        ? count + 1
+        : count;
+    }, 0);
     const targetCount = deepAnalysisTarget(gateAcceptedCount, gateComponentCount, gateBorderlineCount);
     const borderlineNeeded = Math.max(0, targetCount - accepted.length - component.length);
     const borderline = selectByDecision('borderline', Math.min(MAX_BORDERLINE_FILL, borderlineNeeded));
@@ -4765,7 +4880,7 @@ RESPONSE:`;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
     const reviewedCount = Number(stage1Data?.aiRelevance?.reviewedCount ?? stage1Data?.reviewedCount ?? stage1Data?.aiRelevance?.consideredCount ?? 0) || 0;
     const retrievedCount = Number(stage1Data?.aiRelevance?.retrievedCount ?? stage1Data?.retrievedCount ?? candidatePool.length) || candidatePool.length;
-    const message = 'No high-confidence prior art matches were found in the selected patent sources.';
+    const message = 'No high abstract-level overlap candidate was identified among screened title/abstract records from the selected sources.';
     const perFeatureUniqueness = inventionFeatures.map(feature => ({
       feature,
       present_in: 0,
@@ -4971,15 +5086,49 @@ RESPONSE:`;
 
     const configuredMax = Number(config.consolidatedAnalysis?.maxPatentsForAttorneyReport || config.consolidatedAnalysis?.maxCandidates || 60);
     const maxCandidates = Math.min(Math.max(Number.isFinite(configuredMax) ? configuredMax : 60, 1), 60);
+    const adaptiveMode = config.adaptiveAnalysis?.mode || 'observe';
+    const screeningClusters = this.buildScreeningQueryClusters(stage0Data);
+    if (adaptiveMode !== 'off' && stage1Data?.hasMoreCandidates) {
+      const promotedStage1 = this.promotePotentialTierCandidatesForGate(stage1Data, stage0Data, screeningClusters);
+      const previousCursor = Number(stage1Data?.aiRelevance?.nextBatchCursor ?? stage1Data?.nextBatchCursor ?? 0);
+      const gateCeiling = Math.min(
+        this.getStage1CandidatePool(promotedStage1).length,
+        Number(config.adaptiveAnalysis?.gateCeiling || 180)
+      );
+      if (previousCursor < gateCeiling && promotedStage1.preStopTierScan?.promotedTier12Count > 0) {
+        const nextGate = await this.performStage15(searchId, stage0Data, promotedStage1, config, requestHeaders, { appendNextBatch: true });
+        if (nextGate.success && nextGate.data) {
+          stage1Data = this.mergeStage15Visibility(promotedStage1, nextGate.data, config);
+          console.info('[AdaptiveScreening]', JSON.stringify({
+            event: 'pre_stop_tier_scan_gated',
+            searchId,
+            promotedTier12Count: promotedStage1.preStopTierScan.promotedTier12Count,
+            previousCursor,
+            nextCursor: stage1Data?.aiRelevance?.nextBatchCursor ?? stage1Data?.nextBatchCursor,
+          }));
+        }
+      }
+    }
     const selected = this.selectRelevantPatentsForDeepAnalysis(stage1Data, maxCandidates);
     if (selected.length === 0) return { success: false, error: 'No relevant candidates available for consolidated analysis.' };
 
-    const normalizedPatents = this.normalizePatentsForFeatureMappingV2(selected, selected.length);
-    const batchSize = Math.max(1, Math.min(12, Math.trunc(config.consolidatedAnalysis?.batchSize || 8)));
+    const initialProfile = this.adaptiveComplexityProfile(stage0Data, []);
+    const configuredBatchSize = Math.max(1, Math.min(12, Math.trunc(config.consolidatedAnalysis?.batchSize || 8)));
+    const batchSize = adaptiveMode === 'off' ? configuredBatchSize : initialProfile.batchSize;
+    const adaptiveMaximum = adaptiveMode === 'enforce'
+      ? Math.min(maxCandidates, initialProfile.maximum, Number(config.adaptiveAnalysis?.deepAnalysisCeiling || 60))
+      : maxCandidates;
+    const normalizedPatentsUnordered = this.normalizePatentsForFeatureMappingV2(selected, selected.length).slice(0, adaptiveMaximum);
+    const normalizedPatents = adaptiveMode === 'off'
+      ? normalizedPatentsUnordered
+      : this.orderAdaptiveCandidates(normalizedPatentsUnordered, stage0Data, screeningClusters, batchSize);
     const concurrency = Math.max(1, Math.min(4, Math.trunc(config.consolidatedAnalysis?.concurrency || 3)));
+    const executionConcurrency = adaptiveMode === 'off' ? concurrency : 1;
     const batches = this.createBatches(normalizedPatents, batchSize);
     const parsedBatches: any[] = [];
+    let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let totalThoughtTokens = 0;
     let modelClass = '';
 
     await this.persistDeepAnalysisProgress(
@@ -5063,16 +5212,55 @@ RESPONSE:`;
         throw new Error(`Consolidated analysis batch ${batchIndex + 1} did not return per-patent remarks.`);
       }
 
+      totalInputTokens += Number((response as any).inputTokens ?? response.metadata?.inputTokens ?? 0);
       totalOutputTokens += Number(response.outputTokens || 0);
+      totalThoughtTokens += Number(response.metadata?.thoughtTokens || 0);
       modelClass = modelClass || response.modelClass || '';
       parsedBatches[batchIndex] = { parsed, prompt, patentCount: batch.length };
     };
 
     try {
-      for (let index = 0; index < batches.length; index += concurrency) {
-        await Promise.all(batches.slice(index, index + concurrency).map((batch, offset) => processBatch(batch, index + offset)));
+      for (let index = 0; index < batches.length; index += executionConcurrency) {
+        await Promise.all(batches.slice(index, index + executionConcurrency).map((batch, offset) => processBatch(batch, index + offset)));
         const processedBatchCount = parsedBatches.filter(Boolean).length;
         const analyzedPatents = parsedBatches.reduce((sum, item) => sum + Number(item?.patentCount || 0), 0);
+        let adaptiveProgress: AdaptiveScreeningProgress | undefined;
+        if (adaptiveMode !== 'off') {
+          const cumulativeParsed = this.mergeConsolidatedAnalysisBatches(parsedBatches.filter(Boolean).map(item => item.parsed));
+          const cumulativeRawMaps = this.validateAndRepairFeatureMaps(
+            cumulativeParsed.feature_map,
+            normalizedPatents.slice(0, analyzedPatents),
+            inventionFeatures
+          );
+          const cumulativeMaps = cumulativeRawMaps.map(map => {
+            const patent = normalizedPatents.find(item => item.canonicalPn === map.pn) || {};
+            const gate = this.getGateRecordForPublication(stage1Data?.aiRelevance?.byPn || {}, map.pn);
+            return this.decorateTitleAbstractScreeningMap(
+              map,
+              patent,
+              stage0Data,
+              gate,
+              screeningClusters,
+              config.stage35a.criticalFeatures || []
+            );
+          });
+          adaptiveProgress = this.buildAdaptiveScreeningProgress({
+            maps: cumulativeMaps,
+            stage0Data,
+            stage1Data,
+            clusters: screeningClusters,
+            config,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            thoughtTokens: totalThoughtTokens,
+            batchesCompleted: processedBatchCount,
+          });
+          console.info('[AdaptiveScreening]', JSON.stringify({
+            event: 'wave_completed',
+            searchId,
+            ...adaptiveProgress,
+          }));
+        }
         await this.persistDeepAnalysisProgress(
           searchId,
           this.buildStageProgressSnapshot({
@@ -5087,9 +5275,19 @@ RESPONSE:`;
             extra: {
               attorneyReportPatentLimit: maxCandidates,
               consolidatedBatchCount: batches.length,
+              ...(adaptiveProgress ? { adaptiveScreening: adaptiveProgress } : {}),
             }
           }
         );
+        if (adaptiveProgress?.terminalStopReason) {
+          console.info('[AdaptiveScreening]', JSON.stringify({
+            event: 'enforced_stop',
+            searchId,
+            stopReason: adaptiveProgress.terminalStopReason,
+            analyzedCount: adaptiveProgress.analyzedCount,
+          }));
+          break;
+        }
       }
     } catch (error) {
       const processedBatchCount = parsedBatches.filter(Boolean).length;
@@ -5119,7 +5317,19 @@ RESPONSE:`;
     }
 
     const parsed = this.mergeConsolidatedAnalysisBatches(parsedBatches.map(item => item.parsed));
-    const featureMaps = this.validateAndRepairFeatureMaps(parsed.feature_map, normalizedPatents, inventionFeatures);
+    const rawFeatureMaps = this.validateAndRepairFeatureMaps(parsed.feature_map, normalizedPatents, inventionFeatures);
+    const featureMaps = rawFeatureMaps.map(map => {
+      const patent = normalizedPatents.find(item => item.canonicalPn === map.pn) || {};
+      const gate = this.getGateRecordForPublication(stage1Data?.aiRelevance?.byPn || {}, map.pn);
+      return this.decorateTitleAbstractScreeningMap(
+        map,
+        patent,
+        stage0Data,
+        gate,
+        screeningClusters,
+        config.stage35a.criticalFeatures || []
+      );
+    });
     if (featureMaps.length === 0) {
       return { success: false, error: 'Consolidated feature map did not match selected patents.' };
     }
@@ -5175,27 +5385,46 @@ RESPONSE:`;
         language_mismatch: Boolean(parsed.quality_flags.language_mismatch)
       }
       : this.calculateQualityFlags(featureMaps, normalizedPatents);
+    const deterministicEvidenceQuality = this.titleAbstractEvidenceQuality(featureMaps, stage0Data, screeningClusters);
     const qualityFlags = {
       ...parsedQualityFlags,
-      low_evidence: parsedQualityFlags.low_evidence || stage1Data?.aiRelevance?.gateStatus !== 'complete',
+      low_evidence: parsedQualityFlags.low_evidence || deterministicEvidenceQuality.low || stage1Data?.aiRelevance?.gateStatus !== 'complete',
     };
     const stats = {
       ...this.calculateFeatureMappingStats(featureMaps, normalizedPatents),
       ...(parsed.stats && typeof parsed.stats === 'object' ? parsed.stats : {}),
       patents_analyzed: featureMaps.length
     };
+    const executedBatchCount = parsedBatches.filter(Boolean).length;
+    const adaptiveScreening = this.buildAdaptiveScreeningProgress({
+      maps: featureMaps,
+      stage0Data,
+      stage1Data,
+      clusters: screeningClusters,
+      config,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      thoughtTokens: totalThoughtTokens,
+      batchesCompleted: executedBatchCount,
+    });
+    console.info('[AdaptiveScreening]', JSON.stringify({
+      event: 'evaluation_completed',
+      searchId,
+      ...adaptiveScreening,
+    }));
     const stage35Data: FeatureMapBatchResult = {
       feature_map: featureMaps,
       quality_flags: qualityFlags,
       stats,
+      adaptiveScreening,
       attorneyReportPatentLimit: maxCandidates,
-      consolidatedBatchCount: batches.length,
+      consolidatedBatchCount: executedBatchCount,
       progress: this.buildStageProgressSnapshot({
         stage: 'deep_analysis',
         status: 'complete',
         analyzedPatents: featureMaps.length,
         totalPatents: normalizedPatents.length,
-        processedBatches: batches.length,
+        processedBatches: executedBatchCount,
         batchCount: batches.length,
         failedBatches: 0,
       })
@@ -5216,8 +5445,12 @@ RESPONSE:`;
       per_patent_remarks_source: 'consolidated_deep_analysis',
       consolidated_deep_analysis_complete: true,
       consolidated_deep_analysis_completed_at: new Date().toISOString(),
-      consolidated_batch_count: batches.length,
+      consolidated_batch_count: executedBatchCount,
       attorney_report_patent_count: featureMaps.length,
+      adaptiveScreening,
+      screeningStopReason: adaptiveScreening.terminalStopReason,
+      projectedScreeningStopReason: adaptiveScreening.projectedStopReason,
+      combinationRiskSignal: Number((aggregation.data as any).distributed_component_coverage || 0) >= 0.5,
       stage35c_complete: true
     } as AggregationResult & Record<string, any>;
 
@@ -5237,7 +5470,8 @@ RESPONSE:`;
       success: true,
       data: {
         stage35Data,
-        stage4Data
+        stage4Data,
+        aiRelevance: stage1Data?.aiRelevance,
       }
     };
   }
@@ -5995,21 +6229,49 @@ RESPONSE:`;
         }
       } catch {}
 
+      const screeningClusters = this.buildScreeningQueryClusters(stage0Data);
+      for (let index = 0; index < allFeatureMaps.length; index += 1) {
+        const map = allFeatureMaps[index];
+        const patent = normalizedPatents.find(item => item.canonicalPn === map.pn) || {};
+        const gateRecord = this.getGateRecordForPublication(stage1Data?.aiRelevance?.byPn || {}, map.pn);
+        allFeatureMaps[index] = this.decorateTitleAbstractScreeningMap(
+          map,
+          patent,
+          stage0Data,
+          gateRecord,
+          screeningClusters,
+          config.stage35a.criticalFeatures || []
+        );
+      }
+
       // Store results in database
       await this.storeFeatureMapResults(searchId, allFeatureMaps);
 
       // Calculate quality flags and stats
       const calculatedQualityFlags = this.calculateQualityFlags(allFeatureMaps, normalizedPatents);
+      const deterministicEvidenceQuality = this.titleAbstractEvidenceQuality(allFeatureMaps, stage0Data, screeningClusters);
       const qualityFlags = {
         ...calculatedQualityFlags,
-        low_evidence: calculatedQualityFlags.low_evidence || stage1Data?.aiRelevance?.gateStatus !== 'complete',
+        low_evidence: calculatedQualityFlags.low_evidence || deterministicEvidenceQuality.low || stage1Data?.aiRelevance?.gateStatus !== 'complete',
       };
       const stats = this.calculateFeatureMappingStats(allFeatureMaps, normalizedPatents);
+      const adaptiveScreening = this.buildAdaptiveScreeningProgress({
+        maps: allFeatureMaps,
+        stage0Data,
+        stage1Data,
+        clusters: screeningClusters,
+        config,
+        inputTokens: 0,
+        outputTokens: 0,
+        thoughtTokens: 0,
+        batchesCompleted: batches.length,
+      });
 
       const result: FeatureMapBatchResult = {
         feature_map: allFeatureMaps,
         quality_flags: qualityFlags,
         stats: stats,
+        adaptiveScreening,
         progress: this.buildStageProgressSnapshot({
           stage: 'deep_analysis',
           status: 'complete',
@@ -7256,6 +7518,461 @@ OUTPUT JSON:
       }
     }
     return typeByFeature;
+  }
+
+  private screeningTokens(value: unknown): string[] {
+    const stop = new Set([
+      'about', 'after', 'also', 'based', 'being', 'between', 'comprising', 'configured', 'device', 'from',
+      'having', 'including', 'method', 'module', 'process', 'system', 'that', 'their', 'thereof', 'these',
+      'this', 'through', 'using', 'wherein', 'which', 'with', 'without',
+    ]);
+    return Array.from(new Set(String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .split(/\s+/)
+      .map(token => token.trim())
+      .filter(token => token.length >= 4 && !stop.has(token))));
+  }
+
+  private buildScreeningQueryClusters(stage0Data: NormalizedIdea): ScreeningQueryCluster[] {
+    const clusters: ScreeningQueryCluster[] = [];
+    const seen = new Set<string>();
+    const add = (label: unknown, critical: boolean) => {
+      const text = String(label || '').replace(/\s+/g, ' ').trim();
+      const terms = this.screeningTokens(text).slice(0, 12);
+      const key = terms.join('|');
+      if (!text || terms.length === 0 || seen.has(key) || clusters.length >= 6) return;
+      seen.add(key);
+      clusters.push({ id: `QC${clusters.length + 1}`, label: text.slice(0, 180), terms, critical });
+    };
+
+    for (const concept of stage0Data.claimConcepts || []) {
+      add(`${concept.title} ${concept.claimableSummary}`, concept.importance === 'primary');
+    }
+    for (const interaction of stage0Data.noveltyFocusInteractions || []) {
+      add(interaction.description, true);
+    }
+    for (const detail of stage0Data.featureDetails || []) {
+      if (detail.feature_type === 'novelty_candidate' || detail.feature_type === 'core_technical') {
+        add(`${detail.feature} ${detail.technical_role || ''}`, detail.feature_type === 'novelty_candidate');
+      }
+    }
+    if (clusters.length === 0) add(stage0Data.searchQuery, true);
+    return clusters;
+  }
+
+  private screeningEvidenceQuote(text: string, terms: string[]): string {
+    const sentences = String(text || '').replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).filter(Boolean);
+    const ranked = sentences.map(sentence => {
+      const lower = sentence.toLowerCase();
+      return { sentence, hits: terms.filter(term => lower.includes(term)).length };
+    }).sort((a, b) => b.hits - a.hits);
+    return ranked[0]?.hits ? ranked[0].sentence.slice(0, 260) : '';
+  }
+
+  private classifyDomainTier(
+    patent: any,
+    stage0Data: NormalizedIdea,
+    clusters: ScreeningQueryCluster[]
+  ): { tier: DomainTier; reason: string; quote: string; clusterIds: string[] } {
+    const title = String(patent?.title || '');
+    const abstract = String(patent?.abstract || '');
+    const text = `${title} ${abstract}`.toLowerCase();
+    const featureDetails = stage0Data.featureDetails || [];
+    const domainTerms = Array.from(new Set([
+      ...this.screeningTokens(stage0Data.title || ''),
+      ...this.screeningTokens(stage0Data.searchQuery),
+      ...featureDetails
+        .filter(detail => detail.feature_type === 'core_technical' || detail.feature_type === 'novelty_candidate')
+        .flatMap(detail => this.screeningTokens(`${detail.feature} ${detail.technical_role || ''}`)),
+    ])).slice(0, 40);
+    const matchedDomainTerms = domainTerms.filter(term => text.includes(term));
+    const domainRatio = domainTerms.length ? matchedDomainTerms.length / domainTerms.length : 0;
+    const genericTerms = ['artificial intelligence', 'machine learning', 'sensor', 'wireless', 'cloud', 'internet of things', 'iot', 'drone', 'predictive', 'monitoring', 'analytics'];
+    const genericHits = genericTerms.filter(term => text.includes(term));
+    const clusterIds = clusters.filter(cluster => {
+      const hits = cluster.terms.filter(term => text.includes(term)).length;
+      return hits >= Math.min(2, Math.max(1, Math.ceil(cluster.terms.length * 0.3)));
+    }).map(cluster => cluster.id);
+    const stageClassifications = new Set([...(stage0Data.cpcCodes || []), ...(stage0Data.ipcCodes || [])].map(code => String(code).slice(0, 4).toUpperCase()));
+    const patentClassifications = [
+      ...(Array.isArray(patent?.classifications) ? patent.classifications : []),
+      ...(Array.isArray(patent?.cpcCodes) ? patent.cpcCodes : []),
+      ...(Array.isArray(patent?.ipcCodes) ? patent.ipcCodes : []),
+    ].map(code => String(code).slice(0, 4).toUpperCase());
+    const classificationMatch = patentClassifications.some(code => stageClassifications.has(code));
+
+    let tier: DomainTier;
+    let reason: string;
+    if (clusterIds.length > 0 && domainRatio >= 0.45 && matchedDomainTerms.length >= 3) {
+      tier = 1;
+      reason = 'Same target domain and technical-purpose anchors are explicit in the title/abstract record.';
+    } else if ((clusterIds.length > 0 && domainRatio >= 0.25) || (classificationMatch && matchedDomainTerms.length >= 2)) {
+      tier = 2;
+      reason = 'Adjacent domain record with matching mechanism, purpose, or patent classification.';
+    } else if (matchedDomainTerms.length >= 2 || classificationMatch) {
+      tier = 3;
+      reason = 'Related platform or subsystem, but the target application is not fully aligned.';
+    } else if (genericHits.length >= 2) {
+      tier = 4;
+      reason = 'Overlap is primarily generic technology terminology.';
+    } else {
+      tier = 5;
+      reason = 'Only weak analogy or isolated keyword overlap was identified.';
+    }
+    return {
+      tier,
+      reason,
+      quote: this.screeningEvidenceQuote(abstract || title, matchedDomainTerms.length ? matchedDomainTerms : genericHits),
+      clusterIds,
+    };
+  }
+
+  private cooperativeRelationshipEvidence(stage0Data: NormalizedIdea, abstract: string): { present: boolean; quote: string } {
+    const normalizedAbstract = String(abstract || '').toLowerCase();
+    if (!normalizedAbstract || normalizedAbstract === 'no abstract available.') return { present: false, quote: '' };
+    const interactions = stage0Data.noveltyFocusInteractions || [];
+    for (const interaction of interactions) {
+      const relationshipTerms = this.screeningTokens(interaction.description);
+      const relationshipHits = relationshipTerms.filter(term => normalizedAbstract.includes(term));
+      const linkedCovered = (interaction.linkedFeatures || []).every(feature => {
+        const terms = this.screeningTokens(feature);
+        return terms.some(term => normalizedAbstract.includes(term));
+      });
+      if (linkedCovered && relationshipHits.length >= Math.min(3, Math.max(1, Math.ceil(relationshipTerms.length * 0.35)))) {
+        return { present: true, quote: this.screeningEvidenceQuote(abstract, relationshipHits) };
+      }
+    }
+    return { present: false, quote: '' };
+  }
+
+  private orderAdaptiveCandidates(
+    candidates: any[],
+    stage0Data: NormalizedIdea,
+    clusters: ScreeningQueryCluster[],
+    batchSize: number
+  ): any[] {
+    if (candidates.length <= batchSize) return candidates;
+    const ordered = candidates.slice(0, batchSize);
+    const pending = candidates.slice(batchSize);
+    const seenSources = new Set<string>(ordered.flatMap(candidate => candidate.sourceProviders || [candidate.sourceProvider]).filter(Boolean));
+    const seenJurisdictions = new Set<string>(ordered.map(candidate => String(candidate.jurisdiction || '')).filter(Boolean));
+    const seenFamilies = new Set<string>(ordered.map(candidate => this.canonicalPatentNumber(getPriorArtPublicationNumber(candidate))).filter(Boolean));
+    const noveltyFeatures = (stage0Data.featureDetails || []).filter(detail => detail.feature_type === 'novelty_candidate').map(detail => detail.feature);
+
+    while (pending.length > 0) {
+      const ranked = pending.map((candidate, index) => {
+        const sources = (candidate.sourceProviders || [candidate.sourceProvider]).filter(Boolean);
+        const jurisdiction = String(candidate.jurisdiction || '');
+        const family = this.canonicalPatentNumber(getPriorArtPublicationNumber(candidate));
+        const domain = this.classifyDomainTier(candidate, stage0Data, clusters);
+        const matchedFeatures = Array.isArray(candidate.matchedFeatures) ? candidate.matchedFeatures : [];
+        const noveltyHit = noveltyFeatures.some(feature => matchedFeatures.includes(feature) || String(candidate.abstract || '').toLowerCase().includes(feature.toLowerCase()));
+        const score =
+          (sources.some((source: string) => !seenSources.has(source)) ? 5 : 0) +
+          (jurisdiction && !seenJurisdictions.has(jurisdiction) ? 3 : 0) +
+          (family && !seenFamilies.has(family) ? 2 : 0) +
+          (domain.tier <= 2 ? 4 : domain.tier === 3 ? 2 : 0) +
+          (noveltyHit ? 4 : 0) +
+          Number(candidate.rerankScore ?? candidate.relevanceScore ?? 0);
+        return { candidate, index, score };
+      }).sort((a, b) => b.score - a.score || a.index - b.index);
+      const next = ranked[0];
+      pending.splice(next.index, 1);
+      ordered.push(next.candidate);
+      for (const source of next.candidate.sourceProviders || [next.candidate.sourceProvider]) if (source) seenSources.add(source);
+      if (next.candidate.jurisdiction) seenJurisdictions.add(String(next.candidate.jurisdiction));
+      const family = this.canonicalPatentNumber(getPriorArtPublicationNumber(next.candidate));
+      if (family) seenFamilies.add(family);
+    }
+    return ordered;
+  }
+
+  private promotePotentialTierCandidatesForGate(
+    stage1Data: any,
+    stage0Data: NormalizedIdea,
+    clusters: ScreeningQueryCluster[]
+  ) {
+    const candidates = this.getStage1CandidatePool(stage1Data);
+    const byPn = stage1Data?.aiRelevance?.byPn || {};
+    const reviewed: any[] = [];
+    const tier12: any[] = [];
+    const remaining: any[] = [];
+    for (const candidate of candidates) {
+      const pn = getPriorArtPublicationNumber(candidate);
+      if (this.getGateRecordForPublication(byPn, pn)) reviewed.push(candidate);
+      else if (this.classifyDomainTier(candidate, stage0Data, clusters).tier <= 2) tier12.push(candidate);
+      else remaining.push(candidate);
+    }
+    return {
+      ...stage1Data,
+      retrievalCandidates: [...reviewed, ...tier12, ...remaining],
+      preStopTierScan: {
+        scannedCount: candidates.length,
+        promotedTier12Count: tier12.length,
+        completedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  private decorateTitleAbstractScreeningMap(
+    patentMap: PatentFeatureMap,
+    patent: any,
+    stage0Data: NormalizedIdea,
+    gate: PriorArtGateRecord | undefined,
+    clusters: ScreeningQueryCluster[],
+    configuredCriticalFeatures: string[]
+  ): PatentFeatureMap {
+    const features = stage0Data.inventionFeatures || [];
+    const featureTypes = this.buildFeatureTypeMap(stage0Data, features);
+    const importantFeatures = features.filter(feature => this.isImportantFeature(feature, featureTypes));
+    const criticalFeatures = new Set([
+      ...configuredCriticalFeatures,
+      ...features.filter(feature => featureTypes.get(feature) === 'core_technical'),
+    ]);
+    const positiveCells = patentMap.feature_analysis.filter(cell => cell.status === 'Present' || cell.status === 'Partial');
+    const genericMappedFeatureCount = positiveCells.filter(cell => featureTypes.get(cell.feature) === 'generic_weak').length;
+    const noveltyCandidateMappedFeatureCount = positiveCells.filter(cell => featureTypes.get(cell.feature) === 'novelty_candidate' && cell.status === 'Present').length;
+    const domainSpecificMappedFeatureCount = positiveCells.filter(cell => {
+      const type = featureTypes.get(cell.feature);
+      return (type === 'core_technical' || type === 'implementation') && cell.status === 'Present';
+    }).length;
+    const mappedWeight = importantFeatures.reduce((sum, feature) => {
+      const cell = patentMap.feature_analysis.find(item => item.feature === feature);
+      const factor = cell?.status === 'Present' ? 1 : cell?.status === 'Partial' ? 0.5 : 0;
+      return sum + this.featureWeight(feature, featureTypes) * factor;
+    }, 0);
+    const totalWeight = importantFeatures.reduce((sum, feature) => sum + this.featureWeight(feature, featureTypes), 0);
+    const importantFeatureCoverage = totalWeight > 0 ? this.roundScore(mappedWeight / totalWeight) : 0;
+    const importantUnknownCount = importantFeatures.filter(feature => {
+      const cell = patentMap.feature_analysis.find(item => item.feature === feature);
+      return !cell || cell.status === 'Unknown';
+    }).length;
+    const importantUnknownRatio = importantFeatures.length ? importantUnknownCount / importantFeatures.length : 0;
+    const criticalAbstractPresent = Array.from(criticalFeatures).every(feature => {
+      const cell = patentMap.feature_analysis.find(item => item.feature === feature);
+      return cell?.status === 'Present' && cell.evidence_source === 'abstract' && Boolean(cell.quote);
+    });
+    const relationship = this.cooperativeRelationshipEvidence(stage0Data, String(patent?.abstract || ''));
+    const domain = this.classifyDomainTier(patent, stage0Data, clusters);
+    const genericFeatureOnlyMatch = positiveCells.length > 0 && genericMappedFeatureCount === positiveCells.length;
+    const genericityRiskReasons: string[] = [];
+    if (genericFeatureOnlyMatch) genericityRiskReasons.push('All positively mapped features are generic.');
+    if (genericMappedFeatureCount > domainSpecificMappedFeatureCount + noveltyCandidateMappedFeatureCount) {
+      genericityRiskReasons.push('Generic mapped features outnumber domain-specific and novelty-candidate mappings.');
+    }
+    if (domain.tier >= 4) genericityRiskReasons.push('Domain classification is generic or weakly analogous.');
+    const genericityRiskLevel: GenericityRiskLevel = genericFeatureOnlyMatch || genericityRiskReasons.length >= 2
+      ? 'HIGH'
+      : genericityRiskReasons.length === 1 ? 'MEDIUM' : 'LOW';
+    const mappingConfidences = positiveCells.map(cell => Number(cell.mappingConfidence ?? cell.confidence ?? 0)).filter(Number.isFinite);
+    const mappingAverage = mappingConfidences.length
+      ? mappingConfidences.reduce((sum, value) => sum + value, 0) / mappingConfidences.length
+      : 0;
+    const gateScore = Number(gate?.rerankScore ?? gate?.score ?? 0);
+    const screeningConfidence = this.roundScore(0.55 * gateScore + 0.35 * mappingAverage + 0.10 * (relationship.present ? 1 : 0));
+    const legalEvidenceStrength = positiveCells.length
+      ? Math.min(...positiveCells.map(cell => Number(cell.legalEvidenceStrength ?? 0.65)))
+      : 0;
+    const gateDecision = normalizeRerankDecision(gate?.rerankDecision || gate?.decision);
+    const relationshipRequired = (stage0Data.noveltyFocusInteractions || []).length > 0;
+    const highOverlap = gateDecision === 'accept' && domain.tier <= 2 && criticalAbstractPresent && importantFeatureCoverage >= 0.90 &&
+      importantUnknownRatio === 0 && (noveltyCandidateMappedFeatureCount >= 1 || domainSpecificMappedFeatureCount >= 1) &&
+      (!relationshipRequired || relationship.present) &&
+      !genericFeatureOnlyMatch && genericityRiskLevel !== 'HIGH';
+    const matchCategory: PatentScreeningMatchCategory = highOverlap
+      ? 'HIGH_ABSTRACT_OVERLAP'
+      : positiveCells.some(cell => this.isImportantFeature(cell.feature, featureTypes))
+        ? 'COMPONENT_LEVEL_OVERLAP'
+        : domain.tier <= 3 ? 'ADJACENT_DOMAIN_ANALOGY' : domain.tier === 4 ? 'WEAK_ANALOGY' : 'NOT_RELEVANT';
+
+    return {
+      ...patentMap,
+      screeningConfidence,
+      evidenceDepth: patent?.abstract && patent?.title ? 'TITLE_AND_ABSTRACT' : patent?.abstract ? 'ABSTRACT_ONLY' : patent?.title ? 'TITLE_ONLY' : 'NONE',
+      legalEvidenceStrength,
+      domainTier: domain.tier,
+      domainTierReason: domain.reason,
+      domainTierEvidenceQuote: domain.quote,
+      matchCategory,
+      genericMappedFeatureCount,
+      domainSpecificMappedFeatureCount,
+      noveltyCandidateMappedFeatureCount,
+      genericityRiskLevel,
+      genericityRiskReasons,
+      genericFeatureOnlyMatch,
+      cooperativeRelationshipPresentInSameAbstract: relationship.present,
+      cooperativeRelationshipEvidenceQuote: relationship.quote,
+      importantFeatureCoverage,
+      importantUnknownRatio,
+      queryClusterIds: domain.clusterIds,
+    };
+  }
+
+  private adaptiveComplexityProfile(stage0Data: NormalizedIdea, maps: PatentFeatureMap[]) {
+    const featureTypes = this.buildFeatureTypeMap(stage0Data, stage0Data.inventionFeatures || []);
+    const importantCount = (stage0Data.inventionFeatures || []).filter(feature => this.isImportantFeature(feature, featureTypes)).length;
+    const conceptCount = (stage0Data.claimConcepts || []).length + (stage0Data.noveltyFocusInteractions || []).length;
+    const genericRatio = maps.length
+      ? maps.filter(map => map.genericityRiskLevel === 'HIGH' || (map.domainTier || 5) >= 4).length / maps.length
+      : 0;
+    if (genericRatio > 0.6) return { complexity: 'crowded' as const, batchSize: 8, minimum: 40, maximum: 60 };
+    const units = importantCount + conceptCount * 2 + (Number(stage0Data.confidence || 1) < 0.7 ? 2 : 0);
+    if (units <= 6) return { complexity: 'simple' as const, batchSize: 4, minimum: 16, maximum: 24 };
+    if (units <= 12) return { complexity: 'moderate' as const, batchSize: 6, minimum: 24, maximum: 40 };
+    return { complexity: 'complex' as const, batchSize: 8, minimum: 32, maximum: 60 };
+  }
+
+  private titleAbstractEvidenceQuality(
+    maps: PatentFeatureMap[],
+    stage0Data: NormalizedIdea,
+    clusters: ScreeningQueryCluster[]
+  ): { low: boolean; reasons: string[] } {
+    const reasons: string[] = [];
+    const featureTypes = this.buildFeatureTypeMap(stage0Data, stage0Data.inventionFeatures || []);
+    const important = (stage0Data.inventionFeatures || []).filter(feature => this.isImportantFeature(feature, featureTypes));
+    const critical = (stage0Data.inventionFeatures || []).filter(feature => featureTypes.get(feature) === 'core_technical');
+    const positive = maps.flatMap(map => map.feature_analysis).filter(cell => cell.status === 'Present' || cell.status === 'Partial');
+    const titleOnly = positive.filter(cell => cell.evidenceDepth === 'TITLE_ONLY' || cell.evidence_source === 'title');
+    if (positive.length > 0 && titleOnly.length / positive.length > 0.4) reasons.push('More than 40% of positive mappings are title-only.');
+    const importantCells = maps.flatMap(map => important.map(feature => map.feature_analysis.find(cell => cell.feature === feature)));
+    if (importantCells.length > 0 && importantCells.filter(cell => !cell || cell.status === 'Unknown').length / importantCells.length > 0.3) {
+      reasons.push('More than 30% of important feature mappings are Unknown.');
+    }
+    if (maps.some(map => critical.some(feature => {
+      const cell = map.feature_analysis.find(item => item.feature === feature);
+      return cell?.evidenceDepth === 'TITLE_ONLY' || cell?.evidence_source === 'title';
+    }))) reasons.push('At least one critical feature is supported only by title text.');
+    if (maps.some(map => map.matchCategory === 'HIGH_ABSTRACT_OVERLAP' && !map.cooperativeRelationshipEvidenceQuote && map.noveltyCandidateMappedFeatureCount === 0)) {
+      reasons.push('A high-overlap candidate lacks an exact abstract relationship or novelty-feature quote.');
+    }
+    if (maps.length > 0 && maps.filter(map => (map.domainTier || 5) >= 3 || map.genericityRiskLevel === 'HIGH').length / maps.length > 0.6) {
+      reasons.push('More than 60% of analyzed candidates are generic or Tier 3-5 analogies.');
+    }
+    const represented = new Set(maps.flatMap(map => map.queryClusterIds || []));
+    if (clusters.some(cluster => cluster.critical && !represented.has(cluster.id))) reasons.push('A critical query cluster lacks a sufficiently specific analyzed abstract.');
+    return { low: reasons.length > 0, reasons };
+  }
+
+  private adaptiveCoveragePlateauBatches(
+    maps: PatentFeatureMap[],
+    stage0Data: NormalizedIdea,
+    batchSize: number
+  ): number {
+    const featureTypes = this.buildFeatureTypeMap(stage0Data, stage0Data.inventionFeatures || []);
+    const important = new Set((stage0Data.inventionFeatures || []).filter(feature => this.isImportantFeature(feature, featureTypes)));
+    const covered = new Set<string>();
+    let trailingPlateaus = 0;
+    for (const batch of this.createBatches(maps, Math.max(1, batchSize))) {
+      const before = covered.size;
+      for (const map of batch) {
+        for (const cell of map.feature_analysis) {
+          if (important.has(cell.feature) && cell.status === 'Present') covered.add(cell.feature);
+        }
+      }
+      trailingPlateaus = covered.size === before ? trailingPlateaus + 1 : 0;
+    }
+    return trailingPlateaus;
+  }
+
+  private buildAdaptiveScreeningProgress(params: {
+    maps: PatentFeatureMap[];
+    stage0Data: NormalizedIdea;
+    stage1Data: any;
+    clusters: ScreeningQueryCluster[];
+    config: NoveltySearchConfig;
+    inputTokens: number;
+    outputTokens: number;
+    thoughtTokens: number;
+    batchesCompleted: number;
+  }): AdaptiveScreeningProgress {
+    const { maps, stage0Data, stage1Data, clusters, config } = params;
+    const adaptive = config.adaptiveAnalysis || this.defaultConfig.adaptiveAnalysis!;
+    const candidates = this.getStage1CandidatePool(stage1Data);
+    const gateByPn = stage1Data?.aiRelevance?.byPn || {};
+    const profile = this.adaptiveComplexityProfile(stage0Data, maps);
+    const quality = this.titleAbstractEvidenceQuality(maps, stage0Data, clusters);
+    const decisive = maps.find(map => map.matchCategory === 'HIGH_ABSTRACT_OVERLAP' &&
+      Number(map.screeningConfidence || 0) >= Number(adaptive.screeningConfidenceThreshold || 0.75) &&
+      Number(map.importantFeatureCoverage || 0) >= Number(adaptive.importantCoverageThreshold || 0.90));
+    const qaInvalidatedAcceptedCandidate = maps.some(map => {
+      const gate = this.getGateRecordForPublication(gateByPn, map.pn);
+      return normalizeRerankDecision(gate?.rerankDecision || gate?.decision) === 'accept' &&
+        map.matchCategory !== 'HIGH_ABSTRACT_OVERLAP' &&
+        map.feature_analysis.some(cell => cell.qaDowngraded);
+    });
+    const decisiveIndex = decisive ? maps.findIndex(map => map.pn === decisive.pn) : -1;
+    const confirmationBatchCompleted = decisiveIndex >= 0 && maps.length - decisiveIndex - 1 >= Math.min(profile.batchSize, Math.max(0, candidates.length - decisiveIndex - 1));
+    const confirmationStable = Boolean(decisive && confirmationBatchCompleted && maps.some(map => map.pn === decisive.pn && map.matchCategory === 'HIGH_ABSTRACT_OVERLAP'));
+    const queryClusterCoverage = Object.fromEntries(clusters.map(cluster => {
+      const gated = candidates.filter(candidate => {
+        const domain = this.classifyDomainTier(candidate, stage0Data, clusters);
+        const pn = getPriorArtPublicationNumber(candidate);
+        return domain.clusterIds.includes(cluster.id) && Boolean(this.getGateRecordForPublication(gateByPn, pn));
+      }).length;
+      const analyzed = maps.filter(map => (map.queryClusterIds || []).includes(cluster.id)).length;
+      return [cluster.id, { gated, analyzed }];
+    }));
+    const ungatedTier12 = candidates.filter(candidate => {
+      const domain = this.classifyDomainTier(candidate, stage0Data, clusters);
+      const pn = getPriorArtPublicationNumber(candidate);
+      return domain.tier <= 2 && !this.getGateRecordForPublication(gateByPn, pn);
+    });
+    const uncoveredCriticalCluster = clusters.some(cluster => cluster.critical && (queryClusterCoverage[cluster.id]?.analyzed || 0) === 0);
+    const clustersInsufficient = clusters.some(cluster => {
+      const coverage = queryClusterCoverage[cluster.id];
+      return coverage.gated < 3 && coverage.gated < candidates.filter(candidate => this.classifyDomainTier(candidate, stage0Data, clusters).clusterIds.includes(cluster.id)).length;
+    });
+    const remainingReviewable = candidates.filter(candidate => {
+      const pn = getPriorArtPublicationNumber(candidate);
+      const gate = this.getGateRecordForPublication(gateByPn, pn);
+      const decision = normalizeRerankDecision(gate?.rerankDecision || gate?.decision);
+      return decision === 'accept' || (decision === 'component' && Number(gate?.rerankScore ?? gate?.score ?? 0) >= Number(adaptive.componentScoreThreshold || 0.55));
+    }).filter(candidate => !maps.some(map => this.canonicalPatentNumber(map.pn) === this.canonicalPatentNumber(getPriorArtPublicationNumber(candidate))));
+    const plateau = this.adaptiveCoveragePlateauBatches(maps, stage0Data, profile.batchSize);
+    const saturation = maps.length >= profile.minimum && plateau >= Number(adaptive.saturationPlateauBatches || 2) &&
+      ungatedTier12.length === 0 && !clustersInsufficient && !uncoveredCriticalCluster && remainingReviewable.length === 0 && !quality.low;
+    const gatedCount = Number(stage1Data?.aiRelevance?.reviewedCount || stage1Data?.reviewedCount || 0);
+    const hardCeiling = gatedCount >= Number(adaptive.gateCeiling || 180) ||
+      maps.length >= Math.min(profile.maximum, Number(adaptive.deepAnalysisCeiling || 60));
+    const exhausted = maps.length >= candidates.length || (remainingReviewable.length === 0 && !stage1Data?.hasMoreCandidates && candidates.length <= maps.length);
+
+    let projectedStopReason: AdaptiveStopReason | undefined;
+    if (qaInvalidatedAcceptedCandidate && !decisive) projectedStopReason = 'safe_report_due_to_qa_failure';
+    else if (decisive && confirmationStable) projectedStopReason = 'abstract_level_high_overlap_candidate_confirmed';
+    else if (hardCeiling) projectedStopReason = 'hard_ceiling_reached';
+    else if (saturation) projectedStopReason = 'coverage_saturation';
+    else if (exhausted) projectedStopReason = 'candidate_pool_exhausted';
+    else if ((ungatedTier12.length > 0 || clustersInsufficient || uncoveredCriticalCluster) && maps.length >= profile.minimum) projectedStopReason = 'provider_or_cluster_coverage_incomplete';
+
+    const terminalStopReason = adaptive.mode === 'enforce' && projectedStopReason && projectedStopReason !== 'provider_or_cluster_coverage_incomplete'
+      ? projectedStopReason
+      : undefined;
+    const estimatedTokensPerPatent = maps.length > 0
+      ? (params.inputTokens + params.outputTokens + params.thoughtTokens) / maps.length
+      : 0;
+    return {
+      mode: adaptive.mode,
+      complexity: profile.complexity,
+      gatedCount,
+      analyzedCount: maps.length,
+      remainingCount: Math.max(0, candidates.length - maps.length),
+      batchesCompleted: params.batchesCompleted,
+      projectedStopReason,
+      terminalStopReason,
+      decisivePatentNumber: decisive?.pn,
+      confirmationBatchCompleted,
+      confirmationStable,
+      evidenceQualityLow: quality.low,
+      evidenceQualityReasons: quality.reasons,
+      queryClusterCoverage,
+      inputTokens: params.inputTokens,
+      outputTokens: params.outputTokens,
+      thoughtTokens: params.thoughtTokens,
+      projectedTokensSaved: projectedStopReason
+        ? Math.max(0, Math.round((candidates.length - maps.length) * estimatedTokensPerPatent))
+        : 0,
+    };
   }
 
   private featureWeight(feature: string, featureTypes?: Map<string, InventionFeatureDetail['feature_type']>): number {
@@ -9018,31 +9735,57 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       (typeof cell.evidence === 'string' ? cell.evidence : '') ||
       ''
     ).trim();
-    const sourceHint = String(cell.field || cell.evidence_source || evidenceObject?.field || '').toLowerCase();
     const title = String(patent?.title || '');
     const abstract = String(patent?.abstract || '');
-    const sourceText = sourceHint === 'title'
-      ? title
-      : sourceHint === 'abstract'
-        ? abstract
-        : `${title} ${abstract}`;
     const normalizedQuote = this.normalizeEvidenceForVerification(quote);
-    const normalizedSource = this.normalizeEvidenceForVerification(sourceText);
+    const normalizedTitle = this.normalizeEvidenceForVerification(title);
+    const normalizedAbstract = this.normalizeEvidenceForVerification(abstract);
+    const quoteInAbstract = Boolean(normalizedQuote && normalizedAbstract.includes(normalizedQuote));
+    const quoteInTitle = Boolean(normalizedQuote && normalizedTitle.includes(normalizedQuote));
 
-    if (!normalizedQuote || !normalizedSource.includes(normalizedQuote)) {
+    if (!normalizedQuote || (!quoteInAbstract && !quoteInTitle)) {
       return {
         ...cell,
         status: 'Unknown',
         quote: undefined,
         field: undefined,
         evidence_source: 'none',
+        evidenceDepth: 'NONE',
+        legalEvidenceStrength: 0,
+        mappingConfidence: Math.min(typeof cell.confidence === 'number' ? cell.confidence : 0.4, 0.4),
+        qaDowngraded: true,
         extent_score: 0.2,
         confidence: Math.min(typeof cell.confidence === 'number' ? cell.confidence : 0.4, 0.4),
         reason: 'Supplied evidence quote was not found in the available title or abstract.',
       };
     }
 
-    return { ...cell, quote };
+    const originalConfidence = this.normalizeScore(cell.mappingConfidence ?? cell.confidence) ?? 0.7;
+    if (cell.status === 'Present' && !quoteInAbstract) {
+      return {
+        ...cell,
+        status: 'Partial',
+        quote,
+        field: 'title',
+        evidence_source: 'title',
+        evidenceDepth: 'TITLE_ONLY',
+        legalEvidenceStrength: 0.30,
+        mappingConfidence: Math.min(originalConfidence, 0.60),
+        qaDowngraded: true,
+        extent_score: Math.min(this.normalizeScore(cell.extent_score) ?? 0.5, 0.5),
+        reason: 'Title-only evidence cannot establish a Present feature in title/abstract screening.',
+      };
+    }
+
+    return {
+      ...cell,
+      quote,
+      field: quoteInAbstract ? 'abstract' : 'title',
+      evidence_source: quoteInAbstract ? 'abstract' : 'title',
+      evidenceDepth: quoteInAbstract ? (title ? 'TITLE_AND_ABSTRACT' : 'ABSTRACT_ONLY') : 'TITLE_ONLY',
+      legalEvidenceStrength: quoteInAbstract ? 0.65 : 0.30,
+      mappingConfidence: originalConfidence,
+    };
   }
 
   private validateAndRepairFeatureMaps(featureMaps: PatentFeatureMap[], batch: any[], inventionFeatures: string[]): PatentFeatureMap[] {
@@ -9076,6 +9819,9 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
               patent_disclosure: cell.patent_disclosure,
               extent_score: this.normalizeScore((cell as any).extent_score ?? (cell as any).extentScore),
               confidence: cell.confidence,
+              mappingConfidence: cell.mappingConfidence,
+              evidenceDepth: cell.evidenceDepth,
+              legalEvidenceStrength: cell.legalEvidenceStrength,
               quote: cell.quote,
               field: cell.field,
               evidence_source: cell.evidence_source,
@@ -9138,6 +9884,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       const coverage = { present, partial, absent, coverage_score: coverageScore };
 
       validated.push({
+        ...patentMap,
         pn: patentMap.pn,
         title: patent.title,
         link: patentMap.link,

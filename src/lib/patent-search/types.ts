@@ -215,6 +215,7 @@ export interface PatentSearchDiagnostics {
   resultCount: number
   candidateResultCount: number
   providerCandidateCount: number
+  providerContributionCounts: Partial<Record<PatentSearchProviderId, number>>
 }
 
 export interface PatentSearchResponse {

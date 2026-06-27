@@ -330,7 +330,7 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
 
   doc.rect(PAGE.left, 76, 82, 5).fill(COLORS.cyan);
   doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text('PatentNest.ai', PAGE.left, 96, { width: 300 });
-  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3).text('Preliminary Novelty Assessment Report', PAGE.left, 128, { width: 360 });
+  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3).text('Title/Abstract-Based Patent Screening Report', PAGE.left, 128, { width: 420 });
 
   doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.display)
     .text(report.reportTitle, PAGE.left, 254, { width: 405, lineGap: SPACE.xs });

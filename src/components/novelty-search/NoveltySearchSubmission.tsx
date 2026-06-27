@@ -76,8 +76,9 @@ function splitValues(value: string) {
 }
 
 function defaultProviderIds(providers: ProviderInfo[]) {
+  const defaultIds = new Set(['indian-corpus', 'pqai-corpus', 'pqai', 'google-patents'])
   const ids = providers
-    .filter(provider => provider.enabled && (provider.id === 'indian-corpus' || provider.id === 'google-patents'))
+    .filter(provider => provider.enabled && defaultIds.has(provider.id))
     .map(provider => provider.id)
   return ids.length ? ids : providers.filter(provider => provider.enabled).slice(0, 1).map(provider => provider.id)
 }

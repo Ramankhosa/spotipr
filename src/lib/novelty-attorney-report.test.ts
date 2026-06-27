@@ -189,13 +189,13 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.tableOfContents).toContainEqual({ number: '2', title: 'Citation Analysis' });
     expect(model.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
     expect(model.tableOfContents.some(item => item.number === '2.3')).toBe(false);
-    expect(model.reportTitle).toBe('Preliminary Novelty Assessment Report');
-    expect(model.evidenceBasis).toContain('Preliminary patentability intelligence');
-    expect(model.methodology.searchedEvidence).toContain('full claims');
+    expect(model.reportTitle).toBe('Title/Abstract-Based Patent Screening Report');
+    expect(model.evidenceBasis).toContain('Preliminary title/abstract screening');
+    expect(model.methodology.searchedEvidence).toContain('Claims, specifications');
     expect(model.methodology.searchedEvidence).toContain('legal status');
     expect(model.methodology.preliminaryStatus).toContain('preliminary assessment');
     expect(model.limitations).toContain('full patent documents');
-    expect(model.limitations).not.toMatch(/limited available patent data|title\/abstract|title and abstract/i);
+    expect(model.evidenceBasis).toContain('claims and specifications were not assessed');
     expect(model.countLabels.map(item => item.label)).toEqual([
       'Candidate records retrieved/ranked',
       'Shortlisted candidate citations',
@@ -207,7 +207,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       'D - Directly Mapped',
       'P - Partially Mapped',
       'Feature Mapping',
-      'N - Not Expressly Taught',
+      'N - Not Found',
     ]));
     expect(model.scoringLegend.map(item => item.label)).not.toContain('Retrieval Relevance');
     expect(model.scoringLegend.map(item => item.label)).not.toContain('Evidence Confidence');

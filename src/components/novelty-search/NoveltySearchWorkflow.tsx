@@ -3866,12 +3866,12 @@ export default function NoveltySearchWorkflow({
     // Helper to get threat label
     const getThreatLabel = (threat: string) => {
       const labels: Record<string, { text: string; color: string }> = {
-        anticipates: { text: 'High Risk - Anticipates', color: 'text-red-600 bg-red-50 border-red-200' },
-        obvious: { text: 'Moderate Risk - Obviousness', color: 'text-orange-600 bg-orange-50 border-orange-200' },
+        anticipates: { text: 'High Abstract-Level Overlap', color: 'text-red-600 bg-red-50 border-red-200' },
+        obvious: { text: 'Combination-Risk Signal', color: 'text-orange-600 bg-orange-50 border-orange-200' },
         adjacent: { text: 'Low Risk - Adjacent Art', color: 'text-yellow-700 bg-yellow-50 border-yellow-200' },
         remote: { text: 'Minimal Risk - Remote', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-        novel: { text: 'Novel', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-        partial_novelty: { text: 'Partial Novelty', color: 'text-amber-600 bg-amber-50 border-amber-200' }
+        novel: { text: 'No High Overlap Identified', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+        partial_novelty: { text: 'Partial Abstract-Level Overlap', color: 'text-amber-600 bg-amber-50 border-amber-200' }
       };
       return labels[threat] || { text: 'Unassessed', color: 'text-slate-500 bg-slate-50 border-slate-200' };
     };
@@ -3894,7 +3894,7 @@ export default function NoveltySearchWorkflow({
               <div className="hidden md:flex items-center gap-4 text-[10px]">
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                  <span className="text-slate-500">Anticipates</span>
+                  <span className="text-slate-500">High abstract-level overlap</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-3 rounded-full bg-orange-400"></div>
@@ -3906,7 +3906,7 @@ export default function NoveltySearchWorkflow({
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
-                  <span className="text-slate-500">Remote/Novel</span>
+                  <span className="text-slate-500">Remote / no high overlap</span>
                 </div>
               </div>
             </div>

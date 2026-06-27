@@ -132,13 +132,7 @@ function displayEvidenceSource(value: unknown, fallback = 'citation record') {
 
 function reportSafeText(value: unknown, fallback = '') {
   return cleanText(value, fallback)
-    .replace(/\bno abstract available\.?/gi, 'Full patent record review is recommended for this point.')
-    .replace(/title\s*\/\s*abstract/gi, 'reviewed patent record')
-    .replace(/title and abstract/gi, 'reviewed patent record')
-    .replace(/patent abstract evidence/gi, 'reviewed patent record')
-    .replace(/abstract evidence/gi, 'reviewed patent record')
-    .replace(/abstract data/gi, 'reviewed patent record')
-    .replace(/abstract text/gi, 'reviewed patent record')
+    .replace(/\bno abstract available\.?/gi, 'No abstract was available; full patent record review is recommended for this point.')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
@@ -177,7 +171,13 @@ function reportSafeText(value: unknown, fallback = '') {
     .replace(/\bobviousness\b/gi, 'overlap-risk')
     .replace(/\bobvious\b/gi, 'high-overlap risk')
     .replace(/\bclear novelty\b/gi, 'potential novelty space')
-    .replace(/\bdefinite novelty\b/gi, 'potential novelty space');
+    .replace(/\bdefinite novelty\b/gi, 'potential novelty space')
+    .replace(/\banticipated by\b/gi, 'shows high abstract-level overlap with')
+    .replace(/\banticipates?\b/gi, 'shows high abstract-level overlap')
+    .replace(/\bexact match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\bdecisive match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\bnot novel\b/gi, 'high mapped-overlap risk')
+    .replace(/\bno prior art (?:was )?found\b/gi, 'no high abstract-level overlap candidate was identified among screened title/abstract records');
 }
 
 function formatDate(value: unknown) {
