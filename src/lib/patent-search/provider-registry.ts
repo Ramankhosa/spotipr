@@ -72,8 +72,9 @@ export function resolveProviderIds(params: {
   const googleProviderIds: PatentSearchProviderId[] = hasGooglePatentsCredentials() ? ['google-patents'] : []
   const officialProviderIds: PatentSearchProviderId[] = []
   if (jurisdictions.includes('AU') && hasIpAustraliaCredentials()) officialProviderIds.push('ip-australia')
-  const epoProviderIds: PatentSearchProviderId[] = ['epo-ops-corpus']
-  if (hasEpoOpsCredentials()) epoProviderIds.push('epo-ops')
+  const epoProviderIds: PatentSearchProviderId[] = hasEpoOpsCredentials()
+    ? ['epo-ops', 'epo-ops-corpus']
+    : ['epo-ops-corpus']
   if (jurisdictions.some(value => value === 'EP' || value === 'WO')) {
     officialProviderIds.push(...epoProviderIds)
   }

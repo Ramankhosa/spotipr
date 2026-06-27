@@ -55,7 +55,7 @@ describe('EpoOpsProvider CQL generation', () => {
     expect(cql).not.toContain('ta=')
   })
 
-  test('maps manual title, abstract, and any-text fields to title/abstract CQL only', () => {
+  test('maps manual title, abstract, any-text, and patent-text fields to title/abstract keyword CQL only', () => {
     const cql = buildEpoOpsCqlForTests(request({
       searchMode: 'manual',
       query: '',
@@ -65,6 +65,7 @@ describe('EpoOpsProvider CQL generation', () => {
           titleContains: ['orodispersible film'],
           abstractContains: ['polymer matrix dissolution'],
           anyTextContains: ['drug release'],
+          patentTextContains: ['mucoadhesive layer'],
         },
         explicitFilters: {},
       },
@@ -73,6 +74,8 @@ describe('EpoOpsProvider CQL generation', () => {
     expect(cql).toContain('ti="orodispersible film"')
     expect(cql).toContain('ab="polymer matrix dissolution"')
     expect(cql).toContain('(ti="drug release" or ab="drug release")')
+    expect(cql).toContain('(ti="mucoadhesive layer" or ab="mucoadhesive layer")')
+    expect(cql).toContain(' or ')
     expect(cql).not.toContain('ta=')
   })
 

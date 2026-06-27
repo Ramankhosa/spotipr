@@ -51,13 +51,13 @@ describe('patent search provider registry', () => {
     expect(resolveProviderIds({ sourceMode: 'EPO_ONLY' })).toEqual(['epo-ops-corpus'])
     process.env.EPO_KEY = 'test-key'
     process.env.EPO_SECRET = 'test-secret'
-    expect(resolveProviderIds({ sourceMode: 'EPO_ONLY' })).toEqual(['epo-ops-corpus', 'epo-ops'])
+    expect(resolveProviderIds({ sourceMode: 'EPO_ONLY' })).toEqual(['epo-ops', 'epo-ops-corpus'])
   })
 
   test('adds EPO providers to EP jurisdiction searches', () => {
     process.env.EPO_KEY = 'test-key'
     process.env.EPO_SECRET = 'test-secret'
-    expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY', jurisdictions: ['EP'] })).toEqual(['epo-ops-corpus', 'epo-ops', 'pqai-corpus', 'pqai'])
+    expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY', jurisdictions: ['EP'] })).toEqual(['epo-ops', 'epo-ops-corpus', 'pqai-corpus', 'pqai'])
   })
 
   test('adds Google Patents to default source-mode resolution when SerpApi is configured', () => {

@@ -124,9 +124,10 @@ function buildManualCql(filters: PatentSearchFilters, fallbackQuery = '') {
     ...asStringArray(filters.titleContains).map(value => cqlTerm('ti', value)),
     ...asStringArray(filters.abstractContains).map(value => cqlTerm('ab', value)),
     ...asStringArray(filters.anyTextContains).map(titleOrAbstractTerm),
+    ...asStringArray(filters.patentTextContains).map(titleOrAbstractTerm),
   ].filter(Boolean))
 
-  if (clauses.length) return clauses.slice(0, 6).join(' and ')
+  if (clauses.length) return clauses.slice(0, 6).join(' or ')
   const fallback = firstText([fallbackQuery], 12)
   return fallback ? titleOrAbstractTerm(fallback) : ''
 }
@@ -380,7 +381,7 @@ export class EpoOpsProvider implements PatentSearchProvider {
     const timeout = setTimeout(() => controller.abort(), EPO_TIMEOUT_MS)
     let response: Response
     try {
-      response = await fetch(`${epoBaseUrl()}/published-data/search?q=${encodeURIComponent(cql)}`, {
+      response = await fetch(`${epoBaseUrl()}/published-data/search/biblio?q=${encodeURIComponent(cql)}`, {
         headers: {
           Accept: 'application/exchange+xml',
           Authorization: `Bearer ${token}`,
