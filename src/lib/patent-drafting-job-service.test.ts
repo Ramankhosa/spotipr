@@ -38,7 +38,7 @@ describe('buildAutomationIdeaText', () => {
 })
 
 describe('selectReviewedPriorArtDecisions', () => {
-  it('sorts usable potential threats and excludes remote, unknown, and low relevance decisions', () => {
+  it('sorts drafting-safe prior art and excludes high-risk, unknown, and low relevance decisions', () => {
     const selected = selectReviewedPriorArtDecisions([
       { pn: 'ADJ', relevance: 0.6, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
       { pn: 'ANT', relevance: 0.95, novelty_threat: 'anticipates', analysis_status: 'analyzed' },
@@ -47,7 +47,7 @@ describe('selectReviewedPriorArtDecisions', () => {
       { pn: 'UNK', relevance: null, novelty_threat: 'unknown', analysis_status: 'unknown' },
       { pn: 'LOW', relevance: 0.2, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
     ])
-    expect(selected.map(decision => decision.pn)).toEqual(['ANT', 'OBV', 'ADJ'])
+    expect(selected.map(decision => decision.pn)).toEqual(['REM', 'ADJ'])
   })
 })
 

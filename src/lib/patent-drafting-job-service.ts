@@ -544,7 +544,7 @@ export function selectReviewedPriorArtDecisions(decisions: any[], limit = BATCH_
       const noveltyThreat = String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase()
       return decision?.analysis_status !== 'unknown' &&
         relevance >= 0.3 &&
-        (noveltyThreat === 'anticipates' || noveltyThreat === 'obvious' || noveltyThreat === 'adjacent')
+        (noveltyThreat === 'adjacent' || noveltyThreat === 'remote')
     })
     .sort((a: any, b: any) => Number(b?.relevance || 0) - Number(a?.relevance || 0))
     .slice(0, limit)

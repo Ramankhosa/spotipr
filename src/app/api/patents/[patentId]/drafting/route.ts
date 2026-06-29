@@ -1421,6 +1421,26 @@ function relatedArtStringArray(value: unknown): string[] {
   if (typeof value === 'string') {
     return value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean)
   }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const preferred = [
+      record.name,
+      record.organization,
+      record.assignee_organization,
+      record.assigneeOrganization,
+      record.applicant,
+      record.applicant_name,
+      record.applicantName,
+      record.raw,
+      record.value,
+      record.text,
+    ]
+    for (const item of preferred) {
+      const normalized = relatedArtStringArray(item)
+      if (normalized.length) return normalized
+    }
+    return []
+  }
   if (value === undefined || value === null) return []
   return [String(value).trim()].filter(Boolean)
 }
@@ -1456,6 +1476,11 @@ function normalizeRelatedArtKeywordList(value: unknown, maxItems = 10): string[]
     .filter(value => value.length >= 3 && value.length <= 120)
     .filter(value => !/[()*?]/.test(value))
     .slice(0, maxItems)
+}
+
+function optionalRelatedArtStringArray(value: unknown): string[] | undefined {
+  const normalized = uniqueRelatedArtStrings([value])
+  return normalized.length ? normalized : undefined
 }
 
 function normalizeRelatedArtConceptGroups(value: unknown): PatentSearchConceptGroup[] {
@@ -1647,9 +1672,9 @@ function toDraftingRelatedArtResult(result: NormalizedPatentResult): any {
     filing_date: filingDate,
     score,
     relevance: score,
-    cpc_codes: cpcCodes,
-    ipc_codes: ipcCodes,
-    assignees: (result as any).assignees || result.applicants || [],
+    cpc_codes: optionalRelatedArtStringArray(cpcCodes) || [],
+    ipc_codes: optionalRelatedArtStringArray(ipcCodes) || [],
+    assignees: optionalRelatedArtStringArray([(result as any).assignees, result.applicants]) || [],
     providerId: result.providerId,
     sourceProvider: result.sourceProvider || result.providerId,
     sourceProviders: (result as any).sourceProviders || [result.sourceProvider || result.providerId].filter(Boolean),
@@ -8521,6 +8546,19 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
       const tags = Array.from(new Set([...existingTags, ...incomingTags]))
       const preserveAnalysis = existingTags.some((tag: string) => tag === 'AI_REVIEWED' || tag === 'AI_ANALYSIS_UNKNOWN')
       const userNotes = preserveAnalysis && existing?.userNotes ? existing.userNotes : (sel.user_notes || existing?.userNotes || undefined)
+      const cpcCodes = optionalRelatedArtStringArray(sel.cpc_codes || sel.cpcCodes)
+      const ipcCodes = optionalRelatedArtStringArray(sel.ipc_codes || sel.ipcCodes)
+      const inventors = optionalRelatedArtStringArray(sel.inventors || sel.inventor_names || sel.inventorNames)
+      const assignees = optionalRelatedArtStringArray([
+        sel.assignees,
+        sel.assignee_names,
+        sel.assigneeNames,
+        sel.applicants,
+        sel.applicant_names,
+        sel.applicantNames,
+        sel.assignee,
+        sel.applicant,
+      ])
       const rec = await (prisma as any).relatedArtSelection.upsert({
         where: {
           sessionId_patentNumber_runId: {
@@ -8536,10 +8574,10 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
           tags,
           userNotes,
           publicationDate: sel.publication_date || undefined,
-          cpcCodes: sel.cpc_codes || undefined,
-          ipcCodes: sel.ipc_codes || undefined,
-          inventors: sel.inventors || undefined,
-          assignees: sel.assignees || undefined
+          cpcCodes,
+          ipcCodes,
+          inventors,
+          assignees
         },
         create: {
           sessionId,
@@ -8551,10 +8589,10 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
           tags,
           userNotes,
           publicationDate: sel.publication_date || undefined,
-          cpcCodes: sel.cpc_codes || undefined,
-          ipcCodes: sel.ipc_codes || undefined,
-          inventors: sel.inventors || undefined,
-          assignees: sel.assignees || undefined
+          cpcCodes,
+          ipcCodes,
+          inventors,
+          assignees
         }
       })
       created.push(rec)

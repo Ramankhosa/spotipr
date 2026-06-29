@@ -936,18 +936,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
     const candidates = sourceFilteredResults
       .map((r, index) => {
-        const pn =
-          r.pn ||
-          (r as any).patent_number ||
-          (r as any).publication_number ||
-          (r as any).publication_id ||
-          (r as any).publicationId ||
-          (r as any).patentId ||
-          (r as any).patent_id ||
-          (r as any).id ||
-          'N/A'
+        const pn = getPatentKey(r, index)
         const analysis = getAnalysisForPatentNumber(pn)
-        if (!pn || pn === 'N/A' || !analysis || analysis.noveltyThreat !== 'adjacent') return null
+        if (!pn || pn === 'N/A' || !analysis || !['adjacent', 'remote'].includes(String(analysis.noveltyThreat || ''))) return null
 
         const relevance =
           typeof (r as any).score === 'number'
@@ -979,6 +970,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     const nextSelected: Record<string, any> = { ...priorArtSelected }
 
     top.forEach(({ r, pn }) => {
+      const analysis = getAnalysisForPatentNumber(pn)
       const title = (r as any).title || (r as any).invention_title || pn || 'Untitled'
       const snippet = (r as any).snippet || (r as any).abstract || (r as any).summary || (r as any).description || ''
       const publication_date = (r as any).publication_date
@@ -1002,12 +994,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         publication_date,
         inventors,
         assignees,
-        aiSummary: getAnalysisForPatentNumber(pn)?.aiSummary || existing.aiSummary,
-        noveltyThreat: getAnalysisForPatentNumber(pn)?.noveltyThreat || existing.noveltyThreat,
-        relevantParts: getAnalysisForPatentNumber(pn)?.relevantParts || existing.relevantParts || [],
-        irrelevantParts: getAnalysisForPatentNumber(pn)?.irrelevantParts || existing.irrelevantParts || [],
-        noveltyComparison: getAnalysisForPatentNumber(pn)?.noveltyComparison || existing.noveltyComparison,
-        tags: Array.from(new Set([...(existing.tags || []), 'AI_REVIEWED', 'AI_ADJACENT']))
+        aiSummary: analysis?.aiSummary || existing.aiSummary,
+        noveltyThreat: analysis?.noveltyThreat || existing.noveltyThreat,
+        relevantParts: analysis?.relevantParts || existing.relevantParts || [],
+        irrelevantParts: analysis?.irrelevantParts || existing.irrelevantParts || [],
+        noveltyComparison: analysis?.noveltyComparison || existing.noveltyComparison,
+        tags: Array.from(new Set([
+          ...(existing.tags || []),
+          'AI_REVIEWED',
+          analysis?.noveltyThreat === 'remote' ? 'AI_REMOTE' : 'AI_ADJACENT'
+        ]))
       }
     })
 
@@ -1126,16 +1122,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const q = defaultQuery
 
   const getPatentKey = (item: any, index?: number) => {
-    const pn =
-      item.pn ||
-      (item as any).patent_number ||
-      (item as any).publication_number ||
-      (item as any).publication_id ||
-      (item as any).publicationId ||
-      (item as any).patentId ||
-      (item as any).patent_id ||
-      (item as any).id ||
-      'N/A'
+    const pn = getPatentNumber(item) || 'N/A'
     const ttl = item.title || (item as any).invention_title || pn || 'Untitled'
     const idx = typeof index === 'number' ? index : 0
     return pn !== 'N/A' ? pn : `${ttl}-${idx}`

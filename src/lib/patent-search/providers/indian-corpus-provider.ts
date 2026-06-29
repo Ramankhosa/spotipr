@@ -71,6 +71,13 @@ function searchErrorDetails(error: unknown) {
   return { errorMessage: String(error) }
 }
 
+function isStatementTimeoutError(error: unknown) {
+  const details = searchErrorDetails(error)
+  const meta = error && typeof error === 'object' ? (error as any).meta : undefined
+  return details.errorCode === 'P2010' &&
+    (meta?.code === '57014' || String(meta?.message || details.errorMessage || '').includes('statement timeout'))
+}
+
 function logEmbeddingSearch(
   level: SearchLogLevel,
   event: string,
@@ -79,6 +86,27 @@ function logEmbeddingSearch(
 ) {
   if (!PATENT_SEARCH_DEBUG && !force) return
   console[level](`[PatentEmbeddingSearch] ${JSON.stringify({ event, ...details })}`)
+}
+
+function logOptionalSearchError(
+  stage: string,
+  error: unknown,
+  details: Record<string, unknown> = {}
+) {
+  const errorDetails = searchErrorDetails(error)
+  if (isStatementTimeoutError(error)) {
+    logEmbeddingSearch('info', `${stage}_timed_out`, {
+      ...details,
+      ...errorDetails,
+      databaseCode: (error as any)?.meta?.code,
+      databaseMessage: (error as any)?.meta?.message,
+    })
+    return
+  }
+  logEmbeddingSearch('warn', `${stage}_failed`, {
+    ...details,
+    ...errorDetails,
+  }, true)
 }
 
 async function getVectorInventorySnapshot(corpusSource: string) {
@@ -689,7 +717,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         `)
         textRows.forEach((row, index) => merge(row, 'textRank', index + 1, 1))
       } catch (error) {
-        console.warn('[IndianCorpusProvider] Full-text search skipped:', error)
+        logOptionalSearchError('full_text_search', error, { traceId, providerId: this.id })
       }
 
       if (this.metadataSearchEnabled) {
@@ -721,7 +749,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           `)
           metadataRows.forEach((row, index) => merge(row, 'textRank', index + 1, 0.45))
         } catch (error) {
-          console.warn('[IndianCorpusProvider] Metadata text search skipped:', error)
+          logOptionalSearchError('metadata_text_search', error, { traceId, providerId: this.id })
         }
       }
     }
@@ -837,7 +865,8 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }, forceWarning)
     }
 
-    if (textQuery.length >= 3 && !manualMode && !request.skipTrigramSearch) {
+    const hasEnoughCandidatesForRequestedLimit = rows.size >= safeLimit
+    if (textQuery.length >= 3 && !manualMode && !request.skipTrigramSearch && !hasEnoughCandidatesForRequestedLimit) {
       try {
         const trigramCandidatePoolLimit = Math.min(Math.max(candidateLimit * 6, 180), TRIGRAM_MATCH_CANDIDATE_CAP)
         const titleRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
@@ -868,8 +897,16 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         `)
         titleRows.forEach((row, index) => merge(row, 'titleRank', index + 1, 0.85))
       } catch (error) {
-        console.warn('[IndianCorpusProvider] Trigram search skipped:', error)
+        logOptionalSearchError('trigram_search', error, { traceId, providerId: this.id })
       }
+    } else if (hasEnoughCandidatesForRequestedLimit && !request.skipTrigramSearch) {
+      logEmbeddingSearch('info', 'trigram_search_skipped', {
+        traceId,
+        reason: 'candidate_pool_already_satisfied',
+        searchMode: request.searchMode || 'intelligent',
+        currentCandidateCount: rows.size,
+        safeLimit,
+      })
     } else if (request.skipTrigramSearch) {
       logEmbeddingSearch('info', 'trigram_search_skipped', {
         traceId,
@@ -889,7 +926,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         `)
         fieldRows.forEach((row, index) => merge(row, 'fieldRank', index + 1, 1.1))
       } catch (error) {
-        console.warn('[IndianCorpusProvider] Field search skipped:', error)
+        logOptionalSearchError('field_search', error, { traceId, providerId: this.id })
       }
     }
 
