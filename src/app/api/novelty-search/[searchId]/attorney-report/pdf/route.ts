@@ -367,6 +367,20 @@ function drawCard(doc: PdfDoc, x: number, y: number, width: number, height: numb
   doc.roundedRect(x, y, width, height, radius).fillAndStroke(COLORS.white, '#DCE4EE');
 }
 
+function measuredTextHeight(
+  doc: PdfDoc,
+  value: unknown,
+  width: number,
+  font: string,
+  fontSize: number,
+  lineGap = 1.2,
+) {
+  const text = cleanText(value, '');
+  if (!text) return 0;
+  doc.font(font).fontSize(fontSize);
+  return doc.heightOfString(text, { width, lineGap });
+}
+
 function drawSnapshotMetric(
   doc: PdfDoc,
   x: number,
@@ -384,13 +398,18 @@ function drawSnapshotMetric(
     .text(label, x + SPACE.md, y + 41, { width: width - 20, height: 18, lineGap: 1 });
 }
 
+function snapshotInfoItemHeight(doc: PdfDoc, width: number, value: string) {
+  const valueHeight = measuredTextHeight(doc, value || '-', Math.max(20, width - 17), FONTS.regular, TYPE.caption, 1);
+  return Math.max(39, 12 + valueHeight);
+}
+
 function drawSnapshotInfoItem(doc: PdfDoc, x: number, y: number, width: number, label: string, value: string) {
   doc.circle(x + 6, y + 7, 5).fill(COLORS.paleBlue);
   doc.circle(x + 6, y + 7, 1.7).fill(COLORS.blue);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(label.toUpperCase(), x + 17, y, { width: width - 17, height: 9, lineBreak: false, ellipsis: true });
   doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.caption)
-    .text(truncate(value, 90), x + 17, y + 12, { width: width - 17, height: 27, ellipsis: true, lineGap: 1 });
+    .text(cleanText(value, '-'), x + 17, y + 12, { width: width - 17, lineGap: 1 });
 }
 
 function highestMappedRow(report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
@@ -430,6 +449,11 @@ function drawDecisionFact(
     .text(text, x + SPACE.md, y + 24, { width: width - 20, height: valueHeight, ellipsis: options.truncateValue !== false, lineGap: 1.2 });
 }
 
+function decisionFactHeight(doc: PdfDoc, width: number, value: string, valueFontSize = TYPE.caption) {
+  const valueHeight = measuredTextHeight(doc, value, width - 20, FONTS.semibold, valueFontSize, 1.2);
+  return Math.max(54, 24 + valueHeight + SPACE.md);
+}
+
 function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
   const risk = riskAssessmentFor(report);
   const strongest = report.comparisons.find(item => item.publicationNumber === report.publicClosestCitation?.publicationNumber)
@@ -447,6 +471,20 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     ? `Review ${strongest.publicationNumber} first; compare ${mappedRow?.row.featureNumber || 'mapped features'} and preserve ${differentiatorRow?.row.featureNumber || 'unmapped distinctions'} in claim-positioning review.`
     : 'Run detailed citation mapping before forming claim-positioning conclusions.');
 
+  let currentY = PAGE.top + 76;
+  const reserveSnapshotBlock = (height: number) => {
+    if (currentY + height > pageBottom(doc) - 18) {
+      addPage(doc);
+      doc.rect(PAGE.left, PAGE.top + 2, 72, 4).fill(COLORS.cyan);
+      doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(TYPE.h2)
+        .text('Executive Snapshot (continued)', PAGE.left, PAGE.top + 16, { width: contentWidth(doc) });
+      currentY = PAGE.top + 44;
+    }
+    const y = currentY;
+    currentY += height;
+    return y;
+  };
+
   doc.addNamedDestination('executive-snapshot', 'XYZ', PAGE.left, PAGE.top, null);
   doc.rect(PAGE.left, PAGE.top + 2, 72, 4).fill(COLORS.cyan);
   doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(TYPE.h1)
@@ -454,75 +492,101 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
   doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.small)
     .text('A concise view of retrieval volume, mapped evidence, and the automated overlap signal.', PAGE.left, PAGE.top + 49, { width: contentWidth(doc) });
 
-  const verdictY = PAGE.top + 76;
   const rationale = firstSentence(report.finalAssessment.summary);
-  doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), 86, 7).fillAndStroke(palette.fill, palette.stroke);
-  doc.rect(PAGE.left, verdictY, 4, 86).fill(palette.accent);
-  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text('DETERMINISTIC RISK VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: 180, lineBreak: false });
-  doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
-    .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: 180, height: 30, ellipsis: true });
-  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(`Review stage: preliminary assessment`, PAGE.left + SPACE.lg, verdictY + 64, { width: 180, height: 9, lineBreak: false, ellipsis: true });
   const riskLines = [
     `${risk.noveltyRiskLabel} - ${risk.noveltyRiskExplanation}`,
     `${risk.combinationRiskLabel} - ${risk.combinationRiskExplanation}`,
   ].join('\n');
+  const verdictLeftWidth = 180;
+  const verdictRightX = PAGE.left + 210;
+  const verdictRightWidth = contentWidth(doc) - 226;
+  const signalHeight = measuredTextHeight(doc, signal, verdictLeftWidth, FONTS.bold, TYPE.h3, 1.2);
+  const stageHeight = measuredTextHeight(doc, 'Review stage: preliminary assessment', verdictLeftWidth, FONTS.semibold, TYPE.micro, 1);
+  const riskLinesHeight = measuredTextHeight(doc, riskLines || rationale, verdictRightWidth, FONTS.regular, TYPE.small, 1.5);
+  const verdictHeight = Math.max(86, SPACE.md + 9 + 8 + signalHeight + 8 + stageHeight + SPACE.md, SPACE.md + riskLinesHeight + SPACE.md);
+  const verdictY = reserveSnapshotBlock(verdictHeight + 12);
+
+  doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), verdictHeight, 7).fillAndStroke(palette.fill, palette.stroke);
+  doc.rect(PAGE.left, verdictY, 4, verdictHeight).fill(palette.accent);
+  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
+    .text('DETERMINISTIC RISK VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: verdictLeftWidth, lineBreak: false });
+  doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
+    .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: verdictLeftWidth, lineGap: 1.2 });
+  doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
+    .text(`Review stage: preliminary assessment`, PAGE.left + SPACE.lg, verdictY + 29 + signalHeight + 8, { width: verdictLeftWidth, lineGap: 1 });
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
-    .text(riskLines || rationale, PAGE.left + 210, verdictY + SPACE.md, {
-      width: contentWidth(doc) - 226,
-      height: 62,
+    .text(riskLines || rationale, verdictRightX, verdictY + SPACE.md, {
+      width: verdictRightWidth,
       lineGap: 1.5,
-      ellipsis: true,
     });
 
-  const factsY = verdictY + 98;
   const factGap = SPACE.sm;
   const factWidth = (contentWidth(doc) - factGap * 2) / 3;
-  const factHeight = 96;
+  const noveltyFact = `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`;
+  const combinationFact = `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`;
+  const factHeight = Math.max(
+    96,
+    decisionFactHeight(doc, factWidth, noveltyFact, TYPE.caption),
+    decisionFactHeight(doc, factWidth, combinationFact, TYPE.caption),
+    decisionFactHeight(doc, factWidth, mainDifferentiator, TYPE.caption),
+  );
+  const factsY = reserveSnapshotBlock(factHeight + 12);
   drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`, COLORS.blue, {
     height: factHeight,
-    valueHeight: 66,
+    valueHeight: factHeight - 34,
     truncateValue: false,
     valueFontSize: TYPE.caption,
   });
   drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`, COLORS.red, {
     height: factHeight,
-    valueHeight: 66,
+    valueHeight: factHeight - 34,
     truncateValue: false,
     valueFontSize: TYPE.caption,
   });
   drawDecisionFact(doc, PAGE.left + (factWidth + factGap) * 2, factsY, factWidth, 'Main differentiator', mainDifferentiator, COLORS.success, {
     height: factHeight,
-    valueHeight: 66,
+    valueHeight: factHeight - 34,
     truncateValue: false,
     valueFontSize: TYPE.caption,
   });
 
-  const focusY = factsY + factHeight + 12;
-  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), 68, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
+  const reviewFocusHeight = measuredTextHeight(doc, reviewFocus, contentWidth(doc) - 44, FONTS.medium, TYPE.small, 1.2);
+  const focusHeight = Math.max(68, 23 + reviewFocusHeight + SPACE.md);
+  const focusY = reserveSnapshotBlock(focusHeight + 14);
+  doc.roundedRect(PAGE.left, focusY, contentWidth(doc), focusHeight, 6).fillAndStroke('#F8FAFC', '#CBD5E1');
   doc.circle(PAGE.left + 15, focusY + 17, 4).fill(palette.accent);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text('ATTORNEY REVIEW FOCUS', PAGE.left + 28, focusY + 9, { width: 145, height: 9, lineBreak: false });
   doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
-    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, height: 38, lineGap: 1.2, ellipsis: false });
+    .text(reviewFocus, PAGE.left + 28, focusY + 23, { width: contentWidth(doc) - 44, lineGap: 1.2 });
 
-  const detailY = focusY + 82;
   const detailGap = SPACE.md;
   const detailWidth = (contentWidth(doc) - detailGap) / 2;
-  const detailCardHeight = 164;
+  const strongestPnHeight = strongest ? measuredTextHeight(doc, strongest.publicationNumber, detailWidth - 24, FONTS.bold, TYPE.h3, 1) : 0;
+  const strongestTitleHeight = strongest ? measuredTextHeight(doc, strongest.title, detailWidth - 24, FONTS.medium, TYPE.small, 2) : 0;
+  const strongestRoleHeight = strongest ? measuredTextHeight(doc, strongest.referenceRole, detailWidth - 36, FONTS.semibold, TYPE.caption, 1) : 0;
+  const strongestCardHeight = strongest
+    ? Math.max(164, 42 + strongestPnHeight + 6 + strongestTitleHeight + 10 + strongestRoleHeight + 34)
+    : 96;
+  const takeawayText = `${rationale}\n\nPotential Differentiation Space: ${report.potentialDifferentiationSpace}`;
+  const takeawayTextHeight = measuredTextHeight(doc, takeawayText, detailWidth - 24, FONTS.regular, TYPE.small, 2);
+  const detailCardHeight = Math.max(164, strongestCardHeight, 44 + takeawayTextHeight + SPACE.md);
+  const detailY = reserveSnapshotBlock(detailCardHeight + 12);
+
   drawCard(doc, PAGE.left, detailY, detailWidth, detailCardHeight);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.body)
     .text('Closest Mapped Citation', PAGE.left + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
   doc.rect(PAGE.left + SPACE.md, detailY + 31, 28, 2).fill(COLORS.blue);
   if (strongest) {
     doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
-      .text(strongest.publicationNumber, PAGE.left + SPACE.md, detailY + 42, { width: detailWidth - 24, height: 16, ellipsis: true });
+      .text(strongest.publicationNumber, PAGE.left + SPACE.md, detailY + 42, { width: detailWidth - 24, lineGap: 1 });
     doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
-      .text(strongest.title, PAGE.left + SPACE.md, detailY + 64, { width: detailWidth - 24, height: 42, ellipsis: true, lineGap: 2 });
-    doc.roundedRect(PAGE.left + SPACE.md, detailY + 112, 112, 21, 5).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
+      .text(strongest.title, PAGE.left + SPACE.md, detailY + 42 + strongestPnHeight + 6, { width: detailWidth - 24, lineGap: 2 });
+    const roleY = detailY + 42 + strongestPnHeight + 6 + strongestTitleHeight + 10;
+    const roleHeight = Math.max(21, strongestRoleHeight + 12);
+    doc.roundedRect(PAGE.left + SPACE.md, roleY, detailWidth - 24, roleHeight, 5).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
     doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
-      .text(strongest.referenceRole, PAGE.left + 18, detailY + 119, { width: 100, height: 9, lineBreak: false, ellipsis: true });
+      .text(strongest.referenceRole, PAGE.left + 18, roleY + 7, { width: detailWidth - 36, lineGap: 1 });
   } else {
     doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.small)
       .text('No citation was mapped for detailed comparison.', PAGE.left + SPACE.md, detailY + 48, { width: detailWidth - 24 });
@@ -534,17 +598,11 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     .text('Key Takeaway', takeawayX + SPACE.md, detailY + SPACE.md, { width: detailWidth - 24 });
   doc.rect(takeawayX + SPACE.md, detailY + 31, 28, 2).fill(COLORS.success);
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
-    .text(`${rationale}\n\nPotential Differentiation Space: ${report.potentialDifferentiationSpace}`, takeawayX + SPACE.md, detailY + 44, {
+    .text(takeawayText, takeawayX + SPACE.md, detailY + 44, {
       width: detailWidth - 24,
-      height: 108,
       lineGap: 2,
-      ellipsis: false,
     });
 
-  const methodY = detailY + detailCardHeight + 12;
-  drawCard(doc, PAGE.left, methodY, contentWidth(doc), 86);
-  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
-    .text('Report Basis', PAGE.left + SPACE.md, methodY + SPACE.md, { width: 110 });
   const infoWidth = (contentWidth(doc) - 24) / 4;
   const infoItems = [
     ['Corpus', report.methodology.corpus],
@@ -552,6 +610,12 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     ['Assessment basis', report.evidenceBasis],
     ['Report type', 'AI-assisted patent intelligence'],
   ];
+  const infoHeights = infoItems.map(([_, value]) => snapshotInfoItemHeight(doc, infoWidth - 10, value));
+  const methodHeight = Math.max(86, 36 + Math.max(...infoHeights) + SPACE.md);
+  const methodY = reserveSnapshotBlock(methodHeight + 16);
+  drawCard(doc, PAGE.left, methodY, contentWidth(doc), methodHeight);
+  doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
+    .text('Report Basis', PAGE.left + SPACE.md, methodY + SPACE.md, { width: 110 });
   infoItems.forEach(([label, value], index) => {
     const x = PAGE.left + SPACE.md + index * infoWidth;
     drawSnapshotInfoItem(doc, x, methodY + 36, infoWidth - 10, label, value);
@@ -559,7 +623,7 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
 
   doc.fillColor(COLORS.muted).font(FONTS.regular).fontSize(TYPE.micro)
     .text('Automated mapping should be validated against complete patent records and claims.', PAGE.left, pageBottom(doc) - 14, { width: contentWidth(doc), align: 'center' });
-  doc.y = pageBottom(doc);
+  doc.y = Math.max(currentY, pageBottom(doc));
 }
 
 function drawSectionHeading(doc: PdfDoc, title: string) {

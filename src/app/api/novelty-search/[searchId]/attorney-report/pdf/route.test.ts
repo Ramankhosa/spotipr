@@ -23,6 +23,10 @@ function longText(prefix: string, marker: string) {
   return `${prefix} ${Array.from({ length: 850 }, (_, index) => `evidence-${index}`).join(' ')} ${marker}`
 }
 
+function executiveText(prefix: string, marker: string) {
+  return `${prefix} ${Array.from({ length: 90 }, (_, index) => `snapshot-${index}`).join(' ')} ${marker}`
+}
+
 function featureRow(index: number, overrides: Record<string, unknown> = {}) {
   return {
     featureNumber: `KF${index + 1}`,
@@ -209,9 +213,9 @@ describe('GET attorney report PDF', () => {
         typeLabel: 'Core technical',
         genericWarning: '',
       })),
-      mainDifferentiator: 'Controller-driven sensing to curing relationship with MAIN_DIFFERENTIATOR_WRAP_MARKER',
-      attorneyReviewFocus: 'Open US-2026-000001-A1 first and compare the mapped control relationship before drafting ATTORNEY_REVIEW_WRAP_MARKER',
-      potentialDifferentiationSpace: 'Potential differentiation space appears to lie in the integrated control relationship with KEY_TAKEAWAY_WRAP_MARKER.',
+      mainDifferentiator: executiveText('Controller-driven sensing to curing relationship with', 'MAIN_DIFFERENTIATOR_WRAP_MARKER'),
+      attorneyReviewFocus: executiveText('Open US-2026-000001-A1 first and compare the mapped control relationship before drafting', 'ATTORNEY_REVIEW_WRAP_MARKER'),
+      potentialDifferentiationSpace: executiveText('Potential differentiation space appears to lie in the integrated control relationship with', 'KEY_TAKEAWAY_WRAP_MARKER'),
       claimPositioningAnalysis: {
         primaryClaimFocus: 'Controller-driven sensing to curing relationship.',
         weakClaimAreas: ['Generic sensor alone.'],
