@@ -189,13 +189,13 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.tableOfContents).toContainEqual({ number: '2', title: 'Citation Analysis' });
     expect(model.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
     expect(model.tableOfContents.some(item => item.number === '2.3')).toBe(false);
-    expect(model.reportTitle).toBe('Title/Abstract-Based Patent Screening Report');
-    expect(model.evidenceBasis).toContain('Preliminary title/abstract screening');
-    expect(model.methodology.searchedEvidence).toContain('Claims, specifications');
+    expect(model.reportTitle).toBe('Preliminary Novelty Assessment Report');
+    expect(model.evidenceBasis).toContain('based on limited preliminary data');
+    expect(model.methodology.searchedEvidence).toContain('claims, specification');
     expect(model.methodology.searchedEvidence).toContain('legal status');
     expect(model.methodology.preliminaryStatus).toContain('preliminary assessment');
     expect(model.limitations).toContain('full patent documents');
-    expect(model.evidenceBasis).toContain('claims and specifications were not assessed');
+    expect(model.evidenceBasis).toContain('before any final conclusion');
     expect(model.countLabels.map(item => item.label)).toEqual([
       'Candidate records retrieved/ranked',
       'Shortlisted candidate citations',
@@ -234,7 +234,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       statusLabel: 'Directly Mapped',
       publicMappingStatus: 'Directly Mapped',
       publicMappingCode: 'D',
-      evidenceSource: 'abstract',
+      evidenceSource: 'source record',
       extentScore: 0.88,
       confidence: 0.91,
       evidenceStrength: 'Strong',

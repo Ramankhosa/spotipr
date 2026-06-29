@@ -4,6 +4,7 @@ import { verifyJWT } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
 import { NoveltySearchStage, NoveltySearchStatus, Prisma } from '@prisma/client';
+import { getNoveltyPublicStatus } from '@/lib/novelty-search-background-state';
 
 const noveltySearchService = new NoveltySearchService();
 
@@ -42,19 +43,23 @@ export async function GET(
     const searchRun = await prisma.noveltySearchRun.findFirst({
       where: { id: searchId, userId: user.id },
       include: {
-        llmCalls: { orderBy: { calledAt: 'desc' }, take: 10 }
+        llmCalls: { orderBy: { calledAt: 'desc' }, take: 10 },
+        backgroundJob: true,
       }
     });
     if (!searchRun) return NextResponse.json({ error: 'Novelty search not found' }, { status: 404 });
 
     const enrichedSearchRun = await hydrateNoveltyReportPatentMetadata(searchRun);
+    const publicStatus = getNoveltyPublicStatus(enrichedSearchRun as any);
+    const isCancelled = publicStatus === 'CANCELLED';
 
     return NextResponse.json({
       success: true,
       search: {
         id: enrichedSearchRun.id,
         title: enrichedSearchRun.title,
-        status: enrichedSearchRun.status,
+        status: isCancelled ? 'CANCELLED' : enrichedSearchRun.status,
+        publicStatus,
         currentStage: enrichedSearchRun.currentStage,
         jurisdiction: enrichedSearchRun.jurisdiction,
         filingType: enrichedSearchRun.filingType,
@@ -63,7 +68,7 @@ export async function GET(
         stage1CompletedAt: enrichedSearchRun.stage1CompletedAt,
         stage35CompletedAt: enrichedSearchRun.stage35CompletedAt,
         stage4CompletedAt: enrichedSearchRun.stage4CompletedAt,
-        reportUrl: enrichedSearchRun.reportUrl,
+        reportUrl: isCancelled ? null : enrichedSearchRun.reportUrl,
         results: {
           stage0: enrichedSearchRun.stage0Results,
           stage1: enrichedSearchRun.stage1Results,

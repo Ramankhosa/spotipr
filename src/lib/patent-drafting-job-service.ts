@@ -60,6 +60,7 @@ export type PatentDraftingAutomationPayload = {
   figuresLanguage?: string
   languageByJurisdiction?: Record<string, string>
   runReview?: boolean
+  skipQualityGate?: boolean
   projectId?: string
   batchId?: string
   batchItemId?: string
@@ -111,6 +112,18 @@ export function buildAutomationIdeaText(payload: PatentDraftingAutomationPayload
     normalizeText(payload.novelty) ? `Novelty / inventive contribution:\n${normalizeText(payload.novelty)}` : '',
   ].filter(Boolean)
   return parts.join('\n\n').trim()
+}
+
+export function validateAutomationPayloadForPipeline(payload: PatentDraftingAutomationPayload) {
+  const jurisdictions = normalizeJurisdictions(payload)
+  const suppliedClaimsText = normalizeText(payload.claimsText)
+  const claimsHandling = payload.claimsHandling || (suppliedClaimsText ? 'improve' : 'draft from brief')
+  if (jurisdictions.length > 1 && !(claimsHandling === 'use as is' && suppliedClaimsText)) {
+    throw new Error(
+      'Multi-jurisdiction automated drafting requires caller-supplied claims with claimsHandling="use as is" until per-jurisdiction claim freezing is supported.'
+    )
+  }
+  return { jurisdictions, suppliedClaimsText, claimsHandling }
 }
 
 function hasIdeaDisclosure(payload: PatentDraftingAutomationPayload) {
@@ -661,6 +674,82 @@ function findMissingDraftSections(draft: any, sections: string[]) {
   return sections.filter(sectionKey => !getDraftContentForSection(draft, sectionKey).trim())
 }
 
+export function buildEnabledJurisdictionToggles(jurisdictions: unknown, includeReference = false): Record<string, boolean> {
+  const source = Array.isArray(jurisdictions) ? jurisdictions : []
+  const entries = source
+    .map(code => String(code || '').trim().toUpperCase())
+    .filter(Boolean)
+    .map(code => [code, true] as const)
+  if (includeReference) entries.unshift(['REFERENCE', true])
+  return Object.fromEntries(entries)
+}
+
+type DraftQualityGateInput = {
+  jurisdiction: string
+  sections: string[]
+  draft: any
+  validationReport?: any
+  extendedReport?: any
+  generationWarnings?: string[]
+  reviewAttempted?: boolean
+}
+
+function extractSectionGenerationWarnings(result: any) {
+  const warnings: string[] = []
+  const debugSteps = Array.isArray(result?.json?.debugSteps) ? result.json.debugSteps : []
+  for (const step of debugSteps) {
+    const stepName = String(step?.step || '')
+    if (stepName.startsWith('fallback_')) {
+      warnings.push(`${stepName.replace(/^fallback_/, '')} used fallback content`)
+    }
+    if (stepName.startsWith('guard_') && step?.status === 'warning') {
+      warnings.push(`${stepName.replace(/^guard_/, '')} guard warning: ${step?.meta?.note || 'guardrail issue'}`)
+    }
+    if (stepName === 'integrity_check' && step?.status === 'warning') {
+      warnings.push(`Integrity warning: ${step?.meta?.note || 'invalid references detected'}`)
+    }
+  }
+  return Array.from(new Set(warnings.map(warning => warning.trim()).filter(Boolean)))
+}
+
+export function evaluateDraftQualityGate(input: DraftQualityGateInput) {
+  const problems: string[] = []
+  const missing = findMissingDraftSections(input.draft, input.sections)
+  if (missing.length) {
+    problems.push(`Missing required section(s): ${missing.join(', ')}`)
+  }
+
+  const invalidReferences = Array.isArray(input.validationReport?.invalidReferences)
+    ? input.validationReport.invalidReferences
+    : []
+  if (invalidReferences.length) {
+    problems.push(`Invalid reference(s): ${invalidReferences.join(', ')}`)
+  }
+
+  if (Array.isArray(input.generationWarnings) && input.generationWarnings.length) {
+    problems.push(...input.generationWarnings.map(warning => `Generation warning: ${warning}`))
+  }
+
+  if (input.extendedReport?.hardFail) {
+    const score = typeof input.extendedReport.complianceScore === 'number'
+      ? ` Compliance score: ${input.extendedReport.complianceScore}.`
+      : ''
+    problems.push(`Extended validation reported a hard drafting failure.${score}`)
+  }
+
+  if (input.reviewAttempted === false) {
+    problems.push('AI review was not run before export.')
+  }
+
+  return {
+    ok: problems.length === 0,
+    problems,
+    message: problems.length
+      ? `${input.jurisdiction}: automated draft did not pass final quality gate. ${problems.join(' ')}`
+      : '',
+  }
+}
+
 function buildBriefDescriptionOfDrawingsFromSession(session: any) {
   const plans = Array.isArray(session?.figurePlans) ? session.figurePlans : []
   const sources = Array.isArray(session?.diagramSources) ? session.diagramSources : []
@@ -715,32 +804,14 @@ async function ensureDraftSectionsForJurisdiction(params: {
   includeDrawingSections: boolean
   selectedPatents: any[]
 }) {
+  const warnings: string[] = []
   const sections = await getDraftingSectionsForJurisdiction(params.jurisdiction, params.includeDrawingSections)
   let draft = await getLatestDraftForJurisdiction(params.sessionId, params.jurisdiction)
   let missing = findMissingDraftSections(draft, sections)
 
   if (missing.length > 0) {
     await setActiveDraftingJurisdiction(params.sessionId, params.jurisdiction)
-    await invokeDraftingAction({
-      user: params.user,
-      patentId: params.patentId,
-      body: {
-        action: 'generate_sections',
-        sessionId: params.sessionId,
-        jurisdiction: params.jurisdiction,
-        sections,
-        selectedPatents: params.selectedPatents,
-        acceptPersonaWarnings: true,
-      },
-    })
-  }
-
-  await ensureBriefDescriptionOfDrawings({ ...params, sections })
-  draft = await getLatestDraftForJurisdiction(params.sessionId, params.jurisdiction)
-  missing = findMissingDraftSections(draft, sections)
-  if (missing.length > 0) {
-    await setActiveDraftingJurisdiction(params.sessionId, params.jurisdiction)
-    await invokeDraftingAction({
+    const generation = await invokeDraftingAction({
       user: params.user,
       patentId: params.patentId,
       body: {
@@ -752,6 +823,27 @@ async function ensureDraftSectionsForJurisdiction(params: {
         acceptPersonaWarnings: true,
       },
     })
+    warnings.push(...extractSectionGenerationWarnings(generation))
+  }
+
+  await ensureBriefDescriptionOfDrawings({ ...params, sections })
+  draft = await getLatestDraftForJurisdiction(params.sessionId, params.jurisdiction)
+  missing = findMissingDraftSections(draft, sections)
+  if (missing.length > 0) {
+    await setActiveDraftingJurisdiction(params.sessionId, params.jurisdiction)
+    const generation = await invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'generate_sections',
+        sessionId: params.sessionId,
+        jurisdiction: params.jurisdiction,
+        sections: missing,
+        selectedPatents: params.selectedPatents,
+        acceptPersonaWarnings: true,
+      },
+    })
+    warnings.push(...extractSectionGenerationWarnings(generation))
     await ensureBriefDescriptionOfDrawings({ ...params, sections })
   }
 
@@ -761,7 +853,7 @@ async function ensureDraftSectionsForJurisdiction(params: {
     throw new Error(`${params.jurisdiction}: Missing mapped draft section(s): ${missing.join(', ')}`)
   }
 
-  return { sections, draft }
+  return { sections, draft, warnings: Array.from(new Set(warnings)) }
 }
 
 async function setActiveDraftingJurisdiction(sessionId: string, jurisdiction: string) {
@@ -958,10 +1050,14 @@ async function runPipeline(job: any, workerId: string) {
   const access = await checkServiceAccess(user.id, user.tenantId, 'PATENT_DRAFTING')
   if (!access.allowed) throw new Error(access.reason || 'Patent drafting access is no longer available')
 
-  const jurisdictions = normalizeJurisdictions(payload)
+  const payloadValidation = validateAutomationPayloadForPipeline(payload)
+  const jurisdictions = payloadValidation.jurisdictions
   const activeJurisdiction = (payload.activeJurisdiction || jurisdictions[0] || DEFAULT_JURISDICTION).toUpperCase()
   const languageByJurisdiction = payload.languageByJurisdiction || Object.fromEntries(jurisdictions.map(code => [code, 'en']))
   const pipelineWarnings: string[] = []
+  const generationWarningsByJurisdiction: Record<string, string[]> = {}
+  let reviewAttempted = false
+  const { suppliedClaimsText, claimsHandling } = payloadValidation
 
   await setStep(job.id, workerId, 'INITIALIZING')
   const sessionId = await ensureSession(job, user, payload)
@@ -1004,26 +1100,24 @@ async function runPipeline(job: any, workerId: string) {
 
   if (!hasFrozenClaims(session)) {
     await setStep(job.id, workerId, 'CLAIMS')
-    const claimsText = normalizeText(payload.claimsText)
-    const claimsHandling = payload.claimsHandling || (claimsText ? 'improve' : 'draft from brief')
     const claimRemarks = [
       normalizeText(payload.claimRemarks),
       payload.claimRemarks === payload.claimsNotes ? '' : normalizeText(payload.claimsNotes),
-      claimsHandling === 'improve' && claimsText
-        ? `Improve the following draft claims without entering claim-refinement mode:\n\n${claimsText}`
+      claimsHandling === 'improve' && suppliedClaimsText
+        ? `Improve the following draft claims without entering claim-refinement mode:\n\n${suppliedClaimsText}`
         : '',
     ].filter(Boolean).join('\n\n')
 
-    let claimsHtml = claimsText
-    if (claimsText) {
+    let claimsHtml = suppliedClaimsText
+    if (suppliedClaimsText) {
       await invokeDraftingAction({
         user,
         patentId: job.patentId,
-        body: { action: 'save_claims', sessionId, claims: claimsText },
+        body: { action: 'save_claims', sessionId, claims: suppliedClaimsText },
       })
     }
 
-    if (!(claimsHandling === 'use as is' && claimsText)) {
+    if (!(claimsHandling === 'use as is' && suppliedClaimsText)) {
       const claims = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
         user,
         patentId: job.patentId,
@@ -1179,17 +1273,24 @@ async function runPipeline(job: any, workerId: string) {
   await setStep(job.id, workerId, 'DRAFTING')
   const illustrativeData = normalizeText(payload.illustrativeData)
   if (illustrativeData) {
+    const enabledToggles = buildEnabledJurisdictionToggles(jurisdictions)
     const existingDdData = await prisma.dDUserData.findUnique({ where: { sessionId } })
     if (existingDdData) {
+      const existingToggles = ((existingDdData as any).jurisdictionToggles || {}) as Record<string, boolean>
       await prisma.dDUserData.update({
         where: { sessionId },
-        data: { userData: illustrativeData, updatedBy: user.id }
+        data: {
+          userData: illustrativeData,
+          jurisdictionToggles: { ...existingToggles, ...enabledToggles },
+          updatedBy: user.id
+        }
       })
     } else {
       await prisma.dDUserData.create({
         data: {
           sessionId,
           userData: illustrativeData,
+          jurisdictionToggles: enabledToggles,
           createdBy: user.id,
           updatedBy: user.id
         }
@@ -1199,7 +1300,7 @@ async function runPipeline(job: any, workerId: string) {
   session = await loadSession(sessionId)
   const includeDrawingSections = payload.figureMode !== 'skip' && figuresUsable
   for (const jurisdiction of jurisdictions) {
-    await withHeartbeat(job.id, workerId, () => ensureDraftSectionsForJurisdiction({
+    const ensured = await withHeartbeat(job.id, workerId, () => ensureDraftSectionsForJurisdiction({
       user,
       patentId: job.patentId,
       sessionId,
@@ -1207,9 +1308,14 @@ async function runPipeline(job: any, workerId: string) {
       includeDrawingSections,
       selectedPatents,
     }))
+    generationWarningsByJurisdiction[jurisdiction] = [
+      ...(generationWarningsByJurisdiction[jurisdiction] || []),
+      ...ensured.warnings,
+    ]
   }
 
-  if (payload.runReview) {
+  if (payload.runReview !== false) {
+    reviewAttempted = true
     await setStep(job.id, workerId, 'REVIEW')
     for (const jurisdiction of jurisdictions) {
       try {
@@ -1226,6 +1332,10 @@ async function runPipeline(job: any, workerId: string) {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'AI review failed'
         pipelineWarnings.push(`${jurisdiction}: ${message}`)
+        generationWarningsByJurisdiction[jurisdiction] = [
+          ...(generationWarningsByJurisdiction[jurisdiction] || []),
+          `AI review failed: ${message}`,
+        ]
       }
     }
   }
@@ -1234,7 +1344,7 @@ async function runPipeline(job: any, workerId: string) {
   const artifacts: any[] = []
   for (const jurisdiction of jurisdictions) {
     await setActiveDraftingJurisdiction(sessionId, jurisdiction)
-    await withHeartbeat(job.id, workerId, () => ensureDraftSectionsForJurisdiction({
+    const ensured = await withHeartbeat(job.id, workerId, () => ensureDraftSectionsForJurisdiction({
       user,
       patentId: job.patentId,
       sessionId,
@@ -1242,6 +1352,34 @@ async function runPipeline(job: any, workerId: string) {
       includeDrawingSections,
       selectedPatents,
     }))
+    generationWarningsByJurisdiction[jurisdiction] = [
+      ...(generationWarningsByJurisdiction[jurisdiction] || []),
+      ...ensured.warnings,
+    ]
+    const validation = await invokeDraftingAction({
+      user,
+      patentId: job.patentId,
+      body: {
+        action: 'validate_draft',
+        sessionId,
+        jurisdiction,
+      },
+    })
+    const qualityGate = evaluateDraftQualityGate({
+      jurisdiction,
+      sections: ensured.sections,
+      draft: ensured.draft,
+      validationReport: validation.json?.validationReport,
+      extendedReport: validation.json?.extendedReport,
+      generationWarnings: generationWarningsByJurisdiction[jurisdiction],
+      reviewAttempted,
+    })
+    if (!qualityGate.ok) {
+      if (!payload.skipQualityGate) {
+        throw new Error(qualityGate.message)
+      }
+      pipelineWarnings.push(qualityGate.message)
+    }
     const safeTitle = sanitizeFilename(payload.title || 'patent-draft')
     const docxExport = await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
       user,

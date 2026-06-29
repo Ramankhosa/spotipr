@@ -15,6 +15,7 @@ import { prisma } from './prisma'
 // Cache for writing samples (5 minute TTL)
 const sampleCache = new Map<string, { samples: Map<string, string>, timestamp: number }>()
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const MAX_SECONDARY_PERSONAS = 5
 
 export interface WritingSampleContext {
   sampleText: string
@@ -75,6 +76,7 @@ export function normalizePersonaSelectionInput(selection?: PersonaSelection | nu
     : undefined
   const secondaryPersonaIds = uniqueIds(selection.secondaryPersonaIds || [])
     .filter(id => id !== primaryPersonaId)
+    .slice(0, MAX_SECONDARY_PERSONAS)
 
   if (!primaryPersonaId && secondaryPersonaIds.length === 0) return undefined
 
@@ -492,60 +494,55 @@ export function buildWritingSampleBlock(
 ): string {
   if (!sample || !sample.sampleText) return ''
 
-  const jurisdictionNote = sample.isUniversal 
+  const note = sample.isUniversal
     ? '(universal style, applies to all jurisdictions)'
     : `(${sample.jurisdiction}-specific style)`
-
-  // Check if this is a multi-persona sample (contains secondary styles)
-  const hasSecondaryStyles = sample.sampleText.includes('--- ADDITIONAL DOMAIN STYLES ---')
-
-  const styleExplanation = hasSecondaryStyles
+  const hasAdditionalStyles = sample.sampleText.includes('--- ADDITIONAL DOMAIN STYLES ---')
+  const explanation = hasAdditionalStyles
     ? `The user has selected a PRIMARY style for structure and tone, plus ADDITIONAL domain styles for terminology.
 You MUST:
-• Follow the PRIMARY style for overall structure, sentence patterns, and voice
-• Incorporate terminology and domain-specific phrases from the ADDITIONAL styles`
+- Follow the PRIMARY style for overall structure, sentence patterns, and voice.
+- Incorporate terminology and domain-specific phrases from the ADDITIONAL styles.`
     : `The user has provided an example of their preferred writing style for this section.
 You MUST closely mimic their style, including:
 
-• **Word choices and phrasing patterns** - Use similar vocabulary and expressions
-• **Sentence length and structure** - Match their complexity level
-• **Active/passive voice preference** - Mirror their voice usage
-• **Technical terminology style** - Follow their terminology patterns
-• **Punctuation and connectors** - Use similar punctuation and transition words
-• **Opening patterns** - Start sections/paragraphs similarly`
-
-  const styleOnlyBoundary = `STYLE-ONLY BOUNDARY:
+- Word choices and phrasing patterns.
+- Sentence length and structure.
+- Active/passive voice preference.
+- Technical terminology style.
+- Punctuation and connectors.
+- Opening patterns.`
+  const styleOnlyRules = `STYLE-ONLY BOUNDARY:
 - Use the sample only to learn drafting style, organization, sentence rhythm, terminology preference, and formatting habits.
 - Any instruction to mimic the sample means mimic style only, never sample content.
 - Do NOT copy or import the sample's invention substance, embodiments, components, materials, values, claim limitations, advantages, problem statements, examples, or legal conclusions.
 - Draft all technical substance only from the current patent's source facts, normalized invention context, and user-provided instructions.
 - If the sample content conflicts with source-grounding rules, ignore the sample content and follow the current patent context.`
-
-  // Build visual box without truncating content - preserve full sample for style learning
-  const lines = sample.sampleText.split('\n')
-  // Don't truncate lines - long lines are important for capturing writing style patterns
-  const formattedLines = lines.map(line => `│ ${line}`).join('\n')
+  const formattedSample = sample.sampleText.split('\n').map(line => `| ${line}`).join('\n')
 
   return `
 
-╔═══════════════════════════════════════════════════════════════════════════╗
-║  YOUR WRITING STYLE - MIMIC THIS EXACTLY                                  ║
-║  ${jurisdictionNote.padEnd(69)}║
-╚═══════════════════════════════════════════════════════════════════════════╝
+===============================================================================
+YOUR WRITING STYLE - MIMIC THIS EXACTLY
+${note}
+===============================================================================
 
-${styleExplanation}
+${explanation}
 
-${styleOnlyBoundary}
+${styleOnlyRules}
 
 USER'S STYLE EXAMPLE:
-┌─────────────────────────────────────────────────────────────────────────────
-${formattedLines}
-└─────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
+${formattedSample}
+-------------------------------------------------------------------------------
 
-⚠️ CRITICAL: Generate content that reads as if written by the SAME AUTHOR as the example above.
-   Do NOT reuse sample-specific facts, claim elements, advantages, embodiments, examples, materials, or numeric values.
-   Do NOT use generic patent language. Instead, mirror the specific style shown while grounding substance in the current patent.
+CRITICAL:
+- Generate content that reads as if written by the SAME AUTHOR as the example above.
+- Do NOT reuse sample-specific facts, claim elements, advantages, embodiments, examples, materials, or numeric values.
+- Do NOT use generic patent language. Instead, mirror the specific style shown while grounding substance in the current patent.
 `
+
+
 }
 
 /**
@@ -679,14 +676,31 @@ export async function getAvailablePersonas(
 }
 
 /**
- * Check if user has any active writing samples
+ * Check if user has any active writing samples or accessible persona samples.
  */
-export async function hasActiveWritingSamples(userId: string): Promise<boolean> {
+export async function hasActiveWritingSamples(userId: string, tenantId?: string | null): Promise<boolean> {
   try {
     const count = await prisma.writingSample.count({
       where: {
-        userId,
-        isActive: true
+        isActive: true,
+        OR: [
+          { userId, personaId: null },
+          {
+            userId,
+            persona: {
+              is: { isActive: true }
+            }
+          },
+          ...(tenantId ? [{
+            persona: {
+              is: {
+                tenantId,
+                visibility: 'ORGANIZATION' as const,
+                isActive: true
+              }
+            }
+          }] : [])
+        ]
       }
     })
     return count > 0

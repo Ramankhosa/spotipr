@@ -125,14 +125,14 @@ function firstText(...values: unknown[]) {
 function displayEvidenceSource(value: unknown, fallback = 'citation record') {
   const text = cleanText(value, fallback).toLowerCase();
   if (!text || text === 'none' || text === 'citation record') return 'none';
-  if (/\babstract\b/.test(text)) return 'abstract';
-  if (/\btitle\b/.test(text)) return 'title';
+  if (/\babstract\b/.test(text)) return 'source record';
+  if (/\btitle\b/.test(text)) return 'source record';
   return 'inference';
 }
 
 function reportSafeText(value: unknown, fallback = '') {
   return cleanText(value, fallback)
-    .replace(/\bno abstract available\.?/gi, 'No abstract was available; full patent record review is recommended for this point.')
+    .replace(/\bno abstract available\.?/gi, 'Source record detail was unavailable; full patent record review is recommended for this point.')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
@@ -172,12 +172,16 @@ function reportSafeText(value: unknown, fallback = '') {
     .replace(/\bobvious\b/gi, 'high-overlap risk')
     .replace(/\bclear novelty\b/gi, 'potential novelty space')
     .replace(/\bdefinite novelty\b/gi, 'potential novelty space')
-    .replace(/\banticipated by\b/gi, 'shows high abstract-level overlap with')
-    .replace(/\banticipates?\b/gi, 'shows high abstract-level overlap')
-    .replace(/\bexact match\b/gi, 'high abstract-level overlap candidate')
-    .replace(/\bdecisive match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\banticipated by\b/gi, 'shows high mapped overlap with')
+    .replace(/\banticipates?\b/gi, 'shows high mapped overlap')
+    .replace(/\bexact match\b/gi, 'high mapped-overlap candidate')
+    .replace(/\bdecisive match\b/gi, 'high mapped-overlap candidate')
+    .replace(/\bhigh abstract-level overlap\b/gi, 'high mapped overlap')
+    .replace(/\btitle\/abstract(?:-based)?\b/gi, 'preliminary record')
+    .replace(/\babstract-level\b/gi, 'record-level')
     .replace(/\bnot novel\b/gi, 'high mapped-overlap risk')
-    .replace(/\bno prior art (?:was )?found\b/gi, 'no high abstract-level overlap candidate was identified among screened title/abstract records');
+    .replace(/\bno prior art (?:was )?found\b/gi, 'no high-overlap candidate was identified among the screened preliminary records')
+    .replace(/\bscreened title\/abstract records\b/gi, 'screened preliminary records');
 }
 
 function formatDate(value: unknown) {

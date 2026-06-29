@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
+import { invalidateWritingSampleCache } from '@/lib/writing-sample-service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -123,6 +124,7 @@ export async function POST(request: NextRequest) {
         jurisdiction: normalizedJurisdiction
       }
     })
+    invalidateWritingSampleCache(authResult.user.id)
 
     // Audit log for bulk deletion
     try {

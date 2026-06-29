@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { hashPassword, validateATIToken, incrementATITokenUsage, createAuditLog, generateJWT, generateRefreshToken, storeRefreshToken } from '@/lib/auth'
+import { hashPassword, validateATIToken, consumeATITokenForSignup, createAuditLog, generateJWT, generateRefreshToken, storeRefreshToken } from '@/lib/auth'
 import { generateToken, hashToken } from '@/lib/token-utils'
 import { sendEmail } from '@/lib/mailer'
 import { verificationTemplate } from '@/lib/email-templates'
@@ -321,6 +321,8 @@ export async function POST(request: NextRequest) {
     // Use a transaction to ensure atomicity - either everything succeeds or nothing does
     // This includes the user limit check to prevent race conditions in parallel signups
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenant.id} FOR UPDATE`
+
       // ATOMIC CHECK: Re-count users inside transaction to prevent race conditions
       // Two parallel signup requests could both pass the pre-check, but this ensures
       // only one succeeds when the limit would be exceeded
@@ -333,6 +335,19 @@ export async function POST(request: NextRequest) {
         throw new Error(`TENANT_USER_LIMIT_EXCEEDED:${tenantAdminTokenInfo.maxUses}:${existingUsersCount}`)
       }
 
+      await consumeATITokenForSignup(tx, tokenValidation.atiToken!.id)
+
+      const effectiveUserRole = existingUsersCount === 0
+        ? 'OWNER'
+        : userRole === 'OWNER'
+          ? 'ANALYST'
+          : userRole
+      const effectiveRoleReason = existingUsersCount === 0
+        ? 'first_tenant_user'
+        : userRole === 'OWNER'
+          ? 'default'
+          : roleReason
+
       // Create user
       const user = await tx.user.create({
         data: {
@@ -340,7 +355,7 @@ export async function POST(request: NextRequest) {
           passwordHash,
           tenantId: tenant.id,
           signupAtiTokenId: tokenValidation.atiToken!.id, // Track which ATI token was used
-          roles: [userRole as any],
+          roles: [effectiveUserRole as any],
           status: 'ACTIVE',
           emailVerified: true,
           firstName,
@@ -355,23 +370,6 @@ export async function POST(request: NextRequest) {
         data: {
           name: defaultProjectName,
           userId: user.id
-        }
-      })
-
-      // Get current token state for status update logic
-      const currentToken = await tx.aTIToken.findUnique({
-        where: { id: tokenValidation.atiToken!.id }
-      })
-
-      // Increment ATI token usage atomically
-      await tx.aTIToken.update({
-        where: { id: tokenValidation.atiToken!.id },
-        data: {
-          usageCount: { increment: 1 },
-          // Update status if usage limit reached
-          ...(currentToken && currentToken.maxUses && currentToken.usageCount + 1 >= currentToken.maxUses
-            ? { status: 'USED_UP' }
-            : {})
         }
       })
 
@@ -390,7 +388,7 @@ export async function POST(request: NextRequest) {
           meta: {
             email: user.email,
             roles: user.roles,
-            assigned_role_reason: roleReason,
+            assigned_role_reason: effectiveRoleReason,
             signup_method: 'ati_token',
             ati_token_fingerprint: tokenValidation.atiToken!.fingerprint,
             ati_token_creator: tokenCreator?.actorUserId || null,
@@ -471,6 +469,13 @@ export async function POST(request: NextRequest) {
           current_users: currentUsers,
           max_users: maxUsers
         },
+        { status: 400 }
+      )
+    }
+
+    if (error instanceof Error && ['ATI_USED_UP', 'ATI_EXPIRED', 'ATI_TOKEN_INVALID'].includes(error.message)) {
+      return NextResponse.json(
+        { code: error.message, message: 'ATI token validation failed' },
         { status: 400 }
       )
     }

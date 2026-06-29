@@ -171,6 +171,13 @@ export async function POST(request: NextRequest) {
         return bulkSetPlanModels(body)
       case 'copy_plan_config':
         return copyPlanConfig(body)
+      case 'clear_model_cache':
+        clearModelCache()
+        return NextResponse.json({
+          success: true,
+          message: 'LLM model resolution cache cleared',
+          clearedAt: new Date().toISOString()
+        })
       default:
         return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
     }

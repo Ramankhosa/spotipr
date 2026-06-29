@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fetchWithProviderTimeout, providerTimeoutGraceMs, providerTimeoutMs } from './patent-search/provider-runtime';
 
 // SerpAPI response schemas based on documentation
 const SerpApiPatentResultSchema = z.object({
@@ -168,7 +169,15 @@ export class SerpApiProvider {
     });
 
     try {
-      const response = await fetch(`${this.baseUrl}?${queryParams}`);
+      const response = await fetchWithProviderTimeout(`${this.baseUrl}?${queryParams}`, {
+        method: 'GET',
+        cache: 'no-store',
+      }, {
+        providerId: 'google-patents',
+        operation: `${params.engine || 'google_patents'}_legacy_search`,
+        timeoutMs: providerTimeoutMs('google-patents', 20_000),
+        graceMs: providerTimeoutGraceMs('google-patents'),
+      });
       const data = await response.json();
 
       if (!response.ok) {
@@ -296,7 +305,15 @@ export class SerpApiProvider {
       no_cache: 'false',
     });
 
-    const response = await fetch(`${this.baseUrl}?${queryParams}`);
+    const response = await fetchWithProviderTimeout(`${this.baseUrl}?${queryParams}`, {
+      method: 'GET',
+      cache: 'no-store',
+    }, {
+      providerId: 'google-patents',
+      operation: 'google_patents_details_legacy',
+      timeoutMs: providerTimeoutMs('google-patents', 20_000),
+      graceMs: providerTimeoutGraceMs('google-patents'),
+    });
     const data = await response.json();
 
     if (!response.ok) {

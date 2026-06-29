@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { SECTION_WORD_LIMITS, DEFAULT_LIMITS, MAX_CHARS } from '@/lib/writing-sample-limits'
+import { invalidateWritingSampleCache } from '@/lib/writing-sample-service'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -134,6 +135,7 @@ export async function GET(request: NextRequest) {
       const persona = await prisma.writingPersona.findFirst({
         where: {
           id: personaId,
+          isActive: true,
           OR: [
             { createdBy: authResult.user.id },
             { tenantId: authResult.user.tenantId, visibility: 'ORGANIZATION' }
@@ -380,6 +382,8 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    invalidateWritingSampleCache(authResult.user.id)
+
     const response: any = {
       success: true,
       sample: result,
@@ -443,6 +447,7 @@ export async function DELETE(request: NextRequest) {
       }
 
       await prisma.writingSample.delete({ where: { id } })
+      invalidateWritingSampleCache(authResult.user.id)
       return NextResponse.json({ success: true, message: 'Sample deleted' })
     }
 
@@ -454,6 +459,7 @@ export async function DELETE(request: NextRequest) {
         where: {
           userId: authResult.user.id,
           jurisdiction: normalizedJurisdiction,
+          personaId: null,
           sectionKey
         }
       })
@@ -462,6 +468,7 @@ export async function DELETE(request: NextRequest) {
         return NextResponse.json({ error: 'Sample not found' }, { status: 404 })
       }
 
+      invalidateWritingSampleCache(authResult.user.id)
       return NextResponse.json({ success: true, message: 'Sample deleted' })
     }
 
@@ -503,6 +510,7 @@ export async function PATCH(request: NextRequest) {
         data: { isActive: isActive !== undefined ? isActive : !sample.isActive }
       })
 
+      invalidateWritingSampleCache(authResult.user.id)
       return NextResponse.json({ success: true, sample: updated })
     }
 
@@ -513,11 +521,13 @@ export async function PATCH(request: NextRequest) {
       const updated = await prisma.writingSample.updateMany({
         where: {
           userId: authResult.user.id,
+          personaId: null,
           ...(jurisdiction !== 'all' ? { jurisdiction: normalizedJurisdiction } : {})
         },
         data: { isActive: isActive }
       })
 
+      invalidateWritingSampleCache(authResult.user.id)
       return NextResponse.json({ 
         success: true, 
         message: `${updated.count} samples ${isActive ? 'enabled' : 'disabled'}` 

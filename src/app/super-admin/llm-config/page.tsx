@@ -177,6 +177,7 @@ export default function LLMConfigPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'models' | 'stages' | 'configs'>('overview')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [clearingCache, setClearingCache] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -361,6 +362,34 @@ export default function LLMConfigPage() {
     }
   }
 
+  const handleClearModelCache = async () => {
+    try {
+      setClearingCache(true)
+      setError(null)
+      setSuccess(null)
+
+      const response = await fetch('/api/super-admin/llm-config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify({ action: 'clear_model_cache' })
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to clear model cache')
+      }
+
+      setSuccess(data.message || 'LLM model cache cleared. New model selections will be used immediately.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear model cache')
+    } finally {
+      setClearingCache(false)
+    }
+  }
+
   const formatCost = (costPer1M: number) => {
     return `$${(costPer1M / 100).toFixed(2)}`
   }
@@ -396,6 +425,14 @@ export default function LLMConfigPage() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-slate-400">Super Admin: {user?.email}</span>
+              <button
+                onClick={handleClearModelCache}
+                disabled={clearingCache}
+                className="px-4 py-2 text-sm bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition"
+                title="Clear cached LLM model resolutions so recent model changes are picked immediately"
+              >
+                {clearingCache ? 'Clearing...' : 'Clear Model Cache'}
+              </button>
               <button
                 onClick={() => logout()}
                 className="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg transition"

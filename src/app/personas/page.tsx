@@ -484,7 +484,7 @@ export default function PersonasPage() {
                         <button
                           onClick={(e) => { e.stopPropagation(); openDeletePersonaModal(persona) }}
                           className="text-red-500 hover:text-red-700 text-sm"
-                          title="Delete persona and all samples"
+                          title="Archive persona"
                         >
                           🗑️
                         </button>
@@ -806,12 +806,12 @@ export default function PersonasPage() {
               <div className="space-y-4">
                 <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
                   <p className="text-sm text-red-700 dark:text-red-300">
-                    <strong>Warning:</strong> This will permanently delete the persona 
+                    <strong>Warning:</strong> This will archive the persona
                     <strong className="mx-1">&quot;{personaToDelete.name}&quot;</strong> 
-                    and <strong>ALL writing samples</strong> across <strong>ALL jurisdictions</strong>.
+                    and make its writing samples unavailable across <strong>ALL jurisdictions</strong>.
                   </p>
                   <p className="text-sm text-red-600 dark:text-red-400 mt-2">
-                    This action cannot be undone.
+                    The samples are preserved for recovery if this persona is recreated later.
                   </p>
                 </div>
                 
@@ -846,7 +846,7 @@ export default function PersonasPage() {
                   disabled={deleteConfirmText.toLowerCase() !== 'delete'}
                   className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Delete Permanently
+                  Archive Persona
                 </button>
               </div>
             </div>

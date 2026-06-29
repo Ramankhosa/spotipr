@@ -13,6 +13,7 @@ import {
   uniqueStrings,
   yearFromDate,
 } from '../utils'
+import { fetchWithProviderTimeout, providerTimeoutGraceMs, providerTimeoutMs } from '../provider-runtime'
 
 const PATENTSVIEW_ENDPOINT = 'https://search.patentsview.org/api/v1/patent/'
 const PATENTSVIEW_FIELDS = [
@@ -314,24 +315,21 @@ export class PatentsViewProvider implements PatentSearchProvider {
       o: { size: maxResults },
     }
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000)
-    let response: Response
-    try {
-      response = await fetch(PATENTSVIEW_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-        cache: 'no-store',
-      })
-    } finally {
-      clearTimeout(timeout)
-    }
+    const response = await fetchWithProviderTimeout(PATENTSVIEW_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Api-Key': apiKey,
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    }, {
+      providerId: 'uspto',
+      operation: 'patentsview_search',
+      timeoutMs: providerTimeoutMs('uspto', 15_000),
+      graceMs: providerTimeoutGraceMs('uspto'),
+    })
 
     if (!response.ok) {
       if (response.status === 403) throw new Error('PatentsView authentication failed - check PATENTSVIEW_API_KEY.')

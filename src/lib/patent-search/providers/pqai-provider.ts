@@ -6,6 +6,7 @@ import type {
 } from '../types'
 import { persistPqaiPatentResults } from '@/lib/patent-corpus-service'
 import { asStringArray, clampLimit, normalizeWhitespace, yearFromDate } from '../utils'
+import { fetchWithProviderTimeout, providerTimeoutGraceMs, providerTimeoutMs } from '../provider-runtime'
 
 function normalizePqaiQuery(query: string) {
   const safe = normalizeWhitespace(query)
@@ -150,24 +151,21 @@ export class PqaiProvider implements PatentSearchProvider {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     }
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000)
-    let response: Response
-    try {
-      const fetchOptions: any = {
-        method: 'GET',
-        headers,
-        signal: controller.signal,
-        cache: 'no-store',
-      }
-      if (typeof window === 'undefined') {
-        const https = require('https')
-        fetchOptions.agent = new https.Agent({ rejectUnauthorized: false })
-      }
-      response = await fetch(url, fetchOptions)
-    } finally {
-      clearTimeout(timeout)
+    const fetchOptions: any = {
+      method: 'GET',
+      headers,
+      cache: 'no-store',
     }
+    if (typeof window === 'undefined') {
+      const https = require('https')
+      fetchOptions.agent = new https.Agent({ rejectUnauthorized: false })
+    }
+    const response = await fetchWithProviderTimeout(url, fetchOptions, {
+      providerId: 'pqai',
+      operation: 'rest_search',
+      timeoutMs: providerTimeoutMs('pqai', 15_000),
+      graceMs: providerTimeoutGraceMs('pqai'),
+    })
 
     if (!response.ok) {
       let message = `International patent search request failed (HTTP ${response.status})`
@@ -197,7 +195,7 @@ export class PqaiProvider implements PatentSearchProvider {
       rawResultCount: results.length,
       resultCount: normalizedResults.length,
       durationMs: Date.now() - startedAt,
-      publicationNumbers: normalizedResults.map((result: NormalizedPatentResult) => result.publicationNumber),
+      samplePublicationNumbers: normalizedResults.slice(0, 5).map((result: NormalizedPatentResult) => result.publicationNumber),
     }))
 
     try {

@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
         inventionDescription: `${search.inventionDescription.slice(0, 200)}${search.inventionDescription.length > 200 ? '...' : ''}`,
         status,
         createdAt: search.createdAt,
-        completedAt: search.stage4CompletedAt,
+        completedAt: status === 'COMPLETE' ? search.stage4CompletedAt : null,
         project: search.project,
         patent: search.patent,
         group: search.group ? {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { validateATIToken, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
+import { validateATIToken, consumeATITokenForSignup, generateJWT, generateRefreshToken, storeRefreshToken, createAuditLog } from '@/lib/auth'
 import { autoAssignToDefaultTeam } from '@/lib/org-access-service'
 import { assignTrialPlanToTenant } from '@/lib/trial-plan-service'
 
@@ -227,6 +227,46 @@ export async function POST(request: NextRequest) {
 
     // Create user with social OAuth data
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenant.id} FOR UPDATE`
+
+      const usersCountInTransaction = await tx.user.count({
+        where: { tenantId: tenant.id }
+      })
+
+      if (usersCountInTransaction > 0) {
+        const tenantAdmin = await tx.user.findFirst({
+          where: {
+            tenantId: tenant.id,
+            roles: { hasSome: ['OWNER', 'ADMIN'] }
+          },
+          select: { signupAtiTokenId: true },
+          orderBy: { createdAt: 'asc' }
+        })
+
+        if (tenantAdmin?.signupAtiTokenId) {
+          const originalToken = await tx.aTIToken.findUnique({
+            where: { id: tenantAdmin.signupAtiTokenId }
+          })
+
+          if (originalToken?.maxUses && usersCountInTransaction >= originalToken.maxUses) {
+            throw new Error(`TENANT_USER_LIMIT_EXCEEDED:${originalToken.maxUses}:${usersCountInTransaction}`)
+          }
+        }
+      }
+
+      await consumeATITokenForSignup(tx, tokenValidation.atiToken!.id)
+
+      const effectiveUserRole = usersCountInTransaction === 0
+        ? 'OWNER'
+        : userRole === 'OWNER'
+          ? 'ANALYST'
+          : userRole
+      const effectiveRoleReason = usersCountInTransaction === 0
+        ? 'first_tenant_user'
+        : userRole === 'OWNER'
+          ? 'default'
+          : roleReason
+
       const user = await tx.user.create({
         data: {
           email: pendingData.email,
@@ -235,7 +275,7 @@ export async function POST(request: NextRequest) {
           lastName: pendingData.lastName,
           tenantId: tenant.id,
           signupAtiTokenId: tokenValidation.atiToken!.id,
-          roles: [userRole as any],
+          roles: [effectiveUserRole as any],
           status: 'ACTIVE',
           emailVerified: true, // Social logins are verified
           oauthProvider: pendingData.provider.toUpperCase() as any,
@@ -249,22 +289,6 @@ export async function POST(request: NextRequest) {
         data: {
           name: 'Default Project',
           userId: user.id
-        }
-      })
-
-      // Get current token state
-      const currentToken = await tx.aTIToken.findUnique({
-        where: { id: tokenValidation.atiToken!.id }
-      })
-
-      // Increment ATI token usage
-      await tx.aTIToken.update({
-        where: { id: tokenValidation.atiToken!.id },
-        data: {
-          usageCount: { increment: 1 },
-          ...(currentToken && currentToken.maxUses && currentToken.usageCount + 1 >= currentToken.maxUses
-            ? { status: 'USED_UP' }
-            : {})
         }
       })
 
@@ -283,11 +307,11 @@ export async function POST(request: NextRequest) {
           meta: {
             email: user.email,
             roles: user.roles,
-            assigned_role_reason: roleReason,
+            assigned_role_reason: effectiveRoleReason,
             signup_method: 'social_oauth_with_ati',
             oauth_provider: pendingData.provider,
             ati_token_fingerprint: tokenValidation.atiToken!.fingerprint,
-            is_first_tenant_user: existingUsersCount === 0
+            is_first_tenant_user: usersCountInTransaction === 0
           }
         }
       })
@@ -360,6 +384,20 @@ export async function POST(request: NextRequest) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { code: 'INVALID_INPUT', message: 'Invalid input data', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    if (error instanceof Error && error.message.startsWith('TENANT_USER_LIMIT_EXCEEDED:')) {
+      return NextResponse.json(
+        { code: 'TENANT_USER_LIMIT_EXCEEDED', message: 'Tenant has reached its maximum user limit.' },
+        { status: 400 }
+      )
+    }
+
+    if (error instanceof Error && ['ATI_USED_UP', 'ATI_EXPIRED', 'ATI_TOKEN_INVALID'].includes(error.message)) {
+      return NextResponse.json(
+        { code: error.message, message: `ATI token validation failed: ${error.message}` },
         { status: 400 }
       )
     }

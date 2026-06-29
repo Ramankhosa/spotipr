@@ -378,34 +378,41 @@ export async function validateATIToken(token: string, tenantId?: string) {
 }
 
 export async function incrementATITokenUsage(tokenId: string) {
-  // Get current token state first
-  const currentToken = await prisma.aTIToken.findUnique({
-    where: { id: tokenId }
-  })
-
-  if (!currentToken) {
-    throw new Error('Token not found')
-  }
-
-  // Atomically increment and check in a transaction to avoid race conditions
   await prisma.$transaction(async (tx) => {
-    // Increment usage count
-    await tx.aTIToken.update({
-      where: { id: tokenId },
-      data: {
-        usageCount: { increment: 1 }
-      }
-    })
-
-    // Check if now used up (current usage + 1 >= max uses)
-    const newUsageCount = currentToken.usageCount + 1
-    if (currentToken.maxUses && newUsageCount >= currentToken.maxUses) {
-      await tx.aTIToken.update({
-        where: { id: tokenId },
-        data: { status: 'USED_UP' }
-      })
-    }
+    await consumeATITokenForSignup(tx, tokenId)
   })
+}
+
+export async function consumeATITokenForSignup(tx: any, tokenId: string) {
+  const consumed = await tx.$queryRaw<Array<{ id: string; usageCount: number; maxUses: number | null }>>`
+    UPDATE "ati_tokens"
+    SET
+      "usageCount" = "usageCount" + 1,
+      "status" = CASE
+        WHEN "maxUses" IS NOT NULL AND "usageCount" + 1 >= "maxUses" THEN 'USED_UP'::"ATITokenStatus"
+        ELSE "status"
+      END,
+      "updatedAt" = NOW()
+    WHERE "id" = ${tokenId}
+      AND "status" IN ('ACTIVE'::"ATITokenStatus", 'ISSUED'::"ATITokenStatus")
+      AND ("expiresAt" IS NULL OR "expiresAt" > NOW())
+      AND ("maxUses" IS NULL OR "usageCount" < "maxUses")
+    RETURNING "id", "usageCount", "maxUses"
+  `
+
+  if (consumed.length === 1) return consumed[0]
+
+  const currentToken = await tx.aTIToken.findUnique({ where: { id: tokenId } })
+  if (!currentToken) throw new Error('ATI_TOKEN_INVALID')
+  if (currentToken.expiresAt && new Date() > currentToken.expiresAt) {
+    await tx.aTIToken.update({ where: { id: tokenId }, data: { status: 'EXPIRED' } })
+    throw new Error('ATI_EXPIRED')
+  }
+  if (currentToken.maxUses && currentToken.usageCount >= currentToken.maxUses) {
+    await tx.aTIToken.update({ where: { id: tokenId }, data: { status: 'USED_UP' } })
+    throw new Error('ATI_USED_UP')
+  }
+  throw new Error('ATI_TOKEN_INVALID')
 }
 
 // Token encryption for temporary revelation
@@ -482,4 +489,3 @@ export async function createAuditLog({
     }
   })
 }
-

@@ -83,7 +83,7 @@ function reportModel(overrides: Record<string, unknown> = {}) {
   const comparison = citation(rows)
   return {
     reportNumber: 'PN-NOV-IN-20260622-TEST001',
-    reportTitle: 'Title/Abstract-Based Patent Screening Report',
+    reportTitle: 'Preliminary Novelty Assessment Report',
     inventionTitle: 'Evidence-driven adaptive control platform',
     jurisdiction: 'India',
     sourceMode: 'PQAI_ONLY',
@@ -280,6 +280,7 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text).not.toContain('Not Novel determination')
     expect(parsed.text).toContain('1 Search Overview')
     expect(parsed.text).toContain('2 Citation Analysis')
+    expect(parsed.text).toContain('2.1.1 US-2026-000001-A1')
     expect(parsed.text).toContain('2.2 List of Other Shortlisted Citations')
     expect(parsed.text).not.toContain('2.3 List of Other Shortlisted Citations')
     expect(parsed.text).toContain('Key Features')

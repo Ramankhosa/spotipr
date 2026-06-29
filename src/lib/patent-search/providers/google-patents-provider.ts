@@ -6,6 +6,7 @@ import type {
   PatentSearchProvider,
 } from '../types'
 import { asStringArray, clampLimit, normalizeWhitespace, uniqueStrings, yearFromDate } from '../utils'
+import { fetchWithProviderTimeout, providerTimeoutGraceMs, providerTimeoutMs } from '../provider-runtime'
 
 const SERPAPI_ENDPOINT = 'https://serpapi.com/search'
 const GOOGLE_PATENTS_PROVIDER_ID = 'google-patents'
@@ -221,19 +222,16 @@ export class GooglePatentsProvider implements PatentSearchProvider {
     }))
 
     await enforceSerpApiRateLimit()
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 20000)
-    let response: Response
-    try {
-      response = await fetch(`${SERPAPI_ENDPOINT}?${params.toString()}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-        cache: 'no-store',
-      })
-    } finally {
-      clearTimeout(timeout)
-    }
+    const response = await fetchWithProviderTimeout(`${SERPAPI_ENDPOINT}?${params.toString()}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    }, {
+      providerId: GOOGLE_PATENTS_PROVIDER_ID,
+      operation: 'serpapi_search',
+      timeoutMs: providerTimeoutMs(GOOGLE_PATENTS_PROVIDER_ID, 20_000),
+      graceMs: providerTimeoutGraceMs(GOOGLE_PATENTS_PROVIDER_ID),
+    })
 
     const json = await response.json().catch(() => ({}))
     if (!response.ok || json?.error) {
@@ -253,7 +251,7 @@ export class GooglePatentsProvider implements PatentSearchProvider {
       rawResultCount: results.length,
       resultCount: normalizedResults.length,
       durationMs: Date.now() - startedAt,
-      publicationNumbers: normalizedResults.map((result: NormalizedPatentResult) => result.publicationNumber),
+      samplePublicationNumbers: normalizedResults.slice(0, 5).map((result: NormalizedPatentResult) => result.publicationNumber),
     }))
     return normalizedResults
   }

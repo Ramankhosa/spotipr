@@ -3894,7 +3894,7 @@ export default function NoveltySearchWorkflow({
               <div className="hidden md:flex items-center gap-4 text-[10px]">
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                  <span className="text-slate-500">High abstract-level overlap</span>
+                  <span className="text-slate-500">High mapped overlap</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-3 rounded-full bg-orange-400"></div>

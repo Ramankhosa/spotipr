@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildAutomationIdeaText, selectReviewedPriorArtDecisions } from './patent-drafting-job-service'
+import {
+  buildAutomationIdeaText,
+  buildEnabledJurisdictionToggles,
+  evaluateDraftQualityGate,
+  selectReviewedPriorArtDecisions,
+  validateAutomationPayloadForPipeline,
+} from './patent-drafting-job-service'
 
 describe('buildAutomationIdeaText', () => {
   it('combines structured idea details with novelty text', () => {
@@ -42,5 +48,81 @@ describe('selectReviewedPriorArtDecisions', () => {
       { pn: 'LOW', relevance: 0.2, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
     ])
     expect(selected.map(decision => decision.pn)).toEqual(['ANT', 'OBV', 'ADJ'])
+  })
+})
+
+describe('buildEnabledJurisdictionToggles', () => {
+  it('enables each normalized jurisdiction', () => {
+    expect(buildEnabledJurisdictionToggles(['in', ' US ', '', null])).toEqual({
+      IN: true,
+      US: true,
+    })
+  })
+})
+
+describe('validateAutomationPayloadForPipeline', () => {
+  it('blocks multi-jurisdiction generated claims to avoid reusing one jurisdiction claim set', () => {
+    expect(() => validateAutomationPayloadForPipeline({
+      title: 'Smart valve',
+      rawIdea: 'A valve assembly.',
+      jurisdictions: ['IN', 'US'],
+      claimsHandling: 'draft from brief',
+    })).toThrow(/Multi-jurisdiction automated drafting requires caller-supplied claims/)
+  })
+
+  it('allows multi-jurisdiction jobs when claims are explicitly supplied as-is', () => {
+    const result = validateAutomationPayloadForPipeline({
+      title: 'Smart valve',
+      rawIdea: 'A valve assembly.',
+      jurisdictions: ['IN', 'US'],
+      claimsHandling: 'use as is',
+      claimsText: '1. A valve assembly comprising a monitored restriction member.',
+    })
+
+    expect(result.jurisdictions).toEqual(['IN', 'US'])
+    expect(result.claimsHandling).toBe('use as is')
+  })
+})
+
+describe('evaluateDraftQualityGate', () => {
+  const completeDraft = {
+    title: 'Smart valve',
+    fieldOfInvention: 'The invention relates to valves.',
+    background: 'Known valves require manual tuning.',
+    summary: 'The valve includes a monitored restriction member.',
+    detailedDescription: 'The monitored restriction member is described.',
+    claims: '1. A valve assembly comprising a monitored restriction member.',
+    abstract: 'Smart valve includes a monitored restriction member.',
+  }
+
+  it('passes a complete reviewed draft with clean validation', () => {
+    const gate = evaluateDraftQualityGate({
+      jurisdiction: 'IN',
+      sections: Object.keys(completeDraft),
+      draft: completeDraft,
+      validationReport: { invalidReferences: [] },
+      extendedReport: { hasIssues: true, hardFail: false },
+      generationWarnings: [],
+      reviewAttempted: true,
+    })
+
+    expect(gate.ok).toBe(true)
+  })
+
+  it('blocks missing sections, generation warnings, invalid references, and skipped review', () => {
+    const gate = evaluateDraftQualityGate({
+      jurisdiction: 'IN',
+      sections: [...Object.keys(completeDraft), 'industrialApplicability'],
+      draft: completeDraft,
+      validationReport: { invalidReferences: ['Figure 9'] },
+      generationWarnings: ['detailedDescription used fallback content'],
+      reviewAttempted: false,
+    })
+
+    expect(gate.ok).toBe(false)
+    expect(gate.message).toContain('industrialApplicability')
+    expect(gate.message).toContain('Figure 9')
+    expect(gate.message).toContain('fallback content')
+    expect(gate.message).toContain('AI review was not run')
   })
 })

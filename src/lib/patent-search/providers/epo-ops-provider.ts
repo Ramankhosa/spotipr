@@ -8,10 +8,11 @@ import type {
   PatentSearchProvider,
 } from '../types'
 import { asStringArray, clampLimit, normalizeClassification, normalizeWhitespace, uniqueStrings, yearFromDate } from '../utils'
+import { fetchWithProviderTimeout, providerTimeoutGraceMs, providerTimeoutMs } from '../provider-runtime'
 
 const EPO_AUTH_URL = 'https://ops.epo.org/3.2/auth/accesstoken'
 const EPO_BASE_URL = 'https://ops.epo.org/3.2/rest-services'
-const EPO_TIMEOUT_MS = Math.max(1000, Number(process.env.EPO_OPS_TIMEOUT_MS || '20000') || 20_000)
+const EPO_TIMEOUT_MS = providerTimeoutMs('epo-ops', Math.max(1000, Number(process.env.EPO_OPS_TIMEOUT_MS || '20000') || 20_000))
 
 let tokenCache: { token: string; expiresAt: number } | null = null
 
@@ -52,7 +53,7 @@ async function requestEpoAccessToken() {
   const authEndpoint = epoAuthUrl()
   const authStartedAt = Date.now()
   console.info('[EpoOpsProvider]', JSON.stringify({ event: 'oauth_request', endpoint: authEndpoint, method: 'POST' }))
-  const response = await fetch(authEndpoint, {
+  const response = await fetchWithProviderTimeout(authEndpoint, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -61,6 +62,11 @@ async function requestEpoAccessToken() {
     },
     body: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
     cache: 'no-store',
+  }, {
+    providerId: 'epo-ops',
+    operation: 'oauth_token',
+    timeoutMs: EPO_TIMEOUT_MS,
+    graceMs: providerTimeoutGraceMs('epo-ops'),
   })
 
   const text = await response.text()
@@ -332,12 +338,17 @@ function parseEpoResults(xml: string, cql: string) {
 async function fetchEpoBiblioXml(reference: EpoPublicationReference, token: string) {
   const kind = reference.kind ? `.${reference.kind}` : ''
   const docdb = `${reference.country}.${reference.docNumber}${kind}`
-  const response = await fetch(`${epoBaseUrl()}/published-data/publication/docdb/${encodeURIComponent(docdb)}/biblio`, {
+  const response = await fetchWithProviderTimeout(`${epoBaseUrl()}/published-data/publication/docdb/${encodeURIComponent(docdb)}/biblio`, {
     headers: {
       Accept: 'application/exchange+xml',
       Authorization: `Bearer ${token}`,
     },
     cache: 'no-store',
+  }, {
+    providerId: 'epo-ops',
+    operation: 'biblio_lookup',
+    timeoutMs: EPO_TIMEOUT_MS,
+    graceMs: providerTimeoutGraceMs('epo-ops'),
   })
   const xml = await response.text()
   if (!response.ok) {
@@ -395,22 +406,19 @@ export class EpoOpsProvider implements PatentSearchProvider {
     }))
 
     const token = await requestEpoAccessToken()
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), EPO_TIMEOUT_MS)
-    let response: Response
-    try {
-      response = await fetch(`${epoBaseUrl()}/published-data/search/biblio?q=${encodeURIComponent(cql)}`, {
-        headers: {
-          Accept: 'application/exchange+xml',
-          Authorization: `Bearer ${token}`,
-          'X-OPS-Range': `1-${Math.min(maxResults, 100)}`,
-        },
-        signal: controller.signal,
-        cache: 'no-store',
-      })
-    } finally {
-      clearTimeout(timeout)
-    }
+    const response = await fetchWithProviderTimeout(`${epoBaseUrl()}/published-data/search/biblio?q=${encodeURIComponent(cql)}`, {
+      headers: {
+        Accept: 'application/exchange+xml',
+        Authorization: `Bearer ${token}`,
+        'X-OPS-Range': `1-${Math.min(maxResults, 100)}`,
+      },
+      cache: 'no-store',
+    }, {
+      providerId: 'epo-ops',
+      operation: 'search_biblio',
+      timeoutMs: EPO_TIMEOUT_MS,
+      graceMs: providerTimeoutGraceMs('epo-ops'),
+    })
 
     const xml = await response.text()
     if (!response.ok) {

@@ -467,6 +467,16 @@ export async function buildCanonicalEmailDraftPayload(requestRecord: any): Promi
   }
 }
 
+function buildEnabledJurisdictionToggles(jurisdictions: unknown): Record<string, boolean> {
+  const source = Array.isArray(jurisdictions) ? jurisdictions : []
+  return Object.fromEntries(
+    source
+      .map(code => String(code || '').trim().toUpperCase())
+      .filter(Boolean)
+      .map(code => [code, true] as const)
+  )
+}
+
 async function createEvent(requestId: string, stage: string, state: string, message?: string, meta?: any) {
   await (prisma as any).emailDraftEvent.create({
     data: {
@@ -1465,17 +1475,24 @@ export async function processEmailDraftRequestById(requestId: string, workerId =
 
     await transitionRequest(requestId, 'DRAFTING')
     if (payload.illustrativeData) {
+      const enabledToggles = buildEnabledJurisdictionToggles(jurisdictions)
       const ddData = await prisma.dDUserData.findUnique({ where: { sessionId } })
       if (ddData) {
+        const existingToggles = ((ddData as any).jurisdictionToggles || {}) as Record<string, boolean>
         await prisma.dDUserData.update({
           where: { sessionId },
-          data: { userData: payload.illustrativeData, updatedBy: user.id }
+          data: {
+            userData: payload.illustrativeData,
+            jurisdictionToggles: { ...existingToggles, ...enabledToggles },
+            updatedBy: user.id
+          }
         })
       } else {
         await prisma.dDUserData.create({
           data: {
             sessionId,
             userData: payload.illustrativeData,
+            jurisdictionToggles: enabledToggles,
             createdBy: user.id,
             updatedBy: user.id
           }

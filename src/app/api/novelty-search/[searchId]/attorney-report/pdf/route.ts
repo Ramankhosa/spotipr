@@ -122,6 +122,10 @@ function statusPalette(status: string) {
   return STATUS.Review;
 }
 
+function patentDestination(index: number) {
+  return `patent-detail-${index + 1}`;
+}
+
 function overlapDescriptor(score: number | null | undefined) {
   const value = typeof score === 'number' ? score : 0;
   if (value >= 0.7) return 'Broad mapped overlap';
@@ -231,7 +235,7 @@ function drawFlowingLabeledText(
     doc.fillColor(options.color || '#334155').font(FONTS.regular).fontSize(fontSize);
     const available = Math.max(24, pageBottom(doc) - doc.y);
     const [chunk, rest] = fitTextToHeight(doc, remaining, width, available, lineGap);
-    doc.text(chunk, x, doc.y, { width, align: proseAlign(chunk), lineGap });
+    doc.text(chunk, x, doc.y, { width, align: cleanText(chunk, '').split(/\s+/).filter(Boolean).length >= 4 ? 'justify' : 'left', lineGap });
     remaining = rest;
     if (remaining) {
       addPage(doc);
@@ -330,7 +334,7 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
 
   doc.rect(PAGE.left, 76, 82, 5).fill(COLORS.cyan);
   doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text('PatentNest.ai', PAGE.left, 96, { width: 300 });
-  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3).text('Title/Abstract-Based Patent Screening Report', PAGE.left, 128, { width: 420 });
+  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3).text('Preliminary Novelty Assessment Report', PAGE.left, 128, { width: 420 });
 
   doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.display)
     .text(report.reportTitle, PAGE.left, 254, { width: 405, lineGap: SPACE.xs });
@@ -790,6 +794,7 @@ function labeledLine(label: string, value: unknown) {
 
 function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
   const statusLabel = cleanText(row.statusLabel, cleanText(row.status, 'Review'));
+  const statusCode = cleanText(row.publicMappingCode, row.status === 'Present' ? 'D' : row.status === 'Partial' ? 'P' : row.status === 'Absent' ? 'N' : 'R');
   const supportingPassage = cleanText(row.evidenceQuote, '');
   const submittedDisclosure = cleanText(row.userDisclosure, '');
 
@@ -799,8 +804,8 @@ function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
       submittedDisclosure ? labeledLine('Submitted disclosure', submittedDisclosure) : '',
     ].filter(Boolean).join('\n'),
     [
+      `Mapping assessment: ${statusCode} - ${statusLabel}`,
       cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.'),
-      `Mapping assessment: ${statusLabel}`,
       `Evidence strength: ${cleanText(row.evidenceStrength, 'Weak')} - ${cleanText(row.evidenceStrengthReason, 'Evidence should be confirmed from source records.')}`,
       supportingPassage ? labeledLine('Supporting passage', supportingPassage) : '',
     ].filter(Boolean).join('\n'),
@@ -841,12 +846,30 @@ function hasRemainingTableText(cells: string[]) {
 }
 
 function referenceRowStatus(cells: string[]) {
-  const statusLine = cleanText(cells[3], '').split('\n')[0] || '';
+  const statusLine = cleanText(cells[1], '').split('\n').find(line => /^Mapping assessment:/i.test(line)) || '';
   const status = statusLine.replace(/^Status:\s*/i, '');
-  if (/present/i.test(status)) return 'Present';
-  if (/partial/i.test(status)) return 'Partial';
-  if (/absent/i.test(status)) return 'Absent';
+  if (/\bD\b|direct|present/i.test(status)) return 'Present';
+  if (/\bP\b|partial/i.test(status)) return 'Partial';
+  if (/\bN\b|absent|not found|not expressly taught/i.test(status)) return 'Absent';
   return 'Review';
+}
+
+function referenceStatusParts(cells: string[]) {
+  const line = cleanText(cells[1], '').split('\n').find(item => /^Mapping assessment:/i.test(item)) || '';
+  const value = line.replace(/^Mapping assessment:\s*/i, '').trim();
+  const match = value.match(/^([A-Z])\s*[-:]\s*(.+)$/);
+  const status = referenceRowStatus(cells);
+  const code = match?.[1] || (status === 'Present' ? 'D' : status === 'Partial' ? 'P' : status === 'Absent' ? 'N' : 'R');
+  const label = match?.[2] || (status === 'Present' ? 'Directly Mapped' : status === 'Partial' ? 'Partially Mapped' : status === 'Absent' ? 'Not Found' : 'Requires Full-Text Review');
+  return { code, label, line };
+}
+
+function removeReferenceStatusLine(text: string) {
+  return cleanText(text, '')
+    .split('\n')
+    .filter(line => !/^Mapping assessment:/i.test(line))
+    .join('\n')
+    .trim();
 }
 
 function referenceRowFill(status: string, rowIndex: number, continuation: boolean) {
@@ -886,20 +909,37 @@ function drawReferenceFeatureRowChunk(
     const textWidth = widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2;
     const textHeight = rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2;
 
-    if (index === 3 && !continuation) {
-      const statusLine = text.split('\n')[0] || '';
-      const badgeWidth = Math.min(textWidth, Math.max(42, doc.widthOfString(statusLine) + 12));
-      doc.roundedRect(textX - 1, textY - 1, badgeWidth, 13, 3).fillAndStroke(palette.fill, palette.stroke);
+    if (index === 1 && !continuation) {
+      const { code, label } = referenceStatusParts(cells);
+      const badgeWidth = Math.min(36, Math.max(24, doc.widthOfString(code) + 14));
+      doc.roundedRect(textX, textY, badgeWidth, 14, 4).fillAndStroke(palette.fill, palette.stroke);
+      doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
+        .text(code, textX + 2, textY + 4, {
+          width: badgeWidth - 4,
+          height: 8,
+          align: 'center',
+          lineBreak: false,
+        });
+      doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
+        .text(`Mapping assessment: ${label}`, textX + badgeWidth + 5, textY + 4, {
+          width: Math.max(20, textWidth - badgeWidth - 5),
+          height: 8,
+          lineBreak: false,
+          ellipsis: true,
+        });
     }
 
-    const textColor = index === 0 ? COLORS.blue2 : (index === 4 ? '#111827' : COLORS.text);
+    const renderedText = index === 1 && !continuation ? removeReferenceStatusLine(text) : text;
+    const renderedTextY = index === 1 && !continuation ? textY + 18 : textY;
+    const renderedTextHeight = index === 1 && !continuation ? Math.max(8, textHeight - 18) : textHeight;
+    const textColor = index === 0 ? COLORS.blue2 : COLORS.text;
     doc.fillColor(textColor)
       .font(index === 0 ? FONTS.semibold : FONTS.regular)
       .fontSize(REFERENCE_FEATURE_TABLE.fontSize)
-      .text(text, textX, textY, {
+      .text(renderedText, textX, renderedTextY, {
         width: textWidth,
-        height: textHeight,
-        align: index === 0 ? 'center' : proseAlign(text),
+        height: renderedTextHeight,
+        align: index === 0 ? 'justify' : proseAlign(renderedText),
         lineGap: REFERENCE_FEATURE_TABLE.lineGap,
       });
     x += widths[index];
@@ -1071,6 +1111,7 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
       drawFeatureMatrixRow(
         doc,
         item.publicationNumber,
+        patentDestination(itemIndex),
         item.referenceRole,
         item.reviewPriority,
         item.overlapRiskLevel,
@@ -1109,6 +1150,7 @@ function drawFeatureMatrixHeader(doc: PdfDoc, headers: string[], widths: number[
 function drawFeatureMatrixRow(
   doc: PdfDoc,
   publicationNumber: string,
+  destination: string,
   referenceRole: string,
   reviewPriority: string,
   overlapSignal: string,
@@ -1125,6 +1167,10 @@ function drawFeatureMatrixRow(
 
   widths.forEach((width, index) => {
     if (index === 0) {
+      const linkX = x + 4;
+      const linkY = y + 5;
+      const linkWidth = width - 8;
+      const linkHeight = rowHeight - 10;
       doc.fillColor(strongest ? COLORS.blue2 : '#334155')
         .font(strongest ? FONTS.semibold : FONTS.regular)
         .fontSize(TYPE.caption)
@@ -1134,6 +1180,9 @@ function drawFeatureMatrixRow(
           lineBreak: false,
           ellipsis: true,
         });
+      doc.goTo(linkX, linkY, linkWidth, linkHeight, destination, { Border: [0, 0, 0] });
+      doc.moveTo(x + 8, y + 22).lineTo(x + Math.min(width - 8, 8 + doc.widthOfString(publicationNumber)), y + 22)
+        .lineWidth(0.25).strokeColor(strongest ? COLORS.blue2 : COLORS.border).stroke();
     } else if (index === 1) {
       const label = cleanText(referenceRole, 'Review');
       const badgeWidth = Math.min(86, width - 10);
@@ -1269,6 +1318,7 @@ function drawCitationCardHeader(
   index: number,
   total: number,
   jurisdiction: string,
+  destination?: string,
 ) {
   const x = PAGE.left;
   const width = contentWidth(doc);
@@ -1276,6 +1326,9 @@ function drawCitationCardHeader(
   const titleHeight = doc.heightOfString(cleanText(item.title), { width: width - 28, lineGap: 1.5 });
   const height = Math.max(184, 155 + titleHeight);
   ensureSpace(doc, height + SPACE.lg);
+  if (destination) {
+    doc.addNamedDestination(destination, 'XYZ', PAGE.left, Math.max(PAGE.top, doc.y - 8), null);
+  }
   const y = doc.y;
   drawCard(doc, x, y, width, height, 7);
   const riskPalette = verdictPalette(item.noveltyThreat || item.overlapRiskLevel);
@@ -1388,7 +1441,7 @@ export async function GET(
       info: { Title: report.reportTitle, Author: report.preparedBy, Subject: report.inventionTitle },
     });
     registerReportFonts(doc);
-    const sectionPages: Array<{ number: string; title: string; page: number; destination: string; level: 1 | 2 }> = [];
+    const sectionPages: Array<{ number: string; title: string; page: number; destination: string; level: 1 | 2 | 3 }> = [];
 
     drawCover(doc, report);
 
@@ -1476,7 +1529,15 @@ export async function GET(
     startSection('2.1', 'Details of Relevant Patent Citations', 2);
     for (let itemIndex = 0; itemIndex < report.comparisons.length; itemIndex += 1) {
       const item = report.comparisons[itemIndex];
-      drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction);
+      const destination = patentDestination(itemIndex);
+      drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction, destination);
+      sectionPages.push({
+        number: `2.1.${itemIndex + 1}`,
+        title: `${cleanText(item.publicationNumber)} - ${truncate(item.title, 74)}`,
+        page: doc.bufferedPageRange().count,
+        destination,
+        level: 3,
+      });
       drawMetadataGrid(doc, [
         ['Application No.', item.applicationNumber],
         ['Filing Date', item.filingDate],
@@ -1632,9 +1693,12 @@ export async function GET(
     doc.y += SPACE.lg;
     sectionPages.forEach(item => {
       const y = doc.y;
-      const rowHeight = item.level === 1 ? 22 : 18;
-      const indent = item.level === 2 ? SPACE.lg : 0;
-      doc.font(item.level === 1 ? FONTS.semibold : FONTS.regular).fontSize(item.level === 1 ? TYPE.body : TYPE.small).fillColor(COLORS.text)
+      const rowHeight = item.level === 1 ? 22 : item.level === 2 ? 18 : 16;
+      const indent = item.level === 3 ? SPACE.xl : item.level === 2 ? SPACE.lg : 0;
+      const font = item.level === 1 ? FONTS.semibold : item.level === 3 ? FONTS.regular : FONTS.regular;
+      const fontSize = item.level === 1 ? TYPE.body : item.level === 3 ? TYPE.micro : TYPE.small;
+      const textColor = item.level === 3 ? COLORS.blue2 : COLORS.text;
+      doc.font(font).fontSize(fontSize).fillColor(textColor)
         .text(`${item.number} ${item.title}`.trim(), PAGE.left + indent, y, { width: contentWidth(doc) - 58 - indent });
       doc.font(FONTS.semibold).fontSize(TYPE.small).fillColor(COLORS.blue)
         .text(String(item.page), doc.page.width - PAGE.right - 42, y, { width: 42, align: 'right' });

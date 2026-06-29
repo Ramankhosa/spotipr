@@ -8,9 +8,10 @@ import type {
 import { createPatentSearchQueryPlan } from './query-planner'
 import { getPatentSearchProvider, listPatentSearchProviders, resolveProviderIds } from './provider-registry'
 import { canonicalPatentResultKey, clampLimit, uniqueStrings } from './utils'
+import { compactLogDetails } from './provider-runtime'
 
 function logSearchEvent(event: string, details: Record<string, unknown>) {
-  console.info('[PatentSearch]', JSON.stringify({ event, ...details }))
+  console.info('[PatentSearch]', JSON.stringify(compactLogDetails({ event, ...details })))
 }
 
 function resultLogSummary(result: NormalizedPatentResult) {

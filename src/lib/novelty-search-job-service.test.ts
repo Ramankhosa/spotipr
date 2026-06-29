@@ -20,15 +20,18 @@ describe('novelty search job cancellation', () => {
     const findFirst = vi.spyOn((prisma as any).noveltySearchJob, 'findFirst').mockResolvedValue({
       id: 'job-1',
       status: 'PROCESSING',
+      search: { stage4Results: { existing: true } },
     })
     const updateMany = vi.spyOn((prisma as any).noveltySearchJob, 'updateMany').mockResolvedValue({ count: 1 })
+    const runUpdate = vi.spyOn(prisma.noveltySearchRun, 'update').mockResolvedValue({} as any)
+    vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => callback(prisma))
 
     const result = await cancelNoveltySearch('search-1', 'user-1')
 
     expect(result).toEqual({ outcome: 'cancelled', searchId: 'search-1', status: 'CANCELLED' })
     expect(findFirst).toHaveBeenCalledWith({
       where: { searchId: 'search-1', search: { userId: 'user-1' } },
-      select: { id: true, status: true },
+      include: { search: true },
     })
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: 'job-1', status: { in: ['QUEUED', 'PROCESSING'] } },
@@ -39,6 +42,20 @@ describe('novelty search job cancellation', () => {
         cancelledAt: expect.any(Date),
         lockedBy: null,
         lockedUntil: null,
+      }),
+    })
+    expect(runUpdate).toHaveBeenCalledWith({
+      where: { id: 'search-1' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        reportUrl: null,
+        stage4Results: expect.objectContaining({
+          existing: true,
+          cancellation: expect.objectContaining({
+            cancelledById: 'user-1',
+            reason: 'USER_CANCELLED',
+          }),
+        }),
       }),
     })
   })

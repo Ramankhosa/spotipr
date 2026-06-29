@@ -64,10 +64,25 @@ async function heartbeat(jobId: string, workerId: string) {
   })
 }
 
+async function ensureJobActive(jobId: string, workerId?: string) {
+  const job = await (prisma as any).noveltySearchJob.findUnique({
+    where: { id: jobId },
+    select: { id: true, status: true, lockedBy: true },
+  })
+  if (!job || job.status === 'CANCELLED') throw new NoveltySearchJobLeaseLostError()
+  if (workerId && (job.status !== 'PROCESSING' || job.lockedBy !== workerId)) {
+    throw new NoveltySearchJobLeaseLostError()
+  }
+  return job
+}
+
 async function withHeartbeat<T>(jobId: string, workerId: string, work: () => Promise<T>) {
   const timer = setInterval(() => void heartbeat(jobId, workerId).catch(() => undefined), 60_000)
   try {
-    return await work()
+    await ensureJobActive(jobId, workerId)
+    const result = await work()
+    await ensureJobActive(jobId, workerId)
+    return result
   } finally {
     clearInterval(timer)
   }
@@ -136,6 +151,7 @@ async function runPipeline(job: any, workerId: string) {
   if (getRawStage1SearchResults(run.stage1Results).length === 0) {
     await setStep(job.id, workerId, 'NO_MATCH_REPORT')
     const result = await noveltySearchService.completeNoMatchNoveltySearch(run.id, user.id)
+    await ensureJobActive(job.id, workerId)
     if (!result.success) throw new Error(result.error || 'No-match report generation failed')
     return prisma.noveltySearchRun.findUnique({ where: { id: run.id } })
   }
@@ -150,6 +166,7 @@ async function runPipeline(job: any, workerId: string) {
   if (getVisibleNoveltyPatentCount(run.stage1Results) === 0) {
     await setStep(job.id, workerId, 'NO_MATCH_REPORT')
     const result = await noveltySearchService.completeNoMatchNoveltySearch(run.id, user.id)
+    await ensureJobActive(job.id, workerId)
     if (!result.success) throw new Error(result.error || 'No-match report generation failed')
     return prisma.noveltySearchRun.findUnique({ where: { id: run.id } })
   }
@@ -353,7 +370,7 @@ export async function requeueNoveltySearch(searchId: string, userId: string) {
 export async function cancelNoveltySearch(searchId: string, userId: string) {
   const job = await (prisma as any).noveltySearchJob.findFirst({
     where: { searchId, search: { userId } },
-    select: { id: true, status: true },
+    include: { search: true },
   })
   if (!job) return { outcome: 'not_found' as const }
   if (job.status === 'CANCELLED') return { outcome: 'cancelled' as const, searchId, status: 'CANCELLED' as const }
@@ -362,17 +379,39 @@ export async function cancelNoveltySearch(searchId: string, userId: string) {
   }
 
   const cancelledAt = new Date()
-  const updated = await (prisma as any).noveltySearchJob.updateMany({
-    where: { id: job.id, status: { in: ['QUEUED', 'PROCESSING'] } },
-    data: {
-      status: 'CANCELLED',
-      currentStep: 'CANCELLED',
-      cancelledAt,
+  const existingStage4 = (job.search?.stage4Results || {}) as any
+  const cancellationMetadata = {
+    ...(existingStage4 && typeof existingStage4 === 'object' && !Array.isArray(existingStage4) ? existingStage4 : {}),
+    cancellation: {
+      cancelledAt: cancelledAt.toISOString(),
       cancelledById: userId,
-      lockedBy: null,
-      lockedUntil: null,
-      lastError: null,
+      reason: 'USER_CANCELLED',
     },
+  }
+  const updated = await prisma.$transaction(async tx => {
+    const jobUpdate = await (tx as any).noveltySearchJob.updateMany({
+      where: { id: job.id, status: { in: ['QUEUED', 'PROCESSING'] } },
+      data: {
+        status: 'CANCELLED',
+        currentStep: 'CANCELLED',
+        cancelledAt,
+        cancelledById: userId,
+        lockedBy: null,
+        lockedUntil: null,
+        lastError: null,
+      },
+    })
+    if (jobUpdate.count === 1) {
+      await tx.noveltySearchRun.update({
+        where: { id: searchId },
+        data: {
+          status: NoveltySearchStatus.FAILED,
+          reportUrl: null,
+          stage4Results: cancellationMetadata as any,
+        },
+      })
+    }
+    return jobUpdate
   })
   if (updated.count === 1) return { outcome: 'cancelled' as const, searchId, status: 'CANCELLED' as const }
 

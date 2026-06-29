@@ -45,7 +45,7 @@ export async function GET(
     }
 
     // Check if user has writing samples (new persona system)
-    const hasSamples = await hasActiveWritingSamples(auth.user.id)
+    const hasSamples = await hasActiveWritingSamples(auth.user.id, auth.user.tenantId)
     
     // Get available personas
     let personas: any[] = []

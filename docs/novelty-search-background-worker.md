@@ -48,4 +48,4 @@ pm2 logs patentnest-novelty-worker --lines 200
 
 Queued work survives web or worker restarts. Do not run the worker before the migration is present.
 
-Users can cancel their own `QUEUED` or `PROCESSING` searches from novelty-search history. Cancellation immediately prevents the worker from claiming or completing the job. An external request already in flight may return before the worker observes cancellation, but no later pipeline stage, completion email, or usage record is produced for the cancelled job.
+Users can cancel their own `QUEUED` or `PROCESSING` searches from novelty-search history. Cancellation is hard: the job is marked `CANCELLED`, the run is prevented from completing, report URLs are cleared, and public history/detail APIs report `CANCELLED` from the job state. An external request already in flight may return before the worker observes cancellation, but guarded stage writes must not mark the run completed, send completion email, or record completed usage for the cancelled job.

@@ -57,13 +57,20 @@ export async function POST(
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, name: true, tenantId: true }
+      select: { id: true, email: true, name: true, tenantId: true, roles: true }
     });
 
     if (!user) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
+      );
+    }
+
+    if (!user.roles?.includes('SUPER_ADMIN')) {
+      return NextResponse.json(
+        { error: 'Manual novelty stage execution is restricted to internal administrators.' },
+        { status: 403 }
       );
     }
 
@@ -140,7 +147,7 @@ export async function POST(
         break;
       default:
         return NextResponse.json({
-          error: 'Invalid stage number. Valid stages: 1, 2, 3, 4, 5. Legacy stages are also supported: 1.5, 3.5, 3.5a, 3.5b, 3.5c.'
+          error: 'Invalid stage number.'
         }, { status: 400 });
     }
 

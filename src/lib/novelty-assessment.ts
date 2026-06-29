@@ -99,13 +99,13 @@ export class NoveltyAssessmentService {
    */
   static async startAssessment(request: NoveltyAssessmentRequest): Promise<NoveltyAssessmentResponse> {
     try {
-      // Verify JWT and extract user
-      const userEmail = await this.getUserFromJWT(request.jwtToken);
-      if (!userEmail) {
+      // Verify JWT and extract user id
+      const userId = await this.getUserFromJWT(request.jwtToken);
+      if (!userId) {
         return { success: false, error: 'Unauthorized' };
       }
 
-      const user = await prisma.user.findUnique({ where: { email: userEmail } });
+      const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) {
         return { success: false, error: 'User not found' };
       }
@@ -234,18 +234,39 @@ export class NoveltyAssessmentService {
         if (!stage2Result.success) {
           await prisma.noveltyAssessmentRun.update({
             where: { id: assessment.id },
-            data: { status: NoveltyAssessmentStatus.FAILED },
+            data: {
+              status: NoveltyAssessmentStatus.FAILED,
+              finalDetermination: NoveltyDetermination.DOUBT,
+              stage2Results: stage2Result.diagnostics as any,
+              finalRemarks: stage2Result.error || 'Stage 2 detailed assessment was incomplete',
+            },
           });
           return { success: false, error: stage2Result.error };
         }
 
         const stage2Data = stage2Result.data!;
+        if (stage2Data.length === 0) {
+          await prisma.noveltyAssessmentRun.update({
+            where: { id: assessment.id },
+            data: {
+              status: NoveltyAssessmentStatus.FAILED,
+              finalDetermination: NoveltyDetermination.DOUBT,
+              stage2Results: {
+                results: [],
+                failures: [{ reason: 'No detailed Stage 2 assessments were produced' }],
+                incomplete: true,
+              } as any,
+              finalRemarks: 'Stage 2 detailed assessment produced no results',
+            },
+          });
+          return { success: false, error: 'Stage 2 detailed assessment produced no results' };
+        }
 
         // Determine final novelty status based on stage 2 results
         let finalDetermination: NoveltyDetermination;
         const hasNotNovel = stage2Data.some((result: any) => result.determination === 'NOT_NOVEL');
         const hasPartiallyNovel = stage2Data.some((result: any) => result.determination === 'PARTIALLY_NOVEL');
-        const allNovel = stage2Data.every((result: any) => result.determination === 'NOVEL');
+        const allNovel = stage2Data.length > 0 && stage2Data.every((result: any) => result.determination === 'NOVEL');
 
         if (hasNotNovel) {
           finalDetermination = NoveltyDetermination.NOT_NOVEL;
@@ -415,20 +436,29 @@ Abstract: ${patent.abstract}`)
     assessmentId: string,
     request: NoveltyAssessmentRequest,
     stage1Assessments: any[]
-  ): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  ): Promise<{ success: boolean; data?: any[]; error?: string; diagnostics?: any }> {
     try {
       const results: any[] = [];
+      const failures: Array<{ publicationNumber: string; reason: string; detail?: string }> = [];
 
       // Only assess patents that were marked as MEDIUM relevance in Stage 1
-      const patentsToAssess = stage1Assessments
+      const mediumAssessments = stage1Assessments.filter(assessment => assessment.relevance === 'MEDIUM');
+      const patentsToAssess = mediumAssessments
         .filter(assessment => assessment.relevance === 'MEDIUM')
         .map(assessment => {
           const patent = request.intersectingPatents.find(p => p.publicationNumber === assessment.publication_number);
           return { assessment, patent };
-        })
-        .filter(item => item.patent);
+        });
 
-      for (const { assessment, patent } of patentsToAssess) {
+      const missingPatents = patentsToAssess.filter(item => !item.patent);
+      for (const missing of missingPatents) {
+        failures.push({
+          publicationNumber: String(missing.assessment?.publication_number || 'unknown'),
+          reason: 'MATCHING_PATENT_NOT_FOUND',
+        });
+      }
+
+      for (const { patent } of patentsToAssess.filter(item => item.patent)) {
         // Fetch detailed patent data (title, abstract, claims)
         const detailedData = await this.fetchPatentDetails(patent!.publicationNumber);
 
@@ -455,11 +485,23 @@ Abstract: ${patent.abstract}`)
 
         if (!result.success || !result.response) {
           console.error(`Stage 2 failed for patent ${patent!.publicationNumber}:`, result.error);
-          continue; // Continue with other patents
+          failures.push({
+            publicationNumber: patent!.publicationNumber,
+            reason: 'LLM_CALL_FAILED',
+            detail: typeof result.error === 'string' ? result.error : JSON.stringify(result.error || {}),
+          });
+          continue;
         }
 
         // Parse response
-        const responseText = result.response.output.trim();
+        const responseText = String(result.response.output || '').trim();
+        if (!responseText) {
+          failures.push({
+            publicationNumber: patent!.publicationNumber,
+            reason: 'EMPTY_LLM_RESPONSE',
+          });
+          continue;
+        }
         let detailedAssessment;
 
         try {
@@ -467,10 +509,18 @@ Abstract: ${patent.abstract}`)
           const jsonText = jsonMatch ? jsonMatch[1].trim() : responseText;
           const startBrace = jsonText.indexOf('{');
           const lastBrace = jsonText.lastIndexOf('}');
+          if (startBrace < 0 || lastBrace <= startBrace) {
+            throw new Error('No JSON object found in Stage 2 response');
+          }
           const cleanJson = jsonText.substring(startBrace, lastBrace + 1);
           detailedAssessment = JSON.parse(cleanJson);
         } catch (parseError) {
           console.error(`Stage 2 JSON parse error for ${patent!.publicationNumber}:`, parseError);
+          failures.push({
+            publicationNumber: patent!.publicationNumber,
+            reason: 'JSON_PARSE_FAILED',
+            detail: parseError instanceof Error ? parseError.message : String(parseError),
+          });
           continue;
         }
 
@@ -505,6 +555,22 @@ Abstract: ${patent.abstract}`)
           publicationNumber: patent!.publicationNumber,
           ...detailedAssessment,
         });
+      }
+
+      if (failures.length > 0 || results.length !== mediumAssessments.length) {
+        const diagnostics = {
+          incomplete: true,
+          expectedPublicationNumbers: mediumAssessments.map(assessment => assessment.publication_number),
+          completedPublicationNumbers: results.map(result => result.publicationNumber),
+          results,
+          failures,
+        };
+        return {
+          success: false,
+          data: results,
+          diagnostics,
+          error: `Stage 2 detailed assessment incomplete: ${failures.length} failed, ${results.length}/${mediumAssessments.length} completed`,
+        };
       }
 
       return { success: true, data: results };
@@ -604,14 +670,6 @@ Abstract: ${patent.abstract}`)
         return { success: false, error: 'Assessment not found' };
       }
 
-      // Generate report URL if assessment is completed
-      let reportUrl: string | undefined;
-      if (assessment.status === NoveltyAssessmentStatus.NOVEL ||
-          assessment.status === NoveltyAssessmentStatus.NOT_NOVEL ||
-          assessment.status === NoveltyAssessmentStatus.DOUBT_RESOLVED) {
-        reportUrl = `/api/patents/${assessment.patentId}/novelty-assessment/${assessment.id}/report`;
-      }
-
       return {
         success: true,
         assessmentId: assessment.id,
@@ -621,7 +679,7 @@ Abstract: ${patent.abstract}`)
         suggestions: assessment.finalSuggestions || undefined,
         stage1Results: assessment.stage1Results as any[] || undefined,
         stage2Results: assessment.stage2Results as any[] || undefined,
-        reportUrl,
+        reportUrl: undefined,
       };
 
     } catch (error) {
@@ -854,10 +912,16 @@ Relevance: ${patent.relevance}%`;
       }
 
       // Update assessment record
+      const assessmentStatus = determination === NoveltyDetermination.DOUBT
+        ? NoveltyAssessmentStatus.STAGE1_COMPLETED
+        : determination === NoveltyDetermination.NOT_NOVEL
+          ? NoveltyAssessmentStatus.NOT_NOVEL
+          : NoveltyAssessmentStatus.NOVEL;
+
       await prisma.noveltyAssessmentRun.update({
         where: { id: assessment.id },
         data: {
-          status: determination === NoveltyDetermination.DOUBT ? NoveltyAssessmentStatus.STAGE1_COMPLETED : NoveltyAssessmentStatus.NOVEL,
+          status: assessmentStatus,
           finalDetermination: determination,
           stage1Results: level1Results,
           finalRemarks: level1Results.summary_remarks || `Level 1 assessment: ${determination}`,

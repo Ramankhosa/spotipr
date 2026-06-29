@@ -18,7 +18,7 @@ function safeReportText(value: any) {
   return value
     .normalize('NFKC')
     .replace(/\uFFFD/g, '')
-    .replace(/\bno abstract available\.?/gi, 'No abstract was available; review the full patent document where needed.')
+    .replace(/\bno abstract available\.?/gi, 'Source record detail was unavailable; review the full patent document where needed.')
     .replace(/\bcomplete information (?:was|is) not available\b/gi, 'source record review is recommended')
     .replace(/\bnot available\b/gi, 'to be confirmed')
     .replace(/\bunavailable\b/gi, 'to be confirmed')
@@ -35,12 +35,16 @@ function safeReportText(value: any) {
     .replace(/\bpreliminary report\b/gi, 'patent intelligence report')
     .replace(/\bpreliminary claim-positioning observations\b/gi, 'claim-positioning observations')
     .replace(/\bpreliminary patent intelligence\b/gi, 'patent intelligence')
-    .replace(/\banticipated by\b/gi, 'shows high abstract-level overlap with')
-    .replace(/\banticipates?\b/gi, 'shows high abstract-level overlap')
-    .replace(/\bexact match\b/gi, 'high abstract-level overlap candidate')
-    .replace(/\bdecisive match\b/gi, 'high abstract-level overlap candidate')
+    .replace(/\banticipated by\b/gi, 'shows high mapped overlap with')
+    .replace(/\banticipates?\b/gi, 'shows high mapped overlap')
+    .replace(/\bexact match\b/gi, 'high mapped-overlap candidate')
+    .replace(/\bdecisive match\b/gi, 'high mapped-overlap candidate')
+    .replace(/\bhigh abstract-level overlap\b/gi, 'high mapped overlap')
+    .replace(/\btitle\/abstract(?:-based)?\b/gi, 'preliminary record')
+    .replace(/\babstract-level\b/gi, 'record-level')
     .replace(/\bnot novel\b/gi, 'high mapped-overlap risk')
-    .replace(/\bno prior art (?:was )?found\b/gi, 'no high abstract-level overlap candidate was identified among screened title/abstract records');
+    .replace(/\bno prior art (?:was )?found\b/gi, 'no high-overlap candidate was identified among the screened preliminary records')
+    .replace(/\bscreened title\/abstract records\b/gi, 'screened preliminary records');
 }
 
 export default function Stage4ResultsDisplay({
@@ -76,21 +80,24 @@ export default function Stage4ResultsDisplay({
   const adaptiveReason = r.screeningStopReason || r.projectedScreeningStopReason || adaptive.terminalStopReason || adaptive.projectedStopReason;
   const displayCardLabel = (key: string) => key === 'Unique Features' ? 'Potential Differentiators' : key;
   const publicAssessment = overallAssessment === 'Novel'
-    ? 'No High Abstract-Level Overlap Identified'
+    ? 'No High-Overlap Candidate Identified'
     : overallAssessment === 'Partially Novel'
-      ? 'Moderate Abstract-Level Overlap'
+      ? 'Moderate Mapped Overlap'
       : overallAssessment === 'Not Novel'
-        ? 'High Abstract-Level Overlap Risk'
+        ? 'High Mapped-Overlap Risk'
         : overallAssessment;
+  const reportTitle = typeof metadata.title === 'string' && /title\/abstract/i.test(metadata.title)
+    ? 'Preliminary Novelty Assessment Report'
+    : (sanitize(metadata.title) || 'Preliminary Novelty Assessment Report');
 
   return (
     <div className="space-y-6">
       <section className="rounded-lg border border-slate-200 border-t-indigo-500 border-t-4 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <div className="text-sm font-medium text-slate-500">AI Title/Abstract Screening</div>
+            <div className="text-sm font-medium text-slate-500">AI Preliminary Screening</div>
             <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-              {metadata.title || 'Title/Abstract-Based Patent Screening Report'}
+              {reportTitle}
             </h2>
             <div className="mt-2 text-sm text-slate-500">
               Search ID: {metadata.search_id || searchId} | {metadata.date || new Date().toISOString().slice(0, 10)}

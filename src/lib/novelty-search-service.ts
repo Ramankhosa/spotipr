@@ -9,6 +9,7 @@ import { checkServiceAccess } from './org-access-service';
 import { sendEmail } from './mailer';
 import crypto from 'crypto';
 import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
+import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
   DEFAULT_MINIMUM_VISIBLE_CONFIDENCE,
   DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
@@ -646,7 +647,7 @@ OUTPUT JSON STRUCTURE:
     ]
   },
  "report_metadata": {
-   "title": "Title/Abstract-Based Patent Screening Report",
+   "title": "Preliminary Novelty Assessment Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
    "analyst": "SpotIPR AI",
@@ -788,7 +789,7 @@ Hard constraints:
 Output JSON shape (exact keys):
 {
   "report_metadata": {
-    "title": "Title/Abstract-Based Patent Screening Report",
+    "title": "Preliminary Novelty Assessment Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
     "jurisdiction": "SEARCH_JURISDICTION",
@@ -860,7 +861,7 @@ Strict rules:
 Output JSON shape (exact keys):
 {
   "report_metadata": {
-    "title": "Title/Abstract-Based Patent Screening Report",
+    "title": "Preliminary Novelty Assessment Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
     "jurisdiction": "SEARCH_JURISDICTION",
@@ -947,7 +948,7 @@ STRICT RULES
 OUTPUT JSON SHAPE:
 {
   "report_metadata": {
-    "title": "Title/Abstract-Based Patent Screening Report",
+    "title": "Preliminary Novelty Assessment Report",
     "search_id": "SEARCH_ID",
     "date": "GENERATION_DATE",
     "jurisdiction": "SEARCH_JURISDICTION",
@@ -1623,6 +1624,17 @@ export class NoveltySearchService extends BasePatentService {
     }
   };
 
+  private async ensureSearchNotCancelled(searchId: string): Promise<{ success: true } | { success: false; error: string }> {
+    const job = await (prisma as any).noveltySearchJob.findUnique({
+      where: { searchId },
+      select: { status: true },
+    });
+    if (job?.status === 'CANCELLED') {
+      return { success: false, error: 'Novelty search was cancelled' };
+    }
+    return { success: true };
+  }
+
   normalizeApprovedStage0(stage0Data: NormalizedIdea, inventionDisclosure = ''): NormalizedIdea {
     return this.normalizeStage0Idea(stage0Data, inventionDisclosure);
   }
@@ -2126,6 +2138,9 @@ export class NoveltySearchService extends BasePatentService {
     options?: { appendNextBatch?: boolean }
   ): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
@@ -2159,6 +2174,8 @@ export class NoveltySearchService extends BasePatentService {
 
       const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders, options);
       if (!gate.success) return { success: false, error: gate.error || 'Stage 1.5 failed' };
+      const postGateCancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postGateCancellation.success) return postGateCancellation;
 
       // Merge back into stage1Results and persist
       const merged = this.mergeStage15Visibility(stage1Data, gate.data, config);
@@ -2182,6 +2199,9 @@ export class NoveltySearchService extends BasePatentService {
    */
   async executeStage1(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       // Get search run
       let searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
@@ -2201,6 +2221,8 @@ export class NoveltySearchService extends BasePatentService {
 
       // Perform Stage 1 screening through the modular provider orchestrator.
       const stage1Result = await this.performStage1(searchRun, stage0Data, config, requestHeaders);
+      const postSearchCancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postSearchCancellation.success) return postSearchCancellation;
 
       if (!stage1Result.success) {
         await prisma.noveltySearchRun.update({
@@ -2253,6 +2275,9 @@ export class NoveltySearchService extends BasePatentService {
    */
   async executeStage2(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
@@ -2265,6 +2290,8 @@ export class NoveltySearchService extends BasePatentService {
       let stage1Data = searchRun.stage1Results as unknown as any;
       if (!stage1Data || this.getStage1CandidatePool(stage1Data).length === 0) {
         const stage1Result = await this.performStage1(searchRun, stage0Data, config, requestHeaders);
+        const postSearchCancellation = await this.ensureSearchNotCancelled(searchId);
+        if (!postSearchCancellation.success) return postSearchCancellation;
         if (!stage1Result.success) {
           await prisma.noveltySearchRun.update({ where: { id: searchId }, data: { status: NoveltySearchStatus.FAILED } });
           return { success: false, error: stage1Result.error };
@@ -2274,6 +2301,8 @@ export class NoveltySearchService extends BasePatentService {
 
       if (this.getStage1CandidatePool(stage1Data).length > 0) {
         const gate = await this.performStage15(searchId, stage0Data, stage1Data, config, requestHeaders);
+        const postGateCancellation = await this.ensureSearchNotCancelled(searchId);
+        if (!postGateCancellation.success) return postGateCancellation;
         if (!gate.success) return { success: false, error: gate.error || 'AI relevance gate failed' };
         stage1Data = this.mergeStage15Visibility(stage1Data, gate.data, config);
       } else {
@@ -2326,6 +2355,9 @@ export class NoveltySearchService extends BasePatentService {
    */
   async executeStage3(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       let searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
@@ -2371,6 +2403,8 @@ export class NoveltySearchService extends BasePatentService {
 
       if (!hasExistingDeepAnalysis) {
         const consolidated = await this.performConsolidatedDeepAnalysis(searchId, stage0Data, stage1Data, config, requestHeaders);
+        const postAnalysisCancellation = await this.ensureSearchNotCancelled(searchId);
+        if (!postAnalysisCancellation.success) return postAnalysisCancellation;
 
         if (consolidated.success && consolidated.data) {
           stage35Data = consolidated.data.stage35Data;
@@ -2450,6 +2484,9 @@ export class NoveltySearchService extends BasePatentService {
     selectedPublicationNumbers?: string[]
   ): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       // Get search run
       let searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
@@ -2533,6 +2570,8 @@ export class NoveltySearchService extends BasePatentService {
         config,
         requestHeaders
       );
+      const postMappingCancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postMappingCancellation.success) return postMappingCancellation;
 
       if (!stage35aResult.success) {
         await prisma.noveltySearchRun.update({
@@ -2577,6 +2616,9 @@ export class NoveltySearchService extends BasePatentService {
    */
   async executeStage35b(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       // Get search run
       const searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
@@ -2592,6 +2634,8 @@ export class NoveltySearchService extends BasePatentService {
 
       // Perform Stage 3.5b aggregation
       const stage35bResult = await this.performStage35b(searchId, stage0Data, stage35aData, config, requestHeaders);
+      const postAggregationCancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postAggregationCancellation.success) return postAggregationCancellation;
 
       if (!stage35bResult.success) {
         await prisma.noveltySearchRun.update({
@@ -2636,6 +2680,9 @@ export class NoveltySearchService extends BasePatentService {
    */
   async executeStage35c(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
       if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
@@ -3030,6 +3077,8 @@ export class NoveltySearchService extends BasePatentService {
         stage35c_complete: true,
         stage35c_completed_at: new Date().toISOString()
       };
+      const postRemarksCancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postRemarksCancellation.success) return postRemarksCancellation;
 
       await prisma.noveltySearchRun.update({
         where: { id: searchId },
@@ -3236,6 +3285,9 @@ export class NoveltySearchService extends BasePatentService {
    */
   async executeStage0(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       // Get search run
       const searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
@@ -3263,6 +3315,8 @@ export class NoveltySearchService extends BasePatentService {
 
       // Execute stage 0
       const stage0Result = await this.performStage0(searchId, request, config, user, requestHeaders);
+      const postStage0Cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postStage0Cancellation.success) return postStage0Cancellation;
 
       if (!stage0Result.success) {
         await prisma.noveltySearchRun.update({
@@ -3306,6 +3360,9 @@ export class NoveltySearchService extends BasePatentService {
   }
 
   async completeNoMatchNoveltySearch(searchId: string, userId: string): Promise<NoveltySearchResponse> {
+    const cancellation = await this.ensureSearchNotCancelled(searchId);
+    if (!cancellation.success) return cancellation;
+
     const searchRun = await prisma.noveltySearchRun.findFirst({ where: { id: searchId, userId } });
     if (!searchRun) return { success: false, error: 'Novelty search not found' };
 
@@ -3317,7 +3374,7 @@ export class NoveltySearchService extends BasePatentService {
         summary: 'The configured search completed without identifying sufficiently relevant patent records for detailed feature mapping.',
       },
       concluding_remarks: {
-        summary: 'No high abstract-level overlap candidate was identified among the screened title/abstract records. This is not a legal conclusion and does not establish novelty.',
+        summary: 'No high-overlap candidate was identified among the screened preliminary records. This is not a legal conclusion and does not establish novelty.',
       },
       per_patent_remarks: [],
       risks: [
@@ -3331,8 +3388,14 @@ export class NoveltySearchService extends BasePatentService {
       report_metadata: { outcome: 'no_relevant_matches', generatedAt: new Date().toISOString() },
     };
 
-    await prisma.noveltySearchRun.update({
-      where: { id: searchId },
+    const completionWrite = await (prisma as any).noveltySearchRun.updateMany({
+      where: {
+        id: searchId,
+        OR: [
+          { backgroundJob: { is: null } },
+          { backgroundJob: { is: { status: { not: 'CANCELLED' } } } },
+        ],
+      },
       data: {
         status: NoveltySearchStatus.COMPLETED,
         currentStage: NoveltySearchStage.STAGE_4,
@@ -3341,6 +3404,9 @@ export class NoveltySearchService extends BasePatentService {
         reportUrl: null,
       },
     });
+    if (completionWrite.count !== 1) {
+      return { success: false, error: 'Novelty search was cancelled' };
+    }
 
     return {
       success: true,
@@ -3390,6 +3456,9 @@ export class NoveltySearchService extends BasePatentService {
 
   async executeStage4(searchId: string, userId: string, requestHeaders?: Record<string, string>): Promise<NoveltySearchResponse> {
     try {
+      const cancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!cancellation.success) return cancellation;
+
       // Get search run with all results
       let searchRun = await prisma.noveltySearchRun.findFirst({
         where: { id: searchId, userId }
@@ -3424,10 +3493,14 @@ export class NoveltySearchService extends BasePatentService {
         if (!searchRun) {
           return { success: false, error: 'Novelty search not found after Deep Analysis' };
         }
+        const postDeepAnalysisCancellation = await this.ensureSearchNotCancelled(searchId);
+        if (!postDeepAnalysisCancellation.success) return postDeepAnalysisCancellation;
       }
 
       // Perform Stage 4 report generation
       const stage4Result = await this.performStage4(searchRun, config, requestHeaders);
+      const postReportCancellation = await this.ensureSearchNotCancelled(searchId);
+      if (!postReportCancellation.success) return postReportCancellation;
 
       if (!stage4Result.success) {
         await prisma.noveltySearchRun.update({
@@ -3447,8 +3520,14 @@ export class NoveltySearchService extends BasePatentService {
         }
       } catch {}
 
-      await prisma.noveltySearchRun.update({
-        where: { id: searchId },
+      const completionWrite = await (prisma as any).noveltySearchRun.updateMany({
+        where: {
+          id: searchId,
+          OR: [
+            { backgroundJob: { is: null } },
+            { backgroundJob: { is: { status: { not: 'CANCELLED' } } } },
+          ],
+        },
         data: {
           status: NoveltySearchStatus.COMPLETED,
           stage4CompletedAt: new Date(),
@@ -3456,6 +3535,9 @@ export class NoveltySearchService extends BasePatentService {
           reportUrl: stage4Result.reportUrl
         }
       });
+      if (completionWrite.count !== 1) {
+        return { success: false, error: 'Novelty search was cancelled' };
+      }
 
       const backgroundJob = await (prisma as any).noveltySearchJob.findUnique({ where: { searchId } });
       if (!backgroundJob) {
@@ -3915,7 +3997,7 @@ RESPONSE:`;
       const pqaiResults: any[] = [];
 
       // Return raw PQAI results for UI
-      console.log('[NoveltyPipeline] stage1_provider_retrieval_completed', JSON.stringify({
+      console.log('[NoveltyPipeline] stage1_provider_retrieval_completed', JSON.stringify(compactLogDetails({
         searchId: searchRun?.id,
         stage0SearchQuery,
         stage0Features,
@@ -3932,7 +4014,7 @@ RESPONSE:`;
           sourceProvider: candidate.sourceProvider,
           sourceProviders: candidate.sourceProviders,
         })),
-      }));
+      })));
       return {
         success: true,
         data: {
@@ -4880,7 +4962,7 @@ RESPONSE:`;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
     const reviewedCount = Number(stage1Data?.aiRelevance?.reviewedCount ?? stage1Data?.reviewedCount ?? stage1Data?.aiRelevance?.consideredCount ?? 0) || 0;
     const retrievedCount = Number(stage1Data?.aiRelevance?.retrievedCount ?? stage1Data?.retrievedCount ?? candidatePool.length) || candidatePool.length;
-    const message = 'No high abstract-level overlap candidate was identified among screened title/abstract records from the selected sources.';
+    const message = 'No high-overlap candidate was identified among screened preliminary records from the selected sources.';
     const perFeatureUniqueness = inventionFeatures.map(feature => ({
       feature,
       present_in: 0,

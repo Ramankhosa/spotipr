@@ -15,6 +15,38 @@ import { prisma } from '@/lib/prisma'
 import { canUsePersona, canCreateOwnPersona, canCreateOrgPersona, canManageOrgPersonas } from '@/lib/permissions'
 import type { PersonaVisibility } from '@prisma/client'
 
+const PERSONA_NAME_PATTERN = /^[\w\s\-\.]+$/
+
+function normalizePersonaName(value: unknown): { value?: string; error?: string; code?: string } {
+  if (!value || typeof value !== 'string') {
+    return { error: 'Name is required', code: 'NAME_REQUIRED' }
+  }
+
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return { error: 'Name cannot be empty', code: 'NAME_EMPTY' }
+  if (trimmed.length < 2) return { error: 'Name must be at least 2 characters', code: 'NAME_TOO_SHORT' }
+  if (trimmed.length > 100) return { error: 'Name must be 100 characters or less', code: 'NAME_TOO_LONG' }
+  if (!PERSONA_NAME_PATTERN.test(trimmed)) {
+    return {
+      error: 'Name can only contain letters, numbers, spaces, hyphens, and dots',
+      code: 'NAME_INVALID_CHARS'
+    }
+  }
+
+  return { value: trimmed }
+}
+
+function normalizeOptionalBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function canManagePersonaRecord(user: { id: string; tenantId: string }, persona: { createdBy: string; tenantId: string; visibility: PersonaVisibility }) {
+  if (persona.createdBy === user.id) return true
+  return persona.tenantId === user.tenantId
+    && persona.visibility === 'ORGANIZATION'
+    && canManageOrgPersonas(user as any)
+}
+
 async function getUserFromRequest(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -167,45 +199,19 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    const { name, description, visibility = 'PRIVATE', isTemplate = false, allowCopy = true } = body
+    const { name, description, visibility = 'PRIVATE' } = body
+    const isTemplate = normalizeOptionalBoolean(body.isTemplate, false)
+    const allowCopy = normalizeOptionalBoolean(body.allowCopy, true)
 
     // === NAME VALIDATION ===
-    if (!name || typeof name !== 'string') {
-      return NextResponse.json({ 
-        error: 'Name is required',
-        code: 'NAME_REQUIRED'
+    const normalizedName = normalizePersonaName(name)
+    if (!normalizedName.value) {
+      return NextResponse.json({
+        error: normalizedName.error,
+        code: normalizedName.code
       }, { status: 400 })
     }
-
-    const trimmedName = name.trim()
-    if (trimmedName.length === 0) {
-      return NextResponse.json({ 
-        error: 'Name cannot be empty',
-        code: 'NAME_EMPTY'
-      }, { status: 400 })
-    }
-
-    if (trimmedName.length < 2) {
-      return NextResponse.json({ 
-        error: 'Name must be at least 2 characters',
-        code: 'NAME_TOO_SHORT'
-      }, { status: 400 })
-    }
-
-    if (trimmedName.length > 100) {
-      return NextResponse.json({ 
-        error: 'Name must be 100 characters or less',
-        code: 'NAME_TOO_LONG'
-      }, { status: 400 })
-    }
-
-    // Check for invalid characters in name
-    if (!/^[\w\s\-\.]+$/.test(trimmedName)) {
-      return NextResponse.json({ 
-        error: 'Name can only contain letters, numbers, spaces, hyphens, and dots',
-        code: 'NAME_INVALID_CHARS'
-      }, { status: 400 })
-    }
+    const trimmedName = normalizedName.value
 
     // === DESCRIPTION VALIDATION ===
     if (description !== undefined && description !== null) {
@@ -269,15 +275,19 @@ export async function POST(request: NextRequest) {
         })
 
         // Audit log
-        await prisma.auditLog.create({
-          data: {
-            actorUserId: user.id,
-            tenantId: user.tenantId,
-            action: 'PERSONA_REACTIVATE',
-            resource: `persona:${reactivated.id}`,
-            meta: { name: reactivated.name, visibility: reactivated.visibility }
-          }
-        })
+        try {
+          await prisma.auditLog.create({
+            data: {
+              actorUserId: user.id,
+              tenantId: user.tenantId,
+              action: 'PERSONA_REACTIVATE',
+              resource: `persona:${reactivated.id}`,
+              meta: { name: reactivated.name, visibility: reactivated.visibility }
+            }
+          })
+        } catch (auditError) {
+          console.warn('[Personas] Audit log failed:', auditError)
+        }
 
         // Get sample count
         const sampleCount = await prisma.writingSample.count({
@@ -405,20 +415,14 @@ export async function PATCH(request: NextRequest) {
         }, { status: 400 })
       }
 
-      if (!newName || typeof newName !== 'string') {
-        return NextResponse.json({ 
-          error: 'newName is required for copy operation',
-          code: 'NEW_NAME_REQUIRED'
+      const normalizedNewName = normalizePersonaName(newName)
+      if (!normalizedNewName.value) {
+        return NextResponse.json({
+          error: normalizedNewName.error?.replace(/^Name/, 'New name') || 'Invalid new name',
+          code: normalizedNewName.code || 'NEW_NAME_INVALID'
         }, { status: 400 })
       }
-
-      const trimmedNewName = newName.trim()
-      if (trimmedNewName.length < 2 || trimmedNewName.length > 100) {
-        return NextResponse.json({ 
-          error: 'New name must be between 2 and 100 characters',
-          code: 'NAME_INVALID_LENGTH'
-        }, { status: 400 })
-      }
+      const trimmedNewName = normalizedNewName.value
 
       // Check if user already has a persona with this name
       const existingWithName = await prisma.writingPersona.findFirst({
@@ -560,11 +564,11 @@ export async function PATCH(request: NextRequest) {
       }, { status: 404 })
     }
 
-    // Check ownership or admin rights
+    // Check ownership or same-tenant organization admin rights
     const isOwner = persona.createdBy === user.id
-    const canManage = canManageOrgPersonas(user as any)
+    const canManage = canManagePersonaRecord(user as any, persona)
 
-    if (!isOwner && !canManage) {
+    if (!canManage) {
       return NextResponse.json({ 
         error: 'You can only update your own personas',
         code: 'PERMISSION_DENIED'
@@ -572,19 +576,22 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Validate name if provided
+    let trimmedUpdateName: string | undefined
     if (name !== undefined) {
-      if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 100) {
-        return NextResponse.json({ 
-          error: 'Name must be between 2 and 100 characters',
-          code: 'NAME_INVALID_LENGTH'
+      const normalizedUpdateName = normalizePersonaName(name)
+      if (!normalizedUpdateName.value) {
+        return NextResponse.json({
+          error: normalizedUpdateName.error,
+          code: normalizedUpdateName.code
         }, { status: 400 })
       }
+      trimmedUpdateName = normalizedUpdateName.value
 
       // Check for duplicate name (excluding self)
       const existingWithName = await prisma.writingPersona.findFirst({
         where: { 
-          createdBy: user.id, 
-          name: name.trim(), 
+          createdBy: persona.createdBy,
+          name: trimmedUpdateName,
           isActive: true,
           NOT: { id: persona.id }
         }
@@ -592,7 +599,7 @@ export async function PATCH(request: NextRequest) {
 
       if (existingWithName) {
         return NextResponse.json({ 
-          error: `You already have a persona named "${name.trim()}"`,
+          error: `A persona named "${trimmedUpdateName}" already exists for this creator`,
           code: 'DUPLICATE_NAME'
         }, { status: 400 })
       }
@@ -608,7 +615,7 @@ export async function PATCH(request: NextRequest) {
 
     // Build update data
     const updateData: any = {}
-    if (name !== undefined) updateData.name = name.trim()
+    if (trimmedUpdateName !== undefined) updateData.name = trimmedUpdateName
     if (description !== undefined) updateData.description = description?.trim() || null
     if (visibility !== undefined && (isOwner || canManage)) {
       // Only allow visibility change if user has permission
@@ -618,9 +625,9 @@ export async function PATCH(request: NextRequest) {
         updateData.visibility = visibility
       }
     }
-    if (isTemplate !== undefined && canManage) updateData.isTemplate = isTemplate
-    if (allowCopy !== undefined) updateData.allowCopy = allowCopy
-    if (isActive !== undefined) updateData.isActive = isActive
+    if (typeof isTemplate === 'boolean' && canManage) updateData.isTemplate = isTemplate
+    if (typeof allowCopy === 'boolean') updateData.allowCopy = allowCopy
+    if (typeof isActive === 'boolean') updateData.isActive = isActive
 
     // Prevent empty updates
     if (Object.keys(updateData).length === 0) {
@@ -718,12 +725,12 @@ export async function DELETE(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Check ownership or admin rights
+    // Check ownership or same-tenant organization admin rights
     const isOwner = persona.createdBy === user.id
-    const canManage = canManageOrgPersonas(user as any)
+    const canManage = canManagePersonaRecord(user as any, persona)
     const isOrgPersona = persona.visibility === 'ORGANIZATION'
 
-    if (!isOwner && !canManage) {
+    if (!canManage) {
       if (isOrgPersona) {
         return NextResponse.json({ 
           error: 'Only the creator or an admin can delete organization personas',

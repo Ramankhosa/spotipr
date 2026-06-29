@@ -13,6 +13,7 @@ import {
   uniqueStrings,
   yearFromDate,
 } from '../utils'
+import { fetchWithProviderTimeout, providerTimeoutGraceMs, providerTimeoutMs } from '../provider-runtime'
 
 const IP_AUSTRALIA_PRODUCTION_BASE = 'https://production.api.ipaustralia.gov.au/public/australian-patent-search-api/v1'
 const IP_AUSTRALIA_TEST_BASE = 'https://test.api.ipaustralia.gov.au/public/australian-patent-search-api/v1'
@@ -70,7 +71,7 @@ async function requestIpAustraliaAccessToken() {
   const now = Date.now()
   if (tokenCache && tokenCache.expiresAt > now + 60_000) return tokenCache.token
 
-  const response = await fetch(ipAustraliaTokenUrl(), {
+  const response = await fetchWithProviderTimeout(ipAustraliaTokenUrl(), {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -82,6 +83,11 @@ async function requestIpAustraliaAccessToken() {
       client_secret: clientSecret,
     }).toString(),
     cache: 'no-store',
+  }, {
+    providerId: 'ip-australia',
+    operation: 'oauth_token',
+    timeoutMs: providerTimeoutMs('ip-australia', 15_000),
+    graceMs: providerTimeoutGraceMs('ip-australia'),
   })
 
   const json = await response.json().catch(() => ({}))
@@ -281,47 +287,48 @@ export class IpAustraliaProvider implements PatentSearchProvider {
     const baseUrl = ipAustraliaBaseUrl()
     const filters = request.queryPlan.fieldFilters || {}
     const patentNumber = explicitPatentNumber(filters)
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000)
-
-    try {
-      let json: any
-      if (patentNumber) {
-        const response = await fetch(`${baseUrl}/patent/${encodeURIComponent(patentNumber)}`, {
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          signal: controller.signal,
-          cache: 'no-store',
-        })
-        if (!response.ok) throw new Error(`IP Australia patent lookup failed (HTTP ${response.status})`)
-        json = await response.json().catch(() => ({}))
-      } else {
-        const body = buildQuickSearchBody(request, maxResults)
-        if (!body.query) return []
-        const response = await fetch(`${baseUrl}/search/quick`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-          cache: 'no-store',
-        })
-        if (!response.ok) throw new Error(`IP Australia quick search failed (HTTP ${response.status})`)
-        json = await response.json().catch(() => ({}))
-      }
-
-      const queryTerms = normalizeSearchText(buildQuickSearchText(request), 16).split(/\s+/).filter(Boolean)
-      return resultArray(json)
-        .map(result => normalizeIpAustraliaResult(result, queryTerms))
-        .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
-        .slice(0, maxResults)
-    } finally {
-      clearTimeout(timeout)
+    let json: any
+    if (patentNumber) {
+      const response = await fetchWithProviderTimeout(`${baseUrl}/patent/${encodeURIComponent(patentNumber)}`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        cache: 'no-store',
+      }, {
+        providerId: 'ip-australia',
+        operation: 'patent_lookup',
+        timeoutMs: providerTimeoutMs('ip-australia', 15_000),
+        graceMs: providerTimeoutGraceMs('ip-australia'),
+      })
+      if (!response.ok) throw new Error(`IP Australia patent lookup failed (HTTP ${response.status})`)
+      json = await response.json().catch(() => ({}))
+    } else {
+      const body = buildQuickSearchBody(request, maxResults)
+      if (!body.query) return []
+      const response = await fetchWithProviderTimeout(`${baseUrl}/search/quick`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+      }, {
+        providerId: 'ip-australia',
+        operation: 'quick_search',
+        timeoutMs: providerTimeoutMs('ip-australia', 15_000),
+        graceMs: providerTimeoutGraceMs('ip-australia'),
+      })
+      if (!response.ok) throw new Error(`IP Australia quick search failed (HTTP ${response.status})`)
+      json = await response.json().catch(() => ({}))
     }
+
+    const queryTerms = normalizeSearchText(buildQuickSearchText(request), 16).split(/\s+/).filter(Boolean)
+    return resultArray(json)
+      .map(result => normalizeIpAustraliaResult(result, queryTerms))
+      .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
+      .slice(0, maxResults)
   }
 }
