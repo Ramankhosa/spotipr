@@ -1127,6 +1127,11 @@ export interface NormalizedIdea {
   epoCombinedKeywords?: string[];
   paperSearchQuery?: string;
   paperKeywords?: string[];
+  paperSearchQueries?: string[];
+  googleScholarSearchQuery?: string;
+  academicDatabaseSearchQuery?: string;
+  paperYearFrom?: number;
+  paperYearTo?: number;
   noveltyFocus?: string[];
   noveltyFocusInteractions?: NoveltyFocusInteraction[];
   architecturalInnovation?: string;
@@ -1937,6 +1942,11 @@ export class NoveltySearchService extends BasePatentService {
                 500
               ),
               paperKeywords: this.normalizeEpoKeywordList((request.approvedStage0 as any)?.paperKeywords),
+              paperSearchQueries: this.normalizeEpoKeywordList((request.approvedStage0 as any)?.paperSearchQueries),
+              googleScholarSearchQuery: this.normalizeStage0Scalar((request.approvedStage0 as any)?.googleScholarSearchQuery || (request.approvedStage0 as any)?.paperSearchQuery || approvedQuery, 500),
+              academicDatabaseSearchQuery: this.normalizeStage0Scalar((request.approvedStage0 as any)?.academicDatabaseSearchQuery || (request.approvedStage0 as any)?.paperSearchQuery || approvedQuery, 500),
+              paperYearFrom: Number((request.approvedStage0 as any)?.paperYearFrom) || 1900,
+              paperYearTo: Number((request.approvedStage0 as any)?.paperYearTo) || new Date().getFullYear(),
             } : {}),
             featureDetails: approvedFeatures.slice(0, 30).map((feature, index) => {
               const exactMatch = suppliedDetails.find(detail => String(detail?.feature || '').trim() === feature);
@@ -3819,6 +3829,11 @@ RESPONSE:`;
             ...(includePapers ? {
               paperSearchQuery: config.searchSource?.paperSearchQuery || searchText || request.title,
               paperKeywords: Array.from(new Set<string>(featureSeeds)).slice(0, 10),
+              paperSearchQueries: Array.from(new Set<string>(featureSeeds)).slice(0, 6),
+              googleScholarSearchQuery: config.searchSource?.paperSearchQuery || searchText || request.title,
+              academicDatabaseSearchQuery: config.searchSource?.paperSearchQuery || searchText || request.title,
+              paperYearFrom: Number((config.searchSource?.paperFilters as any)?.yearFrom) || 1900,
+              paperYearTo: Number((config.searchSource?.paperFilters as any)?.yearTo) || new Date().getFullYear(),
             } : {}),
             architecturalInnovation: '',
             claimConcepts: [],
@@ -3843,7 +3858,7 @@ RESPONSE:`;
         .replace('{title}', request.title || 'Untitled Invention')
         .replace('{rawIdea}', request.inventionDescription || 'No description provided');
       if (includePapers) {
-        prompt += `\n\nAlso include these two top-level JSON fields:\n"paperSearchQuery": "a concise scholarly literature query using technical concepts, mechanisms, and accepted research terminology",\n"paperKeywords": ["4-10 short editable technical phrases suitable for Google Scholar, Semantic Scholar, Crossref, OpenAlex, PubMed, arXiv, and CORE"]\nDo not add unsupported facts, author names, publication titles, years, Boolean operators, or wildcards.`;
+        prompt += `\n\nAlso include these top-level JSON fields for scholarly-publication retrieval:\n"paperSearchQuery": "one concise source-neutral scholarly literature query",\n"googleScholarSearchQuery": "a concise Google Scholar / SerpApi query using quoted technical phrases where useful",\n"academicDatabaseSearchQuery": "a concise query for Semantic Scholar, Crossref, OpenAlex, PubMed, arXiv, and CORE",\n"paperSearchQueries": ["3-6 short alternative search strings covering object, mechanism, and technical relationship"],\n"paperKeywords": ["4-10 short editable technical phrases"],\n"paperYearFrom": 1900,\n"paperYearTo": ${new Date().getFullYear()}\nRules:\n- Keep dates broad for novelty searching. Use 1900 through ${new Date().getFullYear()} unless the disclosure expressly states a legally relevant prior-art cutoff.\n- Do not invent author names, paper titles, dates, or unsupported facts.\n- Do not use wildcards or long Boolean strings.\n- Query variants must remain faithful to the submitted disclosure.`;
       }
 
       console.log('[NoveltyPipeline] stage_summary', {
@@ -3896,6 +3911,23 @@ RESPONSE:`;
                 500
               ),
               paperKeywords: this.normalizeEpoKeywordList(normalizedData?.paperKeywords ?? normalizedData?.paper_keywords),
+              paperSearchQueries: this.normalizeEpoKeywordList(normalizedData?.paperSearchQueries ?? normalizedData?.paper_search_queries),
+              googleScholarSearchQuery: this.normalizeStage0Scalar(
+                normalizedData?.googleScholarSearchQuery ?? normalizedData?.google_scholar_search_query ?? normalizedData?.paperSearchQuery ?? '',
+                500
+              ),
+              academicDatabaseSearchQuery: this.normalizeStage0Scalar(
+                normalizedData?.academicDatabaseSearchQuery ?? normalizedData?.academic_database_search_query ?? normalizedData?.paperSearchQuery ?? '',
+                500
+              ),
+              paperYearFrom: (() => {
+                const year = Number(normalizedData?.paperYearFrom ?? normalizedData?.paper_year_from);
+                return Number.isInteger(year) && year >= 1800 && year <= new Date().getFullYear() ? year : 1900;
+              })(),
+              paperYearTo: (() => {
+                const year = Number(normalizedData?.paperYearTo ?? normalizedData?.paper_year_to);
+                return Number.isInteger(year) && year >= 1800 && year <= new Date().getFullYear() ? year : new Date().getFullYear();
+              })(),
             } : {}),
             noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
         noveltyFocusInteractions: Array.isArray(normalizedData?.novelty_focus_interactions)
@@ -4039,6 +4071,15 @@ RESPONSE:`;
           ...(config.searchSource?.paperFilters || {}),
           sources: config.searchSource?.paperSources,
           limit: config.searchSource?.paperFilters?.limit || Math.min(config.stage1.maxPatents, 50),
+          sourceQueries: {
+            google_scholar: stage0Data.googleScholarSearchQuery || paperSearchQuery,
+            semantic_scholar: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+            crossref: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+            openalex: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+            pubmed: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+            arxiv: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+            core: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+          },
         })
         : Promise.resolve(null);
       const [searchResponse, literatureResponse] = await Promise.all([patentSearchPromise, literatureSearchPromise]);
@@ -4099,6 +4140,11 @@ RESPONSE:`;
             ...(includePapers ? {
               paperSearchQuery,
               paperKeywords: stage0Data.paperKeywords || [],
+              paperSearchQueries: stage0Data.paperSearchQueries || [],
+              googleScholarSearchQuery: stage0Data.googleScholarSearchQuery || paperSearchQuery,
+              academicDatabaseSearchQuery: stage0Data.academicDatabaseSearchQuery || paperSearchQuery,
+              paperYearFrom: config.searchSource?.paperFilters?.yearFrom ?? stage0Data.paperYearFrom,
+              paperYearTo: config.searchSource?.paperFilters?.yearTo ?? stage0Data.paperYearTo,
               paperSources: config.searchSource?.paperSources || [],
               paperFilters: config.searchSource?.paperFilters || {},
             } : {}),
@@ -4655,7 +4701,12 @@ RESPONSE:`;
     const hasPaperFields = Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperSearchQuery') ||
       Object.prototype.hasOwnProperty.call(stage0Data as any, 'paper_search_query') ||
       Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperKeywords') ||
-      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paper_keywords');
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paper_keywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperSearchQueries') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'googleScholarSearchQuery') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'academicDatabaseSearchQuery') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperYearFrom') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperYearTo');
     return {
       ...stage0Data,
       inventionFeatures: features,
@@ -4668,6 +4719,17 @@ RESPONSE:`;
       ...(hasPaperFields ? {
         paperSearchQuery: this.normalizeStage0Scalar((stage0Data as any).paperSearchQuery ?? (stage0Data as any).paper_search_query ?? '', 500),
         paperKeywords: this.normalizeEpoKeywordList((stage0Data as any).paperKeywords ?? (stage0Data as any).paper_keywords),
+        paperSearchQueries: this.normalizeEpoKeywordList((stage0Data as any).paperSearchQueries ?? (stage0Data as any).paper_search_queries),
+        googleScholarSearchQuery: this.normalizeStage0Scalar((stage0Data as any).googleScholarSearchQuery ?? (stage0Data as any).google_scholar_search_query ?? (stage0Data as any).paperSearchQuery ?? '', 500),
+        academicDatabaseSearchQuery: this.normalizeStage0Scalar((stage0Data as any).academicDatabaseSearchQuery ?? (stage0Data as any).academic_database_search_query ?? (stage0Data as any).paperSearchQuery ?? '', 500),
+        paperYearFrom: (() => {
+          const year = Number((stage0Data as any).paperYearFrom ?? (stage0Data as any).paper_year_from);
+          return Number.isInteger(year) && year >= 1800 && year <= new Date().getFullYear() ? year : 1900;
+        })(),
+        paperYearTo: (() => {
+          const year = Number((stage0Data as any).paperYearTo ?? (stage0Data as any).paper_year_to);
+          return Number.isInteger(year) && year >= 1800 && year <= new Date().getFullYear() ? year : new Date().getFullYear();
+        })(),
       } : {}),
       architecturalInnovation: this.normalizeStage0Scalar((stage0Data as any).architecturalInnovation ?? (stage0Data as any).architectural_innovation ?? '', 500),
       claimConcepts: this.normalizeClaimConcepts(conceptSource, features, warnings),
@@ -4837,6 +4899,23 @@ RESPONSE:`;
     const cellByFeature = new Map(cells.map(cell => [cell.feature, cell]));
     const supplied = Array.isArray(rows) ? rows : [];
     const suppliedByFeature = new Map<string, any>();
+    const evidenceQuoteFrom = (...values: any[]): string => {
+      for (const value of values) {
+        if (typeof value === 'string') {
+          const text = value.trim();
+          if (text) return text;
+        }
+        if (value && typeof value === 'object') {
+          const text = String(value.quote || value.text || value.passage || value.snippet || '').trim();
+          if (text) return text;
+        }
+      }
+      return '';
+    };
+    const evidenceSourceFrom = (value: any): any => {
+      if (!value || typeof value !== 'object') return undefined;
+      return value.field || value.source || value.evidence_source;
+    };
     for (const row of supplied) {
       const feature = String(row?.feature || '').trim();
       if (feature) suppliedByFeature.set(feature, row);
@@ -4847,8 +4926,13 @@ RESPONSE:`;
       const detail = detailByFeature.get(feature);
       const cell = cellByFeature.get(feature);
       const status = this.normalizeFeatureStatus(suppliedRow.status || cell?.status);
-      const evidenceQuote = String(suppliedRow.evidence_quote || cell?.quote || '').trim();
-      const evidenceSource = this.normalizeEvidenceSource(suppliedRow.evidence_source || cell?.evidence_source || cell?.field, status);
+      const evidenceQuote = evidenceQuoteFrom(
+        suppliedRow.evidence_quote,
+        suppliedRow.evidence,
+        cell?.quote,
+        cell?.evidence,
+      );
+      const evidenceSource = this.normalizeEvidenceSource(suppliedRow.evidence_source || evidenceSourceFrom(suppliedRow.evidence) || cell?.evidence_source || cell?.field || evidenceSourceFrom(cell?.evidence), status);
       const confidence = this.normalizeScore(suppliedRow.confidence ?? cell?.confidence);
       const patentDisclosure = String(
         suppliedRow.patent_disclosure ||

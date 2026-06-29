@@ -793,10 +793,9 @@ function labeledLine(label: string, value: unknown) {
 }
 
 function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
-  const statusLabel = cleanText(row.statusLabel, cleanText(row.status, 'Review'));
-  const statusCode = cleanText(row.publicMappingCode, row.status === 'Present' ? 'D' : row.status === 'Partial' ? 'P' : row.status === 'Absent' ? 'N' : 'R');
   const supportingPassage = cleanText(row.evidenceQuote, '');
   const submittedDisclosure = cleanText(row.userDisclosure, '');
+  const mappedDisclosure = cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.');
 
   return [
     [
@@ -804,10 +803,9 @@ function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
       submittedDisclosure ? labeledLine('Submitted disclosure', submittedDisclosure) : '',
     ].filter(Boolean).join('\n'),
     [
-      `Mapping assessment: ${statusCode} - ${statusLabel}`,
-      cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.'),
+      mappedDisclosure ? labeledLine('Mapped disclosure', mappedDisclosure) : '',
+      supportingPassage ? labeledLine('Evidence returned by feature mapping', supportingPassage) : '',
       `Evidence strength: ${cleanText(row.evidenceStrength, 'Weak')} - ${cleanText(row.evidenceStrengthReason, 'Evidence should be confirmed from source records.')}`,
-      supportingPassage ? labeledLine('Supporting passage', supportingPassage) : '',
     ].filter(Boolean).join('\n'),
     cleanText(row.professionalRemark || row.crispRemark, 'No professional review note was mapped for this feature.'),
   ];
@@ -826,11 +824,12 @@ function referenceFeatureRowHeight(doc: PdfDoc, cells: string[], widths: number[
   return Math.max(REFERENCE_FEATURE_TABLE.minRowHeight, ...heights);
 }
 
-function splitReferenceFeatureCellsToHeight(doc: PdfDoc, cells: string[], widths: number[], rowHeight: number) {
+function splitReferenceFeatureCellsToHeight(doc: PdfDoc, cells: string[], widths: number[], rowHeight: number, firstChunk: boolean) {
   doc.font(FONTS.regular).fontSize(REFERENCE_FEATURE_TABLE.fontSize);
-  const availableTextHeight = Math.max(12, rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2);
   return cells.map((cell, index) => {
     if (!cell) return ['', ''] as const;
+    const reservedBadgeHeight = firstChunk && index === 1 ? 18 : 0;
+    const availableTextHeight = Math.max(12, rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2 - reservedBadgeHeight);
     return fitTextToHeight(
       doc,
       cell,
@@ -845,31 +844,16 @@ function hasRemainingTableText(cells: string[]) {
   return cells.some(cell => cleanText(cell, '').length > 0);
 }
 
-function referenceRowStatus(cells: string[]) {
-  const statusLine = cleanText(cells[1], '').split('\n').find(line => /^Mapping assessment:/i.test(line)) || '';
-  const status = statusLine.replace(/^Status:\s*/i, '');
-  if (/\bD\b|direct|present/i.test(status)) return 'Present';
-  if (/\bP\b|partial/i.test(status)) return 'Partial';
-  if (/\bN\b|absent|not found|not expressly taught/i.test(status)) return 'Absent';
+function referenceRowStatus(row: AttorneyReportFeatureRow) {
+  if (row.status === 'Present' || row.status === 'Partial' || row.status === 'Absent') return row.status;
   return 'Review';
 }
 
-function referenceStatusParts(cells: string[]) {
-  const line = cleanText(cells[1], '').split('\n').find(item => /^Mapping assessment:/i.test(item)) || '';
-  const value = line.replace(/^Mapping assessment:\s*/i, '').trim();
-  const match = value.match(/^([A-Z])\s*[-:]\s*(.+)$/);
-  const status = referenceRowStatus(cells);
-  const code = match?.[1] || (status === 'Present' ? 'D' : status === 'Partial' ? 'P' : status === 'Absent' ? 'N' : 'R');
-  const label = match?.[2] || (status === 'Present' ? 'Directly Mapped' : status === 'Partial' ? 'Partially Mapped' : status === 'Absent' ? 'Not Found' : 'Requires Full-Text Review');
-  return { code, label, line };
-}
-
-function removeReferenceStatusLine(text: string) {
-  return cleanText(text, '')
-    .split('\n')
-    .filter(line => !/^Mapping assessment:/i.test(line))
-    .join('\n')
-    .trim();
+function referenceStatusParts(row: AttorneyReportFeatureRow) {
+  const status = referenceRowStatus(row);
+  const code = cleanText(row.publicMappingCode, status === 'Present' ? 'D' : status === 'Partial' ? 'P' : status === 'Absent' ? 'N' : 'R');
+  const label = cleanText(row.statusLabel || row.publicMappingStatus, status === 'Present' ? 'Directly Mapped' : status === 'Partial' ? 'Partially Mapped' : status === 'Absent' ? 'Not Found' : 'Requires Full-Text Review');
+  return { code, label };
 }
 
 function referenceRowFill(status: string, rowIndex: number, continuation: boolean) {
@@ -882,6 +866,7 @@ function referenceRowFill(status: string, rowIndex: number, continuation: boolea
 
 function drawReferenceFeatureRowChunk(
   doc: PdfDoc,
+  row: AttorneyReportFeatureRow,
   cells: string[],
   widths: number[],
   rowHeight: number,
@@ -890,7 +875,7 @@ function drawReferenceFeatureRowChunk(
 ) {
   const y = doc.y;
   const totalWidth = widths.reduce((sum, width) => sum + width, 0);
-  const rowStatus = referenceRowStatus(cells);
+  const rowStatus = referenceRowStatus(row);
   const palette = statusPalette(rowStatus);
   const fill = referenceRowFill(rowStatus, rowIndex, continuation);
   let x = PAGE.left;
@@ -910,7 +895,7 @@ function drawReferenceFeatureRowChunk(
     const textHeight = rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2;
 
     if (index === 1 && !continuation) {
-      const { code, label } = referenceStatusParts(cells);
+      const { code, label } = referenceStatusParts(row);
       const badgeWidth = Math.min(36, Math.max(24, doc.widthOfString(code) + 14));
       doc.roundedRect(textX, textY, badgeWidth, 14, 4).fillAndStroke(palette.fill, palette.stroke);
       doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
@@ -929,7 +914,7 @@ function drawReferenceFeatureRowChunk(
         });
     }
 
-    const renderedText = index === 1 && !continuation ? removeReferenceStatusLine(text) : text;
+    const renderedText = text;
     const renderedTextY = index === 1 && !continuation ? textY + 18 : textY;
     const renderedTextHeight = index === 1 && !continuation ? Math.max(8, textHeight - 18) : textHeight;
     const textColor = index === 0 ? COLORS.blue2 : COLORS.text;
@@ -969,7 +954,7 @@ function drawReferenceFeatureRow(
     const available = pageBottom(doc) - doc.y;
     const fullHeight = referenceFeatureRowHeight(doc, remaining, widths);
     const rowHeight = fullHeight <= available ? fullHeight : Math.max(REFERENCE_FEATURE_TABLE.minRowHeight, available);
-    const split = splitReferenceFeatureCellsToHeight(doc, remaining, widths, rowHeight);
+    const split = splitReferenceFeatureCellsToHeight(doc, remaining, widths, rowHeight, !continuation);
     const chunks = split.map(([chunk]) => chunk);
     const rest = split.map(([, next]) => next);
 
@@ -977,7 +962,7 @@ function drawReferenceFeatureRow(
       if (!chunks[0]) chunks[0] = `${cleanText(row.featureNumber)} cont.`;
     }
 
-    drawReferenceFeatureRowChunk(doc, chunks, widths, rowHeight, rowIndex, continuation);
+    drawReferenceFeatureRowChunk(doc, row, chunks, widths, rowHeight, rowIndex, continuation);
     remaining = rest;
 
     if (hasRemainingTableText(remaining)) {

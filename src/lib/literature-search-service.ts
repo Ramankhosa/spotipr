@@ -22,6 +22,7 @@ export interface LiteratureSearchOptions {
   minCitations?: number;
   fieldsOfStudy?: string[];
   hasAbstract?: boolean;
+  sourceQueries?: Partial<Record<LiteratureSourceId, string>>;
 }
 
 export interface LiteratureSearchResult {
@@ -448,7 +449,8 @@ export class LiteratureSearchService {
         return [];
       }
       try {
-        const results = await SEARCHERS[source](query, { ...options, limit });
+        const sourceQuery = cleanText(options.sourceQueries?.[source]) || query;
+        const results = await SEARCHERS[source](sourceQuery, { ...options, limit });
         providerStats.push({ providerId: source, enabled: true, resultCount: results.length });
         return results;
       } catch (error) {

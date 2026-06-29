@@ -39,8 +39,10 @@ describe('LiteratureSearchService', () => {
   });
 
   it('deduplicates the same DOI returned by Google Scholar and Crossref', async () => {
+    const requestedUrls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = String(input);
+      requestedUrls.push(url);
       if (url.includes('serpapi.com')) {
         return new Response(JSON.stringify({
           organic_results: [{
@@ -72,12 +74,18 @@ describe('LiteratureSearchService', () => {
     const response = await new LiteratureSearchService().search('matching invention mechanism', {
       sources: ['google_scholar', 'crossref'],
       limit: 10,
+      sourceQueries: {
+        google_scholar: 'google scholar sensing phrase',
+        crossref: 'crossref academic sensing phrase',
+      },
     });
 
     expect(response.results).toHaveLength(1);
     expect(response.results[0].sourceProviders).toEqual(expect.arrayContaining(['google_scholar', 'crossref']));
     expect(response.results[0].citationCount).toBe(15);
     expect(response.providerStats).toHaveLength(2);
+    expect(new URL(requestedUrls.find(url => url.includes('serpapi.com'))!).searchParams.get('q')).toBe('google scholar sensing phrase');
+    expect(new URL(requestedUrls.find(url => url.includes('api.crossref.org'))!).searchParams.get('query')).toBe('crossref academic sensing phrase');
   });
 
   it('returns warnings instead of failing the full search when a provider errors', async () => {

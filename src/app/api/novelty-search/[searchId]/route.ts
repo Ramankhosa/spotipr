@@ -177,6 +177,11 @@ export async function PATCH(
       epoCombinedKeywords,
       paperSearchQuery,
       paperKeywords,
+      paperSearchQueries,
+      googleScholarSearchQuery,
+      academicDatabaseSearchQuery,
+      paperYearFrom,
+      paperYearTo,
     } = body;
 
     if (stage === 'stage0') {
@@ -219,11 +224,26 @@ export async function PATCH(
       if (includePapers) {
         stage0Input.paperSearchQuery = paperSearchQuery !== undefined ? paperSearchQuery : existingStage0.paperSearchQuery;
         stage0Input.paperKeywords = Array.isArray(paperKeywords) ? paperKeywords : existingStage0.paperKeywords;
+        stage0Input.paperSearchQueries = Array.isArray(paperSearchQueries) ? paperSearchQueries : existingStage0.paperSearchQueries;
+        stage0Input.googleScholarSearchQuery = googleScholarSearchQuery !== undefined ? googleScholarSearchQuery : existingStage0.googleScholarSearchQuery;
+        stage0Input.academicDatabaseSearchQuery = academicDatabaseSearchQuery !== undefined ? academicDatabaseSearchQuery : existingStage0.academicDatabaseSearchQuery;
+        stage0Input.paperYearFrom = paperYearFrom !== undefined ? paperYearFrom : existingStage0.paperYearFrom;
+        stage0Input.paperYearTo = paperYearTo !== undefined ? paperYearTo : existingStage0.paperYearTo;
       } else {
         delete stage0Input.paperSearchQuery;
         delete stage0Input.paper_search_query;
         delete stage0Input.paperKeywords;
         delete stage0Input.paper_keywords;
+        delete stage0Input.paperSearchQueries;
+        delete stage0Input.paper_search_queries;
+        delete stage0Input.googleScholarSearchQuery;
+        delete stage0Input.google_scholar_search_query;
+        delete stage0Input.academicDatabaseSearchQuery;
+        delete stage0Input.academic_database_search_query;
+        delete stage0Input.paperYearFrom;
+        delete stage0Input.paper_year_from;
+        delete stage0Input.paperYearTo;
+        delete stage0Input.paper_year_to;
       }
       const normalizedStage0 = noveltySearchService.normalizeApprovedStage0(stage0Input as any, String(existing?.inventionDescription || ''));
       const stage0Changed = approvedSearchQuery !== String(existingStage0.searchQuery || '').trim() ||
@@ -235,7 +255,12 @@ export async function PATCH(
         )) ||
         (includePapers && (
           String(normalizedStage0.paperSearchQuery || '') !== String(existingStage0.paperSearchQuery || '') ||
-          JSON.stringify(normalizedStage0.paperKeywords || []) !== JSON.stringify(existingStage0.paperKeywords || [])
+          JSON.stringify(normalizedStage0.paperKeywords || []) !== JSON.stringify(existingStage0.paperKeywords || []) ||
+          JSON.stringify(normalizedStage0.paperSearchQueries || []) !== JSON.stringify(existingStage0.paperSearchQueries || []) ||
+          String(normalizedStage0.googleScholarSearchQuery || '') !== String(existingStage0.googleScholarSearchQuery || '') ||
+          String(normalizedStage0.academicDatabaseSearchQuery || '') !== String(existingStage0.academicDatabaseSearchQuery || '') ||
+          Number(normalizedStage0.paperYearFrom || 0) !== Number(existingStage0.paperYearFrom || 0) ||
+          Number(normalizedStage0.paperYearTo || 0) !== Number(existingStage0.paperYearTo || 0)
         ));
 
       await prisma.noveltySearchRun.update({

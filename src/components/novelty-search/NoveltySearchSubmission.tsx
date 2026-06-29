@@ -23,6 +23,11 @@ type Stage0Review = {
   epoCombinedKeywords?: string[]
   paperSearchQuery?: string
   paperKeywords?: string[]
+  paperSearchQueries?: string[]
+  googleScholarSearchQuery?: string
+  academicDatabaseSearchQuery?: string
+  paperYearFrom?: number
+  paperYearTo?: number
   [key: string]: unknown
 }
 
@@ -177,8 +182,12 @@ export default function NoveltySearchSubmission(props: {
   const [paperHasAbstract, setPaperHasAbstract] = useState(true)
   const [paperMinCitations, setPaperMinCitations] = useState('0')
   const [editedPaperSearchQuery, setEditedPaperSearchQuery] = useState('')
+  const [editedGoogleScholarSearchQuery, setEditedGoogleScholarSearchQuery] = useState('')
+  const [editedAcademicDatabaseSearchQuery, setEditedAcademicDatabaseSearchQuery] = useState('')
+  const [editedPaperSearchQueries, setEditedPaperSearchQueries] = useState<string[]>([])
   const [editedPaperKeywords, setEditedPaperKeywords] = useState<string[]>([])
   const [newPaperKeyword, setNewPaperKeyword] = useState('')
+  const [newPaperSearchQuery, setNewPaperSearchQuery] = useState('')
   const [newEpoTitleKeyword, setNewEpoTitleKeyword] = useState('')
   const [newEpoAbstractKeyword, setNewEpoAbstractKeyword] = useState('')
   const [newFeature, setNewFeature] = useState('')
@@ -338,7 +347,12 @@ export default function NoveltySearchSubmission(props: {
       setEditedEpoTitleKeywords(usesEpoSearch ? stringList(proposed.epoTitleKeywords) : [])
       setEditedEpoAbstractKeywords(usesEpoSearch ? stringList(proposed.epoAbstractKeywords) : [])
       setEditedPaperSearchQuery(includePapers ? String(proposed.paperSearchQuery || proposed.searchQuery || '') : '')
+      setEditedGoogleScholarSearchQuery(includePapers ? String(proposed.googleScholarSearchQuery || proposed.paperSearchQuery || proposed.searchQuery || '') : '')
+      setEditedAcademicDatabaseSearchQuery(includePapers ? String(proposed.academicDatabaseSearchQuery || proposed.paperSearchQuery || proposed.searchQuery || '') : '')
+      setEditedPaperSearchQueries(includePapers ? stringList(proposed.paperSearchQueries) : [])
       setEditedPaperKeywords(includePapers ? stringList(proposed.paperKeywords) : [])
+      if (includePapers && !paperYearFrom) setPaperYearFrom(String(proposed.paperYearFrom || 1900))
+      if (includePapers && !paperYearTo) setPaperYearTo(String(proposed.paperYearTo || new Date().getFullYear()))
       setNewFeature('')
       setNewEpoTitleKeyword('')
       setNewEpoAbstractKeyword('')
@@ -374,7 +388,12 @@ export default function NoveltySearchSubmission(props: {
         } : {}),
         ...(includePapers ? {
           paperSearchQuery: editedPaperSearchQuery.trim() || approvedQuery,
+          googleScholarSearchQuery: editedGoogleScholarSearchQuery.trim() || editedPaperSearchQuery.trim() || approvedQuery,
+          academicDatabaseSearchQuery: editedAcademicDatabaseSearchQuery.trim() || editedPaperSearchQuery.trim() || approvedQuery,
+          paperSearchQueries: editedPaperSearchQueries.map(query => query.trim()).filter(Boolean),
           paperKeywords: editedPaperKeywords.map(keyword => keyword.trim()).filter(Boolean),
+          paperYearFrom: paperYearFrom ? Number(paperYearFrom) : 1900,
+          paperYearTo: paperYearTo ? Number(paperYearTo) : new Date().getFullYear(),
         } : {}),
       }
       if (!usesEpoSearch) {
@@ -888,9 +907,35 @@ export default function NoveltySearchSubmission(props: {
                   <p className="mt-1 text-xs text-slate-600">Edit the generated academic query and technical phrases before retrieval.</p>
                 </div>
                 <label className="block space-y-2 text-sm font-medium text-slate-700">
-                  <span>Paper search query</span>
+                  <span>Source-neutral paper query</span>
                   <textarea value={editedPaperSearchQuery} onChange={event => setEditedPaperSearchQuery(event.target.value)} rows={3} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
                 </label>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block space-y-2 text-sm font-medium text-slate-700">
+                    <span>Google Scholar query</span>
+                    <textarea value={editedGoogleScholarSearchQuery} onChange={event => setEditedGoogleScholarSearchQuery(event.target.value)} rows={3} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
+                  </label>
+                  <label className="block space-y-2 text-sm font-medium text-slate-700">
+                    <span>Academic database query</span>
+                    <textarea value={editedAcademicDatabaseSearchQuery} onChange={event => setEditedAcademicDatabaseSearchQuery(event.target.value)} rows={3} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
+                  </label>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  Publication range: {paperYearFrom || '1900'} to {paperYearTo || new Date().getFullYear()}. Edit these values in the scholarly source controls above.
+                </div>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-slate-700">Alternative search strings</div>
+                  {editedPaperSearchQueries.map((query, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <input value={query} onChange={event => setEditedPaperSearchQueries(current => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm" />
+                      <button type="button" onClick={() => setEditedPaperSearchQueries(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove paper search string ${index + 1}`} className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input value={newPaperSearchQuery} onChange={event => setNewPaperSearchQuery(event.target.value)} className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm" placeholder="Add alternative search string" />
+                    <button type="button" onClick={() => { const value = newPaperSearchQuery.trim(); if (value) { setEditedPaperSearchQueries(current => [...current, value]); setNewPaperSearchQuery('') } }} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700"><Plus className="h-4 w-4" /> Add</button>
+                  </div>
+                </div>
                 <div className="space-y-2">
                   <div className="text-sm font-medium text-slate-700">Paper keywords</div>
                   {editedPaperKeywords.map((keyword, index) => (

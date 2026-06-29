@@ -2,8 +2,8 @@
  * LLM Model Resolver Service
  * 
  * Resolves the appropriate LLM model for a given context based on:
- * 1. Stage-specific configuration (most specific)
- * 2. Task-specific configuration
+ * 1. Exact plan + stage configuration for stage-coded calls
+ * 2. Task-specific configuration for legacy task-only calls
  * 3. Plan defaults (via PlanLLMAccess - backward compatible, task-only calls)
  * 4. System default model (task-only calls)
  * 
@@ -61,8 +61,12 @@ const MODEL_CLASS_DEFAULTS: Record<string, string> = {
 /**
  * Resolve the best model for a given context
  * Priority:
- * - Stage-coded calls: Stage Config > Task Config
+ * - Stage-coded calls: exact Stage Config only
  * - Task-only calls: Task Config > Plan Default (PlanLLMAccess) > System Default
+ *
+ * A stage-coded call is intentionally fail-closed. Falling through to a task,
+ * equivalent plan, or system default would allow a model that is not shown for
+ * that plan/stage in Super Admin to execute the operation.
  */
 export async function resolveModel(
   planId: string,
@@ -71,32 +75,37 @@ export async function resolveModel(
 ): Promise<ModelResolutionResult> {
   const cacheKey = `${planId}:${taskCode}:${stageCode || 'none'}`
   
-  // Check cache
-  const cached = resolutionCache.get(cacheKey)
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    console.log(`[ModelResolver] Cache hit for ${cacheKey}: ${cached.result.modelCode} (source: ${cached.result.source})`)
-    return cached.result
+  // Stage configs are deliberately not cached. Novelty and drafting workers
+  // are separate long-running processes, so an in-memory cache cannot be
+  // invalidated by the admin web process and may continue using an old model.
+  if (!stageCode) {
+    const cached = resolutionCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`[ModelResolver] Cache hit for ${cacheKey}: ${cached.result.modelCode} (source: ${cached.result.source})`)
+      return cached.result
+    }
   }
 
   console.log(`[ModelResolver] Resolving model for planId=${planId}, taskCode=${taskCode}, stageCode=${stageCode || 'none'}`)
 
   let result: ModelResolutionResult | null = null
 
-  // 1. Try stage-specific config (most specific)
+  // Stage-coded calls must use the exact plan/stage row shown in Super Admin.
   if (stageCode) {
     result = await getStageConfig(planId, stageCode)
     if (result) {
       console.log(`[ModelResolver] Found stage config: ${result.modelCode}`)
     } else {
       console.log(`[ModelResolver] No stage config found for planId=${planId}, stageCode=${stageCode}`)
-      result = await getEquivalentPlanStageConfig(planId, stageCode)
-      if (result) {
-        console.log(`[ModelResolver] Found equivalent-plan stage config: ${result.modelCode}`)
-      }
+      throw new Error(
+        `No active LLM stage model config found for planId=${planId}, stageCode=${stageCode}. Configure this exact plan and stage in Super Admin LLM Config.`
+      )
     }
+
+    return result
   }
 
-  // 2. Try task-specific config (new flexible system)
+  // Legacy task-only resolution path.
   if (!result) {
     result = await getTaskConfig(planId, taskCode)
     if (result) {
@@ -108,12 +117,6 @@ export async function resolveModel(
         console.log(`[ModelResolver] Found equivalent-plan task config: ${result.modelCode}`)
       }
     }
-  }
-
-  if (!result && stageCode) {
-    throw new Error(
-      `No active LLM stage/task model config found for planId=${planId}, taskCode=${taskCode}, stageCode=${stageCode}. Configure this stage or task in Super Admin LLM Config.`
-    )
   }
 
   // 3. Try plan's default model for legacy task-only calls.
@@ -201,15 +204,6 @@ async function getEquivalentPlanIds(planId: string): Promise<string[]> {
   })
 
   return plans.map(p => p.id)
-}
-
-async function getEquivalentPlanStageConfig(planId: string, stageCode: string): Promise<ModelResolutionResult | null> {
-  const equivalentPlanIds = await getEquivalentPlanIds(planId)
-  for (const equivalentPlanId of equivalentPlanIds) {
-    const result = await getStageConfig(equivalentPlanId, stageCode)
-    if (result) return result
-  }
-  return null
 }
 
 async function getEquivalentPlanTaskConfig(planId: string, taskCode: TaskCode): Promise<ModelResolutionResult | null> {

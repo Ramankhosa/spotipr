@@ -287,6 +287,8 @@ describe('GET attorney report PDF', () => {
     expect(normalizedText).toContain('Reference Disclosure: US-2026-000001-A1')
     expect(parsed.text).toContain('Key Feature')
     expect(parsed.text).toContain('Professional Remark')
+    expect(compactText).toContain('Mappeddisclosure:Longpatentdisclosure')
+    expect(compactText).toContain('Evidencereturnedbyfeaturemapping:Longmappedevidence')
     expect(parsed.text).not.toContain('Relevance / Evidence')
     expect(parsed.text).not.toContain('Retrieval Relevance')
     expect(parsed.text).not.toContain('Evidence sources')

@@ -606,4 +606,51 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.claimPositioningAnalysis?.remainingInventiveCore).toContain('manual review');
     expect(model.strategicReviewFocus?.reviewReason).toContain('not strong enough');
   });
+
+  it('uses object-form feature-map evidence when comparison rows do not provide a quote', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'objectevidence123',
+      title: 'Evidence mapped controller',
+      jurisdiction: 'IN',
+      stage0Results: {
+        searchQuery: 'controller dosage mapping',
+        inventionFeatures: ['controller adjusts dosage from patient variables'],
+      },
+      stage1Results: {
+        retrievalCandidates: [{
+          publicationNumber: 'INOBJ1',
+          title: 'Patient-variable dosage controller',
+          abstract: 'The controller adjusts dosage according to patient variables.',
+          relevanceScore: 0.86,
+        }],
+        aiRelevance: {
+          accepted: ['INOBJ1'],
+          byPn: { INOBJ1: { decision: 'accept', score: 0.86, evidence_quality: 'high' } },
+        },
+      },
+      stage35Results: {
+        feature_map: [{
+          pn: 'INOBJ1',
+          title: 'Patient-variable dosage controller',
+          feature_analysis: [{
+            feature: 'controller adjusts dosage from patient variables',
+            status: 'Present',
+            patent_disclosure: 'The reference discloses dosage adjustment based on patient variables.',
+            evidence: {
+              quote: 'controller adjusts dosage according to patient variables',
+              field: 'abstract',
+            },
+          }],
+        }],
+      },
+      stage4Results: {},
+    });
+
+    expect(model.comparisons[0].rows[0]).toMatchObject({
+      status: 'Present',
+      evidenceQuote: 'controller adjusts dosage according to patient variables',
+      evidenceSource: 'source record',
+      patentDisclosure: 'The reference discloses dosage adjustment based on patient variables.',
+    });
+  });
 });

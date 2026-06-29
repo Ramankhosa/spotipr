@@ -7,11 +7,9 @@
 // - Via PlanStageModelConfig/PlanTaskModelConfig (new flexible system)
 // - Tenants have NO control over LLM model routing
 //
-// MODEL RESOLUTION PRIORITY:
-// 1. Stage-specific config (if stage is provided)
-// 2. Task-specific config
-// 3. Plan defaults (PlanLLMAccess)
-// 4. System default model
+// MODEL RESOLUTION:
+// - Stage-coded calls: exact plan/stage config only (fail closed)
+// - Legacy task-only calls: task config > PlanLLMAccess > system default
 //
 // ORGANIZATIONAL SERVICE ACCESS (teams/users):
 // - Handled separately at API route level, NOT in LLM gateway
@@ -45,11 +43,9 @@ export class LLMGateway {
    * @param llmRequest - LLM request with taskCode and optional stageCode
    * @returns Response with success status and LLM output
    * 
-   * Model Resolution Priority:
-   * 1. If stageCode is provided: Look up PlanStageModelConfig
-   * 2. If taskCode only: Look up PlanTaskModelConfig  
-   * 3. Fall back to PlanLLMAccess (backward compatible)
-   * 4. Fall back to system default model
+   * Model Resolution:
+   * - If stageCode is provided: require the exact PlanStageModelConfig
+   * - If taskCode only: PlanTaskModelConfig > PlanLLMAccess > system default
    */
   async executeLLMOperation(
     request: { headers: Record<string, string> } | { tenantContext: TenantContext },
@@ -115,16 +111,23 @@ export class LLMGateway {
 
       // 5. Resolve the model to use based on plan, task, and optional stage
       let modelResolution: ModelResolutionResult | null = null
-      const explicitModelCode = typeof llmRequest.modelClass === 'string' && llmRequest.modelClass.trim().length > 0
+      const requestedModelCode = typeof llmRequest.modelClass === 'string' && llmRequest.modelClass.trim().length > 0
         ? llmRequest.modelClass.trim()
         : null
+      // A caller-selected model must never override a stage row managed in
+      // Super Admin. Explicit models remain supported only for legacy
+      // task-only operations that have no stage configuration surface.
+      const explicitModelCode = llmRequest.stageCode ? null : requestedModelCode
       console.log(`[Gateway] Resolving model for tenant=${tenantContext.tenantId}, planId=${tenantContext.planId || 'NONE'}, taskCode=${llmRequest.taskCode}, stageCode=${llmRequest.stageCode || 'none'}`)
       if (explicitModelCode) {
         llmRequest.modelClass = explicitModelCode
         console.log(`[Gateway] Explicit model requested: ${explicitModelCode}`)
+      } else if (requestedModelCode && llmRequest.stageCode) {
+        delete llmRequest.modelClass
+        console.warn(`[Gateway] Ignoring caller model ${requestedModelCode}; stage ${llmRequest.stageCode} is controlled by Super Admin`)
       }
 
-      if (!tenantContext.planId && llmRequest.stageCode && !explicitModelCode) {
+      if (!tenantContext.planId && llmRequest.stageCode) {
         const message = `No planId available for configured LLM stage ${llmRequest.stageCode}`
         console.error(`[Gateway] ${message}`)
         if (decision.reservationId) {

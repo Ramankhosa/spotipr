@@ -1,0 +1,25 @@
+-- Keep the Super Admin Novelty Search list in the same order as the runtime
+-- pipeline. The consolidated-analysis migration introduced a duplicate order
+-- value of 4 without shifting the existing stages.
+
+UPDATE "workflow_stages"
+SET "sortOrder" = CASE "code"
+  WHEN 'NOVELTY_QUERY_GENERATION' THEN 1
+  WHEN 'NOVELTY_PATENT_SEARCH' THEN 2
+  WHEN 'NOVELTY_RELEVANCE_SCORING' THEN 3
+  WHEN 'NOVELTY_CONSOLIDATED_ANALYSIS' THEN 4
+  WHEN 'NOVELTY_FEATURE_ANALYSIS' THEN 5
+  WHEN 'NOVELTY_COMPARISON' THEN 6
+  WHEN 'NOVELTY_REPORT_GENERATION' THEN 7
+  ELSE "sortOrder"
+END,
+"updatedAt" = CURRENT_TIMESTAMP
+WHERE "code" IN (
+  'NOVELTY_QUERY_GENERATION',
+  'NOVELTY_PATENT_SEARCH',
+  'NOVELTY_RELEVANCE_SCORING',
+  'NOVELTY_CONSOLIDATED_ANALYSIS',
+  'NOVELTY_FEATURE_ANALYSIS',
+  'NOVELTY_COMPARISON',
+  'NOVELTY_REPORT_GENERATION'
+);

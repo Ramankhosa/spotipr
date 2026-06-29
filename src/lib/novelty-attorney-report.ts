@@ -322,6 +322,29 @@ function displayEvidenceSource(value: unknown, fallback = 'citation record'): st
   return 'inference';
 }
 
+function evidenceQuoteFrom(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const text = cleanText(value);
+      if (text) return text;
+    }
+    if (value && typeof value === 'object') {
+      const objectValue = value as Record<string, unknown>;
+      const text = cleanText(objectValue.quote || objectValue.text || objectValue.passage || objectValue.snippet);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function evidenceSourceFrom(value: unknown): unknown {
+  if (value && typeof value === 'object') {
+    const objectValue = value as Record<string, unknown>;
+    return objectValue.field || objectValue.source || objectValue.evidence_source;
+  }
+  return undefined;
+}
+
 function reportSafeText(value: unknown, fallback = ''): string {
   const sourceTerm = sourceDisclosureTerm();
   return cleanText(value, fallback)
@@ -1691,12 +1714,13 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
     const supplied = suppliedRows.get(feature) || {};
     const cell = cellFor(patentMap, feature);
     const rawStatus = normalizeStatus(supplied.status || cell?.status);
-    const evidenceQuote = cleanText(
-      supplied.evidence_quote ||
-      cell?.quote ||
-      (typeof (cell as any)?.evidence === 'string' ? (cell as any).evidence : '')
+    const evidenceQuote = evidenceQuoteFrom(
+      supplied.evidence_quote,
+      (supplied as any).evidence,
+      cell?.quote,
+      (cell as any)?.evidence,
     );
-    const rawEvidenceSource = supplied.evidence_source || cell?.evidence_source || cell?.field || (evidenceQuote ? 'inference' : 'none');
+    const rawEvidenceSource = supplied.evidence_source || evidenceSourceFrom((supplied as any).evidence) || cell?.evidence_source || cell?.field || evidenceSourceFrom((cell as any)?.evidence) || (evidenceQuote ? 'inference' : 'none');
     const evidenceSource = displayEvidenceSource(rawEvidenceSource, 'none');
     const patentDisclosure = reportSafeText(
       supplied.patent_disclosure ||

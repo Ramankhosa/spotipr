@@ -10,10 +10,20 @@ describe('novelty scholarly-paper integration', () => {
       inventionFeatures: ['A sensing mechanism'],
       paperSearchQuery: 'sensing mechanism measurement study',
       paperKeywords: ['sensing mechanism', 'measurement method'],
+      paperSearchQueries: ['sensing mechanism study', 'technical condition measurement'],
+      googleScholarSearchQuery: '"sensing mechanism" "technical condition"',
+      academicDatabaseSearchQuery: 'sensing mechanism technical condition measurement',
+      paperYearFrom: 1900,
+      paperYearTo: 2026,
     }, 'A sensing mechanism measures a technical condition.');
 
     expect(normalized.paperSearchQuery).toBe('sensing mechanism measurement study');
     expect(normalized.paperKeywords).toEqual(['sensing mechanism', 'measurement method']);
+    expect(normalized.paperSearchQueries).toEqual(['sensing mechanism study', 'technical condition measurement']);
+    expect(normalized.googleScholarSearchQuery).toBe('"sensing mechanism" "technical condition"');
+    expect(normalized.academicDatabaseSearchQuery).toBe('sensing mechanism technical condition measurement');
+    expect(normalized.paperYearFrom).toBe(1900);
+    expect(normalized.paperYearTo).toBe(2026);
   });
 
   it('includes scholarly metadata in the attorney report comparison', () => {
