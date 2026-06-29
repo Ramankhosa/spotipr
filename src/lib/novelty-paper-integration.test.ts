@@ -73,7 +73,16 @@ describe('novelty scholarly-paper integration', () => {
           }],
         }],
       },
-      stage4Results: { per_patent_remarks: [] },
+      stage4Results: {
+        per_patent_remarks: [{
+          pn: paperId,
+          title: 'Prior sensing research',
+          remarks: 'The paper maps the sensing mechanism but does not describe the claimed control relationship.',
+          summary: 'The paper maps the sensing mechanism but does not describe the claimed control relationship.',
+          overlap_features: ['A sensing mechanism'],
+          missing_features: [],
+        }],
+      },
     });
 
     expect(report.comparisons[0]).toMatchObject({
@@ -85,5 +94,29 @@ describe('novelty scholarly-paper integration', () => {
     });
     expect(report.methodology.corpus).toContain('Scholarly papers');
     expect(report.countLabels).toContainEqual({ label: 'Scholarly papers retrieved', value: 1 });
+    expect(report.paperCitations).toHaveLength(1);
+    expect(report.patentCitations).toHaveLength(0);
+    expect(report.paperComparisons[0].summary).toContain('maps the sensing mechanism');
+    expect(report.tableOfContents).toContainEqual({ number: '2.2.1', title: 'Prior sensing research' });
+  });
+
+  it('omits scholarly sections and counts when publications are not selected', () => {
+    const report = buildNoveltyAttorneyReportModel({
+      id: 'patent-only-search',
+      title: 'Patent-only invention',
+      jurisdiction: 'IN',
+      inventionDescription: 'A technical mechanism.',
+      config: { searchSource: { includePatents: true, includePapers: false, mode: 'INDIAN_ONLY' } },
+      stage0Results: { searchQuery: 'technical mechanism', inventionFeatures: ['A technical mechanism'] },
+      stage1Results: { retrievalCandidates: [], patentCount: 0, paperCount: 0 },
+      stage35Results: { feature_map: [] },
+      stage4Results: {},
+    });
+
+    expect(report.paperCitations).toEqual([]);
+    expect(report.paperComparisons).toEqual([]);
+    expect(report.countLabels.some(item => item.label === 'Scholarly papers retrieved')).toBe(false);
+    expect(report.tableOfContents.some(item => item.title === 'Relevant Scholarly Publications')).toBe(false);
+    expect(report.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
   });
 });

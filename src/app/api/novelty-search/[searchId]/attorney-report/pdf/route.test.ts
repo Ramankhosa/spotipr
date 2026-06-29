@@ -339,6 +339,54 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text.match(/Shared source disclosure text\./g)).toHaveLength(1)
   }, 20_000)
 
+  test('renders scholarly publications separately and indexes paper titles', async () => {
+    const rows = [featureRow(0, {
+      patentDisclosure: 'The paper abstract expressly describes the submitted sensing mechanism.',
+      professionalRemark: 'The paper maps the sensing feature but not the complete control relationship.',
+    })]
+    const paper = citation(rows, {
+      publicationNumber: 'PAPER:0123456789ABCDEF',
+      referenceType: 'paper',
+      title: 'Scholarly sensing mechanism research title',
+      link: 'https://doi.org/10.1000/sensing',
+      authors: 'A. Author, B. Author',
+      venue: 'Journal of Technical Sensors',
+      doi: '10.1000/sensing',
+      sourceProviders: 'Google Scholar, Crossref',
+      citationCount: 42,
+      publicationDate: '2020',
+      abstract: 'A scholarly abstract describing a sensing mechanism.',
+      technicalDisclosure: 'A scholarly abstract describing a sensing mechanism.',
+      summary: 'Paper feature remarks identify sensing overlap and a missing control relationship.',
+    })
+    mockedBuildReport.mockReturnValue(reportModel({
+      inventionFeatures: [rows[0].userFeature],
+      featureSummaries: [{ featureNumber: 'KF1', feature: rows[0].userFeature, type: 'core_technical', typeLabel: 'Core technical', genericWarning: '' }],
+      citations: [paper],
+      patentCitations: [],
+      paperCitations: [paper],
+      directCitations: [paper],
+      comparisons: [paper],
+      patentComparisons: [],
+      paperComparisons: [paper],
+      otherShortlistedCitations: [],
+    }) as any)
+
+    const response = await GET(request(), { params: { searchId: 'search-1' } })
+    const buffer = await responseBuffer(response)
+    const parsed = await pdfParse(buffer)
+    const normalizedText = parsed.text.replace(/\s+/g, ' ')
+
+    expect(response.status).toBe(200)
+    expect(normalizedText).toContain('2.2 Relevant Scholarly Publications')
+    expect(normalizedText).toContain('2.2.1 Scholarly sensing mechanism research title')
+    expect(normalizedText).toContain('Authors A. Author, B. Author')
+    expect(normalizedText).toContain('PAPER FEATURE REMARKS')
+    expect(normalizedText).toContain('Paper feature remarks identify sensing overlap')
+    expect(normalizedText).toContain('2.3 List of Other Shortlisted Citations')
+    expect(buffer.toString('latin1')).toContain('/GoTo')
+  }, 20_000)
+
   test('renders empty comparison and matrix states without changing endpoint behavior', async () => {
     mockedBuildReport.mockReturnValue(reportModel({
       inventionFeatures: [],

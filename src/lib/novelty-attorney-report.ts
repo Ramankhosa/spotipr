@@ -187,6 +187,8 @@ export interface AttorneyReportModel {
     summary: string;
   };
   citations: AttorneyReportCitation[];
+  patentCitations: AttorneyReportCitation[];
+  paperCitations: AttorneyReportCitation[];
   componentCitations: AttorneyReportCitation[];
   directCitations: AttorneyReportCitation[];
   borderlineCitations: AttorneyReportCitation[];
@@ -196,6 +198,8 @@ export interface AttorneyReportModel {
   assigneeLandscape: AttorneyReportEntityLandscape;
   inventorSignals: AttorneyReportEntityLandscape;
   comparisons: AttorneyReportPatentComparison[];
+  patentComparisons: AttorneyReportPatentComparison[];
+  paperComparisons: AttorneyReportPatentComparison[];
   riskAssessment: {
     noveltyRisk: AttorneyReportRiskLevel;
     noveltyRiskLabel: string;
@@ -1825,6 +1829,10 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     matchCategoryLabel,
     referenceType,
   }));
+  const patentCitations = citations.filter(citation => citation.referenceType === 'patent');
+  const paperCitations = citations.filter(citation => citation.referenceType === 'paper');
+  const patentComparisons = comparisons.filter(comparison => comparison.referenceType === 'patent');
+  const paperComparisons = comparisons.filter(comparison => comparison.referenceType === 'paper');
   const directCitations = citations.filter(citation => citation.matchCategory === 'direct');
   const componentCitations = citations.filter(citation => citation.matchCategory === 'component');
   const borderlineCitations = citations.filter(citation => citation.matchCategory === 'borderline');
@@ -1955,8 +1963,12 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '1.6', title: 'Component / Feature-Level Prior Art' },
       { number: '1.7', title: 'Key Feature Analysis Matrix' },
       { number: '2', title: 'Citation Analysis' },
-      { number: '2.1', title: 'Details of Relevant Prior-Art Citations' },
-      { number: '2.2', title: 'List of Other Shortlisted Citations' },
+      { number: '2.1', title: 'Relevant Patent Citations' },
+      ...(paperCitations.length ? [
+        { number: '2.2', title: 'Relevant Scholarly Publications' },
+        ...paperCitations.map((citation, index) => ({ number: `2.2.${index + 1}`, title: citation.title })),
+      ] : []),
+      { number: paperCitations.length ? '2.3' : '2.2', title: 'List of Other Shortlisted Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
       { number: '4', title: 'Repeated Inventor / Entity Signals' },
       { number: '5', title: 'Claim-Positioning Analysis' },
@@ -1971,6 +1983,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
         : 'No standalone generic feature risk was detected from the extracted feature list.',
     },
     citations,
+    patentCitations,
+    paperCitations,
     directCitations,
     componentCitations,
     borderlineCitations,
@@ -1980,6 +1994,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     assigneeLandscape: buildEntityLandscape(assigneeSignals, 'assignee'),
     inventorSignals: buildEntityLandscape(inventorSignalNames, 'inventor'),
     comparisons,
+    patentComparisons,
+    paperComparisons,
     riskAssessment,
     potentialDifferentiationSpace,
     matrixInsight,

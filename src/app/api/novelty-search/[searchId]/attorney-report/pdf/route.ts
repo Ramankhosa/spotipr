@@ -1433,6 +1433,12 @@ export async function GET(
 
     const enrichedSearchRun = await hydrateNoveltyReportPatentMetadata(searchRun);
     const report = buildNoveltyAttorneyReportModel(enrichedSearchRun);
+    const patentComparisons = Array.isArray(report.patentComparisons)
+      ? report.patentComparisons
+      : report.comparisons.filter(item => item.referenceType !== 'paper');
+    const paperComparisons = Array.isArray(report.paperComparisons)
+      ? report.paperComparisons
+      : report.comparisons.filter(item => item.referenceType === 'paper');
     const doc = new PDFDocument({
       size: 'A4',
       margins: { top: PAGE.top, bottom: PAGE.bottom, left: PAGE.left, right: PAGE.right },
@@ -1525,60 +1531,78 @@ export async function GET(
     startSection('1.7', 'Key Feature Analysis Matrix', 2);
     drawFeatureStatusMatrix(doc, report);
 
-    startGroup('2', 'Citation Analysis');
-    startSection('2.1', 'Details of Relevant Prior-Art Citations', 2);
-    for (let itemIndex = 0; itemIndex < report.comparisons.length; itemIndex += 1) {
-      const item = report.comparisons[itemIndex];
-      const destination = patentDestination(itemIndex);
-      drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction, destination);
-      sectionPages.push({
-        number: `2.1.${itemIndex + 1}`,
-        title: `${cleanText(item.publicationNumber)} - ${truncate(item.title, 74)}`,
-        page: doc.bufferedPageRange().count,
-        destination,
-        level: 3,
-      });
-      drawMetadataGrid(doc, item.referenceType === 'paper' ? [
-        ['Reference Type', 'Scholarly paper'],
-        ['Authors', item.authors],
-        ['Year / Venue', `${item.publicationDate} / ${item.venue}`],
-        ['DOI', item.doi],
-        ['Citation Count', item.citationCount === null ? '-' : String(item.citationCount)],
-        ['Reference Role', item.referenceRole],
-        ['Academic Source', item.sourceProviders],
-        ['Record URL', item.link],
-      ] : [
-        ['Application No.', item.applicationNumber],
-        ['Filing Date', item.filingDate],
-        ['Priority Date', item.priorityDate],
-        ['Reference Role', item.referenceRole],
-        ['Review Priority', item.reviewPriority],
-        ['Inventor(s)', item.inventors],
-        ['CPC / IPC', `${item.cpcCodes} / ${item.ipcCodes}`],
-        ['Source', item.link],
-      ]);
-      doc.y += SPACE.sm;
-      drawFlowingLabeledText(doc, item.referenceType === 'paper' ? 'Paper Abstract' : 'Patent Abstract', item.abstract);
-      const normalizedAbstract = cleanText(item.abstract, '');
-      const normalizedTechnicalDisclosure = cleanText(item.technicalDisclosure, '');
-      if (
-        normalizedTechnicalDisclosure &&
-        normalizedTechnicalDisclosure !== normalizedAbstract &&
-        !normalizedAbstract.includes(normalizedTechnicalDisclosure)
-      ) {
-        drawFlowingLabeledText(doc, 'Technical Disclosure', item.technicalDisclosure);
+    const drawReferenceDetails = (
+      items: typeof report.comparisons,
+      sectionNumber: string,
+      sectionTitle: string,
+    ) => {
+      startSection(sectionNumber, sectionTitle, 2);
+      if (!items.length) {
+        drawParagraph(doc, `No ${sectionTitle.toLowerCase()} were selected for detailed feature mapping in this run.`);
+        return;
       }
-      doc.font(FONTS.semibold).fontSize(TYPE.h3).fillColor(COLORS.text).text('Feature-by-Feature Comparison', PAGE.left, doc.y, { width: contentWidth(doc) });
-      doc.y += SPACE.md;
-      if (item.rows.length > 0) drawFeatureTable(doc, item.publicationNumber, item.rows);
-      else drawParagraph(doc, 'No feature comparison rows were available for this citation.');
-      doc.y += SPACE.sm;
-      keyValueRow(doc, 'Reference Summary', item.summary);
-      keyValueRow(doc, 'Claim Impact Summary', item.claimImpactSummary);
-      doc.y += SPACE.md;
+      items.forEach((item, localIndex) => {
+        const itemIndex = Math.max(0, report.comparisons.findIndex(comparison => comparison.publicationNumber === item.publicationNumber));
+        const destination = patentDestination(itemIndex);
+        drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction, destination);
+        sectionPages.push({
+          number: `${sectionNumber}.${localIndex + 1}`,
+          title: item.referenceType === 'paper'
+            ? truncate(item.title, 100)
+            : `${cleanText(item.publicationNumber)} - ${truncate(item.title, 74)}`,
+          page: doc.bufferedPageRange().count,
+          destination,
+          level: 3,
+        });
+        drawMetadataGrid(doc, item.referenceType === 'paper' ? [
+          ['Reference Type', 'Scholarly paper'],
+          ['Authors', item.authors],
+          ['Year / Venue', `${item.publicationDate} / ${item.venue}`],
+          ['DOI', item.doi],
+          ['Citation Count', item.citationCount === null ? '-' : String(item.citationCount)],
+          ['Reference Role', item.referenceRole],
+          ['Academic Source', item.sourceProviders],
+          ['Record URL', item.link],
+        ] : [
+          ['Application No.', item.applicationNumber],
+          ['Filing Date', item.filingDate],
+          ['Priority Date', item.priorityDate],
+          ['Reference Role', item.referenceRole],
+          ['Review Priority', item.reviewPriority],
+          ['Inventor(s)', item.inventors],
+          ['CPC / IPC', `${item.cpcCodes} / ${item.ipcCodes}`],
+          ['Source', item.link],
+        ]);
+        doc.y += SPACE.sm;
+        drawFlowingLabeledText(doc, item.referenceType === 'paper' ? 'Paper Abstract' : 'Patent Abstract', item.abstract);
+        const normalizedAbstract = cleanText(item.abstract, '');
+        const normalizedTechnicalDisclosure = cleanText(item.technicalDisclosure, '');
+        if (
+          normalizedTechnicalDisclosure &&
+          normalizedTechnicalDisclosure !== normalizedAbstract &&
+          !normalizedAbstract.includes(normalizedTechnicalDisclosure)
+        ) {
+          drawFlowingLabeledText(doc, 'Technical Disclosure', item.technicalDisclosure);
+        }
+        doc.font(FONTS.semibold).fontSize(TYPE.h3).fillColor(COLORS.text).text('Feature-by-Feature Comparison', PAGE.left, doc.y, { width: contentWidth(doc) });
+        doc.y += SPACE.md;
+        if (item.rows.length > 0) drawFeatureTable(doc, item.publicationNumber, item.rows);
+        else drawParagraph(doc, 'No feature comparison rows were available for this citation.');
+        doc.y += SPACE.sm;
+        keyValueRow(doc, item.referenceType === 'paper' ? 'Paper Feature Remarks' : 'Reference Summary', item.summary);
+        keyValueRow(doc, 'Claim Impact Summary', item.claimImpactSummary);
+        doc.y += SPACE.md;
+      });
+    };
+
+    startGroup('2', 'Citation Analysis');
+    drawReferenceDetails(patentComparisons, '2.1', 'Relevant Patent Citations');
+    if (paperComparisons.length > 0) {
+      drawReferenceDetails(paperComparisons, '2.2', 'Relevant Scholarly Publications');
     }
 
-    startSection('2.2', 'List of Other Shortlisted Citations', 2);
+    const otherCitationSection = paperComparisons.length > 0 ? '2.3' : '2.2';
+    startSection(otherCitationSection, 'List of Other Shortlisted Citations', 2);
     if (report.otherShortlistedCitations.length > 0) {
       drawParagraph(doc, 'The below citations were shortlisted but not mapped in citation detail because the final report focuses on the most relevant mapped references.');
       drawCitationTable(doc, report.otherShortlistedCitations);

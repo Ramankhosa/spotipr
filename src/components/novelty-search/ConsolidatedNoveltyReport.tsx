@@ -73,6 +73,12 @@ interface CitationView {
   coverageScore: number;
   claimImpactSummary: string;
   summary: string;
+  referenceType: 'patent' | 'paper';
+  authors: string;
+  venue: string;
+  doi: string;
+  sourceProviders: string;
+  citationCount: number | null;
   rows: FeatureComparisonRow[];
 }
 
@@ -537,6 +543,12 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
       coverageScore: item.coverage.score,
       claimImpactSummary: item.claimImpactSummary,
       summary: item.summary,
+      referenceType: item.referenceType,
+      authors: item.authors,
+      venue: item.venue,
+      doi: item.doi,
+      sourceProviders: item.sourceProviders,
+      citationCount: item.citationCount,
       rows: item.rows.map(row => ({
         feature_id: row.featureNumber,
         feature: row.userFeature,
@@ -563,6 +575,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
     return {
       ...model,
       citations,
+      patentCitations: citations.filter(citation => citation.referenceType === 'patent'),
+      paperCitations: citations.filter(citation => citation.referenceType === 'paper'),
       otherShortlisted: model.otherShortlistedCitations,
       assignees: model.assignees,
       inventors: model.inventors,
@@ -682,8 +696,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 ['1.5', 'Summary of Relevant Citations'],
                 ['1.6', 'Component / Feature-Level Prior Art'],
                 ['1.7', 'Key Feature Analysis'],
-                ['2.1', 'Details of Relevant Patent Citations'],
-                ['2.3', 'List of Other Shortlisted Citations'],
+                ['2.1', 'Relevant Patent Citations'],
+                ...(reportData.paperCitations.length ? [['2.2', 'Relevant Scholarly Publications']] : []),
+                [reportData.paperCitations.length ? '2.3' : '2.2', 'List of Other Shortlisted Citations'],
                 ['3', 'Applicant / Assignee Landscape'],
                 ['4', 'Repeated Inventor / Entity Signals'],
                 ['5', 'Claim-Positioning Analysis'],
@@ -696,6 +711,18 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                 </a>
               ))}
             </div>
+            {reportData.paperCitations.length > 0 && (
+              <div className="mt-4 border-t border-slate-200 pt-4">
+                <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Scholarly publication index</div>
+                <div className="space-y-2 text-sm">
+                  {reportData.paperCitations.map((citation, index) => (
+                    <a key={citation.publicationNumber} href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} className="block text-blue-700 underline">
+                      2.2.{index + 1} {citation.title}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
           </nav>
 
           <Section id="section-1-1" title="1.1 Objective">
@@ -870,13 +897,13 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
             </div>
           </Section>
 
-          <Section id="section-2-1" title="2.1 Details of Relevant Patent Citations" breakBefore>
+          <Section id="section-2-1" title="2.1 Relevant Patent Citations" breakBefore>
             <p className="mb-5 max-w-4xl text-sm leading-6 text-slate-700">
               The relevant patent records are mapped based on the key features of the submitted invention.
             </p>
             <div className="space-y-10">
-              {reportData.citations.map((citation, index) => (
-                <article id={`citation-${index + 1}`} key={citation.publicationNumber}>
+              {reportData.patentCitations.map((citation, index) => (
+                <article id={`citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} key={citation.publicationNumber}>
                   <div className="mb-0 bg-blue-700 px-4 py-3 text-lg font-bold text-white">
                     Reference {index + 1}: {citation.publicationNumber}
                   </div>
@@ -938,11 +965,58 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
                   </div>
                 </article>
               ))}
+              {!reportData.patentCitations.length && (
+                <div className="rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm text-slate-700">No patents were selected for detailed mapping in this run.</div>
+              )}
             </div>
           </Section>
 
+          {reportData.paperCitations.length > 0 && (
+            <Section id="section-2-2" title="2.2 Relevant Scholarly Publications" breakBefore>
+              <p className="mb-5 max-w-4xl text-sm leading-6 text-slate-700">
+                Scholarly publications are assessed as non-patent prior art using available bibliographic metadata, abstracts, and feature-level evidence.
+              </p>
+              <div className="space-y-10">
+                {reportData.paperCitations.map((citation, index) => (
+                  <article id={`citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} key={citation.publicationNumber}>
+                    <div className="mb-0 bg-emerald-700 px-4 py-3 text-lg font-bold text-white">
+                      Paper {index + 1}: <a href={citation.link} target="_blank" rel="noreferrer" className="underline">{citation.title}</a>
+                    </div>
+                    <DenseTable>
+                      <tbody>
+                        <tr><Cell className="w-48 font-semibold">Authors:</Cell><Cell colSpan={3}>{citation.authors}</Cell></tr>
+                        <tr><Cell className="font-semibold">Year / Venue:</Cell><Cell>{citation.publicationDate} / {citation.venue}</Cell><Cell className="font-semibold">Citation Count:</Cell><Cell>{citation.citationCount ?? '-'}</Cell></tr>
+                        <tr><Cell className="font-semibold">DOI:</Cell><Cell>{citation.doi}</Cell><Cell className="font-semibold">Academic Source:</Cell><Cell>{citation.sourceProviders}</Cell></tr>
+                        <tr><Cell className="font-semibold">Reference Role:</Cell><Cell>{citation.referenceRole}</Cell><Cell className="font-semibold">Review Priority:</Cell><Cell>{citation.reviewPriority}</Cell></tr>
+                        <tr><Cell className="font-semibold">Paper Abstract:</Cell><Cell colSpan={3}>{reportSafeText(citation.abstract)}</Cell></tr>
+                        <tr><Cell className="font-semibold">Source:</Cell><Cell colSpan={3}><a className="text-blue-700 underline" href={citation.link} target="_blank" rel="noreferrer">{citation.link}</a></Cell></tr>
+                      </tbody>
+                    </DenseTable>
+                    <div className="mt-4 overflow-x-auto rounded-sm border border-slate-300">
+                      <table className="min-w-full border-collapse text-xs">
+                        <thead><tr><HeaderCell className="w-16">S.No.</HeaderCell><HeaderCell className="min-w-64">Key Feature</HeaderCell><HeaderCell className="min-w-80">Paper Evidence</HeaderCell><HeaderCell className="min-w-64">Feature Remark</HeaderCell></tr></thead>
+                        <tbody>
+                          {citation.rows.map(row => (
+                            <tr className="print-row" key={row.feature_id}>
+                              <Cell className="font-semibold">{row.feature_id}</Cell>
+                              <Cell><div className="font-semibold text-slate-950">{row.feature}</div><div className="mt-2 text-slate-600">{row.user_invention_disclosure}</div></Cell>
+                              <Cell><div className={`mb-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}>{row.public_mapping_status || row.status_label || statusLabel(row.status)}</div><div>{row.patent_disclosure}</div>{row.evidence_quote && <div className="mt-2 text-slate-500">Supporting passage: {row.evidence_quote}</div>}</Cell>
+                              <Cell>{row.professional_remark || defaultProfessionalRemark(row.status, row.feature, row.patent_disclosure)}</Cell>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-4 rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700"><span className="font-semibold text-slate-950">Paper feature remarks: </span>{citation.summary}</div>
+                    <div className="mt-4 rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700"><span className="font-semibold text-slate-950">Claim impact summary: </span>{citation.claimImpactSummary}</div>
+                  </article>
+                ))}
+              </div>
+            </Section>
+          )}
+
           {reportData.otherShortlisted.length > 0 && (
-            <Section id="section-2-3" title="2.3 List of Other Shortlisted Citations" breakBefore>
+            <Section id={reportData.paperCitations.length ? 'section-2-3' : 'section-2-2'} title={`${reportData.paperCitations.length ? '2.3' : '2.2'} List of Other Shortlisted Citations`} breakBefore>
               <div className="mb-5 rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-950">
                 These citations were shortlisted for reference but not mapped in detail in this report version.
               </div>
