@@ -53,6 +53,7 @@ export interface AttorneyReportCitation {
   reviewPriority: string;
   matchCategory: 'direct' | 'component' | 'borderline' | 'rejected';
   matchCategoryLabel: string;
+  referenceType: 'patent' | 'paper';
 }
 
 export interface AttorneyReportEntityGroup {
@@ -126,6 +127,11 @@ export interface AttorneyReportPatentComparison extends AttorneyReportCitation {
   assignees: string;
   cpcCodes: string;
   ipcCodes: string;
+  authors: string;
+  venue: string;
+  doi: string;
+  sourceProviders: string;
+  citationCount: number | null;
   coverage: {
     present: number;
     partial: number;
@@ -240,6 +246,7 @@ function cleanText(value: unknown, fallback = ''): string {
 
 function canonicalPatentNumber(value: unknown): string {
   const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (compact.startsWith('PAPER')) return compact;
   const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/);
   return kindSuffixMatch?.[1] || compact;
 }
@@ -1621,15 +1628,15 @@ function buildEntityLandscape(names: string[], mode: 'assignee' | 'inventor'): A
 }
 
 function sourceModeLabel(value: unknown): string {
-  const mode = cleanText(value, 'Selected patent sources');
-  if (mode === 'PQAI_PLUS_INDIAN') return 'International patent corpus + local Indian patent corpus';
-  if (mode === 'PQAI_PLUS_AUSTRALIA') return 'International patent corpus + IP Australia patent search';
-  if (mode === 'PQAI_PLUS_EPO') return 'International patent corpus + EPO OPS European patent search';
-  if (mode === 'PQAI_PLUS_INDIAN_EPO') return 'International patent corpus + local Indian patent corpus + EPO OPS European patent search';
-  if (mode === 'PQAI_ONLY') return 'International patent corpus';
-  if (mode === 'INDIAN_ONLY') return 'Local Indian patent corpus';
-  if (mode === 'AUSTRALIA_ONLY') return 'IP Australia patent search';
-  if (mode === 'EPO_ONLY') return 'EPO OPS European patent search';
+  const mode = cleanText(value, 'Selected patent nationalities');
+  if (mode === 'PQAI_PLUS_INDIAN') return 'India + international patents';
+  if (mode === 'PQAI_PLUS_AUSTRALIA') return 'Australia + international patents';
+  if (mode === 'PQAI_PLUS_EPO') return 'Europe + international patents';
+  if (mode === 'PQAI_PLUS_INDIAN_EPO') return 'India + Europe + international patents';
+  if (mode === 'PQAI_ONLY') return 'International patents';
+  if (mode === 'INDIAN_ONLY') return 'India patents';
+  if (mode === 'AUSTRALIA_ONLY') return 'Australia patents';
+  if (mode === 'EPO_ONLY') return 'Europe patents';
   return mode;
 }
 
@@ -1759,18 +1766,20 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     const overlapRisk = safeOverlapLabel(rawThreat);
     const claimImpactSummary = buildClaimImpactSummary(rows, overlapRisk.label);
     const relevanceScore = numberScore(gate.rerankScore ?? gate.score ?? meta.rerankScore ?? meta.relevanceScore ?? remark?.relevance);
+    const referenceType: 'patent' | 'paper' = meta.referenceType === 'paper' || pn.toUpperCase().startsWith('PAPER:') ? 'paper' : 'patent';
 
     return {
       citationNo,
       publicationNumber: pn,
-      title: firstText(map.title, meta.title, remark?.title, 'Untitled Patent'),
+      title: firstText(map.title, meta.title, remark?.title, referenceType === 'paper' ? 'Untitled Paper' : 'Untitled Patent'),
+      referenceType,
       relevanceScore,
       evidenceQuality: cleanText(gate.evidence_quality || meta.evidence_quality, 'medium'),
       matchCategory: category,
       matchCategoryLabel: matchCategoryLabel(gateDecision),
       referenceRole: referenceRoleFor(category, score, rows),
       reviewPriority: reviewPriorityFor(category, score, relevanceScore),
-      link: firstText(map.link, meta.link, meta.url, `https://patents.google.com/patent/${pn}`),
+      link: firstText(map.link, meta.link, meta.sourceUrl, meta.url, referenceType === 'paper' ? '' : `https://patents.google.com/patent/${pn}`),
       abstract: firstText(
         ...sourceAbstractFields(meta),
         ...sourceAbstractFields(rawMeta),
@@ -1788,6 +1797,11 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       assignees: firstText(meta.assignees, meta.assignee, meta.applicants, meta.applicant, meta.applicant_names, (rawMeta as any).applicants, (rawMeta as any).rawApplicantBlock, (ipIndiaDetails as any).applicants, '-'),
       cpcCodes: firstText(meta.cpcCodes, meta.cpcs, meta.cpc_codes, meta.classifications, (rawMeta as any).cpcCodes, (rawMeta as any).cpc_codes, (rawMeta as any).classifications, '-'),
       ipcCodes: firstText(meta.ipcCodes, meta.ipcs, meta.ipc_codes, meta.classifications, (rawMeta as any).ipcCodes, (rawMeta as any).ipc_codes, (rawMeta as any).classifications, '-'),
+      authors: firstText(meta.authors, '-'),
+      venue: firstText(meta.venue, '-'),
+      doi: firstText(meta.doi, '-'),
+      sourceProviders: firstText(meta.sourceLabel, meta.sourceProviders, meta.sourceProvider, '-'),
+      citationCount: Number.isFinite(Number(meta.citationCount)) ? Math.max(0, Math.trunc(Number(meta.citationCount))) : null,
       coverage: { present, partial, absent, unknown, score },
       summary: reportSafeText(firstText(remark?.summary, remark?.remarks, map.remarks, 'Reference summary prepared for feature comparison.')),
       claimImpactSummary,
@@ -1799,7 +1813,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     };
   });
 
-  const citations = comparisons.map(({ citationNo, publicationNumber, title, relevanceScore, evidenceQuality, referenceRole, reviewPriority, matchCategory, matchCategoryLabel }) => ({
+  const citations = comparisons.map(({ citationNo, publicationNumber, title, relevanceScore, evidenceQuality, referenceRole, reviewPriority, matchCategory, matchCategoryLabel, referenceType }) => ({
     citationNo,
     publicationNumber,
     title,
@@ -1809,6 +1823,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     reviewPriority,
     matchCategory,
     matchCategoryLabel,
+    referenceType,
   }));
   const directCitations = citations.filter(citation => citation.matchCategory === 'direct');
   const componentCitations = citations.filter(citation => citation.matchCategory === 'component');
@@ -1820,7 +1835,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     .map((item, index) => ({
       citationNo: `S${index + 1}`,
       publicationNumber: getPublicationNumber(item),
-      title: firstText(item?.title, item?.invention_title, 'Untitled Patent'),
+      title: firstText(item?.title, item?.invention_title, item?.referenceType === 'paper' ? 'Untitled Paper' : 'Untitled Patent'),
+      referenceType: item?.referenceType === 'paper' ? 'paper' as const : 'patent' as const,
       relevanceScore: numberScore(item?.relevanceScore ?? item?.score ?? item?.relevance),
       evidenceQuality: cleanText(item?.evidence_quality, 'not mapped'),
       referenceRole: 'Requires full-text review',
@@ -1839,7 +1855,13 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
   const assignees = Array.from(new Set(assigneeSignals)).slice(0, 40);
   const inventors = Array.from(new Set(inventorSignalNames)).slice(0, 60);
   const counts = buildNoveltyReportCountSummary(stage1, stage35);
-  const sourceMode = cleanText((searchRun.config as any)?.searchSource?.mode || 'Selected patent sources');
+  const sourceConfig = (searchRun.config as any)?.searchSource || {};
+  const sourceMode = cleanText(sourceConfig.mode || 'Selected patent sources');
+  const paperSources: string[] = Array.isArray((searchRun.config as any)?.searchSource?.paperSources)
+    ? (searchRun.config as any).searchSource.paperSources.map((source: unknown) => cleanText(source).replace(/_/g, ' ')).filter(Boolean)
+    : [];
+  const patentCount = Number(stage1?.patentCount || 0);
+  const paperCount = Number(stage1?.paperCount || 0);
   const featureSummaries = buildFeatureSummaries(stage0, searchRun.inventionDescription || '');
   const genericFeatures = featureSummaries.filter(feature => feature.type === 'generic_weak').map(feature => feature.feature);
   const claimConcepts = normalizeClaimConcepts(stage0);
@@ -1883,12 +1905,12 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     inventionFeatures: stage0.inventionFeatures || [],
     evidenceBasis: 'Disclaimer: This preliminary assessment is based on limited preliminary data. Review the full patent text, claims, specification, drawings, family/legal status, and prosecution history before any final conclusion.',
     methodology: {
-      corpus: sourceModeLabel(sourceMode),
+      corpus: [sourceConfig.includePatents === false ? '' : sourceModeLabel(sourceMode), paperSources.length ? `Scholarly papers (${paperSources.join(', ')})` : ''].filter(Boolean).join('; ') || 'Configured prior-art sources',
       retrievalMode: 'Hybrid retrieval/ranking with AI relevance gating and feature mapping',
-      searchedEvidence: `This preliminary screening uses selected retrieved patent records, bibliographic metadata, and retrieval signals. Review the full patent text, claims, specification, drawings, prosecution history, legal status, and complete family records before any final conclusion.${stopReason ? ` Adaptive workflow status: ${stopReason.replace(/_/g, ' ')}.` : ''}`,
+      searchedEvidence: `This preliminary screening uses selected patent records and scholarly-paper bibliographic records, including available abstracts and metadata. Review the full patent text, claims, specification, drawings, prosecution history, legal status, and complete family records, as well as complete scholarly publications, before any final conclusion.${stopReason ? ` Adaptive workflow status: ${stopReason.replace(/_/g, ' ')}.` : ''}`,
       techniques: [
         'LLM-assisted invention normalization and key-feature extraction',
-        'Patent candidate retrieval and ranking',
+        'Patent and scholarly-paper candidate retrieval and ranking',
         'AI relevance gating before detailed mapping',
         'Feature-by-feature evidence mapping using explicit source labels',
         adaptiveScreening ? `Adaptive screening in ${cleanText(adaptiveScreening.mode, 'observe')} mode` : 'Fixed screening workflow',
@@ -1906,6 +1928,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     },
     countLabels: [
       { label: 'Candidate records retrieved/ranked', value: counts.patentsSearched },
+      ...(patentCount ? [{ label: 'Patent records retrieved', value: patentCount }] : []),
+      ...(paperCount ? [{ label: 'Scholarly papers retrieved', value: paperCount }] : []),
       { label: 'Shortlisted candidate citations', value: counts.patentsFound },
       { label: 'Direct invention-level mapped citations', value: counts.directMatches },
       { label: 'Component / feature-level mapped citations', value: counts.componentMatches },
@@ -1931,7 +1955,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '1.6', title: 'Component / Feature-Level Prior Art' },
       { number: '1.7', title: 'Key Feature Analysis Matrix' },
       { number: '2', title: 'Citation Analysis' },
-      { number: '2.1', title: 'Details of Relevant Patent Citations' },
+      { number: '2.1', title: 'Details of Relevant Prior-Art Citations' },
       { number: '2.2', title: 'List of Other Shortlisted Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
       { number: '4', title: 'Repeated Inventor / Entity Signals' },

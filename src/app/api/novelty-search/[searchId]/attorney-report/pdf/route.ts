@@ -1482,7 +1482,7 @@ export async function GET(
 
     startSection('1.2', 'Search Scope and Methodology', 2);
     drawMetadataGrid(doc, [
-      ['Corpus + retrieval mode', report.methodology.corpus],
+      ['Patent nationality coverage', report.methodology.corpus],
       ['Search / mapping mode', report.methodology.retrievalMode],
       ['Assessment scope', report.methodology.searchedEvidence],
       ['Review status', report.methodology.preliminaryStatus],
@@ -1526,7 +1526,7 @@ export async function GET(
     drawFeatureStatusMatrix(doc, report);
 
     startGroup('2', 'Citation Analysis');
-    startSection('2.1', 'Details of Relevant Patent Citations', 2);
+    startSection('2.1', 'Details of Relevant Prior-Art Citations', 2);
     for (let itemIndex = 0; itemIndex < report.comparisons.length; itemIndex += 1) {
       const item = report.comparisons[itemIndex];
       const destination = patentDestination(itemIndex);
@@ -1538,7 +1538,16 @@ export async function GET(
         destination,
         level: 3,
       });
-      drawMetadataGrid(doc, [
+      drawMetadataGrid(doc, item.referenceType === 'paper' ? [
+        ['Reference Type', 'Scholarly paper'],
+        ['Authors', item.authors],
+        ['Year / Venue', `${item.publicationDate} / ${item.venue}`],
+        ['DOI', item.doi],
+        ['Citation Count', item.citationCount === null ? '-' : String(item.citationCount)],
+        ['Reference Role', item.referenceRole],
+        ['Academic Source', item.sourceProviders],
+        ['Record URL', item.link],
+      ] : [
         ['Application No.', item.applicationNumber],
         ['Filing Date', item.filingDate],
         ['Priority Date', item.priorityDate],
@@ -1549,7 +1558,7 @@ export async function GET(
         ['Source', item.link],
       ]);
       doc.y += SPACE.sm;
-      drawFlowingLabeledText(doc, 'Patent Abstract', item.abstract);
+      drawFlowingLabeledText(doc, item.referenceType === 'paper' ? 'Paper Abstract' : 'Patent Abstract', item.abstract);
       const normalizedAbstract = cleanText(item.abstract, '');
       const normalizedTechnicalDisclosure = cleanText(item.technicalDisclosure, '');
       if (

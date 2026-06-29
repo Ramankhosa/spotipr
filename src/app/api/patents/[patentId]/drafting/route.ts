@@ -18,6 +18,8 @@ import {
   type PatentRetrievalQuery,
   type PatentSearchFilters,
   type PatentSearchQueryPlan,
+  type PatentSearchPrecision,
+  type PatentSearchConceptGroup,
   type PatentSearchSourceMode
 } from '@/lib/patent-search';
 import {
@@ -1274,15 +1276,16 @@ async function handleSavePriorArtConfig(user: any, patentId: string, data: any) 
 
   // Merge with existing priorArtConfig
   const existingConfig = (session.priorArtConfig as any) || {}
+  const incomingDraftingConfig = priorArtConfig?.priorArtForDrafting || priorArtConfig
   
   const updatedConfig = {
     ...existingConfig,
     // Prior Art for Drafting workflow
-    priorArtForDrafting: priorArtConfig ? {
-      mode: priorArtConfig.mode || 'ai',
-      selectedPatents: priorArtConfig.selectedPatents || [],
-      manualText: priorArtConfig.manualText || '',
-      literatureReviewInstructions: priorArtConfig.literatureReviewInstructions || ''
+    priorArtForDrafting: incomingDraftingConfig ? {
+      mode: incomingDraftingConfig.mode || 'ai',
+      selectedPatents: incomingDraftingConfig.selectedPatents || [],
+      manualText: incomingDraftingConfig.manualText || '',
+      literatureReviewInstructions: incomingDraftingConfig.literatureReviewInstructions || ''
     } : existingConfig.priorArtForDrafting,
     // Claim Refinement workflow
     claimRefinementConfig: claimRefConfig ? {
@@ -1447,6 +1450,59 @@ function normalizeRelatedArtSearchText(value: unknown, maxWords?: number): strin
   return text.split(/\s+/).filter(Boolean).slice(0, maxWords).join(' ')
 }
 
+function normalizeRelatedArtKeywordList(value: unknown, maxItems = 10): string[] {
+  return uniqueRelatedArtStrings([value])
+    .map(value => normalizeRelatedArtSearchText(value, 10))
+    .filter(value => value.length >= 3 && value.length <= 120)
+    .filter(value => !/[()*?]/.test(value))
+    .slice(0, maxItems)
+}
+
+function normalizeRelatedArtConceptGroups(value: unknown): PatentSearchConceptGroup[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+      const record = item as Record<string, any>
+      const terms = normalizeRelatedArtKeywordList(record.terms || record.keywords || record.phrases, 8)
+      if (!terms.length) return null
+      const kind = String(record.kind || '').trim().toLowerCase()
+      const excluded = record.excluded === true || kind === 'excluded' || kind === 'exclude'
+      return {
+        id: normalizeRelatedArtSearchText(record.id || `concept_group_${index + 1}`, 6).replace(/\s+/g, '_').toLowerCase(),
+        label: normalizeRelatedArtSearchText(record.label || record.name || `Concept group ${index + 1}`, 8),
+        kind: kind || undefined,
+        terms,
+        required: record.required === false ? false : !excluded,
+        excluded,
+      } as PatentSearchConceptGroup
+    })
+    .filter((item): item is PatentSearchConceptGroup => Boolean(item))
+    .slice(0, 6)
+}
+
+function normalizeRelatedArtSearchPrecision(value: unknown): PatentSearchPrecision {
+  return value === 'refined' ? 'refined' : 'broad'
+}
+
+function normalizeRelatedArtQueryPlanOverride(value: unknown): Partial<PatentSearchQueryPlan> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const raw = value as Record<string, unknown>
+  const googlePatentKeywords = normalizeRelatedArtKeywordList(raw.googlePatentKeywords ?? (raw as any).google_patent_keywords, 10)
+  const epoTitleKeywords = normalizeRelatedArtKeywordList(raw.epoTitleKeywords ?? (raw as any).epo_title_keywords, 6)
+  const epoAbstractKeywords = normalizeRelatedArtKeywordList(raw.epoAbstractKeywords ?? (raw as any).epo_abstract_keywords, 8)
+  const epoCombinedKeywords = normalizeRelatedArtKeywordList(raw.epoCombinedKeywords ?? (raw as any).epo_combined_keywords, 8)
+  const patentSearchConceptGroups = normalizeRelatedArtConceptGroups(raw.patentSearchConceptGroups ?? (raw as any).patent_search_concept_groups)
+  return {
+    ...(googlePatentKeywords.length ? { googlePatentKeywords } : {}),
+    ...(epoTitleKeywords.length ? { epoTitleKeywords } : {}),
+    ...(epoAbstractKeywords.length ? { epoAbstractKeywords } : {}),
+    ...(epoCombinedKeywords.length ? { epoCombinedKeywords } : {}),
+    ...(patentSearchConceptGroups.length ? { patentSearchConceptGroups } : {}),
+    searchPrecision: normalizeRelatedArtSearchPrecision(raw.searchPrecision),
+  }
+}
+
 function buildRelatedArtRetrievalQueries(searchQuery: string, inventionFeatures: string[]): PatentRetrievalQuery[] {
   const queries: PatentRetrievalQuery[] = []
   const seen = new Set<string>()
@@ -1594,11 +1650,21 @@ function toDraftingRelatedArtResult(result: NormalizedPatentResult): any {
     cpc_codes: cpcCodes,
     ipc_codes: ipcCodes,
     assignees: (result as any).assignees || result.applicants || [],
-    provider: result.sourceProvider,
+    providerId: result.providerId,
+    sourceProvider: result.sourceProvider || result.providerId,
+    sourceProviders: (result as any).sourceProviders || [result.sourceProvider || result.providerId].filter(Boolean),
+    provider: result.sourceProvider || result.providerId,
+    link: (result as any).link || (result as any).sourceUrl || (result as any).raw?.serpapiLink,
+    sourceUrl: (result as any).sourceUrl || (result as any).link || (result as any).raw?.serpapiLink,
   })
 }
 
-function buildDraftingRelatedArtSearchPlan(idea: any, searchQuery: string, filters: PatentSearchFilters): Partial<PatentSearchQueryPlan> {
+function buildDraftingRelatedArtSearchPlan(
+  idea: any,
+  searchQuery: string,
+  filters: PatentSearchFilters,
+  overrides: Partial<PatentSearchQueryPlan> = {}
+): Partial<PatentSearchQueryPlan> {
   const normalizedData = migrateNormalizedData(idea?.normalizedData || {})
   const components = Array.isArray(normalizedData.components) ? normalizedData.components : []
   const componentFeatures = components.flatMap(component => [
@@ -1626,6 +1692,28 @@ function buildDraftingRelatedArtSearchPlan(idea: any, searchQuery: string, filte
     inventionFeatures.join(' '),
   ].filter(Boolean).join(' '), 500)
   const keywords = uniqueRelatedArtStrings(searchQuery.split(/\s+/).filter(word => word.length > 3)).slice(0, 20)
+  const googlePatentKeywords = normalizeRelatedArtKeywordList([
+    overrides.googlePatentKeywords,
+    normalizedData.googlePatentKeywords,
+  ], 10)
+  const epoTitleKeywords = normalizeRelatedArtKeywordList([
+    overrides.epoTitleKeywords,
+    normalizedData.epoTitleKeywords,
+  ], 6)
+  const epoAbstractKeywords = normalizeRelatedArtKeywordList([
+    overrides.epoAbstractKeywords,
+    normalizedData.epoAbstractKeywords,
+  ], 8)
+  const epoCombinedKeywords = normalizeRelatedArtKeywordList([
+    overrides.epoCombinedKeywords,
+    normalizedData.epoCombinedKeywords,
+  ], 8)
+  const patentSearchConceptGroups = normalizeRelatedArtConceptGroups(
+    overrides.patentSearchConceptGroups?.length
+      ? overrides.patentSearchConceptGroups
+      : normalizedData.patentSearchConceptGroups
+  )
+  const searchPrecision = normalizeRelatedArtSearchPrecision(overrides.searchPrecision)
 
   return {
     originalQuery: searchQuery,
@@ -1634,12 +1722,18 @@ function buildDraftingRelatedArtSearchPlan(idea: any, searchQuery: string, filte
     semanticQuery: normalizeRelatedArtSearchText([searchQuery, abstract, inventionFeatures.join(' '), classificationHints.join(' ')].join(' '), 220),
     inventionFeatures,
     technicalKeywords: keywords,
+    googlePatentKeywords,
     synonyms: [],
     mustHaveTerms: [],
     excludedTerms: [],
     cpcCodes,
     ipcCodes,
     classificationHints,
+    epoTitleKeywords,
+    epoAbstractKeywords,
+    epoCombinedKeywords,
+    patentSearchConceptGroups,
+    searchPrecision,
     fieldFilters: filters,
     explicitFilters: filters,
     searchVariants: searchQuery ? [searchQuery] : [],
@@ -1704,15 +1798,17 @@ function getRelatedArtCandidateSource(result: any): string {
     result?.providerId,
     result?.provider,
   ].map(value => String(value || '').toLowerCase())
-  if (providers.includes('indian-corpus')) return 'Indian Patent Corpus'
-  if (providers.includes('pqai')) return 'PQAI International'
+  if (providers.includes('google-patents')) return 'Google Patents'
+  if (providers.includes('epo-ops') || providers.includes('epo-ops-corpus')) return 'European patents'
+  if (providers.includes('indian-corpus')) return 'Indian patents'
+  if (providers.includes('pqai') || providers.includes('pqai-corpus')) return 'International patents'
   const jurisdiction = String(result?.jurisdiction || result?.country || '')
     .toUpperCase()
     .replace(/[^A-Z]/g, '')
   if (jurisdiction === 'IN' || jurisdiction === 'IND' || jurisdiction === 'INDIA' || getRelatedArtCandidatePatentNumber(result).toUpperCase().startsWith('IN')) {
-    return 'Indian Patent Corpus'
+    return 'Indian patents'
   }
-  return 'International Patent Search'
+  return 'International patents'
 }
 
 function handleRelatedArtLLMReviewStream(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
@@ -5048,7 +5144,7 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   const allowedKeys = [
     'problem','objectives','components','logic','inputs','outputs','variants','bestMethod','normalizedData',
     'fieldOfRelevance','subfield','recommendedFocus','complianceNotes','drawingsFocus','claimStrategy','riskFlags','title',
-    'rawInput','abstract','cpcCodes','ipcCodes'
+    'rawInput','abstract','searchQuery','cpcCodes','ipcCodes'
   ] as const
 
   const updateData: Record<string, any> = {}
@@ -5064,7 +5160,8 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
     'problem','objectives','components','logic','inputs','outputs','variants','bestMethod',
     'fieldOfRelevance','subfield','recommendedFocus','complianceNotes','drawingsFocus','claimStrategy','riskFlags',
     'abstract','cpcCodes','ipcCodes','scopeRecommendations','supportDataSources','schemaVersion','sourceInputMeta',
-    'claimScopeStyle'
+    'claimScopeStyle','searchQuery','googlePatentKeywords','epoTitleKeywords','epoAbstractKeywords','epoCombinedKeywords',
+    'patentSearchConceptGroups'
   ] as const
 
   const baseNormalized = (existing?.normalizedData as any) || {}
@@ -5095,6 +5192,21 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   }
   if ('claimScopeStyle' in normalizedPatch) {
     normalizedPatch.claimScopeStyle = normalizePreliminaryClaimScopeStyle(normalizedPatch.claimScopeStyle)
+  }
+  if ('googlePatentKeywords' in normalizedPatch) {
+    normalizedPatch.googlePatentKeywords = normalizeRelatedArtKeywordList(normalizedPatch.googlePatentKeywords, 10)
+  }
+  if ('epoTitleKeywords' in normalizedPatch) {
+    normalizedPatch.epoTitleKeywords = normalizeRelatedArtKeywordList(normalizedPatch.epoTitleKeywords, 6)
+  }
+  if ('epoAbstractKeywords' in normalizedPatch) {
+    normalizedPatch.epoAbstractKeywords = normalizeRelatedArtKeywordList(normalizedPatch.epoAbstractKeywords, 8)
+  }
+  if ('epoCombinedKeywords' in normalizedPatch) {
+    normalizedPatch.epoCombinedKeywords = normalizeRelatedArtKeywordList(normalizedPatch.epoCombinedKeywords, 8)
+  }
+  if ('patentSearchConceptGroups' in normalizedPatch) {
+    normalizedPatch.patentSearchConceptGroups = normalizeRelatedArtConceptGroups(normalizedPatch.patentSearchConceptGroups)
   }
   if ('schemaVersion' in normalizedPatch) {
     normalizedPatch.schemaVersion = 2
@@ -8084,7 +8196,11 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
   const skipTrigramSearch = (data as any)?.skipTrigramSearch === true
   const publicationDateFrom = normalizeRelatedArtDateText(afterDate)
   const filters: PatentSearchFilters = publicationDateFrom ? { publicationDateFrom } : {}
-  const searchContext = buildDraftingRelatedArtSearchPlan(idea, safeQuery, filters) as Partial<PatentSearchQueryPlan> & { inventionText?: string }
+  const queryPlanOverride = normalizeRelatedArtQueryPlanOverride({
+    ...((data as any)?.queryPlan || {}),
+    ...((data as any)?.searchPrecision ? { searchPrecision: (data as any).searchPrecision } : {}),
+  })
+  const searchContext = buildDraftingRelatedArtSearchPlan(idea, safeQuery, filters, queryPlanOverride) as Partial<PatentSearchQueryPlan> & { inventionText?: string }
   const { inventionText, ...queryPlan } = searchContext
   const jurisdiction = String((session as any).activeJurisdiction || (session as any).draftingJurisdictions?.[0] || 'IN').toUpperCase()
 
@@ -8096,6 +8212,7 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
     limit: safeLimit,
     after: publicationDateFrom,
     jurisdiction,
+    searchPrecision: queryPlan.searchPrecision,
     featureQueries: Array.isArray(queryPlan.retrievalQueries) ? queryPlan.retrievalQueries.length : 0,
   })
 
@@ -8385,7 +8502,15 @@ async function handleRelatedArtSelect(user: any, patentId: string, data: any) {
 
   const created: any[] = []
   for (const sel of selections) {
-    const patentNumber = String(sel.patent_number || sel.pn || '').trim()
+    const patentNumber = String(
+      sel.patentNumber ||
+      sel.publicationNumber ||
+      sel.publication_number ||
+      sel.patent_number ||
+      sel.pn ||
+      sel.id ||
+      ''
+    ).trim()
     if (!canonicalizeRelatedArtPatentNumber(patentNumber)) continue
     try {
       const existing = await (prisma as any).relatedArtSelection.findUnique({

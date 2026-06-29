@@ -110,7 +110,7 @@ export function resolveProviderIds(params: {
     const ids: PatentSearchProviderId[] = []
     if (jurisdictions.includes('IN')) ids.push('indian-corpus')
     ids.push(...officialProviderIds)
-    if (jurisdictions.some(value => value !== 'IN')) ids.push('pqai-corpus', 'pqai')
+    ids.push('pqai-corpus', 'pqai')
     ids.push(...googleProviderIds)
     return ids.length ? ids : ['pqai-corpus', 'pqai', ...googleProviderIds]
   }

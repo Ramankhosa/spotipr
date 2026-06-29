@@ -55,6 +55,24 @@ describe('EpoOpsProvider CQL generation', () => {
     expect(cql).not.toContain('ta=')
   })
 
+  test('builds refined concept group CQL with AND between required groups', () => {
+    const cql = buildEpoOpsCqlForTests(request({
+      queryPlan: {
+        ...request().queryPlan,
+        patentSearchConceptGroups: [
+          { id: 'core', label: 'Core', kind: 'core', terms: ['irrigation controller', 'water scheduling device'], required: true },
+          { id: 'mechanism', label: 'Mechanism', kind: 'mechanism', terms: ['soil moisture valve control'], required: true },
+        ],
+        searchPrecision: 'refined',
+      },
+    }))
+
+    expect(cql).toContain('(ti="irrigation controller" or ab="irrigation controller"')
+    expect(cql).toContain(' or ')
+    expect(cql).toContain(' and ')
+    expect(cql).toContain('(ti="soil moisture valve control" or ab="soil moisture valve control")')
+  })
+
   test('maps manual title, abstract, any-text, and patent-text fields to title/abstract keyword CQL only', () => {
     const cql = buildEpoOpsCqlForTests(request({
       searchMode: 'manual',

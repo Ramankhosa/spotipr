@@ -715,7 +715,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
 
           <Section id="section-1-2" title="1.2 Search Scope and Methodology">
             <div className="grid gap-3 text-sm md:grid-cols-2">
-              <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Corpus + retrieval mode: </span>{reportData.methodology.corpus}</div>
+              <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Patent nationality coverage: </span>{reportData.methodology.corpus}</div>
               <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Retrieval / mapping mode: </span>{reportData.methodology.retrievalMode}</div>
               <div className="rounded-sm border border-slate-300 p-3 md:col-span-2"><span className="font-semibold">Evidence scope: </span>{reportData.methodology.searchedEvidence}</div>
               <div className="rounded-sm border border-slate-300 p-3 md:col-span-2"><span className="font-semibold">Review status: </span>{reportData.methodology.preliminaryStatus}</div>

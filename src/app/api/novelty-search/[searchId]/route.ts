@@ -168,7 +168,16 @@ export async function PATCH(
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
 
     const body = await request.json();
-    const { stage, searchQuery, inventionFeatures, epoTitleKeywords, epoAbstractKeywords, epoCombinedKeywords } = body;
+    const {
+      stage,
+      searchQuery,
+      inventionFeatures,
+      epoTitleKeywords,
+      epoAbstractKeywords,
+      epoCombinedKeywords,
+      paperSearchQuery,
+      paperKeywords,
+    } = body;
 
     if (stage === 'stage0') {
       // Preserve LLM-detected archetype so user edits don't wipe it out
@@ -182,6 +191,7 @@ export async function PATCH(
       const cpcCodes = Array.isArray(existingStage0.cpcCodes) ? existingStage0.cpcCodes : undefined;
       const ipcCodes = Array.isArray(existingStage0.ipcCodes) ? existingStage0.ipcCodes : undefined;
       const includeEpoKeywords = searchSourceIncludesEpo((existing?.config as any)?.searchSource?.mode);
+      const includePapers = Boolean((existing?.config as any)?.searchSource?.includePapers);
       const approvedSearchQuery = String(searchQuery || '').trim();
       const approvedFeatures = Array.isArray(inventionFeatures)
         ? inventionFeatures.map((feature: unknown) => String(feature || '').trim()).filter(Boolean)
@@ -206,6 +216,15 @@ export async function PATCH(
         delete stage0Input.epoCombinedKeywords;
         delete stage0Input.epo_combined_keywords;
       }
+      if (includePapers) {
+        stage0Input.paperSearchQuery = paperSearchQuery !== undefined ? paperSearchQuery : existingStage0.paperSearchQuery;
+        stage0Input.paperKeywords = Array.isArray(paperKeywords) ? paperKeywords : existingStage0.paperKeywords;
+      } else {
+        delete stage0Input.paperSearchQuery;
+        delete stage0Input.paper_search_query;
+        delete stage0Input.paperKeywords;
+        delete stage0Input.paper_keywords;
+      }
       const normalizedStage0 = noveltySearchService.normalizeApprovedStage0(stage0Input as any, String(existing?.inventionDescription || ''));
       const stage0Changed = approvedSearchQuery !== String(existingStage0.searchQuery || '').trim() ||
         JSON.stringify(approvedFeatures) !== JSON.stringify(existingStage0.inventionFeatures || []) ||
@@ -213,6 +232,10 @@ export async function PATCH(
           JSON.stringify(normalizedStage0.epoTitleKeywords || []) !== JSON.stringify(existingStage0.epoTitleKeywords || []) ||
           JSON.stringify(normalizedStage0.epoAbstractKeywords || []) !== JSON.stringify(existingStage0.epoAbstractKeywords || []) ||
           JSON.stringify(normalizedStage0.epoCombinedKeywords || []) !== JSON.stringify(existingStage0.epoCombinedKeywords || [])
+        )) ||
+        (includePapers && (
+          String(normalizedStage0.paperSearchQuery || '') !== String(existingStage0.paperSearchQuery || '') ||
+          JSON.stringify(normalizedStage0.paperKeywords || []) !== JSON.stringify(existingStage0.paperKeywords || [])
         ));
 
       await prisma.noveltySearchRun.update({

@@ -16,6 +16,7 @@ function cleanText(value: unknown) {
 
 function canonicalPatentNumber(value: unknown) {
   const compact = cleanText(value).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (compact.startsWith('PAPER')) return compact;
   const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/);
   return kindSuffixMatch?.[1] || compact;
 }

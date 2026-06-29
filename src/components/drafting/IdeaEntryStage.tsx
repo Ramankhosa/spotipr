@@ -72,6 +72,58 @@ const Tooltip = ({ children, content, position = 'bottom' }: { children: React.R
   </div>
 )
 
+type PatentSearchConceptGroup = {
+  id?: string
+  label?: string
+  kind?: string
+  terms: string[]
+  required?: boolean
+  excluded?: boolean
+}
+
+function normalizeKeywordListForUi(value: any): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[;\n|,]/)
+      : []
+  return Array.from(new Set(raw
+    .map(item => String(item || '').trim().replace(/\s+/g, ' '))
+    .filter(item => item.length >= 3 && item.length <= 120)))
+    .slice(0, 10)
+}
+
+function normalizeConceptGroupsForUi(value: any, fallbackQuery = ''): PatentSearchConceptGroup[] {
+  const groups = Array.isArray(value) ? value : []
+  const normalized = groups
+    .map((item, index) => {
+      const record = item && typeof item === 'object' && !Array.isArray(item) ? item : {}
+      const terms = normalizeKeywordListForUi((record as any).terms || (record as any).keywords || (record as any).phrases).slice(0, 8)
+      if (!terms.length) return null
+      const kind = String((record as any).kind || '').trim().toLowerCase()
+      const excluded = (record as any).excluded === true || kind === 'excluded' || kind === 'exclude'
+      return {
+        id: String((record as any).id || `concept_group_${index + 1}`),
+        label: String((record as any).label || (record as any).name || `Concept group ${index + 1}`),
+        kind: kind || undefined,
+        terms,
+        required: (record as any).required === false ? false : !excluded,
+        excluded,
+      } as PatentSearchConceptGroup
+    })
+    .filter((item): item is PatentSearchConceptGroup => Boolean(item))
+    .slice(0, 6)
+  if (normalized.length > 0) return normalized
+  const fallbackTerms = normalizeKeywordListForUi(fallbackQuery).slice(0, 4)
+  return fallbackTerms.length
+    ? [{ id: 'core_concept', label: 'Core concept', kind: 'core', terms: fallbackTerms, required: true, excluded: false }]
+    : []
+}
+
+function keywordListToText(values: string[]) {
+  return (values || []).join('\n')
+}
+
 interface IdeaEntryStageProps {
   session: any
   patent: any
@@ -103,6 +155,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
   const [scopeRecommendations, setScopeRecommendations] = useState<ScopeRecommendations | null>(null)
   const [supportDataSources, setSupportDataSources] = useState<SupportDataSource[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [googlePatentKeywords, setGooglePatentKeywords] = useState<string[]>([])
+  const [epoTitleKeywords, setEpoTitleKeywords] = useState<string[]>([])
+  const [epoAbstractKeywords, setEpoAbstractKeywords] = useState<string[]>([])
+  const [epoCombinedKeywords, setEpoCombinedKeywords] = useState<string[]>([])
+  const [patentSearchConceptGroups, setPatentSearchConceptGroups] = useState<PatentSearchConceptGroup[]>([])
   const [abstractText, setAbstractText] = useState('')
   const [cpcCodes, setCpcCodes] = useState<string[]>([])
   const [ipcCodes, setIpcCodes] = useState<string[]>([])
@@ -153,6 +210,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       setScopeRecommendations(coerceScopeRecommendations(session.ideaRecord.normalizedData?.scopeRecommendations, session.ideaRecord.normalizedData) || null)
       setSupportDataSources(coerceSupportDataSources(session.ideaRecord.normalizedData?.supportDataSources))
       setSearchQuery((session as any)?.ideaRecord?.searchQuery || '')
+      setGooglePatentKeywords(normalizeKeywordListForUi(session.ideaRecord.normalizedData?.googlePatentKeywords))
+      setEpoTitleKeywords(normalizeKeywordListForUi(session.ideaRecord.normalizedData?.epoTitleKeywords).slice(0, 6))
+      setEpoAbstractKeywords(normalizeKeywordListForUi(session.ideaRecord.normalizedData?.epoAbstractKeywords).slice(0, 8))
+      setEpoCombinedKeywords(normalizeKeywordListForUi(session.ideaRecord.normalizedData?.epoCombinedKeywords).slice(0, 8))
+      setPatentSearchConceptGroups(normalizeConceptGroupsForUi(session.ideaRecord.normalizedData?.patentSearchConceptGroups, (session as any)?.ideaRecord?.searchQuery || ''))
       setAbstractText(session.ideaRecord.abstract || '')
       setCpcCodes(Array.isArray(session.ideaRecord.cpcCodes) ? session.ideaRecord.cpcCodes : [])
       setIpcCodes(Array.isArray(session.ideaRecord.ipcCodes) ? session.ideaRecord.ipcCodes : [])
@@ -352,6 +414,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
             problem, objectives, logic, bestMethod,
             components: validComponents,
             searchQuery, abstract: abstractText, cpcCodes, ipcCodes,
+            googlePatentKeywords,
+            epoTitleKeywords,
+            epoAbstractKeywords,
+            epoCombinedKeywords,
+            patentSearchConceptGroups,
             scopeRecommendations,
             supportDataSources,
             schemaVersion: 2
@@ -1355,6 +1422,146 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               </div>
                             )}
                           </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">Google Patents Keywords</h4>
+                              {isEditing ? (
+                                <textarea
+                                  rows={3}
+                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  value={keywordListToText(googlePatentKeywords)}
+                                  onChange={(e) => setGooglePatentKeywords(normalizeKeywordListForUi(e.target.value))}
+                                  placeholder="One keyword phrase per line"
+                                />
+                              ) : (
+                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
+                                  {googlePatentKeywords.length ? googlePatentKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">European Title Keywords</h4>
+                              {isEditing ? (
+                                <textarea
+                                  rows={3}
+                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  value={keywordListToText(epoTitleKeywords)}
+                                  onChange={(e) => setEpoTitleKeywords(normalizeKeywordListForUi(e.target.value).slice(0, 6))}
+                                  placeholder="One title phrase per line"
+                                />
+                              ) : (
+                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
+                                  {epoTitleKeywords.length ? epoTitleKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">European Abstract Keywords</h4>
+                              {isEditing ? (
+                                <textarea
+                                  rows={3}
+                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  value={keywordListToText(epoAbstractKeywords)}
+                                  onChange={(e) => setEpoAbstractKeywords(normalizeKeywordListForUi(e.target.value).slice(0, 8))}
+                                  placeholder="One abstract phrase per line"
+                                />
+                              ) : (
+                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
+                                  {epoAbstractKeywords.length ? epoAbstractKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">European Fallback Keywords</h4>
+                              {isEditing ? (
+                                <textarea
+                                  rows={3}
+                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  value={keywordListToText(epoCombinedKeywords)}
+                                  onChange={(e) => setEpoCombinedKeywords(normalizeKeywordListForUi(e.target.value).slice(0, 8))}
+                                  placeholder="One fallback phrase per line"
+                                />
+                              ) : (
+                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
+                                  {epoCombinedKeywords.length ? epoCombinedKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <h4 className="text-sm font-medium text-gray-900">Boolean Concept Groups</h4>
+                              {isEditing && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPatentSearchConceptGroups(current => [
+                                    ...current,
+                                    { id: `concept_group_${current.length + 1}`, label: `Concept group ${current.length + 1}`, kind: 'core', terms: [], required: true, excluded: false }
+                                  ].slice(0, 6))}
+                                  className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                                >
+                                  Add group
+                                </button>
+                              )}
+                            </div>
+                            <div className="space-y-3">
+                              {patentSearchConceptGroups.length === 0 && (
+                                <div className="text-sm text-gray-400 italic bg-gray-50 p-3 rounded border border-gray-100">Not specified</div>
+                              )}
+                              {patentSearchConceptGroups.map((group, index) => (
+                                <div key={group.id || index} className="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-2">
+                                  {isEditing ? (
+                                    <>
+                                      <div className="grid gap-2 md:grid-cols-3">
+                                        <input
+                                          value={group.label || ''}
+                                          onChange={(e) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: e.target.value } : item))}
+                                          className="text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                          placeholder="Group label"
+                                        />
+                                        <select
+                                          value={group.excluded ? 'excluded' : group.required === false ? 'optional' : 'required'}
+                                          onChange={(e) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? {
+                                            ...item,
+                                            required: e.target.value === 'required',
+                                            excluded: e.target.value === 'excluded',
+                                            kind: e.target.value === 'excluded' ? 'excluded' : item.kind
+                                          } : item))}
+                                          className="text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                        >
+                                          <option value="required">Required</option>
+                                          <option value="optional">Optional</option>
+                                          <option value="excluded">Excluded</option>
+                                        </select>
+                                        <button
+                                          type="button"
+                                          onClick={() => setPatentSearchConceptGroups(current => current.filter((_, itemIndex) => itemIndex !== index))}
+                                          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-red-50 hover:text-red-600"
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
+                                      <textarea
+                                        rows={2}
+                                        value={keywordListToText(group.terms || [])}
+                                        onChange={(e) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, terms: normalizeKeywordListForUi(e.target.value).slice(0, 8) } : item))}
+                                        className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                        placeholder="One phrase per line"
+                                      />
+                                    </>
+                                  ) : (
+                                    <div className="text-sm text-gray-600">
+                                      <span className="font-medium text-gray-800">{group.label || `Group ${index + 1}`}:</span>{' '}
+                                      {(group.terms || []).join(', ')}
+                                      {group.excluded ? ' (excluded)' : group.required === false ? ' (optional)' : ''}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         </>
                       )}
                     </div>
@@ -1380,6 +1587,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                   problem, objectives, logic, bestMethod, 
                                   components: validComponents,
                                   searchQuery, abstract: abstractText, cpcCodes, ipcCodes,
+                                  googlePatentKeywords,
+                                  epoTitleKeywords,
+                                  epoAbstractKeywords,
+                                  epoCombinedKeywords,
+                                  patentSearchConceptGroups,
                                   scopeRecommendations,
                                   supportDataSources,
                                   schemaVersion: 2

@@ -107,12 +107,12 @@ const defaultManualFields: ManualFields = {
 }
 
 const jurisdictionOptions = [
-  { value: 'IN', label: 'India', provider: 'Local corpus' },
-  { value: 'US', label: 'US', provider: 'PQAI' },
-  { value: 'WO', label: 'PCT/WO', provider: 'PQAI' },
-  { value: 'EP', label: 'EP', provider: 'PQAI' },
-  { value: 'AU', label: 'AU', provider: 'PQAI' },
-  { value: '*', label: 'Global', provider: 'PQAI' },
+  { value: 'IN', label: 'India', provider: 'Indian + international patents' },
+  { value: 'US', label: 'United States', provider: 'International patents' },
+  { value: 'WO', label: 'PCT/WO', provider: 'International patents' },
+  { value: 'EP', label: 'Europe', provider: 'European + international patents' },
+  { value: 'AU', label: 'Australia', provider: 'Australian + international patents' },
+  { value: '*', label: 'Global', provider: 'International patents' },
 ]
 
 function splitValues(value: string) {
@@ -145,6 +145,21 @@ function listText(value: unknown, limit = 4) {
 function csvCell(value: unknown) {
   const text = Array.isArray(value) ? value.join('; ') : typeof value === 'object' && value ? JSON.stringify(value) : String(value ?? '')
   return `"${text.replace(/"/g, '""')}"`
+}
+
+function displayPatentProviderLabel(value: unknown) {
+  const raw = String(value || '').trim()
+  const normalized = raw.toLowerCase()
+  if (normalized === 'indian-corpus' || /indian patent/i.test(raw)) return 'Indian patents'
+  if (normalized === 'pqai' || normalized === 'pqai-corpus' || /pqai/i.test(raw) || /international/i.test(raw)) return 'International patents'
+  if (normalized === 'epo-ops' || normalized === 'epo-ops-corpus' || /epo/i.test(raw) || /european/i.test(raw)) return 'European patents'
+  if (normalized === 'ip-australia' || /australia/i.test(raw)) return 'Australian patents'
+  if (normalized === 'google-patents' || /google patents/i.test(raw)) return 'Google Patents'
+  return raw
+}
+
+function displayPatentProviderLabels(values: unknown[]) {
+  return Array.from(new Set(values.map(displayPatentProviderLabel).filter(Boolean))).join(', ')
 }
 
 export default function PatentSearchPage() {
@@ -215,7 +230,7 @@ export default function PatentSearchPage() {
       const option = jurisdictionOptions.find(item => item.value === value)
       chips.push({
         key: `source-${value}`,
-        label: `Source: ${option?.label || value}`,
+        label: `Patent nationality: ${option?.label || value}`,
         onRemove: () => setSelectedJurisdictions(prev => prev.length <= 1 ? ['IN'] : prev.filter(item => item !== value)),
       })
     })
@@ -458,7 +473,7 @@ export default function PatentSearchPage() {
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Patent Search</h1>
-            <p className="mt-1 text-sm text-slate-600">Search local Indian patent records and connected global providers.</p>
+            <p className="mt-1 text-sm text-slate-600">Search patents by nationality using every configured retrieval path for the selected country.</p>
           </div>
           <div className="inline-flex rounded-md border border-slate-300 bg-white p-1">
             <button
@@ -490,7 +505,7 @@ export default function PatentSearchPage() {
         <section className="mb-5 rounded-lg border border-slate-200 bg-white p-4">
           <div className="mb-3 flex items-center gap-2">
             {selectedJurisdictions.includes('IN') ? <Database className="h-4 w-4 text-slate-500" /> : <Globe2 className="h-4 w-4 text-slate-500" />}
-            <h2 className="text-sm font-semibold">Sources</h2>
+            <h2 className="text-sm font-semibold">Patent Nationality</h2>
           </div>
           <div className="flex flex-wrap gap-2">
             {jurisdictionOptions.map(option => {
@@ -1048,7 +1063,7 @@ function ResultsPanel({
         <div className="grid gap-3 md:grid-cols-3">
           {providerStats.map(stat => (
             <div key={stat.providerId} className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
-              <div className="font-medium">{stat.label}</div>
+              <div className="font-medium">{displayPatentProviderLabel(stat.providerId || stat.label)}</div>
               <div className="mt-1 text-xs text-slate-500">{stat.enabled ? `${stat.resultCount} results` : 'Not enabled'}</div>
               {stat.error && <div className="mt-1 text-xs text-amber-700">{stat.error}</div>}
             </div>
@@ -1092,7 +1107,7 @@ function ResultsPanel({
               <article key={`${result.sourceProvider}-${result.publicationNumber}`} className="p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs font-medium uppercase text-slate-500">
-                    {result.publicationNumber} / {result.jurisdiction || 'Patent'} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+                    {result.publicationNumber} / {result.jurisdiction || 'Patent'} / {displayPatentProviderLabels(result.sourceProviders || [result.sourceProvider])}
                   </div>
                   <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
                     {Math.round((result.relevanceScore || 0) * 100)}%

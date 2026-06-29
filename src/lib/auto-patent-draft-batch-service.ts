@@ -194,7 +194,7 @@ function normalizePriorArtHandling(value: unknown, hasPriorArtText: boolean): No
   if (normalized === 'use only') return 'use only'
   if (normalized === 'expand with search') return 'expand with search'
   if (normalized === 'auto') return 'auto'
-  return hasPriorArtText ? 'use only' : 'auto'
+  return 'auto'
 }
 
 function readIdeaFields(input: AutoPatentDraftIdeaInput, index: number) {

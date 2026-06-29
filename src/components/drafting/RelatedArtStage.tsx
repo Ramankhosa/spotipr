@@ -70,14 +70,66 @@ type AnalysisProgressState = {
   message: string
 }
 
-type PatentSearchSourceMode = 'INDIAN_ONLY' | 'PQAI_ONLY' | 'PQAI_PLUS_INDIAN'
-type ResultSourceFilter = 'all' | 'india' | 'international'
+type ResultSourceFilter = 'all' | 'india' | 'international' | 'google' | 'europe'
+type PatentSearchPrecision = 'broad' | 'refined'
+type PatentSearchConceptGroup = {
+  id?: string
+  label?: string
+  kind?: string
+  terms: string[]
+  required?: boolean
+  excluded?: boolean
+}
+
+function normalizeKeywordListForUi(value: any): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[;\n|,]/)
+      : []
+  return Array.from(new Set(raw
+    .map(item => String(item || '').trim().replace(/\s+/g, ' '))
+    .filter(item => item.length >= 3 && item.length <= 120)))
+    .slice(0, 10)
+}
+
+function normalizeConceptGroupsForUi(value: any, fallbackQuery = ''): PatentSearchConceptGroup[] {
+  const groups = Array.isArray(value) ? value : []
+  const normalized = groups
+    .map((item, index) => {
+      const record = item && typeof item === 'object' && !Array.isArray(item) ? item : {}
+      const terms = normalizeKeywordListForUi((record as any).terms || (record as any).keywords || (record as any).phrases).slice(0, 8)
+      if (!terms.length) return null
+      const kind = String((record as any).kind || '').trim().toLowerCase()
+      const excluded = (record as any).excluded === true || kind === 'excluded' || kind === 'exclude'
+      return {
+        id: String((record as any).id || `concept_group_${index + 1}`),
+        label: String((record as any).label || (record as any).name || `Concept group ${index + 1}`),
+        kind: kind || undefined,
+        terms,
+        required: (record as any).required === false ? false : !excluded,
+        excluded,
+      } as PatentSearchConceptGroup
+    })
+    .filter((item): item is PatentSearchConceptGroup => Boolean(item))
+    .slice(0, 6)
+  if (normalized.length > 0) return normalized
+  const fallbackTerms = normalizeKeywordListForUi(fallbackQuery).slice(0, 4)
+  return fallbackTerms.length
+    ? [{ id: 'core_concept', label: 'Core concept', kind: 'core', terms: fallbackTerms, required: true, excluded: false }]
+    : []
+}
+
+function keywordListToText(values: string[]) {
+  return (values || []).join('\n')
+}
 
 const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, onComplete, onRefresh }: RelatedArtStageProps) {
   // DEBUG: Check if component is being remounted
   console.log('🔄 RelatedArtStage component instance created/rendered')
 
   const idea = session?.ideaRecord || {}
+  const normalizedIdea = idea?.normalizedData || {}
   const searchQuery = idea?.searchQuery || ''
   const abstract = idea?.abstract || ''
   const cpcCodes: string[] = Array.isArray(idea?.cpcCodes) ? idea.cpcCodes : []
@@ -98,6 +150,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
   const [includeIndianPatents, setIncludeIndianPatents] = useState(true)
   const [includeInternationalPatents, setIncludeInternationalPatents] = useState(true)
+  const [includeGooglePatents, setIncludeGooglePatents] = useState(false)
+  const [includeEuropeanPatents, setIncludeEuropeanPatents] = useState(false)
+  const [searchPrecision, setSearchPrecision] = useState<PatentSearchPrecision>('broad')
+  const [googlePatentKeywords, setGooglePatentKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.googlePatentKeywords))
+  const [epoTitleKeywords, setEpoTitleKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.epoTitleKeywords))
+  const [epoAbstractKeywords, setEpoAbstractKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.epoAbstractKeywords))
+  const [epoCombinedKeywords, setEpoCombinedKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.epoCombinedKeywords))
+  const [patentSearchConceptGroups, setPatentSearchConceptGroups] = useState<PatentSearchConceptGroup[]>(() => normalizeConceptGroupsForUi(normalizedIdea.patentSearchConceptGroups, searchQuery))
   const [resultSourceFilter, setResultSourceFilter] = useState<ResultSourceFilter>('all')
 
   // AI review states
@@ -248,7 +308,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     return []
   }
 
-  function getResultSourceTypes(item: any): Array<'india' | 'international'> {
+  function getResultSourceTypes(item: any): Array<Exclude<ResultSourceFilter, 'all'>> {
     const providerValues = [
       ...(Array.isArray(item?.sourceProviders) ? item.sourceProviders : []),
       item?.sourceProvider,
@@ -256,10 +316,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       item?.provider
     ].map(value => String(value || '').toLowerCase())
     const pn = getPatentNumber(item).toUpperCase()
-    const sources: Array<'india' | 'international'> = []
+    const sources: Array<Exclude<ResultSourceFilter, 'all'>> = []
     const hasIndianProvider = providerValues.some(value => value === 'indian-corpus' || value === 'indian_corpus')
-    const hasPqaiProvider = providerValues.some(value => value === 'pqai')
+    const hasPqaiProvider = providerValues.some(value => value === 'pqai' || value === 'pqai-corpus')
+    const hasGoogleProvider = providerValues.some(value => value === 'google-patents')
+    const hasEpoProvider = providerValues.some(value => value === 'epo-ops' || value === 'epo-ops-corpus')
 
+    if (hasGoogleProvider) sources.push('google')
+    if (hasEpoProvider) sources.push('europe')
     if (hasIndianProvider) sources.push('india')
     if (hasPqaiProvider) sources.push('international')
     if (sources.length > 0) return sources
@@ -268,7 +332,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       .toUpperCase()
       .replace(/[^A-Z]/g, '')
     const isIndianJurisdiction = jurisdiction === 'IN' || jurisdiction === 'IND' || jurisdiction === 'INDIA'
-    return isIndianJurisdiction || pn.startsWith('IN') ? ['india'] : ['international']
+    if (isIndianJurisdiction || pn.startsWith('IN')) return ['india']
+    if (jurisdiction === 'EP' || jurisdiction === 'EPO' || jurisdiction === 'WO' || pn.startsWith('EP') || pn.startsWith('WO')) return ['europe']
+    return ['international']
   }
 
   function resultMatchesSourceFilter(item: any, filter: ResultSourceFilter) {
@@ -278,9 +344,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
   function getResultSourceLabel(item: any) {
     const sources = getResultSourceTypes(item)
-    if (sources.includes('india') && sources.includes('international')) return 'India + International'
-    if (sources.includes('india')) return 'India'
-    return 'International'
+    const labels: string[] = []
+    if (sources.includes('india')) labels.push('Indian patents')
+    if (sources.includes('international')) labels.push('International patents')
+    if (sources.includes('google')) labels.push('Google Patents')
+    if (sources.includes('europe')) labels.push('European patents')
+    return labels.length ? labels.join(' + ') : 'International patents'
   }
 
   function findStoredPatentDetails(item: any) {
@@ -507,6 +576,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setResultSourceFilter('all')
       setIncludeIndianPatents(true)
       setIncludeInternationalPatents(true)
+      setIncludeGooglePatents(false)
+      setIncludeEuropeanPatents(false)
+      setSearchPrecision('broad')
+      setGooglePatentKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.googlePatentKeywords))
+      setEpoTitleKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.epoTitleKeywords))
+      setEpoAbstractKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.epoAbstractKeywords))
+      setEpoCombinedKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.epoCombinedKeywords))
+      setPatentSearchConceptGroups(normalizeConceptGroupsForUi((session?.ideaRecord as any)?.normalizedData?.patentSearchConceptGroups, (session?.ideaRecord as any)?.searchQuery || ''))
       setCurrentPage(1)
       setAutoSelectWarning(null)
       setStatusMessage(null)
@@ -943,20 +1020,33 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   }
 
 
-  const selectedSearchSourceMode = useMemo<PatentSearchSourceMode>(() => {
-    if (includeIndianPatents && includeInternationalPatents) return 'PQAI_PLUS_INDIAN'
-    if (includeIndianPatents) return 'INDIAN_ONLY'
-    return 'PQAI_ONLY'
-  }, [includeIndianPatents, includeInternationalPatents])
+  const selectedProviderIds = useMemo(() => {
+    const providerIds: string[] = []
+    if (includeIndianPatents) providerIds.push('indian-corpus')
+    if (includeInternationalPatents) providerIds.push('pqai-corpus', 'pqai')
+    if (includeGooglePatents) providerIds.push('google-patents')
+    if (includeEuropeanPatents) providerIds.push('epo-ops')
+    return providerIds
+  }, [includeIndianPatents, includeInternationalPatents, includeGooglePatents, includeEuropeanPatents])
 
   const resultSourceCounts = useMemo(() => {
     return results.reduce((acc, result) => {
       const sources = getResultSourceTypes(result)
       if (sources.includes('india')) acc.india += 1
       if (sources.includes('international')) acc.international += 1
+      if (sources.includes('google')) acc.google += 1
+      if (sources.includes('europe')) acc.europe += 1
       return acc
-    }, { all: results.length, india: 0, international: 0 })
+    }, { all: results.length, india: 0, international: 0, google: 0, europe: 0 })
   }, [results])
+
+  const sourceFilterOptions = useMemo(() => [
+    { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
+    { key: 'india' as const, label: 'Indian', count: resultSourceCounts.india },
+    { key: 'international' as const, label: 'International', count: resultSourceCounts.international },
+    { key: 'google' as const, label: 'Google', count: resultSourceCounts.google },
+    { key: 'europe' as const, label: 'European', count: resultSourceCounts.europe },
+  ], [resultSourceCounts])
 
   const sourceFilteredResults = useMemo(() => {
     return results.filter(result => resultMatchesSourceFilter(result, resultSourceFilter))
@@ -1111,8 +1201,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setError(null)
 
       const searchQuery = customQuery.trim() || q
-      if (!includeIndianPatents && !includeInternationalPatents) {
-        setError('Select Indian patents, International patents, or both before searching.')
+      if (selectedProviderIds.length === 0) {
+        setError('Select at least one patent source before searching.')
         return
       }
 
@@ -1123,7 +1213,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       console.log('  - Default Query (q):', q)
       console.log('  - Final Search Query:', searchQuery)
       console.log('  - Using custom query?', customQuery.trim().length > 0)
-      console.log('  - Source mode:', selectedSearchSourceMode)
+      console.log('  - Provider IDs:', selectedProviderIds)
+      console.log('  - Search precision:', searchPrecision)
 
       // Sophisticated search progress simulation
       /*
@@ -1146,7 +1237,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         limit,
         queryOverride: searchQuery,
         afterDate: afterDate || undefined,
-        sourceMode: selectedSearchSourceMode
+        providerIds: selectedProviderIds,
+        searchPrecision,
+        queryPlan: {
+          googlePatentKeywords,
+          epoTitleKeywords,
+          epoAbstractKeywords,
+          epoCombinedKeywords,
+          patentSearchConceptGroups,
+          searchPrecision,
+        },
       })
 
       const items = Array.isArray(resp?.results) ? resp.results : []
@@ -1916,15 +2016,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       <input
                         type="checkbox"
                         checked={includeIndianPatents}
-                        onChange={(event) => {
-                          if (!event.target.checked && !includeInternationalPatents) return
-                          setIncludeIndianPatents(event.target.checked)
-                        }}
+                        onChange={(event) => setIncludeIndianPatents(event.target.checked)}
                         className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">Indian patents</span>
-                        <span className="block text-xs text-gray-500 mt-0.5">Search imported Indian patents using local RAG embeddings.</span>
+                        <span className="block text-sm font-medium text-gray-900">Indian Patents</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">Search Indian patent records.</span>
                       </span>
                     </label>
                     <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
@@ -1933,17 +2030,67 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       <input
                         type="checkbox"
                         checked={includeInternationalPatents}
-                        onChange={(event) => {
-                          if (!event.target.checked && !includeIndianPatents) return
-                          setIncludeInternationalPatents(event.target.checked)
-                        }}
+                        onChange={(event) => setIncludeInternationalPatents(event.target.checked)}
                         className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">International patents</span>
-                        <span className="block text-xs text-gray-500 mt-0.5">Search global patents through PQAI.</span>
+                        <span className="block text-sm font-medium text-gray-900">International Patents</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">Search international patent records.</span>
                       </span>
                     </label>
+                    <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                      includeGooglePatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={includeGooglePatents}
+                        onChange={(event) => setIncludeGooglePatents(event.target.checked)}
+                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900">Google Patents</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">Search Google Patents with editable keyword phrases.</span>
+                      </span>
+                    </label>
+                    <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                      includeEuropeanPatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={includeEuropeanPatents}
+                        onChange={(event) => setIncludeEuropeanPatents(event.target.checked)}
+                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900">European Patents</span>
+                        <span className="block text-xs text-gray-500 mt-0.5">Search European patents with title and abstract phrases.</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="border border-gray-200 rounded-xl p-4 bg-white">
+                  <label className="block text-sm font-medium text-gray-700 mb-3">Search Precision</label>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {(['broad', 'refined'] as PatentSearchPrecision[]).map(mode => (
+                      <label key={mode} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                        searchPrecision === mode ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="related-art-search-precision"
+                          checked={searchPrecision === mode}
+                          onChange={() => setSearchPrecision(mode)}
+                          className="mt-1 w-4 h-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span>
+                          <span className="block text-sm font-medium text-gray-900">{mode === 'broad' ? 'Broad' : 'Refined'}</span>
+                          <span className="block text-xs text-gray-500 mt-0.5">
+                            {mode === 'broad' ? 'Use OR-heavy recall search.' : 'Use AND between concept groups and OR within each group.'}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
                   </div>
                 </div>
 
@@ -2002,6 +2149,101 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           onChange={(e) => setAfterDate(e.target.value)}
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                         />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Google Patents keywords</label>
+                        <textarea
+                          rows={3}
+                          value={keywordListToText(googlePatentKeywords)}
+                          onChange={(event) => setGooglePatentKeywords(normalizeKeywordListForUi(event.target.value))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="One keyword phrase per line"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">European title keywords</label>
+                        <textarea
+                          rows={3}
+                          value={keywordListToText(epoTitleKeywords)}
+                          onChange={(event) => setEpoTitleKeywords(normalizeKeywordListForUi(event.target.value).slice(0, 6))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="One title phrase per line"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">European abstract keywords</label>
+                        <textarea
+                          rows={3}
+                          value={keywordListToText(epoAbstractKeywords)}
+                          onChange={(event) => setEpoAbstractKeywords(normalizeKeywordListForUi(event.target.value).slice(0, 8))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="One abstract phrase per line"
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">European fallback keywords</label>
+                        <textarea
+                          rows={2}
+                          value={keywordListToText(epoCombinedKeywords)}
+                          onChange={(event) => setEpoCombinedKeywords(normalizeKeywordListForUi(event.target.value).slice(0, 8))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          placeholder="One fallback phrase per line"
+                        />
+                      </div>
+                      <div className="md:col-span-2 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-sm font-medium text-gray-700">Boolean concept groups</label>
+                          <button
+                            type="button"
+                            onClick={() => setPatentSearchConceptGroups(current => [
+                              ...current,
+                              { id: `concept_group_${current.length + 1}`, label: `Concept group ${current.length + 1}`, kind: 'core', terms: [], required: true, excluded: false }
+                            ].slice(0, 6))}
+                            className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                          >
+                            Add group
+                          </button>
+                        </div>
+                        {patentSearchConceptGroups.map((group, index) => (
+                          <div key={group.id || index} className="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
+                            <div className="grid gap-2 md:grid-cols-3">
+                              <input
+                                value={group.label || ''}
+                                onChange={(event) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
+                                className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                                placeholder="Group label"
+                              />
+                              <select
+                                value={group.excluded ? 'excluded' : group.required === false ? 'optional' : 'required'}
+                                onChange={(event) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? {
+                                  ...item,
+                                  required: event.target.value === 'required',
+                                  excluded: event.target.value === 'excluded',
+                                  kind: event.target.value === 'excluded' ? 'excluded' : item.kind
+                                } : item))}
+                                className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                              >
+                                <option value="required">Required</option>
+                                <option value="optional">Optional</option>
+                                <option value="excluded">Excluded</option>
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => setPatentSearchConceptGroups(current => current.filter((_, itemIndex) => itemIndex !== index))}
+                                className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-red-50 hover:text-red-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <textarea
+                              rows={2}
+                              value={keywordListToText(group.terms || [])}
+                              onChange={(event) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, terms: normalizeKeywordListForUi(event.target.value).slice(0, 8) } : item))}
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                              placeholder="One phrase per line"
+                            />
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -2082,11 +2324,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
                 <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-gray-600 mr-1">Filter:</span>
-                  {[
-                    { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
-                    { key: 'india' as const, label: 'India', count: resultSourceCounts.india },
-                    { key: 'international' as const, label: 'International', count: resultSourceCounts.international }
-                  ].map(option => (
+                  {sourceFilterOptions.map(option => (
                     <button
                       key={option.key}
                       type="button"
@@ -2492,11 +2730,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 {/* Filter Bar */}
                 <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center gap-3">
                   <span className="text-sm text-gray-500">Source:</span>
-                  {[
-                    { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
-                    { key: 'india' as const, label: 'India', count: resultSourceCounts.india },
-                    { key: 'international' as const, label: 'International', count: resultSourceCounts.international }
-                  ].map(option => (
+                  {sourceFilterOptions.map(option => (
                     <button
                       key={option.key}
                       type="button"
@@ -2729,11 +2963,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             {results.length > 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium text-gray-600 mr-1">Source:</span>
-                {[
-                  { key: 'all' as const, label: 'All', count: resultSourceCounts.all },
-                  { key: 'india' as const, label: 'India', count: resultSourceCounts.india },
-                  { key: 'international' as const, label: 'International', count: resultSourceCounts.international }
-                ].map(option => (
+                {sourceFilterOptions.map(option => (
                   <button
                     key={option.key}
                     type="button"

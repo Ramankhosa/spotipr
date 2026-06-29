@@ -40,6 +40,68 @@ function normalizeGooglePatentsQuery(value: unknown, maxWords = 32) {
   return words.length > maxWords ? words.slice(0, maxWords).join(' ') : text
 }
 
+function googleKeywordList(value: unknown, maxItems = 10) {
+  return asStringArray(value)
+    .map(value => normalizeGooglePatentsQuery(value, 10))
+    .filter(value => value.length >= 3 && value.length <= 120)
+    .filter(value => !/[()*?]/.test(value))
+    .slice(0, maxItems)
+}
+
+function googlePhrase(value: string) {
+  const text = normalizeGooglePatentsQuery(value, 10).replace(/"/g, ' ').trim()
+  if (!text) return ''
+  return text.includes(' ') ? `"${text}"` : text
+}
+
+function googleOrGroup(terms: string[]) {
+  const phrases = uniqueStrings(terms.map(googlePhrase).filter(Boolean)).slice(0, 5)
+  if (phrases.length === 0) return ''
+  if (phrases.length === 1) return phrases[0]
+  return `(${phrases.join(' OR ')})`
+}
+
+function googleExcludedTerms(groups: PatentProviderSearchRequest['queryPlan']['patentSearchConceptGroups']) {
+  return (groups || [])
+    .filter(group => group?.excluded)
+    .flatMap(group => googleKeywordList(group.terms, 4))
+    .map(term => `-${googlePhrase(term)}`)
+    .filter(Boolean)
+    .slice(0, 4)
+}
+
+export function buildGooglePatentsQueryForTests(request: PatentProviderSearchRequest) {
+  const filters = request.queryPlan.fieldFilters || {}
+  if (request.searchMode === 'manual') return buildManualQuery(filters, request.query)
+
+  const groups = request.queryPlan.patentSearchConceptGroups || []
+  const excluded = googleExcludedTerms(groups)
+  if (request.queryPlan.searchPrecision === 'refined') {
+    const requiredGroups = groups
+      .filter(group => !group?.excluded && group?.required !== false)
+      .map(group => googleOrGroup(googleKeywordList(group.terms, 5)))
+      .filter(Boolean)
+      .slice(0, 4)
+    if (requiredGroups.length) {
+      return normalizeGooglePatentsQuery([requiredGroups.join(' AND '), ...excluded].filter(Boolean).join(' '), 80)
+    }
+  }
+
+  const keywordTerms = uniqueStrings([
+    ...googleKeywordList(request.queryPlan.googlePatentKeywords, 10),
+    ...groups.filter(group => !group?.excluded).flatMap(group => googleKeywordList(group.terms, 4)),
+  ]).slice(0, 10)
+  if (keywordTerms.length) {
+    const broad = googleOrGroup(keywordTerms)
+    return normalizeGooglePatentsQuery([broad, ...excluded].filter(Boolean).join(' '), 80)
+  }
+
+  return normalizeGooglePatentsQuery([
+    request.queryPlan.searchQuery,
+    request.queryPlan.technicalKeywords.join(' '),
+  ].filter(Boolean).join(' '))
+}
+
 function buildManualQuery(filters: PatentSearchFilters, fallback = '') {
   const terms = [
     fallback,
@@ -184,12 +246,7 @@ export class GooglePatentsProvider implements PatentSearchProvider {
 
     const filters = request.queryPlan.fieldFilters || {}
     const maxResults = clampLimit(request.limit, 50, 100)
-    const query = request.searchMode === 'manual'
-      ? buildManualQuery(filters, request.query)
-      : normalizeGooglePatentsQuery([
-        request.queryPlan.searchQuery,
-        request.queryPlan.technicalKeywords.join(' '),
-      ].filter(Boolean).join(' '))
+    const query = buildGooglePatentsQueryForTests(request)
     if (!query) return []
 
     const params = new URLSearchParams({

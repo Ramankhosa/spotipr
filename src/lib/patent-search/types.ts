@@ -92,9 +92,12 @@ export interface PatentSearchQueryPlan {
   cpcCodes: string[]
   ipcCodes: string[]
   classificationHints: string[]
+  googlePatentKeywords?: string[]
   epoTitleKeywords?: string[]
   epoAbstractKeywords?: string[]
   epoCombinedKeywords?: string[]
+  patentSearchConceptGroups?: PatentSearchConceptGroup[]
+  searchPrecision?: PatentSearchPrecision
   fieldFilters: PatentSearchFilters
   explicitFilters: PatentSearchFilters
   searchVariants: string[]
@@ -102,6 +105,17 @@ export interface PatentSearchQueryPlan {
   llmExpanded: boolean
   confidence: number
   warnings: string[]
+}
+
+export type PatentSearchPrecision = 'broad' | 'refined'
+
+export interface PatentSearchConceptGroup {
+  id?: string
+  label?: string
+  kind?: 'core' | 'mechanism' | 'component' | 'narrowing' | 'excluded' | string
+  terms: string[]
+  required?: boolean
+  excluded?: boolean
 }
 
 export interface PatentSearchRequest {

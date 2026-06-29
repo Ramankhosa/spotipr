@@ -11,6 +11,11 @@ import crypto from 'crypto';
 import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
 import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
+  literatureSearchService,
+  normalizeLiteratureCandidate,
+  type LiteratureSearchOptions,
+} from '@/lib/literature-search-service';
+import {
   DEFAULT_MINIMUM_VISIBLE_CONFIDENCE,
   DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
   buildVisiblePriorArtResults,
@@ -426,11 +431,11 @@ RULES
 - ASCII only; JSON only; no markdown, comments, or explanations.
 - Output must be valid JSON (double-quoted keys/values, comma-separated).`;
 
-export const PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3 = `You are a skeptical patent novelty analyst. Map invention FEATURES to prior-art PATENTS and return ONE valid JSON object only.
+export const PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3 = `You are a skeptical novelty analyst. Map invention FEATURES to prior-art REFERENCES, which may be patents or scholarly papers, and return ONE valid JSON object only.
 
 INPUTS
 FEATURES: {invention_features} (array of strings; copy each feature verbatim)
-PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, optional Retrieval hints)
+REFERENCES: {patent_batch} (repeated blocks with reference ID, type, title, abstract, source metadata, and optional retrieval hints)
 
 TASK
 For each patent PN, classify EVERY feature EXACTLY ONCE:
@@ -440,7 +445,7 @@ For each patent PN, classify EVERY feature EXACTLY ONCE:
 - Unknown: the text is too thin, generic, unclear, or unavailable to assess.
 
 NOVELTY EVIDENCE RULES
-- Use only the supplied patent data fields. Do not assume claims or missing details.
+- Use only the supplied reference data fields. Do not assume claims, full text, or missing details.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
 - Use Retrieval hints to focus review, but Present/Partial still require support in the supplied patent data.
 - Treat synonyms and paraphrases as matches only when they implement the same mechanism.
@@ -477,14 +482,14 @@ RULES
 - Confidence: 0.9 explicit same mechanism; 0.7 clear paraphrase; 0.4 weak/indirect.
 - ASCII only. JSON only.`;
 
-export const CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT = `You are a skeptical patent novelty analyst. Analyze shortlisted prior-art candidates against invention features and return ONE valid JSON object only.
+export const CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT = `You are a skeptical novelty analyst. Analyze shortlisted patent and scholarly-paper prior-art candidates against invention features and return ONE valid JSON object only.
 
 INPUTS
 FEATURES: {invention_features}
 FEATURE DETAILS: {feature_details}
 INVENTION TITLE: {invention_title}
 INVENTION DISCLOSURE: {invention_disclosure}
-PATENTS: {patent_batch} (repeated blocks with PN, Title, Abstract, Retrieval hints)
+REFERENCES: {patent_batch} (repeated blocks with reference ID, type, title, abstract, source metadata, and retrieval hints)
 
 TASK
 Candidates have already passed Stage 1.5 relevance screening. This stage is deep feature mapping and attorney-review evidence analysis, not a second routing gate.
@@ -495,7 +500,7 @@ For each patent, do all of the following in one pass:
 4. Summarize novelty signals across the candidate set.
 
 EVIDENCE RULES
-- Use only the supplied patent data fields as evidence.
+- Use only the supplied reference data fields as evidence.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
 - Use Retrieval hints to focus review, but Present/Partial still require support in the supplied patent data.
 - Present/Partial require a short quote from the supplied patent data. If no supplied patent-data quote supports the feature, use Absent or Unknown.
@@ -1010,6 +1015,11 @@ export interface NoveltySearchConfig {
   searchSource?: {
     mode?: PatentSearchSourceMode;
     providerIds?: string[];
+    includePatents?: boolean;
+    includePapers?: boolean;
+    paperSources?: string[];
+    paperFilters?: LiteratureSearchOptions;
+    paperSearchQuery?: string;
     searchMode?: 'intelligent' | 'manual';
     llmExpansion?: boolean;
     filters?: Record<string, any>;
@@ -1115,6 +1125,8 @@ export interface NormalizedIdea {
   epoTitleKeywords?: string[];
   epoAbstractKeywords?: string[];
   epoCombinedKeywords?: string[];
+  paperSearchQuery?: string;
+  paperKeywords?: string[];
   noveltyFocus?: string[];
   noveltyFocusInteractions?: NoveltyFocusInteraction[];
   architecturalInnovation?: string;
@@ -1888,6 +1900,7 @@ export class NoveltySearchService extends BasePatentService {
       const config = this.mergeConfig(request.config);
       const intelligentSearch = config.searchSource?.searchMode !== 'manual';
       const includeEpoKeywords = searchSourceIncludesEpo(config.searchSource?.mode);
+      const includePapers = Boolean(config.searchSource?.includePapers);
       const approvedQuery = String(request.approvedStage0?.searchQuery || '').trim();
       const approvedFeatures = Array.isArray(request.approvedStage0?.inventionFeatures)
         ? Array.from(new Set(request.approvedStage0.inventionFeatures.map(feature => String(feature || '').trim()).filter(Boolean)))
@@ -1917,6 +1930,13 @@ export class NoveltySearchService extends BasePatentService {
               epoTitleKeywords: approvedEpoTitleKeywords,
               epoAbstractKeywords: approvedEpoAbstractKeywords,
               epoCombinedKeywords: approvedEpoCombinedKeywords,
+            } : {}),
+            ...(includePapers ? {
+              paperSearchQuery: this.normalizeStage0Scalar(
+                (request.approvedStage0 as any)?.paperSearchQuery || config.searchSource?.paperSearchQuery || approvedQuery,
+                500
+              ),
+              paperKeywords: this.normalizeEpoKeywordList((request.approvedStage0 as any)?.paperKeywords),
             } : {}),
             featureDetails: approvedFeatures.slice(0, 30).map((feature, index) => {
               const exactMatch = suppliedDetails.find(detail => String(detail?.feature || '').trim() === feature);
@@ -3371,7 +3391,7 @@ export class NoveltySearchService extends BasePatentService {
       confidence: 'Low',
       noRelevantMatches: true,
       executive_summary: {
-        summary: 'The configured search completed without identifying sufficiently relevant patent records for detailed feature mapping.',
+        summary: 'The configured search completed without identifying sufficiently relevant prior-art records for detailed feature mapping.',
       },
       concluding_remarks: {
         summary: 'No high-overlap candidate was identified among the screened preliminary records. This is not a legal conclusion and does not establish novelty.',
@@ -3760,6 +3780,7 @@ RESPONSE:`;
       console.log('ðŸ§  Starting Stage 0: Idea Normalization');
 
       const includeEpoKeywords = searchSourceIncludesEpo(config.searchSource?.mode);
+      const includePapers = Boolean(config.searchSource?.includePapers);
 
       if (config.searchSource?.searchMode === 'manual') {
         const filters = config.searchSource.filters || {};
@@ -3795,6 +3816,10 @@ RESPONSE:`;
               epoAbstractKeywords: abstractKeywords,
               epoCombinedKeywords: combinedKeywords,
             } : {}),
+            ...(includePapers ? {
+              paperSearchQuery: config.searchSource?.paperSearchQuery || searchText || request.title,
+              paperKeywords: Array.from(new Set<string>(featureSeeds)).slice(0, 10),
+            } : {}),
             architecturalInnovation: '',
             claimConcepts: [],
             noveltyFocusInteractions: [],
@@ -3814,9 +3839,12 @@ RESPONSE:`;
           ? NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2
           : removeEpoKeywordInstructions(NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2)
       );
-      const prompt = basePrompt
+      let prompt = basePrompt
         .replace('{title}', request.title || 'Untitled Invention')
         .replace('{rawIdea}', request.inventionDescription || 'No description provided');
+      if (includePapers) {
+        prompt += `\n\nAlso include these two top-level JSON fields:\n"paperSearchQuery": "a concise scholarly literature query using technical concepts, mechanisms, and accepted research terminology",\n"paperKeywords": ["4-10 short editable technical phrases suitable for Google Scholar, Semantic Scholar, Crossref, OpenAlex, PubMed, arXiv, and CORE"]\nDo not add unsupported facts, author names, publication titles, years, Boolean operators, or wildcards.`;
+      }
 
       console.log('[NoveltyPipeline] stage_summary', {
         stage: 'stage0_prompt_ready',
@@ -3861,6 +3889,13 @@ RESPONSE:`;
               epoTitleKeywords: this.normalizeEpoKeywordList(normalizedData?.epoTitleKeywords ?? normalizedData?.epo_title_keywords),
               epoAbstractKeywords: this.normalizeEpoKeywordList(normalizedData?.epoAbstractKeywords ?? normalizedData?.epo_abstract_keywords),
               epoCombinedKeywords: this.normalizeEpoKeywordList(normalizedData?.epoCombinedKeywords ?? normalizedData?.epo_combined_keywords),
+            } : {}),
+            ...(includePapers ? {
+              paperSearchQuery: this.normalizeStage0Scalar(
+                normalizedData?.paperSearchQuery ?? normalizedData?.paper_search_query ?? normalizedData?.searchQuery ?? '',
+                500
+              ),
+              paperKeywords: this.normalizeEpoKeywordList(normalizedData?.paperKeywords ?? normalizedData?.paper_keywords),
             } : {}),
             noveltyFocus: Array.isArray(normalizedData?.novelty_focus) ? normalizedData.novelty_focus.filter(Boolean) : [],
         noveltyFocusInteractions: Array.isArray(normalizedData?.novelty_focus_interactions)
@@ -3936,6 +3971,8 @@ RESPONSE:`;
       const sourceMode = config.searchSource?.mode || (jurisdiction === 'IN' ? 'INDIAN_ONLY' : 'PQAI_ONLY');
       const includeEpoKeywords = searchSourceIncludesEpo(sourceMode);
       const providerIds = config.searchSource?.providerIds;
+      const includePatents = config.searchSource?.includePatents !== false && (!Array.isArray(providerIds) || providerIds.length > 0);
+      const includePapers = Boolean(config.searchSource?.includePapers);
       const searchMode = config.searchSource?.searchMode === 'manual' ? 'manual' : 'intelligent';
       const stage0SearchQuery = String(stage0Data.searchQuery || '').trim();
       const stage0Features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures.filter(Boolean) : [];
@@ -3976,23 +4013,43 @@ RESPONSE:`;
           warnings: ['Using Stage 0 query plan; Stage 1 LLM query expansion disabled.'],
         };
 
-      const searchResponse = await patentSearchOrchestrator.search({
-        searchMode,
-        query: searchMode === 'manual' ? '' : stage0SearchQuery,
-        title: searchRun?.title || '',
-        inventionText: searchRun?.inventionDescription || '',
-        filters: stage1Filters,
-        providerIds,
-        jurisdictions: [jurisdiction],
-        sourceMode,
-        llmExpansion: false,
-        queryPlan: stage0QueryPlan,
-        limit: config.stage1.maxPatents,
-        candidateLimit: config.stage1.candidateLimit,
-        requestHeaders,
-      });
-
-      const retrievalCandidates = searchResponse.candidateResults || searchResponse.results;
+      const patentSearchPromise = includePatents
+        ? patentSearchOrchestrator.search({
+          searchMode,
+          query: searchMode === 'manual' ? '' : stage0SearchQuery,
+          title: searchRun?.title || '',
+          inventionText: searchRun?.inventionDescription || '',
+          filters: stage1Filters,
+          providerIds,
+          jurisdictions: [jurisdiction],
+          sourceMode,
+          llmExpansion: false,
+          queryPlan: stage0QueryPlan,
+          limit: config.stage1.maxPatents,
+          candidateLimit: config.stage1.candidateLimit,
+          requestHeaders,
+        })
+        : Promise.resolve(null);
+      const paperSearchQuery = this.normalizeStage0Scalar(
+        config.searchSource?.paperSearchQuery || stage0Data.paperSearchQuery || stage0Data.paperKeywords?.join(' ') || stage0SearchQuery,
+        500
+      );
+      const literatureSearchPromise = includePapers
+        ? literatureSearchService.search(paperSearchQuery, {
+          ...(config.searchSource?.paperFilters || {}),
+          sources: config.searchSource?.paperSources,
+          limit: config.searchSource?.paperFilters?.limit || Math.min(config.stage1.maxPatents, 50),
+        })
+        : Promise.resolve(null);
+      const [searchResponse, literatureResponse] = await Promise.all([patentSearchPromise, literatureSearchPromise]);
+      const patentCandidates = searchResponse
+        ? (searchResponse.candidateResults || searchResponse.results).map(candidate => ({ ...candidate, referenceType: 'patent' }))
+        : [];
+      const paperCandidates = literatureResponse
+        ? literatureResponse.results.map(normalizeLiteratureCandidate)
+        : [];
+      const retrievalCandidates = [...patentCandidates, ...paperCandidates]
+        .sort((a: any, b: any) => Number(b.relevanceScore || b.retrievalScore || 0) - Number(a.relevanceScore || a.retrievalScore || 0));
       const priorArtResults: any[] = [];
       const pqaiResults: any[] = [];
 
@@ -4002,10 +4059,14 @@ RESPONSE:`;
         stage0SearchQuery,
         stage0Features,
         requestedProviderIds: providerIds,
-        resolvedProviders: searchResponse.providerStats.map(stat => stat.providerId),
-        providerStats: searchResponse.providerStats,
-        diagnostics: searchResponse.diagnostics,
-        warnings: searchResponse.warnings,
+        resolvedProviders: [
+          ...(searchResponse?.providerStats.map(stat => stat.providerId) || []),
+          ...(literatureResponse?.providerStats.map(stat => `paper:${stat.providerId}`) || []),
+        ],
+        providerStats: searchResponse?.providerStats || [],
+        literatureProviderStats: literatureResponse?.providerStats || [],
+        diagnostics: searchResponse?.diagnostics,
+        warnings: [...(searchResponse?.warnings || []), ...(literatureResponse?.warnings || [])],
         candidateCount: retrievalCandidates.length,
         candidates: retrievalCandidates.map(candidate => ({
           publicationNumber: candidate.publicationNumber,
@@ -4024,17 +4085,37 @@ RESPONSE:`;
           retrievalCandidates,
           rawPriorArtResults: retrievalCandidates,
           candidateResults: retrievalCandidates,
+          patentResults: patentCandidates,
+          paperResults: paperCandidates,
+          patentCount: patentCandidates.length,
+          paperCount: paperCandidates.length,
+          retrievedCount: retrievalCandidates.length,
           hiddenCandidateCount: retrievalCandidates.length,
           hasMoreCandidates: retrievalCandidates.length > 0,
           minimumVisibleConfidence: config.stage15.minimumVisibleConfidence,
           nextBatchCursor: 0,
-          queryPlan: searchResponse.queryPlan,
-          providerStats: searchResponse.providerStats,
-          searchWarnings: searchResponse.warnings,
-          searchDiagnostics: searchResponse.diagnostics,
+          queryPlan: {
+            ...(searchResponse?.queryPlan || stage0QueryPlan || {}),
+            ...(includePapers ? {
+              paperSearchQuery,
+              paperKeywords: stage0Data.paperKeywords || [],
+              paperSources: config.searchSource?.paperSources || [],
+              paperFilters: config.searchSource?.paperFilters || {},
+            } : {}),
+          },
+          providerStats: [
+            ...(searchResponse?.providerStats || []),
+            ...(literatureResponse?.providerStats.map(stat => ({ ...stat, providerId: `paper:${stat.providerId}`, label: `Scholarly papers - ${stat.providerId}` })) || []),
+          ],
+          literatureProviderStats: literatureResponse?.providerStats || [],
+          searchWarnings: [...(searchResponse?.warnings || []), ...(literatureResponse?.warnings || [])],
+          searchDiagnostics: searchResponse?.diagnostics,
           searchSource: {
             mode: sourceMode,
-            providerIds: providerIds || searchResponse.providerStats.map(stat => stat.providerId),
+            providerIds: providerIds || searchResponse?.providerStats.map(stat => stat.providerId) || [],
+            includePatents,
+            includePapers,
+            paperSources: config.searchSource?.paperSources || [],
             searchMode,
           },
         },
@@ -4077,6 +4158,7 @@ RESPONSE:`;
 
   private canonicalPatentNumber(value: any): string {
     const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (compact.startsWith('PAPER')) return compact;
     const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/);
     return kindSuffixMatch?.[1] || compact;
   }
@@ -4570,6 +4652,10 @@ RESPONSE:`;
       Object.prototype.hasOwnProperty.call(stage0Data as any, 'epo_abstract_keywords') ||
       Object.prototype.hasOwnProperty.call(stage0Data as any, 'epoCombinedKeywords') ||
       Object.prototype.hasOwnProperty.call(stage0Data as any, 'epo_combined_keywords');
+    const hasPaperFields = Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperSearchQuery') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paper_search_query') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paperKeywords') ||
+      Object.prototype.hasOwnProperty.call(stage0Data as any, 'paper_keywords');
     return {
       ...stage0Data,
       inventionFeatures: features,
@@ -4578,6 +4664,10 @@ RESPONSE:`;
         epoTitleKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoTitleKeywords ?? (stage0Data as any).epo_title_keywords),
         epoAbstractKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords ?? (stage0Data as any).epo_abstract_keywords),
         epoCombinedKeywords: this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords ?? (stage0Data as any).epo_combined_keywords),
+      } : {}),
+      ...(hasPaperFields ? {
+        paperSearchQuery: this.normalizeStage0Scalar((stage0Data as any).paperSearchQuery ?? (stage0Data as any).paper_search_query ?? '', 500),
+        paperKeywords: this.normalizeEpoKeywordList((stage0Data as any).paperKeywords ?? (stage0Data as any).paper_keywords),
       } : {}),
       architecturalInnovation: this.normalizeStage0Scalar((stage0Data as any).architecturalInnovation ?? (stage0Data as any).architectural_innovation ?? '', 500),
       claimConcepts: this.normalizeClaimConcepts(conceptSource, features, warnings),
@@ -5002,7 +5092,7 @@ RESPONSE:`;
       confidence: 'Low',
       risk_factors: [
         `${reviewedCount} candidate${reviewedCount === 1 ? '' : 's'} reviewed by the AI relevance gate.`,
-        `${retrievedCount} candidate${retrievedCount === 1 ? '' : 's'} retrieved from the selected patent sources.`,
+        `${retrievedCount} candidate${retrievedCount === 1 ? '' : 's'} retrieved from the selected patent nationalities.`,
         'No accepted candidate met the visible confidence threshold; broaden sources or review lower-confidence candidates before relying on novelty.',
       ],
       per_patent_remarks: [],
@@ -5235,10 +5325,17 @@ RESPONSE:`;
       const patentBatchText = batch.map((patent, index) => {
         const abstractWords = String(patent.abstract || '').split(/\s+/).filter(Boolean).slice(0, 220).join(' ');
         return [
-          `Patent ${index + 1}:`,
-          `PN: ${patent.canonicalPn}`,
+          `Reference ${index + 1}:`,
+          `Reference ID: ${patent.canonicalPn}`,
+          `Type: ${patent.referenceType === 'paper' ? 'Scholarly paper' : 'Patent'}`,
           `Title: ${patent.title}`,
           `Abstract: ${abstractWords || 'N/A'}`,
+          ...(patent.referenceType === 'paper' ? [
+            `Authors: ${(patent.authors || []).join(', ') || 'N/A'}`,
+            `Year/Venue: ${patent.year || ''} ${patent.venue || ''}`.trim(),
+            `DOI/URL: ${patent.doi || patent.sourceUrl || patent.link || 'N/A'}`,
+            `Source: ${(patent.sourceProviders || [patent.sourceProvider]).filter(Boolean).join(', ') || 'N/A'}`,
+          ] : []),
           `Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}`,
           '---'
         ].join('\n');
@@ -5811,11 +5908,15 @@ RESPONSE:`;
           const title = norm(it.title || '');
           const abstract = norm(it.snippet || it.abstract || it.description || '');
           const retrievalHints = this.formatRetrievalHints(it);
-          return `Item ${idx + 1}\nPN: ${pn}\nTitle: ${title}\nAbstract: ${abstract}\nRetrieval hints: ${retrievalHints || 'none'}`;
+          const referenceType = it.referenceType === 'paper' ? 'Scholarly paper' : 'Patent';
+          const paperMetadata = it.referenceType === 'paper'
+            ? `\nAuthors: ${norm((it.authors || []).join(', '), 300)}\nYear/Venue: ${norm(`${it.year || ''} ${it.venue || ''}`, 240)}\nDOI/URL: ${norm(it.doi || it.sourceUrl || it.link || '', 300)}\nSource: ${norm((it.sourceProviders || [it.sourceProvider]).join(', '), 200)}`
+            : '';
+          return `Item ${idx + 1}\nReference ID: ${pn}\nType: ${referenceType}\nTitle: ${title}\nAbstract: ${abstract}${paperMetadata}\nRetrieval hints: ${retrievalHints || 'none'}`;
         }).join("\n---\n");
 
         return [
-          'You are a patent novelty relevance gate. Return ONLY a valid JSON array.',
+          'You are a novelty relevance gate for patent and scholarly-paper prior art. Return ONLY a valid JSON array.',
           `Invention features: ${feats}`,
           '',
           'The invention features should be atomic, preferably with feature IDs and importance labels such as core, major, or peripheral.',
@@ -5826,7 +5927,7 @@ RESPONSE:`;
           '- F4: control/process/release/detection/verification mechanism',
           '- F5: optional or peripheral implementation detail',
           '',
-          'Your job is to decide whether each patent should proceed to deep novelty mapping. This is not a final patentability opinion. Keep references that may be useful for novelty, inventive-step, component mapping, or bounded attorney review.',
+          'Your job is to decide whether each prior-art reference should proceed to deep novelty mapping. This is not a final patentability opinion. Keep references that may be useful for novelty, inventive-step, component mapping, or bounded attorney review.',
           '',
           'Decision policy:',
           '- accept: the supplied patent data discloses the same or very close invention-level combination, including substantially the same technical purpose, same object/material/data target, and same operating mechanism.',
@@ -5896,7 +5997,7 @@ RESPONSE:`;
           '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature_id_or_exact_feature_label"],"missing_features":["feature_id_or_exact_feature_label"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
           '',
           'Rules:',
-          '- Use only the supplied patent data fields.',
+          '- Use only the supplied reference data fields.',
           '- Retrieval hints are not evidence; use them only to focus review.',
           '- Do not copy hinted matched features unless the supplied patent data supports them.',
           '- In reason, do not name the source-field limitation or use early-stage-review wording. Use reviewed citation record if scope must be mentioned.',
@@ -9310,12 +9411,13 @@ ${candidatesText}`;
 
     for (const patent of take) {
       const pnAny = patent.publicationNumber || patent.publication_number || patent.pn || patent.id || '';
-      const canonicalPn = String(pnAny).toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '');
+      const compactPn = String(pnAny).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const canonicalPn = compactPn.startsWith('PAPER') ? compactPn : compactPn.replace(/[A-Z]\d*$/, '');
       if (!canonicalPn) continue;
       if (seen.has(canonicalPn)) continue;
 
       const titleStr = String(
-        patent.title || (typeof patent.snippet === 'string' ? patent.snippet.split('.')[0] : '') || patent.publication_title || 'Untitled Patent'
+        patent.title || (typeof patent.snippet === 'string' ? patent.snippet.split('.')[0] : '') || patent.publication_title || 'Untitled Reference'
       );
 
       let abstractRaw: any = (
@@ -9376,10 +9478,12 @@ ${candidatesText}`;
 
       // Format patent batch for prompt
       const patentBatchText = batch.map((patent, idx) => `
-Patent ${idx + 1}:
-PN: ${patent.canonicalPn}
+Reference ${idx + 1}:
+Reference ID: ${patent.canonicalPn}
+Type: ${patent.referenceType === 'paper' ? 'Scholarly paper' : 'Patent'}
 Title: ${patent.title}
 Abstract: ${patent.abstract}
+${patent.referenceType === 'paper' ? `Authors: ${(patent.authors || []).join(', ')}\nYear/Venue: ${patent.year || ''} ${patent.venue || ''}\nDOI/URL: ${patent.doi || patent.sourceUrl || patent.link || ''}\nSource: ${(patent.sourceProviders || [patent.sourceProvider]).filter(Boolean).join(', ')}` : ''}
 Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
 ---
       `).join('\n');

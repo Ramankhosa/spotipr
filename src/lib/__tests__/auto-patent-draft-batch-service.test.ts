@@ -120,6 +120,20 @@ describe('auto patent draft batch parsing', () => {
     })
   })
 
+  test('keeps AI prior-art review enabled by default even when literature review text is supplied', () => {
+    const preview = previewAutoPatentDraftBatchIdeas([
+      {
+        title: 'Prior art assisted idea',
+        ideaDetails: 'A controller-assisted storage tray.',
+        literatureReviewContent: 'US123 describes a conventional tray.'
+      }
+    ])
+
+    expect(preview.rows[0]).toMatchObject({
+      priorArtHandling: 'auto',
+    })
+  })
+
   test('applies defaults only when row values are blank', () => {
     const preview = previewAutoPatentDraftBatchIdeas([
       {

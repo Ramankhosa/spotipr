@@ -11,6 +11,7 @@ import {
   coerceSupportDataSources,
   type SupportDataSource,
 } from '@/lib/support-data-sources'
+import type { PatentSearchConceptGroup } from '@/lib/patent-search/types'
 
 export const NORMALIZED_DATA_SCHEMA_VERSION = 2
 
@@ -52,6 +53,11 @@ export interface NormalizedDataV2 {
   extractionFailed?: boolean
   sourceInputMeta?: SourceInputMeta
   searchQuery?: string
+  googlePatentKeywords?: string[]
+  epoTitleKeywords?: string[]
+  epoAbstractKeywords?: string[]
+  epoCombinedKeywords?: string[]
+  patentSearchConceptGroups?: PatentSearchConceptGroup[]
   problem?: string
   objectives?: string
   components: NormalizedComponent[]
@@ -86,6 +92,11 @@ export interface NormalizedDataV2 {
 
 export interface IdeaNormalizationExtractedFields {
   searchQuery?: string
+  googlePatentKeywords?: string[]
+  epoTitleKeywords?: string[]
+  epoAbstractKeywords?: string[]
+  epoCombinedKeywords?: string[]
+  patentSearchConceptGroups?: PatentSearchConceptGroup[]
   problem?: string
   objectives?: string
   components?: NormalizedComponent[]
@@ -133,6 +144,41 @@ function normalizeStringArray(value: unknown): string[] {
     return [value.trim()]
   }
   return []
+}
+
+function normalizeKeywordPhrases(value: unknown, maxItems = 10): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[;\n|]/)
+      : []
+  return unique(raw
+    .map(item => String(item || '').trim().replace(/\s+/g, ' '))
+    .filter(item => item.length >= 3 && item.length <= 120)
+    .filter(item => !/[()*?]/.test(item))
+    .filter(item => item.split(/\s+/).length <= 10))
+    .slice(0, maxItems)
+}
+
+function normalizePatentSearchConceptGroups(value: unknown): PatentSearchConceptGroup[] {
+  if (!Array.isArray(value)) return []
+  const groups: PatentSearchConceptGroup[] = []
+  value.forEach((item, index) => {
+      const record = asRecord(item)
+      const terms = normalizeKeywordPhrases(record.terms || record.keywords || record.phrases, 8)
+      if (terms.length === 0) return
+      const rawKind = String(record.kind || '').trim().toLowerCase()
+      const excluded = record.excluded === true || rawKind === 'excluded' || rawKind === 'exclude'
+      groups.push({
+        id: String(record.id || `concept_group_${index + 1}`).trim(),
+        label: String(record.label || record.name || `Concept group ${index + 1}`).trim(),
+        kind: rawKind || undefined,
+        terms,
+        required: record.required === false ? false : !excluded,
+        excluded,
+      })
+    })
+  return groups.slice(0, 6)
 }
 
 function normalizeInventionType(value: unknown): InventionArchetype[] {
@@ -193,6 +239,11 @@ export function migrateNormalizedData(
     claimableFeatures: normalizeStringArray(record.claimableFeatures),
     fallbackLimitations: normalizeStringArray(record.fallbackLimitations),
     doNotClaim: normalizeStringArray(record.doNotClaim),
+    googlePatentKeywords: normalizeKeywordPhrases(record.googlePatentKeywords ?? record.google_patent_keywords, 10),
+    epoTitleKeywords: normalizeKeywordPhrases(record.epoTitleKeywords ?? record.epo_title_keywords, 6),
+    epoAbstractKeywords: normalizeKeywordPhrases(record.epoAbstractKeywords ?? record.epo_abstract_keywords, 8),
+    epoCombinedKeywords: normalizeKeywordPhrases(record.epoCombinedKeywords ?? record.epo_combined_keywords, 8),
+    patentSearchConceptGroups: normalizePatentSearchConceptGroups(record.patentSearchConceptGroups ?? record.patent_search_concept_groups),
     cpcCodes: normalizeStringArray(record.cpcCodes),
     ipcCodes: normalizeStringArray(record.ipcCodes),
     sourceFactLedger: record.sourceFactLedger
@@ -240,5 +291,10 @@ export function buildIdeaNormalizationExtractedFields(normalizedData: Normalized
     sourceHandlingMode: normalizedData.sourceHandlingMode,
     extractionFailed: normalizedData.extractionFailed,
     sourceInputMeta: normalizedData.sourceInputMeta,
+    googlePatentKeywords: normalizedData.googlePatentKeywords,
+    epoTitleKeywords: normalizedData.epoTitleKeywords,
+    epoAbstractKeywords: normalizedData.epoAbstractKeywords,
+    epoCombinedKeywords: normalizedData.epoCombinedKeywords,
+    patentSearchConceptGroups: normalizedData.patentSearchConceptGroups,
   }
 }

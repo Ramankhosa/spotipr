@@ -38,9 +38,9 @@ describe('patent search provider registry', () => {
     expect(resolveProviderIds({ sourceMode: 'PQAI_PLUS_INDIAN' })).toEqual(['indian-corpus', 'pqai-corpus', 'pqai'])
   })
 
-  test('keeps India-only mode isolated from PQAI corpus records', () => {
+  test('keeps explicit India-only mode isolated from international records', () => {
     expect(resolveProviderIds({ sourceMode: 'INDIAN_ONLY' })).toEqual(['indian-corpus'])
-    expect(resolveProviderIds({ jurisdictions: ['IN'] })).toEqual(['indian-corpus'])
+    expect(resolveProviderIds({ jurisdictions: ['IN'] })).toEqual(['indian-corpus', 'pqai-corpus', 'pqai'])
   })
 
   test('keeps Australia-only mode isolated to IP Australia', () => {

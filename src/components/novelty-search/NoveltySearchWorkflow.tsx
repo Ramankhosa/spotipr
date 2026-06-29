@@ -322,11 +322,18 @@ function displayInternationalPatentText(value: unknown) {
   return String(value || '')
     .replace(/PQAI_API_TOKEN/gi, 'international patent search token')
     .replace(/PQAI_TOKEN/gi, 'international patent search token')
-    .replace(/Stored PQAI International Corpus/gi, 'Stored international patent corpus')
+    .replace(/Stored PQAI International Corpus/gi, 'International patents')
+    .replace(/Stored International Patent Corpus/gi, 'International patents')
+    .replace(/Stored European Patent Corpus/gi, 'European patents')
+    .replace(/European Patent Office OPS/gi, 'European patents')
     .replace(/PQAI Global Patent Search/gi, 'International patent search')
     .replace(/PQAI API/gi, 'International patent search')
-    .replace(/PQAI patent corpus/gi, 'International patent corpus')
-    .replace(/\bpqai-corpus\b/gi, 'Stored international patents')
+    .replace(/PQAI patent corpus/gi, 'International patents')
+    .replace(/\bepo-ops-corpus\b/gi, 'European patents')
+    .replace(/\bepo-ops\b/gi, 'European patents')
+    .replace(/\bindian-corpus\b/gi, 'Indian patents')
+    .replace(/\bip-australia\b/gi, 'Australian patents')
+    .replace(/\bpqai-corpus\b/gi, 'International patents')
     .replace(/\bPQAI\b/gi, 'International patents')
     .replace(/\bpqai\b/gi, 'International patents');
 }
@@ -335,8 +342,23 @@ function displayPatentProviderLabel(value: unknown) {
   const raw = String(value || '').trim();
   const normalized = raw.toLowerCase();
   if (normalized === 'pqai') return 'International patents';
-  if (normalized === 'pqai-corpus') return 'Stored international patents';
+  if (normalized === 'pqai-corpus') return 'International patents';
+  if (normalized === 'epo-ops' || normalized === 'epo-ops-corpus') return 'European patents';
+  if (normalized === 'indian-corpus') return 'Indian patents';
+  if (normalized === 'ip-australia') return 'Australian patents';
   return displayInternationalPatentText(raw);
+}
+
+function displayPatentProviderLabels(values: unknown[]) {
+  return Array.from(new Set(values.map(displayPatentProviderLabel).filter(Boolean)));
+}
+
+function sourceModeForJurisdiction(jurisdiction: string): NoveltySearchSourceMode {
+  const normalized = jurisdiction.toUpperCase();
+  if (normalized === 'IN') return 'PQAI_PLUS_INDIAN';
+  if (normalized === 'AU') return 'PQAI_PLUS_AUSTRALIA';
+  if (normalized === 'EP') return 'PQAI_PLUS_EPO';
+  return 'PQAI_ONLY';
 }
 
 type LiveStageProgress = {
@@ -400,7 +422,7 @@ export default function NoveltySearchWorkflow({
     title: initialTitle || '',
     inventionDescription: initialDescription || '',
     jurisdiction: 'IN',
-    searchSourceMode: 'INDIAN_ONLY',
+    searchSourceMode: sourceModeForJurisdiction('IN'),
     llmExpansion: true,
     searchMode: 'intelligent'
   });
@@ -1154,8 +1176,8 @@ export default function NoveltySearchWorkflow({
     if (stageNumber === '1') {
       setIsStage1Simulating(true);
       const searchMessages = [
-        'Searching selected patent sources...',
-        'Retrieving provider-ranked records...',
+        'Searching selected patent nationalities...',
+        'Retrieving ranked patent records...',
         'Merging duplicate publications...',
         'Preparing raw search results...'
       ];
@@ -1167,7 +1189,7 @@ export default function NoveltySearchWorkflow({
     } else if (stageNumber === '1.5' || stageNumber === '2') {
       setIsStage1Simulating(true);
       const relevanceMessages = [
-        'Reviewing top provider-ranked candidates...',
+        'Reviewing top retrieved candidates...',
         'Comparing candidates against the invention features...',
         'Separating direct, component, borderline, and rejected patents...',
         'Preparing relevance analysis...'
@@ -1750,7 +1772,7 @@ export default function NoveltySearchWorkflow({
               <div>
                 <CardTitle className="text-lg font-semibold text-slate-900">Manual Search Results</CardTitle>
                 <CardDescription>
-                  {results.length} merged result{results.length !== 1 ? 's' : ''} from {requestedProviders.length || manualSearchState.providerStats.length || 0} provider{(requestedProviders.length || manualSearchState.providerStats.length) !== 1 ? 's' : ''}.
+                  {results.length} merged result{results.length !== 1 ? 's' : ''} from the selected patent nationality coverage.
                 </CardDescription>
               </div>
               <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
@@ -1854,9 +1876,9 @@ export default function NoveltySearchWorkflow({
                           <a href={href} target="_blank" rel="noreferrer" className="font-semibold text-indigo-700 hover:underline">
                             {patentNumber}
                           </a>
-                          {sourceProviders.map((provider: string) => (
+                          {displayPatentProviderLabels(sourceProviders).map((provider: string) => (
                             <Badge key={provider} variant="outline" className="border-slate-200 bg-slate-50 text-[11px] text-slate-600">
-                              {displayPatentProviderLabel(provider)}
+                              {provider}
                             </Badge>
                           ))}
                         </div>
@@ -1952,7 +1974,7 @@ export default function NoveltySearchWorkflow({
                   setFormData(prev => ({
                     ...prev,
                     jurisdiction,
-                    searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : jurisdiction === 'AU' ? 'AUSTRALIA_ONLY' : jurisdiction === 'EP' ? 'EPO_ONLY' : 'PQAI_ONLY'
+                    searchSourceMode: sourceModeForJurisdiction(jurisdiction)
                   }));
                 }}
                 className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
@@ -1966,21 +1988,21 @@ export default function NoveltySearchWorkflow({
               </select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="manualSource" className="text-xs font-medium text-slate-600">Search source</Label>
+              <Label htmlFor="manualSource" className="text-xs font-medium text-slate-600">Patent nationality coverage</Label>
               <select
                 id="manualSource"
                 value={formData.searchSourceMode}
                 onChange={(event) => setFormData(prev => ({ ...prev, searchSourceMode: event.target.value as NoveltySearchSourceMode }))}
                 className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
               >
-                <option value="INDIAN_ONLY">Indian database only</option>
-                <option value="AUSTRALIA_ONLY">Australian database only</option>
-                <option value="EPO_ONLY">European patents only</option>
-                <option value="PQAI_ONLY">International patents only</option>
-                <option value="PQAI_PLUS_INDIAN">International patents + Indian database</option>
-                <option value="PQAI_PLUS_AUSTRALIA">International patents + Australian database</option>
-                <option value="PQAI_PLUS_EPO">International patents + European patents</option>
-                <option value="PQAI_PLUS_INDIAN_EPO">International patents + Indian + European patents</option>
+                <option value="PQAI_PLUS_INDIAN">India + international patents</option>
+                <option value="PQAI_PLUS_AUSTRALIA">Australia + international patents</option>
+                <option value="PQAI_PLUS_EPO">Europe + international patents</option>
+                <option value="PQAI_ONLY">International patents</option>
+                <option value="PQAI_PLUS_INDIAN_EPO">India + Europe + international patents</option>
+                <option value="INDIAN_ONLY">India patents</option>
+                <option value="AUSTRALIA_ONLY">Australia patents</option>
+                <option value="EPO_ONLY">Europe patents</option>
               </select>
             </div>
           </div>
@@ -2178,7 +2200,7 @@ export default function NoveltySearchWorkflow({
           <div className="space-y-5 border-t border-slate-200 pt-6">
             <div>
               <h3 className="text-base font-semibold text-slate-900">Search Configuration</h3>
-              <p className="mt-1 text-sm text-slate-500">Control the corpus and query expansion behavior.</p>
+              <p className="mt-1 text-sm text-slate-500">Choose the patent nationality coverage and query expansion behavior.</p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -2188,13 +2210,13 @@ export default function NoveltySearchWorkflow({
                   id="jurisdiction"
                   value={formData.jurisdiction}
                   onChange={(e) => {
-                    const jurisdiction = e.target.value;
-                    setFormData(prev => ({
-                      ...prev,
-                      jurisdiction,
-                      searchSourceMode: jurisdiction === 'IN' ? 'INDIAN_ONLY' : jurisdiction === 'AU' ? 'AUSTRALIA_ONLY' : jurisdiction === 'EP' ? 'EPO_ONLY' : 'PQAI_ONLY'
-                    }));
-                  }}
+                      const jurisdiction = e.target.value;
+                      setFormData(prev => ({
+                        ...prev,
+                        jurisdiction,
+                        searchSourceMode: sourceModeForJurisdiction(jurisdiction)
+                      }));
+                    }}
                   className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
                 >
                   <option value="IN">India (IN)</option>
@@ -2207,21 +2229,21 @@ export default function NoveltySearchWorkflow({
               </div>
 
             <div className="space-y-2">
-              <Label htmlFor="searchSource" className="text-sm font-medium text-slate-700">Search Source</Label>
+              <Label htmlFor="searchSource" className="text-sm font-medium text-slate-700">Patent Nationality Coverage</Label>
               <select
                 id="searchSource"
                 value={formData.searchSourceMode}
                 onChange={(e) => setFormData(prev => ({ ...prev, searchSourceMode: e.target.value as NoveltySearchSourceMode }))}
                 className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
               >
-                <option value="INDIAN_ONLY">Indian database only</option>
-                <option value="AUSTRALIA_ONLY">Australian database only</option>
-                <option value="EPO_ONLY">European patents only</option>
-                <option value="PQAI_ONLY">International patents only</option>
-                <option value="PQAI_PLUS_INDIAN">International patents + Indian database</option>
-                <option value="PQAI_PLUS_AUSTRALIA">International patents + Australian database</option>
-                <option value="PQAI_PLUS_EPO">International patents + European patents</option>
-                <option value="PQAI_PLUS_INDIAN_EPO">International patents + Indian + European patents</option>
+                <option value="PQAI_PLUS_INDIAN">India + international patents</option>
+                <option value="PQAI_PLUS_AUSTRALIA">Australia + international patents</option>
+                <option value="PQAI_PLUS_EPO">Europe + international patents</option>
+                <option value="PQAI_ONLY">International patents</option>
+                <option value="PQAI_PLUS_INDIAN_EPO">India + Europe + international patents</option>
+                <option value="INDIAN_ONLY">India patents</option>
+                <option value="AUSTRALIA_ONLY">Australia patents</option>
+                <option value="EPO_ONLY">Europe patents</option>
               </select>
             </div>
             <label className="flex h-11 items-center justify-between self-end rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700">
@@ -2530,7 +2552,7 @@ export default function NoveltySearchWorkflow({
                   <div className="rounded-lg border border-slate-200 bg-white p-4">
                     <div className="mb-4">
                       <h4 className="text-sm font-semibold text-slate-900">European patent keyword search</h4>
-                      <p className="mt-1 text-xs text-slate-600">Used for EPO OPS title and abstract fields.</p>
+                      <p className="mt-1 text-xs text-slate-600">Used for European patent title and abstract fields.</p>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div>
@@ -2707,7 +2729,7 @@ export default function NoveltySearchWorkflow({
     );
   };
 
-  // Stage 2 Content - raw provider search results
+  // Stage 2 Content - raw patent search results
   const renderStage2Content = () => {
     if (!hasStage1Results) {
       return (
@@ -2716,7 +2738,7 @@ export default function NoveltySearchWorkflow({
             <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Patent Search Not Started</h3>
             <p className="text-sm text-slate-500 max-w-md mx-auto">
-              Search selected patent providers first. These returned records are shown separately before any LLM relevance analysis.
+              Search selected patent nationalities first. These returned records are shown separately before any LLM relevance analysis.
             </p>
             {canRunCurrent && selectedStageTab === '2' && (
               <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
@@ -2762,7 +2784,7 @@ export default function NoveltySearchWorkflow({
             <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">Patent Search Not Started</h3>
             <p className="text-sm text-slate-500 max-w-md mx-auto">
-              Execute the patent search to find relevant prior art from the selected search source.
+              Execute the patent search to find relevant prior art from the selected patent nationality coverage.
             </p>
             {canRunCurrent && selectedStageTab === '2' && (
               <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
@@ -2782,7 +2804,7 @@ export default function NoveltySearchWorkflow({
             <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-slate-700 mb-2">No Patent Candidates Returned</h3>
             <p className="text-sm text-slate-500 max-w-md mx-auto">
-              The selected patent sources did not return candidate records for this query.
+              The selected patent nationalities did not return candidate records for this query.
             </p>
             <div className="mt-3 text-xs text-slate-500">
               {retrievedCount} retrieved · {reviewedCount} reviewed
@@ -2834,7 +2856,7 @@ export default function NoveltySearchWorkflow({
               </div>
               <div>
                 <CardTitle className="text-lg">Patent Search Results</CardTitle>
-                <CardDescription>Raw provider-ranked records before LLM relevance filtering</CardDescription>
+                <CardDescription>Raw retrieved patent records before LLM relevance filtering</CardDescription>
               </div>
             </div>
           </CardHeader>
@@ -2929,7 +2951,7 @@ export default function NoveltySearchWorkflow({
                   <div>
                     <div className="text-sm font-semibold text-slate-900">Filter returned patents</div>
                     <div className="text-xs text-slate-500">
-                      {filterOptions.providers.length} provider{filterOptions.providers.length !== 1 ? 's' : ''} and {filterOptions.matchedItems.length} matched item{filterOptions.matchedItems.length !== 1 ? 's' : ''}
+                      {filterOptions.providers.length} patent nationalit{filterOptions.providers.length !== 1 ? 'ies' : 'y'} and {filterOptions.matchedItems.length} matched item{filterOptions.matchedItems.length !== 1 ? 's' : ''}
                     </div>
                   </div>
                 </div>
@@ -2971,14 +2993,14 @@ export default function NoveltySearchWorkflow({
                   />
                 </div>
                 <div>
-                  <Label htmlFor="stage1-provider" className="text-xs font-medium text-slate-600">Provider</Label>
+                  <Label htmlFor="stage1-provider" className="text-xs font-medium text-slate-600">Patent nationality</Label>
                   <select
                     id="stage1-provider"
                     value={stage1Filters.provider}
                     onChange={(event) => updateStage1Filter('provider', event.target.value)}
                     className={`${selectClass} mt-1`}
                   >
-                    <option value="">All providers</option>
+                    <option value="">All patent nationalities</option>
                     {filterOptions.providers.map(provider => (
                       <option key={provider} value={provider}>{displayPatentProviderLabel(provider)}</option>
                     ))}
@@ -3113,7 +3135,7 @@ export default function NoveltySearchWorkflow({
                           {patentNumber} {pubDate && `- ${String(pubDate).slice(0, 10)}`}
                         </div>
                         <div className="text-xs text-slate-500 mt-1">
-                          Provider: {sourceProviders.map(displayPatentProviderLabel).join(', ') || 'patent-search'}
+                          Provider: {displayPatentProviderLabels(sourceProviders).join(', ') || 'patent-search'}
                         </div>
                         {matchedItems.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -3247,7 +3269,7 @@ export default function NoveltySearchWorkflow({
                 <div>
                   <CardTitle className="text-lg">AI Relevance Analysis</CardTitle>
                   <CardDescription>
-                    Candidate gate over top provider-ranked results
+                    Candidate gate over top retrieved results
                     {typeof aiRel.consideredCount === 'number' && typeof aiRel.totalCandidates === 'number'
                       ? ` (${aiRel.consideredCount} of ${aiRel.totalCandidates} reviewed)`
                       : ''}

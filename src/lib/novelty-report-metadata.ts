@@ -6,6 +6,7 @@ function cleanText(value: unknown) {
 
 function canonicalPatentNumber(value: unknown) {
   const compact = cleanText(value).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (compact.startsWith('PAPER')) return compact;
   const kindSuffixMatch = compact.match(/^(.+\d)[A-Z]\d?$/);
   return kindSuffixMatch?.[1] || compact;
 }
@@ -150,9 +151,10 @@ function patentNumbersFromSearchRun(searchRun: any): string[] {
 
 export async function hydrateNoveltyReportPatentMetadata<T extends { stage1Results?: any; stage35Results?: any; stage4Results?: any }>(searchRun: T): Promise<T> {
   const numbers = patentNumbersFromSearchRun(searchRun);
-  if (!numbers.length) return searchRun;
+  const patentNumbers = numbers.filter(number => !canonicalPatentNumber(number).startsWith('PAPER'));
+  if (!patentNumbers.length) return searchRun;
 
-  const canonicalNumbers = Array.from(new Set(numbers.map(canonicalPatentNumber).filter(Boolean))).slice(0, 80);
+  const canonicalNumbers = Array.from(new Set(patentNumbers.map(canonicalPatentNumber).filter(Boolean))).slice(0, 80);
   const numericTokens = canonicalNumbers.map(value => value.replace(/^IN/i, '')).filter(Boolean);
   const localPatents = await prisma.localPatent.findMany({
     where: {

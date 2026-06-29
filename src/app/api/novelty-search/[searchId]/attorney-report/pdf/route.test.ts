@@ -94,7 +94,7 @@ function reportModel(overrides: Record<string, unknown> = {}) {
     inventionFeatures: rows.map(row => row.userFeature),
     evidenceBasis: 'Preliminary patentability intelligence with mapped support',
     methodology: {
-      corpus: 'International patent corpus',
+      corpus: 'International patents',
       retrievalMode: 'Semantic and textual retrieval',
       searchedEvidence: 'Full patent documents should be reviewed before final conclusions.',
       preliminaryStatus: 'Review required',

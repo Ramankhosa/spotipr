@@ -115,6 +115,33 @@ function titleOrAbstractTerm(value: string) {
   return title || abstract
 }
 
+function cqlOrGroup(values: string[]) {
+  const clauses = uniqueStrings(values.map(value => titleOrAbstractTerm(value)).filter(Boolean)).slice(0, 5)
+  if (clauses.length === 0) return ''
+  if (clauses.length === 1) return clauses[0]
+  return `(${clauses.join(' or ')})`
+}
+
+function buildRefinedConceptGroupCql(request: PatentProviderSearchRequest) {
+  if (request.queryPlan.searchPrecision !== 'refined') return ''
+  const groups = request.queryPlan.patentSearchConceptGroups || []
+  const requiredGroups = groups
+    .filter(group => !group?.excluded && group?.required !== false)
+    .map(group => cqlOrGroup(epoKeywordList(group.terms, 5)))
+    .filter(Boolean)
+    .slice(0, 4)
+  if (requiredGroups.length === 0) return ''
+  const excludedGroups = groups
+    .filter(group => group?.excluded)
+    .map(group => cqlOrGroup(epoKeywordList(group.terms, 4)))
+    .filter(Boolean)
+    .slice(0, 3)
+  const requiredCql = requiredGroups.join(' and ')
+  return excludedGroups.length
+    ? `${requiredCql} not ${excludedGroups.join(' not ')}`
+    : requiredCql
+}
+
 function firstText(values: unknown[], maxWords = 18) {
   return normalizeWhitespace(values.join(' '))
     .replace(/[^\w\s-]/g, ' ')
@@ -150,6 +177,9 @@ function buildIntelligentCql(request: PatentProviderSearchRequest) {
   const filters = request.queryPlan.fieldFilters || {}
   const patentNumber = explicitPatentNumber(filters)
   if (patentNumber) return filters.applicationNumber ? `ap=${patentNumber}` : `pn=${patentNumber}`
+
+  const refinedCql = buildRefinedConceptGroupCql(request)
+  if (refinedCql) return refinedCql
 
   const titleKeywords = epoKeywordList(request.queryPlan.epoTitleKeywords)
   const abstractKeywords = epoKeywordList(request.queryPlan.epoAbstractKeywords)

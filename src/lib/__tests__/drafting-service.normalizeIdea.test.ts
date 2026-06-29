@@ -52,6 +52,64 @@ describe('DraftingService.normalizeIdea', () => {
     expect(result.error).toContain('Failed to parse LLM response')
   })
 
+  test('preserves patent search keywords and concept groups from Stage 0', async () => {
+    executeLLMOperation.mockResolvedValueOnce({
+      success: true,
+      response: {
+        output: JSON.stringify({
+          schemaVersion: 2,
+          searchQuery: 'smart irrigation controller using soil moisture valve control',
+          googlePatentKeywords: [' smart irrigation controller ', 'soil moisture valve control'],
+          epoTitleKeywords: ['irrigation controller'],
+          epoAbstractKeywords: ['soil moisture valve control'],
+          epoCombinedKeywords: ['water scheduling'],
+          patentSearchConceptGroups: [
+            { id: 'core', label: 'Core', kind: 'core', terms: ['irrigation controller', 'water scheduling device'], required: true },
+            { id: 'mechanism', label: 'Mechanism', kind: 'mechanism', terms: ['soil moisture valve control'], required: true },
+          ],
+          problem: 'Water use',
+          objectives: 'Control irrigation',
+          components: [{ name: 'Controller', description: 'controls irrigation' }],
+          inventionType: ['ELECTRICAL'],
+          patentTypePrimary: 'SYSTEM',
+          logic: 'The controller actuates valves.',
+          inputs: 'Soil moisture',
+          outputs: 'Valve control',
+          variants: 'Not stated by source',
+          bestMethod: 'Not stated by source',
+          fieldOfRelevance: 'Agriculture',
+          subfield: 'Irrigation',
+          drawingsFocus: 'Controller and valve flow',
+          claimStrategy: 'System claim',
+          coreInventiveConcept: 'Irrigation controller',
+          claimableFeatures: [],
+          fallbackLimitations: [],
+          doNotClaim: [],
+          riskFlags: 'Not stated by source',
+          abstract: 'Smart Irrigation Controller. A controller actuates valves.',
+          cpcCodes: [],
+          ipcCodes: [],
+          sourceFactLedger: {},
+          supportDataSources: [],
+          normalizationReviewWarnings: [],
+        }),
+        outputTokens: 100,
+        metadata: {},
+      },
+    })
+
+    const result = await DraftingService.normalizeIdea('A smart irrigation controller uses soil moisture valve control.', 'Smart Irrigation Controller')
+
+    expect(result.success).toBe(true)
+    expect(result.extractedFields?.googlePatentKeywords).toEqual(['smart irrigation controller', 'soil moisture valve control'])
+    expect(result.extractedFields?.epoTitleKeywords).toEqual(['irrigation controller'])
+    expect(result.extractedFields?.patentSearchConceptGroups?.[0]).toMatchObject({
+      label: 'Core',
+      terms: ['irrigation controller', 'water scheduling device'],
+      required: true,
+    })
+  })
+
   test('legacy executeDrafting persists normalized patent type on the session', async () => {
     prisma.user.findUnique.mockResolvedValueOnce({ id: 'user_1', email: 'user@example.com', tenantId: 'tenant_1' })
     prisma.patent.findFirst.mockResolvedValueOnce({ id: 'patent_1' })

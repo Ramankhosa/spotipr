@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { GooglePatentsProvider } from './google-patents-provider'
+import { buildGooglePatentsQueryForTests, GooglePatentsProvider } from './google-patents-provider'
 import type { PatentProviderSearchRequest } from '../types'
 
 function request(overrides: Partial<PatentProviderSearchRequest> = {}): PatentProviderSearchRequest {
@@ -122,5 +122,45 @@ describe('GooglePatentsProvider', () => {
     expect(parsedUrl.searchParams.get('q')).toContain('US10905426B2')
     expect(parsedUrl.searchParams.get('q')).toContain('thermal controller')
     expect(parsedUrl.searchParams.get('q')).toContain('Example Corp')
+  })
+
+  test('builds broad query from Google keyword phrases', () => {
+    const query = buildGooglePatentsQueryForTests(request({
+      queryPlan: {
+        ...request().queryPlan,
+        googlePatentKeywords: ['thermal battery controller', 'predictive cooling'],
+        patentSearchConceptGroups: [{
+          id: 'core',
+          label: 'Core',
+          kind: 'core',
+          terms: ['battery thermal control'],
+          required: true,
+        }],
+        searchPrecision: 'broad',
+      },
+    }))
+
+    expect(query).toContain('"thermal battery controller"')
+    expect(query).toContain('OR')
+    expect(query).toContain('"battery thermal control"')
+  })
+
+  test('builds refined query with AND between required concept groups', () => {
+    const query = buildGooglePatentsQueryForTests(request({
+      queryPlan: {
+        ...request().queryPlan,
+        patentSearchConceptGroups: [
+          { id: 'core', label: 'Core', kind: 'core', terms: ['thermal battery controller', 'battery cooling controller'], required: true },
+          { id: 'mechanism', label: 'Mechanism', kind: 'mechanism', terms: ['predictive thermal load'], required: true },
+          { id: 'exclude', label: 'Exclude', kind: 'excluded', terms: ['fuel cell'], excluded: true },
+        ],
+        searchPrecision: 'refined',
+      },
+    }))
+
+    expect(query).toContain('("thermal battery controller" OR "battery cooling controller")')
+    expect(query).toContain(' AND ')
+    expect(query).toContain('"predictive thermal load"')
+    expect(query).toContain('-"fuel cell"')
   })
 })

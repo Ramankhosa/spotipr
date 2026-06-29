@@ -21,8 +21,20 @@ type Stage0Review = {
   epoTitleKeywords?: string[]
   epoAbstractKeywords?: string[]
   epoCombinedKeywords?: string[]
+  paperSearchQuery?: string
+  paperKeywords?: string[]
   [key: string]: unknown
 }
+
+const literatureSources = [
+  { id: 'google_scholar', label: 'Google Scholar' },
+  { id: 'semantic_scholar', label: 'Semantic Scholar' },
+  { id: 'crossref', label: 'Crossref' },
+  { id: 'openalex', label: 'OpenAlex' },
+  { id: 'pubmed', label: 'PubMed' },
+  { id: 'arxiv', label: 'arXiv' },
+  { id: 'core', label: 'CORE' },
+]
 type ManualFields = {
   anyText: string
   title: string
@@ -110,6 +122,21 @@ function listText(value: unknown, limit = 4) {
   return values.filter(Boolean).slice(0, limit).join(', ')
 }
 
+function displayPatentNationality(value: unknown) {
+  const raw = String(value || '').trim()
+  const normalized = raw.toLowerCase()
+  if (normalized === 'indian-corpus' || /indian patent/i.test(raw)) return 'Indian patents'
+  if (normalized === 'pqai' || normalized === 'pqai-corpus' || /international/i.test(raw) || /pqai/i.test(raw)) return 'International patents'
+  if (normalized === 'epo-ops' || normalized === 'epo-ops-corpus' || /european/i.test(raw) || /epo/i.test(raw)) return 'European patents'
+  if (normalized === 'ip-australia' || /australia/i.test(raw)) return 'Australian patents'
+  if (normalized === 'google-patents' || /google patents/i.test(raw)) return 'Google Patents'
+  return raw
+}
+
+function displayPatentNationalities(values: unknown[]) {
+  return Array.from(new Set(values.map(displayPatentNationality).filter(Boolean))).join(', ')
+}
+
 export default function NoveltySearchSubmission(props: {
   initialProjectId?: string
   initialTitle?: string
@@ -141,6 +168,17 @@ export default function NoveltySearchSubmission(props: {
   const [editedFeatures, setEditedFeatures] = useState<string[]>([])
   const [editedEpoTitleKeywords, setEditedEpoTitleKeywords] = useState<string[]>([])
   const [editedEpoAbstractKeywords, setEditedEpoAbstractKeywords] = useState<string[]>([])
+  const [includePapers, setIncludePapers] = useState(false)
+  const [paperSources, setPaperSources] = useState<string[]>(['google_scholar', 'semantic_scholar', 'crossref'])
+  const [paperYearFrom, setPaperYearFrom] = useState('')
+  const [paperYearTo, setPaperYearTo] = useState('')
+  const [paperLimit, setPaperLimit] = useState('20')
+  const [paperOpenAccessOnly, setPaperOpenAccessOnly] = useState(false)
+  const [paperHasAbstract, setPaperHasAbstract] = useState(true)
+  const [paperMinCitations, setPaperMinCitations] = useState('0')
+  const [editedPaperSearchQuery, setEditedPaperSearchQuery] = useState('')
+  const [editedPaperKeywords, setEditedPaperKeywords] = useState<string[]>([])
+  const [newPaperKeyword, setNewPaperKeyword] = useState('')
   const [newEpoTitleKeyword, setNewEpoTitleKeyword] = useState('')
   const [newEpoAbstractKeyword, setNewEpoAbstractKeyword] = useState('')
   const [newFeature, setNewFeature] = useState('')
@@ -177,6 +215,7 @@ export default function NoveltySearchSubmission(props: {
   const sourceMode = sourceModeFromProviders(selectedProviderIds)
   const usesEpoSearch = selectedProviderIds.some(id => id.includes('epo'))
   const selectedProvidersEnabled = selectedProviderIds.length > 0
+  const hasSelectedSources = selectedProvidersEnabled || (includePapers && paperSources.length > 0)
   const selectableProviders = useMemo(() => {
     const storedEpo = providers.find(provider => provider.id === 'epo-ops-corpus')
     return providers
@@ -185,17 +224,27 @@ export default function NoveltySearchSubmission(props: {
         ? {
             ...provider,
             enabled: provider.enabled || Boolean(storedEpo?.enabled),
-            label: provider.enabled
-              ? 'European patents (EPO OPS + stored corpus)'
-              : 'European patents (stored corpus)',
+            label: 'European patents',
           }
-        : provider)
+        : { ...provider, label: displayPatentNationality(provider.id || provider.label) })
   }, [providers])
   const searchSourceConfig = {
     mode: sourceMode,
     providerIds: selectedProviderIds,
     searchMode: 'intelligent' as const,
     llmExpansion: true,
+    includePatents: selectedProviderIds.length > 0,
+    includePapers,
+    paperSources,
+    paperSearchQuery: editedPaperSearchQuery.trim() || undefined,
+    paperFilters: {
+      yearFrom: paperYearFrom ? Number(paperYearFrom) : undefined,
+      yearTo: paperYearTo ? Number(paperYearTo) : undefined,
+      limit: Math.max(1, Math.min(100, Number(paperLimit) || 20)),
+      openAccessOnly: paperOpenAccessOnly,
+      hasAbstract: paperHasAbstract,
+      minCitations: Math.max(0, Number(paperMinCitations) || 0),
+    },
   }
 
   const manualFilters = useMemo(() => ({
@@ -257,8 +306,8 @@ export default function NoveltySearchSubmission(props: {
       setError('Invention title and description are required.')
       return
     }
-    if (!selectedProvidersEnabled) {
-      setError('Select at least one enabled patent source.')
+    if (!hasSelectedSources) {
+      setError('Select at least one patent or scholarly-paper source.')
       return
     }
     setIsPreparing(true)
@@ -288,6 +337,8 @@ export default function NoveltySearchSubmission(props: {
       setEditedFeatures(features)
       setEditedEpoTitleKeywords(usesEpoSearch ? stringList(proposed.epoTitleKeywords) : [])
       setEditedEpoAbstractKeywords(usesEpoSearch ? stringList(proposed.epoAbstractKeywords) : [])
+      setEditedPaperSearchQuery(includePapers ? String(proposed.paperSearchQuery || proposed.searchQuery || '') : '')
+      setEditedPaperKeywords(includePapers ? stringList(proposed.paperKeywords) : [])
       setNewFeature('')
       setNewEpoTitleKeyword('')
       setNewEpoAbstractKeyword('')
@@ -305,8 +356,8 @@ export default function NoveltySearchSubmission(props: {
       setError('Review and approve a search query and at least one invention feature.')
       return
     }
-    if (!selectedProvidersEnabled) {
-      setError('Select at least one enabled patent source.')
+    if (!hasSelectedSources) {
+      setError('Select at least one patent or scholarly-paper source.')
       return
     }
     setIsSubmitting(true)
@@ -320,6 +371,10 @@ export default function NoveltySearchSubmission(props: {
           epoTitleKeywords: editedEpoTitleKeywords.map(keyword => keyword.trim()).filter(Boolean),
           epoAbstractKeywords: editedEpoAbstractKeywords.map(keyword => keyword.trim()).filter(Boolean),
           epoCombinedKeywords: stringList(review.epoCombinedKeywords),
+        } : {}),
+        ...(includePapers ? {
+          paperSearchQuery: editedPaperSearchQuery.trim() || approvedQuery,
+          paperKeywords: editedPaperKeywords.map(keyword => keyword.trim()).filter(Boolean),
         } : {}),
       }
       if (!usesEpoSearch) {
@@ -406,7 +461,7 @@ export default function NoveltySearchSubmission(props: {
       return
     }
     if (!selectedProvidersEnabled) {
-      setError('Select at least one enabled patent source.')
+      setError('Select at least one patent nationality.')
       return
     }
     setIsManualSearching(true)
@@ -438,11 +493,11 @@ export default function NoveltySearchSubmission(props: {
     }
   }
 
-  const renderSourceSelection = () => (
+  const renderSourceSelection = (showLiterature = true) => (
     <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
       <div>
-        <div className="text-sm font-semibold text-slate-900">Patent Sources</div>
-        <div className="mt-1 text-xs text-slate-500">Choose one or more sources for retrieval. Google Patents is basic retrieval only in this release.</div>
+        <div className="text-sm font-semibold text-slate-900">Patent Nationality</div>
+        <div className="mt-1 text-xs text-slate-500">Choose the patent jurisdictions to include. Each selection searches every configured retrieval path for that nationality.</div>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {selectableProviders.map(provider => {
@@ -464,8 +519,60 @@ export default function NoveltySearchSubmission(props: {
           )
         })}
       </div>
-      {!providers.length && <div className="text-xs text-slate-500">Loading available patent sources...</div>}
-      {providers.length > 0 && !selectedProvidersEnabled && <div className="text-xs font-medium text-red-600">Select at least one enabled source.</div>}
+      {!providers.length && <div className="text-xs text-slate-500">Loading available patent nationalities...</div>}
+      {providers.length > 0 && !selectedProvidersEnabled && !includePapers && <div className="text-xs font-medium text-red-600">Select at least one patent nationality or enable scholarly papers.</div>}
+      {showLiterature && (
+        <div className="space-y-4 border-t border-slate-200 pt-4">
+          <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800">
+            <input
+              type="checkbox"
+              checked={includePapers}
+              disabled={isPreparing || isSubmitting}
+              onChange={event => { setIncludePapers(event.target.checked); setReview(null) }}
+              className="h-4 w-4"
+            />
+            <span><span className="font-medium">Scholarly Papers</span><span className="ml-2 text-xs text-slate-500">search academic publications as prior art</span></span>
+          </label>
+          {includePapers && (
+            <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">Academic databases</div>
+                <div className="mt-1 text-xs text-slate-500">Select one or more publication indexes.</div>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {literatureSources.map(source => (
+                  <label key={source.id} className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={paperSources.includes(source.id)}
+                      onChange={() => setPaperSources(current => current.includes(source.id) ? current.filter(id => id !== source.id) : [...current, source.id])}
+                      className="h-4 w-4"
+                    />
+                    {source.label}
+                  </label>
+                ))}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="text-xs font-medium text-slate-600">Published from
+                  <input type="number" min="1800" max="2100" value={paperYearFrom} onChange={event => setPaperYearFrom(event.target.value)} placeholder="e.g. 2000" className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900" />
+                </label>
+                <label className="text-xs font-medium text-slate-600">Published to
+                  <input type="number" min="1800" max="2100" value={paperYearTo} onChange={event => setPaperYearTo(event.target.value)} placeholder={String(new Date().getFullYear())} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900" />
+                </label>
+                <label className="text-xs font-medium text-slate-600">Maximum papers
+                  <input type="number" min="1" max="100" value={paperLimit} onChange={event => setPaperLimit(event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900" />
+                </label>
+                <label className="text-xs font-medium text-slate-600">Minimum citations
+                  <input type="number" min="0" value={paperMinCitations} onChange={event => setPaperMinCitations(event.target.value)} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900" />
+                </label>
+                <label className="flex h-10 items-center gap-2 self-end text-sm text-slate-700"><input type="checkbox" checked={paperHasAbstract} onChange={event => setPaperHasAbstract(event.target.checked)} className="h-4 w-4" /> Require abstract</label>
+                <label className="flex h-10 items-center gap-2 self-end text-sm text-slate-700"><input type="checkbox" checked={paperOpenAccessOnly} onChange={event => setPaperOpenAccessOnly(event.target.checked)} className="h-4 w-4" /> Open access only</label>
+              </div>
+              {!paperSources.length && <div className="text-xs font-medium text-red-600">Select at least one academic database.</div>}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   )
 
@@ -494,11 +601,11 @@ export default function NoveltySearchSubmission(props: {
 
   const renderManualSearch = () => (
     <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      {renderSourceSelection()}
+      {renderSourceSelection(false)}
       <section className="space-y-4">
         <div>
           <h2 className="text-base font-semibold text-slate-900">Manual Patent Search</h2>
-          <p className="mt-1 text-sm text-slate-500">Search selected patent sources using fielded criteria. This does not fetch full Google patent details yet.</p>
+          <p className="mt-1 text-sm text-slate-500">Search selected patent nationalities using fielded criteria.</p>
         </div>
         <div className="grid gap-3 md:grid-cols-3">
           {renderManualInput('anyText', 'Any text', 'Keywords across patent fields', true)}
@@ -549,7 +656,7 @@ export default function NoveltySearchSubmission(props: {
             <div className="grid gap-3 md:grid-cols-3">
               {manualProviderStats.map((stat: any) => (
                 <div key={stat.providerId} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <div className="font-medium text-slate-900">{stat.label}</div>
+                  <div className="font-medium text-slate-900">{displayPatentNationality(stat.providerId || stat.label)}</div>
                   <div className="mt-1 text-xs text-slate-500">{stat.enabled ? `${stat.resultCount} results` : 'Not enabled'}</div>
                   {stat.error && <div className="mt-1 text-xs text-amber-700">{stat.error}</div>}
                 </div>
@@ -572,7 +679,7 @@ export default function NoveltySearchSubmission(props: {
                   <article key={`${result.publicationNumber}-${index}`} className="p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="text-xs font-medium uppercase text-slate-500">
-                        {result.publicationNumber} / {(result.sourceProviders || [result.sourceProvider]).filter(Boolean).join(', ')}
+                        {result.publicationNumber} / {displayPatentNationalities(result.sourceProviders || [result.sourceProvider])}
                       </div>
                       {typeof result.relevanceScore === 'number' && (
                         <div className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
@@ -704,7 +811,7 @@ export default function NoveltySearchSubmission(props: {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><CheckCircle2 className="h-5 w-5 text-indigo-600" /> Review Search Plan</h2>
-                <p className="mt-1 text-sm text-slate-600">Edit the proposed query and features. The patent search will use exactly what you approve below.</p>
+                <p className="mt-1 text-sm text-slate-600">Edit the proposed queries and features. Retrieval will use exactly what you approve below.</p>
               </div>
               <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isSubmitting} className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">
                 {isPreparing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate
@@ -737,7 +844,7 @@ export default function NoveltySearchSubmission(props: {
               <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900">European patent keyword search</h3>
-                  <p className="mt-1 text-xs text-slate-600">These phrases are used only for EPO OPS title and abstract searches.</p>
+                  <p className="mt-1 text-xs text-slate-600">These phrases are used for European patent title and abstract searches.</p>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
@@ -774,8 +881,34 @@ export default function NoveltySearchSubmission(props: {
               </div>
             )}
 
+            {includePapers && (
+              <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Scholarly paper search</h3>
+                  <p className="mt-1 text-xs text-slate-600">Edit the generated academic query and technical phrases before retrieval.</p>
+                </div>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  <span>Paper search query</span>
+                  <textarea value={editedPaperSearchQuery} onChange={event => setEditedPaperSearchQuery(event.target.value)} rows={3} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal leading-6" />
+                </label>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-slate-700">Paper keywords</div>
+                  {editedPaperKeywords.map((keyword, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <input value={keyword} onChange={event => setEditedPaperKeywords(current => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm" />
+                      <button type="button" onClick={() => setEditedPaperKeywords(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove paper keyword ${index + 1}`} className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input value={newPaperKeyword} onChange={event => setNewPaperKeyword(event.target.value)} className="h-10 flex-1 rounded-lg border border-slate-300 px-3 text-sm" placeholder="Add paper keyword phrase" />
+                    <button type="button" onClick={() => { const value = newPaperKeyword.trim(); if (value) { setEditedPaperKeywords(current => [...current, value]); setNewPaperKeyword('') } }} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700"><Plus className="h-4 w-4" /> Add</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
-              Approval is required because these terms control patent retrieval and feature-by-feature comparison. Internal processing begins only after you approve and queue this plan.
+              Approval is required because these terms control prior-art retrieval and feature-by-feature comparison. Internal processing begins only after you approve and queue this plan.
             </div>
             {Array.isArray(review.warnings) && review.warnings.length > 0 && (
               <div className="rounded-lg border border-amber-200 bg-white px-4 py-3 text-xs leading-5 text-amber-900">
@@ -791,12 +924,12 @@ export default function NoveltySearchSubmission(props: {
         )}
 
         {!review ? (
-          <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting || !selectedProvidersEnabled} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+          <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting || !hasSelectedSources} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
             {isPreparing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
             {isPreparing ? 'Generating search plan…' : 'Generate Search Query & Features'}
           </button>
         ) : (
-          <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !selectedProvidersEnabled || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+          <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !hasSelectedSources || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
             {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
             {isSubmitting ? 'Queueing approved search…' : 'Approve & Queue Novelty Search'}
           </button>

@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { generateJWT } from '@/lib/auth'
 import { checkServiceAccess } from '@/lib/org-access-service'
 import { isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
+import { renderPlantUml } from '@/lib/plantuml-renderer'
 
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
 const DEFAULT_JURISDICTION = 'IN'
@@ -193,6 +194,17 @@ function mimeTypeForFilename(filename: string) {
   return 'application/octet-stream'
 }
 
+function extensionForContentType(contentType: string) {
+  if (contentType.includes('svg')) return '.svg'
+  if (contentType.includes('png')) return '.png'
+  return ''
+}
+
+function isDocxEmbeddableRaster(filenameOrPath?: string | null) {
+  const ext = path.extname(String(filenameOrPath || '')).toLowerCase()
+  return ext === '.png' || ext === '.jpg' || ext === '.jpeg'
+}
+
 function localFileCandidates(params: { rawPath?: string | null; filename?: string | null; patentId?: string | null }) {
   const candidates: string[] = []
   const rawPath = String(params.rawPath || '').trim()
@@ -222,6 +234,80 @@ async function readFirstExistingFile(candidates: string[]) {
     }
   }
   return null
+}
+
+async function renderDiagramSourceToFile(params: {
+  source: any
+  job: any
+  format: 'png' | 'svg'
+  persistOnSource?: boolean
+}) {
+  const code = String(params.source?.plantumlCode || '').trim()
+  if (!code) return null
+
+  const rendered = await renderPlantUml(code, params.format)
+  const language = String(params.source.language || 'en').trim().toLowerCase() || 'en'
+  const suffix = language !== 'en' ? `_${language}` : ''
+  const filename = `figure_${params.source.figureNo}${suffix}_${Date.now()}.${params.format}`
+  const baseDir = path.join(process.cwd(), 'uploads', 'patents', params.job.patentId, 'figures')
+  await fs.mkdir(baseDir, { recursive: true })
+  const imagePath = path.join(baseDir, filename)
+  await fs.writeFile(imagePath, rendered.buffer)
+
+  if (params.persistOnSource) {
+    await prisma.diagramSource.update({
+      where: {
+        sessionId_figureNo_language: {
+          sessionId: params.source.sessionId,
+          figureNo: params.source.figureNo,
+          language,
+        }
+      },
+      data: {
+        imageFilename: filename,
+        imagePath,
+        imageChecksum: rendered.checksum,
+        imageUploadedAt: new Date(),
+      }
+    })
+  }
+
+  return {
+    filename,
+    imagePath,
+    buffer: rendered.buffer,
+    contentType: rendered.contentType,
+  }
+}
+
+async function ensureRenderedDiagramImages(params: { job: any; session: any }) {
+  let renderedCount = 0
+  const errors: string[] = []
+
+  for (const info of figureArtifactInfos(params.session)) {
+    const existing = await readFirstExistingFile(localFileCandidates({
+      rawPath: info.source.imagePath,
+      filename: info.source.imageFilename,
+      patentId: params.job.patentId,
+    }))
+    const existingName = info.source.imageFilename || info.source.imagePath
+    if (existing && isDocxEmbeddableRaster(existingName)) continue
+
+    try {
+      await renderDiagramSourceToFile({
+        source: info.source,
+        job: params.job,
+        format: 'png',
+        persistOnSource: true,
+      })
+      renderedCount += 1
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'render failed'
+      errors.push(`FIG. ${info.finalNo}: ${message}`)
+    }
+  }
+
+  return { renderedCount, errors }
 }
 
 function figureArtifactInfos(session: any) {
@@ -273,26 +359,32 @@ async function storeBatchFigureArtifacts(params: {
 
   for (const info of figureArtifactInfos(params.session)) {
     const figurePrefix = `FIG-${String(info.finalNo).padStart(2, '0')}${info.language !== 'en' ? `_${info.language}` : ''}`
-    artifacts.push(await storeExportArtifact({
-      jobId: params.job.id,
-      batchId: params.payload.batchId,
-      batchItemId: params.payload.batchItemId,
-      batchItemNo: params.payload.batchItemNo,
-      user: params.user,
-      tenantId: params.tenantId,
-      filename: `${figurePrefix}_${info.title}.puml`,
-      buffer: Buffer.from(info.source.plantumlCode, 'utf8'),
-      mimeType: 'text/plain; charset=utf-8',
-    }))
-
-    const imageBuffer = await readFirstExistingFile(localFileCandidates({
+    let imageBuffer = await readFirstExistingFile(localFileCandidates({
       rawPath: info.source.imagePath,
       filename: info.source.imageFilename,
       patentId: params.job.patentId,
     }))
+    let sourceFilename = info.source.imageFilename || path.basename(String(info.source.imagePath || '')) || `${figurePrefix}.png`
+
+    if (!imageBuffer) {
+      try {
+        const renderedPng = await renderDiagramSourceToFile({
+          source: info.source,
+          job: params.job,
+          format: 'png',
+          persistOnSource: true,
+        })
+        if (renderedPng) {
+          imageBuffer = renderedPng.buffer
+          sourceFilename = renderedPng.filename
+        }
+      } catch {
+        // SVG rendering below may still succeed.
+      }
+    }
+
     if (imageBuffer) {
       renderedImageCount += 1
-      const sourceFilename = info.source.imageFilename || path.basename(String(info.source.imagePath || '')) || `${figurePrefix}.png`
       artifacts.push(await storeExportArtifact({
         jobId: params.job.id,
         batchId: params.payload.batchId,
@@ -304,6 +396,29 @@ async function storeBatchFigureArtifacts(params: {
         buffer: imageBuffer,
         mimeType: mimeTypeForFilename(sourceFilename),
       }))
+    }
+
+    try {
+      const renderedSvg = await renderDiagramSourceToFile({
+        source: info.source,
+        job: params.job,
+        format: 'svg',
+      })
+      if (renderedSvg) {
+        artifacts.push(await storeExportArtifact({
+          jobId: params.job.id,
+          batchId: params.payload.batchId,
+          batchItemId: params.payload.batchItemId,
+          batchItemNo: params.payload.batchItemNo,
+          user: params.user,
+          tenantId: params.tenantId,
+          filename: `${figurePrefix}_${info.title}${extensionForContentType(renderedSvg.contentType) || '.svg'}`,
+          buffer: renderedSvg.buffer,
+          mimeType: renderedSvg.contentType,
+        }))
+      }
+    } catch {
+      // PNG is the required export format for DOCX; SVG is a convenience artifact.
     }
   }
 
@@ -1153,7 +1268,7 @@ async function runPipeline(job: any, workerId: string) {
 
   await setStep(job.id, workerId, 'PRIOR_ART_REVIEW')
   const priorArtText = buildPriorArtText(payload)
-  const priorArtHandling = payload.priorArtHandling || (priorArtText ? 'use only' : 'auto')
+  const priorArtHandling = payload.priorArtHandling || 'auto'
   let selectedPatents = normalizePriorArtEntries(payload)
   if (priorArtText) {
     await invokeDraftingAction({
@@ -1203,6 +1318,12 @@ async function runPipeline(job: any, workerId: string) {
         selectedPatents,
         manualText: priorArtText,
         literatureReviewInstructions: normalizeText(payload.literatureReview?.instructions || payload.priorArtReview?.instructions),
+        priorArtForDrafting: {
+          mode: selectedPatents.length ? 'selected' : (priorArtText ? 'manual' : 'none'),
+          selectedPatents,
+          manualText: priorArtText,
+          literatureReviewInstructions: normalizeText(payload.literatureReview?.instructions || payload.priorArtReview?.instructions),
+        },
       },
       skipClaimRefinement: true,
     },
@@ -1268,6 +1389,16 @@ async function runPipeline(job: any, workerId: string) {
     }
   } else if (payload.figureMode !== 'skip' && diagramCount === 0) {
     figuresUsable = false
+  }
+  if (payload.figureMode !== 'skip' && diagramCount > 0) {
+    const renderResult = await ensureRenderedDiagramImages({ job, session })
+    if (renderResult.errors.length > 0) {
+      pipelineWarnings.push(`Figure rendering: ${renderResult.errors.slice(0, 3).join('; ')}`)
+      if (renderResult.renderedCount === 0) figuresUsable = false
+    }
+    if (renderResult.renderedCount > 0) {
+      session = await loadSession(sessionId)
+    }
   }
 
   await setStep(job.id, workerId, 'DRAFTING')

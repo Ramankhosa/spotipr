@@ -62,6 +62,13 @@ Rules (must follow strictly):
   - Do NOT classify software or general patent wording as COMPOSITION because the word "solution" appears.
   - Choose based on where the source-stated inventive contribution appears to reside.
 - Additionally, provide a single meaningful "searchQuery" sentence (<= 25 words) optimized for PQAI AI-based prior-art search. It MUST be a coherent plain-English sentence, not a bag of keywords; plain ASCII, no quotes, no brackets, no CPC/IPC codes, no labels.
+- Additionally, provide keyword phrases for non-AI patent search providers:
+  - "googlePatentKeywords": 1-10 concise keyword phrases for Google Patents. Use source-supported terms only. Do not include Boolean operators, wildcards, parentheses, punctuation-heavy syntax, or full sentences.
+  - "epoTitleKeywords": 1-6 short noun phrases likely to appear in European patent titles.
+  - "epoAbstractKeywords": 1-8 mechanism/function phrases likely to appear in European patent abstracts.
+  - "epoCombinedKeywords": fallback phrases useful in either European patent title or abstract when the field is uncertain.
+  - "patentSearchConceptGroups": 2-5 Boolean-ready groups. Each group has a label, kind, terms array, and required/excluded flags. Use OR-ready synonyms within a group; downstream search may AND required groups together. Include excluded terms only if the source clearly identifies misleading or non-invention subject matter.
+- Keep each keyword phrase concise, normally 2-8 words. Do not duplicate phrases unless essential. Do not add unsupported technical facts.
 - Include "coreInventiveConcept" as the minimum source-supported technical combination that could anchor Claim 1. If the source is thin, state that it is thin instead of inventing missing detail.
 - Include "claimableFeatures" as source-stated features that can support dependent claims. Use concise phrases and keep source-specific details.
 - Include "fallbackLimitations" for source-stated fallback rules, safety rules, thresholds, optional narrowing features, and conditions that may be useful if broad claims need review.
@@ -92,6 +99,18 @@ Respond in this exact JSON shape:
 {
   "schemaVersion": 2,
   "searchQuery": "meaningful plain-English search sentence (<= 25 words, ASCII, no quotes/brackets), suitable for PQAI AI-based patent search",
+  "googlePatentKeywords": ["concise Google Patents keyword phrase"],
+  "epoTitleKeywords": ["short object/system phrase likely to appear in a European patent title"],
+  "epoAbstractKeywords": ["mechanism/function phrase likely to appear in a European patent abstract"],
+  "epoCombinedKeywords": ["fallback phrase suitable for either European patent title or abstract"],
+  "patentSearchConceptGroups": [{
+    "id": "core_object",
+    "label": "Core object",
+    "kind": "core",
+    "terms": ["source-supported synonym phrase"],
+    "required": true,
+    "excluded": false
+  }],
   "problem": "source-stated technical problem, or Not stated by source",
   "objectives": "source-stated objectives, or Not stated by source",
   "components": [{

@@ -37,7 +37,9 @@ export function getPriorArtPublicationNumber(candidate: any): string {
 }
 
 export function canonicalPriorArtNumber(value: unknown): string {
-  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[A-Z]\d*$/, '');
+  const compact = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (compact.startsWith('PAPER')) return compact;
+  return compact.replace(/[A-Z]\d*$/, '');
 }
 
 export function normalizeRerankDecision(value: unknown): RerankDecision {
