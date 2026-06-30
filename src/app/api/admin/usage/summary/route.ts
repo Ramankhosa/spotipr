@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { computeUsageSummary } from '@/lib/admin-usage-service'
+import { parseUsageDateRangeParams } from '@/lib/usage-periods'
 
 export const dynamic = 'force-dynamic'
 
@@ -61,10 +62,12 @@ export async function GET(request: NextRequest) {
       sortDir: getParam('sortDir')
     })
 
-    const endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
-    const startDate = parsed.startDate ? new Date(parsed.startDate) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
+    const parsedDates = parseUsageDateRangeParams(parsed.startDate, parsed.endDate)
+    if ('error' in parsedDates) {
+      return NextResponse.json({ error: parsedDates.error }, { status: 400 })
+    }
 
-    const usage = await computeUsageSummary(startDate, endDate, parsed.tenantId)
+    const usage = await computeUsageSummary(parsedDates.startDate, parsedDates.endDate, parsed.tenantId)
 
     const sortBy = parsed.sortBy || 'inputTokens'
     const sortDir = parsed.sortDir === 'asc' ? 1 : -1

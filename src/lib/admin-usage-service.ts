@@ -6,6 +6,7 @@ import { normalizeUsageDateRange, toInclusiveDateRange } from './usage-periods'
 export interface TenantUsageMetrics {
   tenantId: string | null
   tenantName: string | null
+  tenantAtiId: string | null
   tenantType: string | null
   totalInputTokens: number
   totalOutputTokens: number
@@ -39,6 +40,7 @@ export interface UnifiedAdminUsageUserRow {
   userEmail: string
   tenantId: string | null
   tenantName: string | null
+  tenantAtiId: string | null
   tenantType: string | null
   registrationSource: string | null
   signupAtiTokenId: string | null
@@ -95,7 +97,7 @@ export interface UnifiedAdminUsageResult {
  * @param log - Usage log with token counts and model class
  * @returns Cost in USD
  */
-function calculateCostForLog(
+export function calculateCostForLog(
   log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null; meta?: unknown }
 ): number {
   const inputTokens = log.inputTokens ?? 0
@@ -129,214 +131,35 @@ export async function computeUsageSummary(
   endDate: Date,
   tenantFilterId?: string
 ): Promise<UsageSummaryResult> {
-  const normalizedRange = normalizeUsageDateRange(startDate, endDate)
-  const dateRange = toInclusiveDateRange(normalizedRange)
-
-  const usageWhere: any = {
-    startedAt: dateRange,
-    status: 'COMPLETED'
-  }
-
-  if (tenantFilterId) {
-    usageWhere.tenantId = tenantFilterId
-  }
-
-  // Ensure pricing is loaded from database before calculating costs
-  await ensurePricingLoaded()
-
-  const [usageLogs, draftsByTenant, noveltyRuns, reservations] = await Promise.all([
-    prisma.usageLog.findMany({
-      where: usageWhere,
-      select: {
-        tenantId: true,
-        inputTokens: true,
-        outputTokens: true,
-        apiCalls: true,
-        modelClass: true,
-        meta: true
-      }
-    }),
-    prisma.patentDraftingUsage.groupBy({
-      by: ['tenantId'],
-      where: {
-        isCounted: true,
-        ...(tenantFilterId ? { tenantId: tenantFilterId } : {}),
-        countedAt: dateRange
-      },
-      _count: { _all: true }
-    }),
-    prisma.noveltySearchRun.findMany({
-      where: {
-        createdAt: dateRange,
-        status: 'COMPLETED'
-      },
-      select: {
-        user: {
-          select: { tenantId: true }
-        }
-      }
-    }),
-    prisma.ideaBankReservation.findMany({
-      where: {
-        reservedAt: dateRange
-      },
-      select: {
-        user: {
-          select: { tenantId: true }
-        }
-      }
-    })
-  ])
-
-  const tenantMap = new Map<
-    string,
-    {
-      totalInputTokens: number
-      totalOutputTokens: number
-      totalApiCalls: number
-      totalCost: number
-      patentDrafts: number
-      noveltySearches: number
-      ideasReserved: number
-    }
-  >()
+  const usage = await computeUnifiedAdminUsage(startDate, endDate, tenantFilterId)
 
   const global: GlobalUsageSummary = {
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    totalApiCalls: 0,
-    totalCost: 0,
-    totalPatentsDrafted: 0,
-    totalNoveltySearches: 0,
-    totalIdeasReserved: 0
+    totalInputTokens: usage.summary.totalInputTokens,
+    totalOutputTokens: usage.summary.totalOutputTokens,
+    totalApiCalls: usage.summary.totalApiCalls,
+    totalCost: usage.summary.totalCost,
+    totalPatentsDrafted: usage.summary.totalPatentsDrafted,
+    totalNoveltySearches: usage.summary.totalNoveltySearches,
+    totalIdeasReserved: usage.summary.totalIdeasReserved
   }
 
-  // Token + cost aggregation from usage logs
-  for (const log of usageLogs) {
-    const tId = log.tenantId || 'no-tenant'
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-
-    // Use ?? (nullish coalescing) to handle 0 as a valid value
-    const input = log.inputTokens ?? 0
-    const output = getBillableOutputTokens(log.outputTokens, log.meta)
-    const calls = log.apiCalls ?? 0
-    const cost = calculateCostForLog(log)
-
-    bucket.totalInputTokens += input
-    bucket.totalOutputTokens += output
-    bucket.totalApiCalls += calls
-    bucket.totalCost += cost
-
-    global.totalInputTokens += input
-    global.totalOutputTokens += output
-    global.totalApiCalls += calls
-    global.totalCost += cost
-  }
-
-  // Counted patent drafts per tenant (quota-aligned)
-  for (const row of draftsByTenant) {
-    const tId = row.tenantId || 'no-tenant'
-    if (tenantFilterId && tId !== tenantFilterId) continue
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-    bucket.patentDrafts += row._count._all
-    global.totalPatentsDrafted += row._count._all
-  }
-
-  // Novelty searches per tenant (via user.tenantId)
-  for (const run of noveltyRuns) {
-    const tId = run.user?.tenantId || 'no-tenant'
-    if (tenantFilterId && tId !== tenantFilterId) continue
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-    bucket.noveltySearches += 1
-    global.totalNoveltySearches += 1
-  }
-
-  // Idea reservations per tenant (via user.tenantId)
-  for (const res of reservations) {
-    const tId = res.user?.tenantId || 'no-tenant'
-    if (tenantFilterId && tId !== tenantFilterId) continue
-    if (!tenantMap.has(tId)) {
-      tenantMap.set(tId, {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0
-      })
-    }
-    const bucket = tenantMap.get(tId)!
-    bucket.ideasReserved += 1
-    global.totalIdeasReserved += 1
-  }
-
-  const tenantIds = Array.from(tenantMap.keys()).filter(id => id !== 'no-tenant')
-  const tenantRecords = tenantIds.length
-    ? await prisma.tenant.findMany({
-        where: { id: { in: tenantIds } },
-        select: { id: true, name: true, type: true }
-      })
-    : []
-
-  const tenantMeta = new Map<string, { name: string | null; type: string | null }>()
-  for (const t of tenantRecords) {
-    tenantMeta.set(t.id, { name: t.name, type: t.type })
-  }
-
-  const tenants: TenantUsageMetrics[] = Array.from(tenantMap.entries()).map(([id, metrics]) => {
-    const meta = tenantMeta.get(id)
-    const isNoTenant = id === 'no-tenant'
-    return {
-      tenantId: isNoTenant ? null : id,
-      tenantName: isNoTenant ? 'No tenant' : (meta?.name ?? 'Unknown tenant'),
-      tenantType: isNoTenant ? null : (meta?.type ?? null),
-      totalInputTokens: metrics.totalInputTokens,
-      totalOutputTokens: metrics.totalOutputTokens,
-      totalApiCalls: metrics.totalApiCalls,
-      totalCost: metrics.totalCost,
-      patentDrafts: metrics.patentDrafts,
-      noveltySearches: metrics.noveltySearches,
-      ideasReserved: metrics.ideasReserved
-    }
-  })
+  const tenants: TenantUsageMetrics[] = usage.tenants.map(tenant => ({
+    tenantId: tenant.tenantId,
+    tenantName: tenant.tenantName,
+    tenantAtiId: tenant.tenantAtiId,
+    tenantType: tenant.tenantType,
+    totalInputTokens: tenant.totalInputTokens,
+    totalOutputTokens: tenant.totalOutputTokens,
+    totalApiCalls: tenant.totalApiCalls,
+    totalCost: tenant.totalCost,
+    patentDrafts: tenant.patentDrafts,
+    noveltySearches: tenant.noveltySearches,
+    ideasReserved: tenant.ideasReserved
+  }))
 
   return {
-    startDate: normalizedRange.start,
-    endDate: normalizedRange.endInclusive,
+    startDate: usage.startDate,
+    endDate: usage.endDate,
     global,
     tenants
   }
@@ -426,7 +249,7 @@ export async function computeUnifiedAdminUsage(
     }),
     prisma.tenant.findMany({
       where: tenantFilterId ? { id: tenantFilterId } : {},
-      select: { id: true, name: true, type: true, registrationSource: true }
+      select: { id: true, name: true, atiId: true, type: true, registrationSource: true }
     }),
     prisma.aTIToken.findMany({
       where: tenantFilterId ? { tenantId: tenantFilterId } : {},
@@ -449,7 +272,7 @@ export async function computeUnifiedAdminUsage(
           name: true,
           email: true,
           tenantId: true,
-          tenant: { select: { id: true, name: true, type: true, registrationSource: true } },
+          tenant: { select: { id: true, name: true, atiId: true, type: true, registrationSource: true } },
           signupAtiTokenId: true,
           signupAtiToken: { select: { id: true, fingerprint: true } }
         }
@@ -489,6 +312,7 @@ export async function computeUnifiedAdminUsage(
       userEmail: user?.email || '',
       tenantId,
       tenantName: tenant?.name || null,
+      tenantAtiId: tenant?.atiId || null,
       tenantType: tenant?.type || null,
       registrationSource: tenant?.registrationSource || null,
       signupAtiTokenId: user?.signupAtiTokenId || null,
@@ -542,7 +366,15 @@ export async function computeUnifiedAdminUsage(
     }
   }
 
-  const patents: UnifiedAdminUsagePatentRow[] = patentUsageRows.map(row => ({
+  const isCountedPatentUsageInRange = (row: typeof patentUsageRows[number]) =>
+    Boolean(row.isCounted && row.countedAt && row.countedAt >= range.start && row.countedAt <= range.endInclusive)
+
+  const isInProgressPatentUsageInRange = (row: typeof patentUsageRows[number]) =>
+    Boolean(!row.isCounted && row.createdAt >= range.start && row.createdAt <= range.endInclusive)
+
+  const patents: UnifiedAdminUsagePatentRow[] = patentUsageRows.filter(row =>
+    isCountedPatentUsageInRange(row) || isInProgressPatentUsageInRange(row)
+  ).map(row => ({
     patentId: row.patentId,
     patentTitle: patentTitleMap.get(row.patentId) || 'Untitled Patent',
     tenantId: row.tenantId,
@@ -557,8 +389,8 @@ export async function computeUnifiedAdminUsage(
 
   for (const row of patentUsageRows) {
     const bucket = ensureUser(row.userId, row.tenantId)
-    const countedInRange = row.isCounted && row.countedAt && row.countedAt >= range.start && row.countedAt <= range.endInclusive
-    const inProgressInRange = !row.isCounted && row.createdAt >= range.start && row.createdAt <= range.endInclusive
+    const countedInRange = isCountedPatentUsageInRange(row)
+    const inProgressInRange = isInProgressPatentUsageInRange(row)
     if (countedInRange) {
       bucket.patentsDrafted += 1
       global.totalPatentsDrafted += 1
@@ -605,6 +437,7 @@ export async function computeUnifiedAdminUsage(
     const row: UnifiedAdminUsageTenantRow = {
       tenantId,
       tenantName: tenantId ? (tenant?.name ?? 'Unknown tenant') : 'No tenant',
+      tenantAtiId: tenantId ? (tenant?.atiId ?? null) : null,
       tenantType: tenant?.type ?? null,
       registrationSource: tenant?.registrationSource ?? null,
       atiTokenCount: tenantId ? (atiTokenCounts.get(tenantId) || 0) : 0,
@@ -677,6 +510,8 @@ export async function computeUserCostsByTenant(
 ): Promise<UserCostMetrics[]> {
   const normalizedRange = normalizeUsageDateRange(startDate, endDate)
   const dateRange = toInclusiveDateRange(normalizedRange)
+
+  await ensurePricingLoaded()
 
   // Get all usage logs for this tenant with user info
   const usageLogs = await prisma.usageLog.findMany({
@@ -851,6 +686,8 @@ export async function computePatentCosts(
   const normalizedRange = normalizeUsageDateRange(startDate, endDate)
   const dateRange = toInclusiveDateRange(normalizedRange)
 
+  await ensurePricingLoaded()
+
   // Get usage logs that have patent IDs in their metadata
   const usageLogs = await prisma.usageLog.findMany({
     where: {
@@ -984,23 +821,7 @@ export async function computePatentCosts(
     metrics.totalOutputTokens += output
     metrics.totalApiCalls += calls
 
-    // Calculate cost (honour explicit overrides stored in metadata.cost)
-    const metaCost = meta?.cost
-    let actualCost = 0
-    if (metaCost && typeof metaCost.actualCost === 'number') {
-      actualCost = metaCost.actualCost
-    } else if (log.modelClass) {
-      const costBreakdown = calculateCost(
-        log.modelClass,
-        input,
-        log.outputTokens ?? 0,
-        getMetaSeparatelyBilledThoughtTokens(meta) || undefined
-      )
-      actualCost = costBreakdown.actualCost
-    } else {
-      // Fallback pricing: matches DEFAULT_PRICING in cost-calculator.ts ($1/$4 per million)
-      actualCost = (input * 0.000001) + (output * 0.000004)
-    }
+    const actualCost = calculateCostForLog(log)
     metrics.actualCost += actualCost
 
     // Track stage breakdown

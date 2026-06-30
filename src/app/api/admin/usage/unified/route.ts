@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { computeUnifiedAdminUsage } from '@/lib/admin-usage-service'
+import { parseUsageDateRangeParams } from '@/lib/usage-periods'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,19 +42,12 @@ export async function GET(request: NextRequest) {
       tenantId: searchParams.get('tenantId') || undefined
     })
 
-    const endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
-    const startDate = parsed.startDate
-      ? new Date(parsed.startDate)
-      : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
-
-    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-      return NextResponse.json({ error: 'Invalid date format' }, { status: 400 })
-    }
-    if (startDate > endDate) {
-      return NextResponse.json({ error: 'startDate must be before endDate' }, { status: 400 })
+    const parsedDates = parseUsageDateRangeParams(parsed.startDate, parsed.endDate)
+    if ('error' in parsedDates) {
+      return NextResponse.json({ error: parsedDates.error }, { status: 400 })
     }
 
-    const usage = await computeUnifiedAdminUsage(startDate, endDate, parsed.tenantId)
+    const usage = await computeUnifiedAdminUsage(parsedDates.startDate, parsedDates.endDate, parsed.tenantId)
     return NextResponse.json(usage)
   } catch (error) {
     console.error('Unified admin usage API error:', error)

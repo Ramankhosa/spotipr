@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getBillableOutputTokens, getMetaActualCost } from '@/lib/usage-log-cost'
+import { calculateCostForLog } from '@/lib/admin-usage-service'
+import { getBillableOutputTokens } from '@/lib/usage-log-cost'
+import { ensurePricingLoaded } from '@/lib/metering/cost-calculator'
 import { z } from 'zod'
-import { normalizeUsageDateRange, toInclusiveDateRange } from '@/lib/usage-periods'
+import { normalizeUsageDateRange, parseUsageDateRangeParams, toInclusiveDateRange } from '@/lib/usage-periods'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,7 +71,12 @@ export async function GET(request: NextRequest) {
       userId: getParam('userId')
     })
 
-    const normalizedRange = normalizeUsageDateRange(query.startDate, query.endDate)
+    const parsedDates = parseUsageDateRangeParams(query.startDate, query.endDate)
+    if ('error' in parsedDates) {
+      return NextResponse.json({ error: parsedDates.error }, { status: 400 })
+    }
+
+    const normalizedRange = normalizeUsageDateRange(parsedDates.startDate, parsedDates.endDate)
     const startDate = normalizedRange.start
     const endDate = normalizedRange.endInclusive
 
@@ -91,6 +98,8 @@ export async function GET(request: NextRequest) {
       where.userId = query.userId
     }
 
+    await ensurePricingLoaded()
+
     const logs = await prisma.usageLog.findMany({
       where,
       include: {
@@ -104,15 +113,6 @@ export async function GET(request: NextRequest) {
         }
       }
     })
-
-    const modelPrices = await prisma.lLMModelPrice.findMany()
-    const priceMap = new Map<string, { input: number; output: number }>()
-    for (const p of modelPrices) {
-      priceMap.set(p.modelClass, {
-        input: p.inputPricePerMTokens,
-        output: p.outputPricePerMTokens
-      })
-    }
 
     type TaskMetrics = {
       task: string
@@ -160,19 +160,12 @@ export async function GET(request: NextRequest) {
       }
 
       const userEntry = usersMap.get(uid)!
-      const input = log.inputTokens || 0
+      const input = log.inputTokens ?? 0
       const output = getBillableOutputTokens(log.outputTokens, log.meta)
-      const calls = log.apiCalls || 1
+      const calls = log.apiCalls ?? 1
 
       const modelKey = log.modelClass || 'UNKNOWN_MODEL'
-      let unitPrices = priceMap.get(modelKey)
-      if (!unitPrices) {
-        unitPrices = { input: 0.000005, output: 0.000015 }
-      }
-      const metaCost = getMetaActualCost(log.meta)
-      const cost = metaCost !== null && (metaCost > 0 || (input === 0 && output === 0))
-        ? metaCost
-        : input * (unitPrices.input / 1_000_000) + output * (unitPrices.output / 1_000_000)
+      const cost = calculateCostForLog(log)
 
       userEntry.totalInputTokens += input
       userEntry.totalOutputTokens += output

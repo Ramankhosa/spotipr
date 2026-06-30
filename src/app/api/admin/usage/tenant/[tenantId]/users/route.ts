@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { getBillableOutputTokens, getMetaActualCost } from '@/lib/usage-log-cost'
-import { normalizeUsageDateRange, toInclusiveDateRange } from '@/lib/usage-periods'
+import { computeUnifiedAdminUsage } from '@/lib/admin-usage-service'
+import { normalizeUsageDateRange, parseUsageDateRangeParams } from '@/lib/usage-periods'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -12,7 +11,7 @@ const QuerySchema = z.object({
   page: z.string().optional(),
   pageSize: z.string().optional(),
   sortBy: z
-    .enum(['userName', 'inputTokens', 'outputTokens', 'cost', 'patentDrafts', 'noveltySearches', 'ideasReserved'])
+    .enum(['userName', 'inputTokens', 'outputTokens', 'cost', 'patentDrafts', 'sessions', 'inProgress', 'noveltySearches', 'ideasReserved'])
     .optional(),
   sortDir: z.enum(['asc', 'desc']).optional()
 })
@@ -62,190 +61,37 @@ export async function GET(
       sortDir: getParam('sortDir')
     })
 
-    const normalizedRange = normalizeUsageDateRange(parsed.startDate, parsed.endDate)
+    const parsedDates = parseUsageDateRangeParams(parsed.startDate, parsed.endDate)
+    if ('error' in parsedDates) {
+      return NextResponse.json({ error: parsedDates.error }, { status: 400 })
+    }
+
+    const normalizedRange = normalizeUsageDateRange(parsedDates.startDate, parsedDates.endDate)
     const startDate = normalizedRange.start
     const endDate = normalizedRange.endInclusive
-    const dateRange = toInclusiveDateRange(normalizedRange)
-
-    // LLM usage logs for tokens + cost
-    const [usageLogs, modelPrices, draftsByUser, noveltyRuns, reservations] = await Promise.all([
-      prisma.usageLog.findMany({
-        where: {
-          tenantId: params.tenantId,
-          startedAt: dateRange,
-          status: 'COMPLETED'
-        },
-        select: {
-          userId: true,
-          inputTokens: true,
-          outputTokens: true,
-          apiCalls: true,
-          modelClass: true,
-          meta: true,
-          startedAt: true
-        }
-      }),
-      prisma.lLMModelPrice.findMany(),
-      prisma.patentDraftingUsage.groupBy({
-        by: ['userId'],
-        where: {
-          tenantId: params.tenantId,
-          isCounted: true,
-          countedAt: dateRange
-        },
-        _count: { _all: true }
-      }),
-      prisma.noveltySearchRun.findMany({
-        where: {
-          createdAt: dateRange,
-          status: 'COMPLETED',
-          user: { tenantId: params.tenantId }
-        },
-        select: { userId: true }
-      }),
-      prisma.ideaBankReservation.findMany({
-        where: {
-          reservedAt: dateRange,
-          user: { tenantId: params.tenantId }
-        },
-        select: { userId: true }
-      })
-    ])
-
-    const priceMap = new Map<string, { input: number; output: number }>()
-    for (const p of modelPrices) {
-      priceMap.set(p.modelClass, {
-        input: p.inputPricePerMTokens,
-        output: p.outputPricePerMTokens
-      })
-    }
-
-    type UserBucket = {
-      userId: string
-      totalInputTokens: number
-      totalOutputTokens: number
-      totalApiCalls: number
-      totalCost: number
-      patentDrafts: number
-      noveltySearches: number
-      ideasReserved: number
-      lastActivity: Date | null
-    }
-
-    const buckets = new Map<string, UserBucket>()
-
-    const calcCost = (log: { inputTokens: number | null; outputTokens: number | null; modelClass: string | null; meta?: unknown }) => {
-      const inputTokens = log.inputTokens || 0
-      const outputTokens = getBillableOutputTokens(log.outputTokens, log.meta)
-      const metaCost = getMetaActualCost(log.meta)
-      if (metaCost !== null && (metaCost > 0 || (inputTokens === 0 && outputTokens === 0))) {
-        return metaCost
-      }
-      if (log.modelClass && priceMap.has(log.modelClass)) {
-        const price = priceMap.get(log.modelClass)!
-        return inputTokens * (price.input / 1_000_000) + outputTokens * (price.output / 1_000_000)
-      }
-      return inputTokens * 0.000005 + outputTokens * 0.000015
-    }
-
-    for (const log of usageLogs) {
-      if (!log.userId) continue
-      if (!buckets.has(log.userId)) {
-        buckets.set(log.userId, {
-          userId: log.userId,
-          totalInputTokens: 0,
-          totalOutputTokens: 0,
-          totalApiCalls: 0,
-          totalCost: 0,
-          patentDrafts: 0,
-          noveltySearches: 0,
-          ideasReserved: 0,
-          lastActivity: null
-        })
-      }
-      const bucket = buckets.get(log.userId)!
-      const input = log.inputTokens || 0
-      const output = getBillableOutputTokens(log.outputTokens, log.meta)
-      const calls = log.apiCalls || 0
-      const cost = calcCost(log)
-
-      bucket.totalInputTokens += input
-      bucket.totalOutputTokens += output
-      bucket.totalApiCalls += calls
-      bucket.totalCost += cost
-      if (!bucket.lastActivity || (log.startedAt && log.startedAt > bucket.lastActivity)) {
-        bucket.lastActivity = log.startedAt
-      }
-    }
-
-    // Domain counts
-    const draftMap = new Map<string, number>()
-    draftsByUser.forEach(row => draftMap.set(row.userId, row._count._all))
-
-    const noveltyMap = new Map<string, number>()
-    noveltyRuns.forEach(r => {
-      const count = noveltyMap.get(r.userId) || 0
-      noveltyMap.set(r.userId, count + 1)
-    })
-
-    const ideaMap = new Map<string, number>()
-    reservations.forEach(r => {
-      const count = ideaMap.get(r.userId) || 0
-      ideaMap.set(r.userId, count + 1)
-    })
-
-    const userIds = new Set<string>()
-    buckets.forEach((_, id) => userIds.add(id))
-    draftMap.forEach((_, id) => userIds.add(id))
-    noveltyMap.forEach((_, id) => userIds.add(id))
-    ideaMap.forEach((_, id) => userIds.add(id))
-
-    if (userIds.size === 0) {
-      return NextResponse.json({
-        startDate,
-        endDate,
-        tenantId: params.tenantId,
-        users: [],
-        pagination: {
-          page: 1,
-          pageSize: 25,
-          totalUsers: 0
-        }
-      })
-    }
-
-    const userRecords = await prisma.user.findMany({
-      where: { id: { in: Array.from(userIds) } },
-      select: { id: true, name: true, email: true }
-    })
-
-    const usersCombined = Array.from(userIds).map(id => {
-      const bucket = buckets.get(id) || {
-        userId: id,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalApiCalls: 0,
-        totalCost: 0,
-        patentDrafts: 0,
-        noveltySearches: 0,
-        ideasReserved: 0,
-        lastActivity: null as Date | null
-      }
-      const u = userRecords.find(u => u.id === id)
-      return {
-        userId: id,
-        userName: u?.name || u?.email || id,
-        userEmail: u?.email || '',
-        totalInputTokens: bucket.totalInputTokens,
-        totalOutputTokens: bucket.totalOutputTokens,
-        totalApiCalls: bucket.totalApiCalls,
-        totalCost: bucket.totalCost,
-        patentDrafts: (bucket.patentDrafts || 0) + (draftMap.get(id) || 0),
-        noveltySearches: (bucket.noveltySearches || 0) + (noveltyMap.get(id) || 0),
-        ideasReserved: (bucket.ideasReserved || 0) + (ideaMap.get(id) || 0),
-        lastActivity: bucket.lastActivity
-      }
-    })
+    const usage = await computeUnifiedAdminUsage(startDate, endDate, params.tenantId)
+    const usersCombined = usage.users.map(user => ({
+      userId: user.userId,
+      userName: user.userName,
+      userEmail: user.userEmail,
+      tenantId: user.tenantId,
+      tenantName: user.tenantName,
+      tenantAtiId: user.tenantAtiId,
+      tenantType: user.tenantType,
+      registrationSource: user.registrationSource,
+      signupAtiTokenId: user.signupAtiTokenId,
+      signupAtiFingerprint: user.signupAtiFingerprint,
+      totalInputTokens: user.totalInputTokens,
+      totalOutputTokens: user.totalOutputTokens,
+      totalApiCalls: user.totalApiCalls,
+      totalCost: user.totalCost,
+      patentDrafts: user.patentsDrafted,
+      draftingSessionsStarted: user.draftingSessionsStarted,
+      patentDraftsInProgress: user.patentDraftsInProgress,
+      noveltySearches: user.noveltySearches,
+      ideasReserved: user.ideasReserved,
+      lastActivity: user.lastActivity
+    }))
 
     const sortBy = parsed.sortBy || 'inputTokens'
     const sortDir = parsed.sortDir === 'asc' ? 1 : -1
@@ -262,6 +108,10 @@ export async function GET(
             return u.totalCost
           case 'patentDrafts':
             return u.patentDrafts
+          case 'sessions':
+            return u.draftingSessionsStarted
+          case 'inProgress':
+            return u.patentDraftsInProgress
           case 'noveltySearches':
             return u.noveltySearches
           case 'ideasReserved':

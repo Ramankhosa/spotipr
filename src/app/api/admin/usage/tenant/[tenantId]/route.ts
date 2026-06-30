@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { computeUsageSummary } from '@/lib/admin-usage-service'
+import { parseUsageDateRangeParams } from '@/lib/usage-periods'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,10 +51,12 @@ export async function GET(
       endDate: getParam('endDate')
     })
 
-    const endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
-    const startDate = parsed.startDate ? new Date(parsed.startDate) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
+    const parsedDates = parseUsageDateRangeParams(parsed.startDate, parsed.endDate)
+    if ('error' in parsedDates) {
+      return NextResponse.json({ error: parsedDates.error }, { status: 400 })
+    }
 
-    const usage = await computeUsageSummary(startDate, endDate, params.tenantId)
+    const usage = await computeUsageSummary(parsedDates.startDate, parsedDates.endDate, params.tenantId)
 
     const tenant = usage.tenants.find(t => t.tenantId === params.tenantId || (!t.tenantId && params.tenantId === 'no-tenant'))
 
@@ -70,4 +73,3 @@ export async function GET(
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-

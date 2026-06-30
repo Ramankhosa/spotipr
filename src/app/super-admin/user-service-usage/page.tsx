@@ -1,13 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { unstable_noStore as noStore } from 'next/cache'
 import { useAuth } from '@/lib/auth-context'
-import { DateRangePicker } from '@/components/analytics/DateRangePicker'
+import { getDateOnlyMonthRange, getDateOnlyYearRange } from '@/lib/usage-periods'
 
 interface TenantOption {
   id: string
   name: string
+  atiId?: string
 }
 
 interface ServiceUsageUser {
@@ -16,6 +17,7 @@ interface ServiceUsageUser {
   userEmail: string
   tenantId: string | null
   tenantName: string | null
+  tenantAtiId?: string | null
   tenantType: 'INDIVIDUAL' | 'ENTERPRISE' | null
   patentsDrafted: number
   draftingSessionsStarted?: number
@@ -48,9 +50,23 @@ interface ServiceUsageResponse {
 
 type PeriodMode = 'date' | 'month' | 'year'
 
+function toDateInputValue(date: Date): string {
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addLocalDays(date: Date, days: number): Date {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
 interface AdminUsageTenant {
   tenantId: string | null
   tenantName: string | null
+  tenantAtiId?: string | null
   tenantType: string | null
   totalInputTokens: number
   totalOutputTokens: number
@@ -91,11 +107,20 @@ interface TenantUserUsageRow {
   userId: string
   userName: string
   userEmail: string
+  tenantId?: string | null
+  tenantName?: string | null
+  tenantAtiId?: string | null
+  tenantType?: string | null
+  registrationSource?: string | null
+  signupAtiTokenId?: string | null
+  signupAtiFingerprint?: string | null
   totalInputTokens: number
   totalOutputTokens: number
   totalApiCalls: number
   totalCost: number
   patentDrafts: number
+  draftingSessionsStarted?: number
+  patentDraftsInProgress?: number
   noveltySearches: number
   ideasReserved: number
   lastActivity: string | null
@@ -210,13 +235,13 @@ export default function UserServiceUsagePage() {
   const [mode, setMode] = useState<PeriodMode>('date')
   const [expandedTenant, setExpandedTenant] = useState<string | null>(null)
 
-  const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
-    from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-    to: new Date()
+  const [dateRange, setDateRange] = useState<{ from: string; to: string }>({
+    from: toDateInputValue(addLocalDays(new Date(), -30)),
+    to: toDateInputValue(new Date())
   })
 
-  const [selectedMonth, setSelectedMonth] = useState<string>('')
-  const [selectedYear, setSelectedYear] = useState<string>('')
+  const [selectedMonth, setSelectedMonth] = useState<string>(toDateInputValue(new Date()).slice(0, 7))
+  const [selectedYear, setSelectedYear] = useState<string>(`${new Date().getFullYear()}`)
 
   const [data, setData] = useState<ServiceUsageUser[]>([])
   const [summary, setSummary] = useState<ServiceUsageResponse['summary'] | null>(null)
@@ -273,33 +298,71 @@ export default function UserServiceUsagePage() {
     }
   }
 
-  const resolveDateRange = () => {
+  const resolveDateRange = (): { startDate: string; endDate: string } | { error: string } => {
     if (mode === 'date') {
+      if (!dateRange.from || !dateRange.to) {
+        return { error: 'Select both a From date and a To date.' }
+      }
+      if (dateRange.from > dateRange.to) {
+        return { error: 'From date must be on or before To date.' }
+      }
       return {
-        start: dateRange.from,
-        end: dateRange.to
+        startDate: dateRange.from,
+        endDate: dateRange.to
       }
     }
 
     if (mode === 'month' && selectedMonth) {
-      const [yearStr, monthStr] = selectedMonth.split('-')
-      const year = parseInt(yearStr, 10)
-      const month = parseInt(monthStr, 10) - 1
-      const start = new Date(year, month, 1)
-      const end = new Date(year, month + 1, 0)
-      return { start, end }
+      const monthRange = getDateOnlyMonthRange(selectedMonth)
+      if (!monthRange) {
+        return { error: 'Select a valid month.' }
+      }
+      return monthRange
     }
 
     if (mode === 'year' && selectedYear) {
-      const year = parseInt(selectedYear, 10)
-      const start = new Date(year, 0, 1)
-      const end = new Date(year, 11, 31)
-      return { start, end }
+      const yearRange = getDateOnlyYearRange(selectedYear)
+      if (!yearRange) {
+        return { error: 'Select a valid year between 2000 and 2100.' }
+      }
+      return yearRange
     }
 
-    const fallbackEnd = new Date()
-    const fallbackStart = new Date(fallbackEnd.getTime() - 30 * 24 * 60 * 60 * 1000)
-    return { start: fallbackStart, end: fallbackEnd }
+    return {
+      startDate: toDateInputValue(addLocalDays(new Date(), -30)),
+      endDate: toDateInputValue(new Date())
+    }
+  }
+
+  const applyDatePreset = (preset: '7d' | '30d' | '90d' | 'month' | 'year') => {
+    const now = new Date()
+    let from: Date
+    let to = now
+
+    switch (preset) {
+      case '7d':
+        from = addLocalDays(now, -7)
+        break
+      case '90d':
+        from = addLocalDays(now, -90)
+        break
+      case 'month':
+        from = new Date(now.getFullYear(), now.getMonth(), 1)
+        break
+      case 'year':
+        from = new Date(now.getFullYear(), 0, 1)
+        break
+      case '30d':
+      default:
+        from = addLocalDays(now, -30)
+        break
+    }
+
+    setMode('date')
+    setDateRange({
+      from: toDateInputValue(from),
+      to: toDateInputValue(to)
+    })
   }
 
   const fetchUsage = async () => {
@@ -307,11 +370,15 @@ export default function UserServiceUsagePage() {
       setLoading(true)
       setError(null)
 
-      const { start, end } = resolveDateRange()
+      const resolvedRange = resolveDateRange()
+      if ('error' in resolvedRange) {
+        setError(resolvedRange.error)
+        return
+      }
 
       const baseParams = {
-        startDate: start.toISOString(),
-        endDate: end.toISOString()
+        startDate: resolvedRange.startDate,
+        endDate: resolvedRange.endDate
       }
 
       const adminParams = new URLSearchParams(baseParams)
@@ -388,11 +455,15 @@ export default function UserServiceUsagePage() {
       setTenantUsersLoading(true)
       setTenantUsersError(null)
 
-      const { start, end } = resolveDateRange()
+      const resolvedRange = resolveDateRange()
+      if ('error' in resolvedRange) {
+        setTenantUsersError(resolvedRange.error)
+        return
+      }
 
       const params = new URLSearchParams({
-        startDate: start.toISOString(),
-        endDate: end.toISOString(),
+        startDate: resolvedRange.startDate,
+        endDate: resolvedRange.endDate,
         pageSize: '1000',
         sortBy: 'inputTokens',
         sortDir: 'desc'
@@ -431,12 +502,16 @@ export default function UserServiceUsagePage() {
       setPatentCostsLoading(true)
       setPatentCostsError(null)
 
-      const { start, end } = resolveDateRange()
+      const resolvedRange = resolveDateRange()
+      if ('error' in resolvedRange) {
+        setPatentCostsError(resolvedRange.error)
+        return
+      }
 
       const params = new URLSearchParams({
         tenantId,
-        startDate: start.toISOString(),
-        endDate: end.toISOString()
+        startDate: resolvedRange.startDate,
+        endDate: resolvedRange.endDate
       })
 
       if (userId) {
@@ -473,7 +548,21 @@ export default function UserServiceUsagePage() {
         return
       }
 
-      const { start, end } = resolveDateRange()
+      const resolvedRange = resolveDateRange()
+      if ('error' in resolvedRange) {
+        setTokenDetails({
+          userId,
+          loading: false,
+          error: resolvedRange.error,
+          tasks: [],
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalApiCalls: 0,
+          totalCost: 0,
+          activityLogs: []
+        })
+        return
+      }
 
       setTokenDetails({
         userId,
@@ -487,8 +576,8 @@ export default function UserServiceUsagePage() {
       })
 
       const params = new URLSearchParams({
-        startDate: start.toISOString(),
-        endDate: end.toISOString(),
+        startDate: resolvedRange.startDate,
+        endDate: resolvedRange.endDate,
         userId
       })
 
@@ -540,8 +629,8 @@ export default function UserServiceUsagePage() {
       if (tenantId) {
         try {
           const params2 = new URLSearchParams({
-            startDate: start.toISOString(),
-            endDate: end.toISOString(),
+            startDate: resolvedRange.startDate,
+            endDate: resolvedRange.endDate,
             page: '1',
             pageSize: '50',
             sortBy: 'startedAt',
@@ -642,6 +731,7 @@ export default function UserServiceUsagePage() {
           tenantId: key,
           realTenantId: t.tenantId,
           name: t.tenantName || 'No tenant',
+          atiId: t.tenantAtiId || null,
           type: t.tenantType,
           registrationSource: t.registrationSource || null,
           atiTokenCount: t.atiTokenCount || 0,
@@ -664,6 +754,7 @@ export default function UserServiceUsagePage() {
       name: string
       type: string | null
       registrationSource: string | null
+      atiId: string | null
       atiTokenCount: number
       users: ServiceUsageUser[]
       patentsDrafted: number
@@ -679,6 +770,7 @@ export default function UserServiceUsagePage() {
           name: u.tenantName || 'No tenant',
           type: u.tenantType || null,
           registrationSource: u.registrationSource || null,
+          atiId: u.tenantAtiId || null,
           atiTokenCount: u.signupAtiTokenId ? 1 : 0,
           users: [],
           patentsDrafted: 0,
@@ -718,8 +810,11 @@ export default function UserServiceUsagePage() {
           userEmail: u.userEmail,
           tenantId: expandedTenant === 'no-tenant' ? null : expandedTenant,
           tenantName: null,
+          tenantAtiId: null,
           tenantType: null,
           patentsDrafted: u.patentDrafts,
+          draftingSessionsStarted: u.draftingSessionsStarted || 0,
+          patentDraftsInProgress: u.patentDraftsInProgress || 0,
           noveltySearches: u.noveltySearches,
           ideasReserved: u.ideasReserved
         }
@@ -730,6 +825,15 @@ export default function UserServiceUsagePage() {
           totalOutputTokens: u.totalOutputTokens,
           totalApiCalls: u.totalApiCalls,
           totalCost: u.totalCost,
+          tenantId: u.tenantId ?? base.tenantId,
+          tenantName: u.tenantName ?? base.tenantName,
+          tenantAtiId: u.tenantAtiId ?? base.tenantAtiId,
+          tenantType: (u.tenantType as ServiceUsageUser['tenantType']) ?? base.tenantType,
+          registrationSource: u.registrationSource ?? base.registrationSource,
+          signupAtiTokenId: u.signupAtiTokenId ?? base.signupAtiTokenId,
+          signupAtiFingerprint: u.signupAtiFingerprint ?? base.signupAtiFingerprint,
+          draftingSessionsStarted: u.draftingSessionsStarted ?? base.draftingSessionsStarted,
+          patentDraftsInProgress: u.patentDraftsInProgress ?? base.patentDraftsInProgress,
           lastActivity: u.lastActivity
         }
       })
@@ -762,7 +866,7 @@ export default function UserServiceUsagePage() {
   }
 
   const formatDateTime = (value: string | null | undefined) => {
-    if (!value) return '—'
+    if (!value) return '-'
     try {
       return new Date(value).toLocaleString()
     } catch {
@@ -818,11 +922,52 @@ export default function UserServiceUsagePage() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             {mode === 'date' && (
-              <div className="md:col-span-2">
+              <div className="md:col-span-2 space-y-3">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Date range
                 </label>
-                <DateRangePicker value={dateRange} onChange={setDateRange} />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      From
+                    </label>
+                    <input
+                      type="date"
+                      value={dateRange.from}
+                      onChange={(e) => setDateRange(prev => ({ ...prev, from: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      To
+                    </label>
+                    <input
+                      type="date"
+                      value={dateRange.to}
+                      onChange={(e) => setDateRange(prev => ({ ...prev, to: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { id: '7d', label: 'Last 7 days' },
+                    { id: '30d', label: 'Last 30 days' },
+                    { id: '90d', label: 'Last 90 days' },
+                    { id: 'month', label: 'This month' },
+                    { id: 'year', label: 'This year' }
+                  ].map(preset => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyDatePreset(preset.id as '7d' | '30d' | '90d' | 'month' | 'year')}
+                      className="px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -869,7 +1014,7 @@ export default function UserServiceUsagePage() {
                 <option value="">All tenants</option>
                 {tenants.map((tenant) => (
                   <option key={tenant.id} value={tenant.id}>
-                    {tenant.name}
+                    {tenant.name}{tenant.atiId ? ` (${tenant.atiId})` : ''}
                   </option>
                 ))}
               </select>
@@ -891,7 +1036,7 @@ export default function UserServiceUsagePage() {
           <div className="bg-white p-6 rounded-lg shadow border">
             <h3 className="text-sm font-medium text-gray-600 mb-2">Counted patent drafts</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalPatentsDrafted) : '—'}
+              {summary ? formatNumber(summary.totalPatentsDrafted) : '-'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
               Completed drafts counted against patent quota.
@@ -901,7 +1046,7 @@ export default function UserServiceUsagePage() {
           <div className="bg-white p-6 rounded-lg shadow border">
             <h3 className="text-sm font-medium text-gray-600 mb-2">Sessions started</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalDraftingSessionsStarted || 0) : 'â€”'}
+              {summary ? formatNumber(summary.totalDraftingSessionsStarted || 0) : '-'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
               New drafting sessions opened in the selected period.
@@ -911,7 +1056,7 @@ export default function UserServiceUsagePage() {
           <div className="bg-white p-6 rounded-lg shadow border">
             <h3 className="text-sm font-medium text-gray-600 mb-2">In-progress drafts</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalPatentDraftsInProgress || 0) : 'â€”'}
+              {summary ? formatNumber(summary.totalPatentDraftsInProgress || 0) : '-'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
               Partial patent drafts not counted yet.
@@ -921,7 +1066,7 @@ export default function UserServiceUsagePage() {
           <div className="bg-white p-6 rounded-lg shadow border">
             <h3 className="text-sm font-medium text-gray-600 mb-2">Novelty searches</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalNoveltySearches) : '—'}
+              {summary ? formatNumber(summary.totalNoveltySearches) : '-'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
               Completed novelty search runs in the selected period.
@@ -931,7 +1076,7 @@ export default function UserServiceUsagePage() {
           <div className="bg-white p-6 rounded-lg shadow border">
             <h3 className="text-sm font-medium text-gray-600 mb-2">Patent ideas reserved</h3>
             <div className="text-2xl font-bold text-gray-900">
-              {summary ? formatNumber(summary.totalIdeasReserved) : '—'}
+              {summary ? formatNumber(summary.totalIdeasReserved) : '-'}
             </div>
             <p className="text-sm text-gray-500 mt-1">
               New idea bank reservations created in the selected period.
@@ -970,7 +1115,7 @@ export default function UserServiceUsagePage() {
               </p>
             </div>
             <div className="bg-white p-6 rounded-lg shadow border">
-              <h3 className="text-sm font-medium text-gray-600 mb-2">Estimated LLM cost</h3>
+              <h3 className="text-sm font-medium text-gray-600 mb-2">Actual LLM cost</h3>
               <div className="text-2xl font-bold text-gray-900">
                 {formatCurrency(adminSummary.summary.totalCost)}
               </div>
@@ -1019,11 +1164,15 @@ export default function UserServiceUsagePage() {
                       <tr key={t.tenantId} className="border-b hover:bg-gray-50 cursor-pointer" onClick={() => handleTenantRowClick(t.tenantId, t.realTenantId)}>
                       <td className="px-4 py-2">
                         <div className="font-medium">{t.name}</div>
-                        <div className="text-xs text-gray-500">{t.tenantId}</div>
+                        <div className="text-xs text-gray-500">Tenant ID: {t.realTenantId || 'No tenant'}</div>
+                        <div className="text-xs text-gray-500">Tenant ATI: {t.atiId || '-'}</div>
                       </td>
                       <td className="px-4 py-2 text-xs text-gray-700">
                         <div>{t.type || 'N/A'}</div>
-                        <div className="text-gray-500">{t.registrationSource || 'Unknown'}{t.atiTokenCount ? ` - ${t.atiTokenCount} ATI` : ''}</div>
+                        <div className="text-gray-500">
+                          {t.registrationSource || 'Unknown source'}
+                          {t.atiTokenCount ? ` - ${t.atiTokenCount} signup token${t.atiTokenCount === 1 ? '' : 's'}` : ''}
+                        </div>
                       </td>
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.patentsDrafted)}</td>
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.draftingSessionsStarted || 0)}</td>
@@ -1032,7 +1181,7 @@ export default function UserServiceUsagePage() {
                       <td className="px-4 py-2 text-right font-mono">{formatNumber(t.ideasReserved)}</td>
                       <td className="px-4 py-2 text-right font-mono font-semibold">{formatNumber(t.totalActions)}</td>
                       <td className="px-4 py-2 text-right text-xs text-indigo-600 underline">
-                        {t.users.length} user{t.users.length === 1 ? '' : 's'} {isOpen ? '▼' : '▶'}
+                        {t.users.length} user{t.users.length === 1 ? '' : 's'} {isOpen ? 'v' : '>'}
                       </td>
                     </tr>
                   )
@@ -1055,32 +1204,46 @@ export default function UserServiceUsagePage() {
               <button
                 onClick={() => {
                   const header = [
+                    'tenantId',
                     'tenantName',
+                    'tenantAtiId',
                     'tenantType',
                     'userName',
                     'userEmail',
                     'registrationSource',
+                    'signupAtiTokenId',
                     'signupAtiFingerprint',
                     'countedPatentDrafts',
                     'draftingSessionsStarted',
                     'patentDraftsInProgress',
                     'noveltySearches',
                     'ideasReserved',
-                    'totalActions'
+                    'totalActions',
+                    'totalInputTokens',
+                    'totalOutputTokens',
+                    'totalApiCalls',
+                    'actualCostUsd'
                   ]
                   const rows = visibleUsers.map(row => [
+                    row.tenantId || '',
                     row.tenantName || '',
+                    row.tenantAtiId || '',
                     row.tenantType || '',
                     row.userName,
                     row.userEmail,
                     row.registrationSource || '',
+                    row.signupAtiTokenId || '',
                     row.signupAtiFingerprint || '',
                     row.patentsDrafted,
                     row.draftingSessionsStarted || 0,
                     row.patentDraftsInProgress || 0,
                     row.noveltySearches,
                     row.ideasReserved,
-                    row.patentsDrafted + row.noveltySearches + row.ideasReserved
+                    row.patentsDrafted + row.noveltySearches + row.ideasReserved,
+                    row.totalInputTokens || 0,
+                    row.totalOutputTokens || 0,
+                    row.totalApiCalls || 0,
+                    (row.totalCost || 0).toFixed(6)
                   ])
                   const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
                   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -1143,14 +1306,17 @@ export default function UserServiceUsagePage() {
                     const isExpanded = tokenDetails?.userId === row.userId
 
                     return (
-                      <>
-                        <tr key={row.userId} className="border-b hover:bg-gray-50 align-top">
+                      <Fragment key={row.userId}>
+                        <tr className="border-b hover:bg-gray-50 align-top">
                           <td className="px-4 py-2">
                             <div className="font-medium">
-                              {row.tenantName || '—'}
+                              {row.tenantName || '-'}
                             </div>
                             <div className="text-xs text-gray-500">
-                              {row.tenantId || 'No tenant'}
+                              Tenant ID: {row.tenantId || 'No tenant'}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              Tenant ATI: {row.tenantAtiId || '-'}
                             </div>
                           </td>
                           <td className="px-4 py-2">
@@ -1164,7 +1330,7 @@ export default function UserServiceUsagePage() {
                             {(row.registrationSource || row.signupAtiFingerprint) && (
                               <div className="text-xs text-gray-500">
                                 {row.registrationSource || 'Unknown source'}
-                                {row.signupAtiFingerprint ? ` - ATI ${row.signupAtiFingerprint}` : ''}
+                                {row.signupAtiFingerprint ? ` - Signup token ${row.signupAtiFingerprint}` : ''}
                               </div>
                             )}
                           </td>
@@ -1194,7 +1360,7 @@ export default function UserServiceUsagePage() {
                                   {typeof row.totalCost === 'number' && (
                                     <>
                                       {' '}
-                                      · {formatCurrency(row.totalCost || 0)}
+                                      | {formatCurrency(row.totalCost || 0)}
                                     </>
                                   )}
                                 </div>
@@ -1223,8 +1389,8 @@ export default function UserServiceUsagePage() {
                                   <div className="font-semibold">
                                     Token usage (input/output, API calls, cost):{' '}
                                     {formatNumber(tokenDetails.totalInputTokens)}/
-                                    {formatNumber(tokenDetails.totalOutputTokens)} ·{' '}
-                                    {formatNumber(tokenDetails.totalApiCalls)} calls ·{' '}
+                                    {formatNumber(tokenDetails.totalOutputTokens)} |{' '}
+                                    {formatNumber(tokenDetails.totalApiCalls)} calls |{' '}
                                     {formatCurrency((tokenDetails as any).totalCost || 0)}
                                   </div>
                                   {tokenDetails.tasks.length === 0 ? (
@@ -1242,8 +1408,8 @@ export default function UserServiceUsagePage() {
                                             </div>
                                             <div className="font-mono text-[11px] text-gray-600">
                                               in/out: {formatNumber(task.totalInputTokens)}/
-                                              {formatNumber(task.totalOutputTokens)} ·{' '}
-                                              {formatNumber(task.totalApiCalls)} calls ·{' '}
+                                              {formatNumber(task.totalOutputTokens)} |{' '}
+                                              {formatNumber(task.totalApiCalls)} calls |{' '}
                                               {formatCurrency((task as any).totalCost || 0)}
                                             </div>
                                           </div>
@@ -1258,8 +1424,8 @@ export default function UserServiceUsagePage() {
                                                     <span className="font-mono">{model.model}</span>
                                                     <span className="font-mono text-gray-600">
                                                       in/out: {formatNumber(model.inputTokens)}/
-                                                      {formatNumber(model.outputTokens)} ·{' '}
-                                                      {formatNumber(model.apiCalls)} calls ·{' '}
+                                                      {formatNumber(model.outputTokens)} |{' '}
+                                                      {formatNumber(model.apiCalls)} calls |{' '}
                                                       {formatCurrency((model as any).cost || 0)}
                                                     </span>
                                                   </li>
@@ -1276,7 +1442,7 @@ export default function UserServiceUsagePage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     )
                   })}
                 </tbody>
@@ -1309,7 +1475,7 @@ export default function UserServiceUsagePage() {
               )}
               {!selectedTenantId && (
                 <span className="text-sm text-amber-600">
-                  ⚠️ Select a tenant to view patent-wise costs
+                  Warning: Select a tenant to view patent-wise costs
                 </span>
               )}
             </div>

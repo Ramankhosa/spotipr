@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { computeUserCostsByTenant } from '@/lib/admin-usage-service'
+import { normalizeUsageDateRange, parseUsageDateRangeParams } from '@/lib/usage-periods'
 
 export const dynamic = 'force-dynamic'
 
@@ -55,33 +56,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'tenantId is required' }, { status: 400 })
     }
 
-    // Validate and parse dates with error handling
-    let endDate: Date
-    let startDate: Date
-    
-    try {
-      endDate = parsed.endDate ? new Date(parsed.endDate) : new Date()
-      if (isNaN(endDate.getTime())) {
-        return NextResponse.json({ error: 'Invalid endDate format' }, { status: 400 })
-      }
-      
-      startDate = parsed.startDate ? new Date(parsed.startDate) : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000)
-      if (isNaN(startDate.getTime())) {
-        return NextResponse.json({ error: 'Invalid startDate format' }, { status: 400 })
-      }
-      
-      // Ensure startDate is before endDate
-      if (startDate > endDate) {
-        return NextResponse.json({ error: 'startDate must be before endDate' }, { status: 400 })
-      }
-    } catch {
-      return NextResponse.json({ error: 'Invalid date format' }, { status: 400 })
+    const parsedDates = parseUsageDateRangeParams(parsed.startDate, parsed.endDate)
+    if ('error' in parsedDates) {
+      return NextResponse.json({ error: parsedDates.error }, { status: 400 })
     }
+
+    const normalizedRange = normalizeUsageDateRange(parsedDates.startDate, parsedDates.endDate)
 
     const userCosts = await computeUserCostsByTenant(
       parsed.tenantId,
-      startDate,
-      endDate
+      normalizedRange.start,
+      normalizedRange.endInclusive
     )
 
     // Calculate totals
@@ -106,8 +91,8 @@ export async function GET(request: NextRequest) {
     })
 
     return NextResponse.json({
-      startDate,
-      endDate,
+      startDate: normalizedRange.start,
+      endDate: normalizedRange.endInclusive,
       tenantId: parsed.tenantId,
       totals,
       users: userCosts

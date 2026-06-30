@@ -4,6 +4,10 @@ export interface UsageDateRange {
   endExclusive: Date
 }
 
+export type ParsedUsageDateRange =
+  | { startDate: Date; endDate: Date }
+  | { error: string }
+
 export function getUtcDayWindow(now: Date = new Date()): UsageDateRange {
   const start = new Date(Date.UTC(
     now.getUTCFullYear(),
@@ -71,9 +75,68 @@ export function normalizeUsageDateRange(
   }
 }
 
+export function parseUsageDateRangeParams(
+  startInput?: string | null,
+  endInput?: string | null,
+  fallbackDays = 30
+): ParsedUsageDateRange {
+  const parsedEnd = endInput ? new Date(endInput) : new Date()
+  if (Number.isNaN(parsedEnd.getTime())) {
+    return { error: 'Invalid endDate format' }
+  }
+
+  const parsedStart = startInput
+    ? new Date(startInput)
+    : new Date(parsedEnd.getTime() - fallbackDays * 24 * 60 * 60 * 1000)
+  if (Number.isNaN(parsedStart.getTime())) {
+    return { error: 'Invalid startDate format' }
+  }
+
+  if (parsedStart > parsedEnd) {
+    return { error: 'startDate must be on or before endDate' }
+  }
+
+  return {
+    startDate: parsedStart,
+    endDate: parsedEnd
+  }
+}
+
 export function toInclusiveDateRange(range: UsageDateRange) {
   return {
     gte: range.start,
     lte: range.endInclusive
+  }
+}
+
+export function getDateOnlyMonthRange(monthValue: string): { startDate: string; endDate: string } | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthValue)
+  if (!match) return null
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return null
+  }
+
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  return {
+    startDate: `${match[1]}-${match[2]}-01`,
+    endDate: `${match[1]}-${match[2]}-${`${lastDay}`.padStart(2, '0')}`
+  }
+}
+
+export function getDateOnlyYearRange(yearValue: string | number): { startDate: string; endDate: string } | null {
+  const yearText = String(yearValue)
+  if (!/^\d{4}$/.test(yearText)) return null
+
+  const year = Number(yearText)
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    return null
+  }
+
+  return {
+    startDate: `${yearText}-01-01`,
+    endDate: `${yearText}-12-31`
   }
 }
