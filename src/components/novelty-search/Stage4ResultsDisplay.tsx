@@ -94,30 +94,30 @@ export default function Stage4ResultsDisplay({
     <div className="space-y-6">
       <section className="rounded-lg border border-slate-200 border-t-indigo-500 border-t-4 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
+          <div className="min-w-0">
             <div className="text-sm font-medium text-slate-500">AI Preliminary Screening</div>
-            <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+            <h2 className="mt-1 break-words text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
               {reportTitle}
             </h2>
-            <div className="mt-2 text-sm text-slate-500">
+            <div className="mt-2 break-all text-sm text-slate-500 sm:break-normal">
               Search ID: {metadata.search_id || searchId} | {metadata.date || new Date().toISOString().slice(0, 10)}
             </div>
           </div>
 
           {overallAssessment && (
-            <span className={`inline-flex rounded-full border px-3 py-1 text-sm font-medium ${assessmentBadgeClass(overallAssessment)}`}>
+            <span className={`inline-flex w-fit rounded-full border px-3 py-1 text-sm font-medium ${assessmentBadgeClass(overallAssessment)}`}>
               {sanitize(publicAssessment)}
             </span>
           )}
         </div>
       </section>
 
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
         {!hideConsolidatedButton && (
           <Link
             href={`/novelty-search/${metadata.search_id || searchId}/consolidated`}
             target="_blank"
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
           >
             Consolidated Report
             <ExternalLink className="h-4 w-4" />
@@ -127,7 +127,7 @@ export default function Stage4ResultsDisplay({
           <button
             type="button"
             onClick={() => onRerun()}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             <RefreshCw className="h-4 w-4" />
             Re-run Report Generation
@@ -136,7 +136,7 @@ export default function Stage4ResultsDisplay({
       </div>
 
       {cards && Object.keys(cards).length > 0 && (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {Object.entries(cards).map(([key, value]) => (
             <KpiCard key={key} label={displayCardLabel(key)} value={sanitize(String(value))} />
           ))}
@@ -153,7 +153,7 @@ export default function Stage4ResultsDisplay({
       {adaptive.mode && adaptive.mode !== 'off' && (
         <section className="rounded-lg border border-blue-200 bg-blue-50 p-5">
           <h3 className="text-base font-semibold text-blue-950">Adaptive Screening Trail</h3>
-          <div className="mt-3 grid gap-3 text-sm text-blue-900 md:grid-cols-4">
+          <div className="mt-3 grid gap-3 text-sm text-blue-900 sm:grid-cols-2 lg:grid-cols-4">
             <div><span className="font-medium">Mode:</span> {String(adaptive.mode)}</div>
             <div><span className="font-medium">Gated:</span> {adaptive.gatedCount ?? '-'}</div>
             <div><span className="font-medium">Deeply analyzed:</span> {adaptive.analyzedCount ?? '-'}</div>
@@ -186,7 +186,7 @@ export default function Stage4ResultsDisplay({
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-slate-900">Search Trail</h3>
-        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <KpiCard label="Patent Database Screened" value={pqaiInitial ?? '-'} />
           <KpiCard label="AI Direct" value={aiAccepted ?? '-'} />
           <KpiCard label="AI Component" value={aiComponent ?? '-'} />
@@ -269,7 +269,7 @@ function KpiCard({ label, value }: { label: string; value: any }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+      <div className="mt-2 break-words text-xl font-semibold text-slate-900 sm:text-2xl">{value}</div>
     </div>
   );
 }
@@ -339,7 +339,7 @@ function PatentAnalysisAccordion({ patent, sanitize }: { patent: any; sanitize: 
 
   return (
     <details className="group bg-white open:bg-slate-50">
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4">
+      <summary className="flex cursor-pointer list-none flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-sm font-semibold text-slate-900">{pn}</span>
@@ -347,7 +347,7 @@ function PatentAnalysisAccordion({ patent, sanitize }: { patent: any; sanitize: 
           </div>
           <div className="mt-1 line-clamp-2 text-sm text-slate-600">{sanitize(title)}</div>
         </div>
-        <div className="flex-shrink-0 text-right">
+        <div className="flex-shrink-0 text-left sm:text-right">
           <div className="text-xs uppercase tracking-wide text-slate-400">Relevance</div>
           <div className="text-lg font-semibold text-slate-900">{relevancePercent}%</div>
         </div>
@@ -423,8 +423,8 @@ function LegacyRemarkAccordion({ item, sanitize }: { item: any; sanitize: (value
 
   return (
     <details className="group bg-white open:bg-slate-50">
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4">
-        <div>
+      <summary className="flex cursor-pointer list-none flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <div className="font-mono text-sm font-semibold text-slate-900">{pn}</div>
           {item.title && <div className="mt-1 text-sm text-slate-600">{sanitize(item.title)}</div>}
         </div>

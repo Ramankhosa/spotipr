@@ -38,16 +38,42 @@ describe('buildAutomationIdeaText', () => {
 })
 
 describe('selectReviewedPriorArtDecisions', () => {
-  it('sorts drafting-safe prior art and excludes high-risk, unknown, and low relevance decisions', () => {
+  it('sorts adjacent drafting prior art and excludes remote, high-risk, unknown, and low relevance decisions', () => {
     const selected = selectReviewedPriorArtDecisions([
       { pn: 'ADJ', relevance: 0.6, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
+      { pn: 'ADJ2', relevance: 0.7, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
       { pn: 'ANT', relevance: 0.95, novelty_threat: 'anticipates', analysis_status: 'analyzed' },
       { pn: 'OBV', relevance: 0.8, novelty_threat: 'obvious', analysis_status: 'analyzed' },
       { pn: 'REM', relevance: 0.99, novelty_threat: 'remote', analysis_status: 'analyzed' },
       { pn: 'UNK', relevance: null, novelty_threat: 'unknown', analysis_status: 'unknown' },
       { pn: 'LOW', relevance: 0.2, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
     ])
-    expect(selected.map(decision => decision.pn)).toEqual(['REM', 'ADJ'])
+    expect(selected.map(decision => decision.pn)).toEqual(['ADJ2', 'ADJ'])
+  })
+
+  it('defaults to the top 10 adjacent patents', () => {
+    const decisions = Array.from({ length: 12 }, (_, index) => ({
+      pn: `ADJ${index + 1}`,
+      relevance: 1 - index / 100,
+      novelty_threat: 'adjacent',
+      analysis_status: 'analyzed',
+    }))
+
+    const selected = selectReviewedPriorArtDecisions(decisions)
+
+    expect(selected).toHaveLength(10)
+    expect(selected.map(decision => decision.pn)).toEqual([
+      'ADJ1',
+      'ADJ2',
+      'ADJ3',
+      'ADJ4',
+      'ADJ5',
+      'ADJ6',
+      'ADJ7',
+      'ADJ8',
+      'ADJ9',
+      'ADJ10',
+    ])
   })
 })
 

@@ -1877,6 +1877,25 @@ model NoveltySearchRun {
   @@map("novelty_search_runs")
 }
 
+model NoveltyReportShare {
+  id             String    @id @default(cuid())
+  searchId       String
+  userId         String
+  title          String
+  snapshot       Json
+  tokenHash      String    @unique
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  accessCount    Int       @default(0)
+  lastAccessedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([searchId])
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("novelty_report_shares")
+}
+
 model NoveltySearchJob {
   id                    String                 @id @default(cuid())
   searchId              String                 @unique

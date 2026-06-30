@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { buildNoveltyAttorneyReportModel } from '@/lib/novelty-attorney-report';
 import { useAuth } from '@/lib/auth-context';
+import { Copy, Download, Mail, MessageCircle, Share2, X } from 'lucide-react';
 
 const printStyles = `
   @media print {
@@ -25,6 +26,7 @@ const printStyles = `
 interface ConsolidatedNoveltyReportProps {
   searchId: string;
   searchData: any;
+  readOnly?: boolean;
 }
 
 type FeatureStatus = 'Present' | 'Partial' | 'Absent' | 'Unknown';
@@ -495,7 +497,7 @@ function Cell({ children, className = '', ...props }: React.TdHTMLAttributes<HTM
   return <td {...props} className={`border border-slate-300 px-3 py-2 align-top text-slate-800 ${className}`}>{children}</td>;
 }
 
-export default function ConsolidatedNoveltyReport({ searchId, searchData }: ConsolidatedNoveltyReportProps) {
+export default function ConsolidatedNoveltyReport({ searchId, searchData, readOnly = false }: ConsolidatedNoveltyReportProps) {
   const { authFetch } = useAuth();
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [isGeneratingShare, setIsGeneratingShare] = useState(false);
@@ -511,6 +513,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
   const featureMaps: any[] = Array.isArray(stage35?.feature_map) ? stage35.feature_map : (Array.isArray(stage35) ? stage35 : []);
   const generatedDate = new Date().toISOString().slice(0, 10);
   const title = cleanText(searchData?.title || stage0?.title, 'Novelty Assessment Report');
+  const shareMessage = `PatentNest novelty report: ${title}`;
 
   const reportData = useMemo(() => {
     const model = buildNoveltyAttorneyReportModel({
@@ -590,6 +593,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
   }, [searchId, searchData, stage0, stage1, stage35, stage4]);
 
   const handleDownloadProfessionalPDF = async () => {
+    if (readOnly) return;
     try {
       setIsDownloadingPdf(true);
       const response = await authFetch(`/api/novelty-search/${searchId}/attorney-report/pdf`);
@@ -612,6 +616,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
   };
 
   const handleGenerateShareLink = async () => {
+    if (readOnly) return;
     try {
       setIsGeneratingShare(true);
       const response = await authFetch(`/api/novelty-search/${searchId}/share`, {
@@ -645,35 +650,71 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
     }
   };
 
+  const shareByEmail = () => {
+    if (!shareUrl) return;
+    const subject = encodeURIComponent(title);
+    const body = encodeURIComponent(`${shareMessage}\n\n${shareUrl}`);
+    window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
+  };
+
+  const shareByGmail = () => {
+    if (!shareUrl) return;
+    const subject = encodeURIComponent(title);
+    const body = encodeURIComponent(`${shareMessage}\n\n${shareUrl}`);
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const shareByWhatsApp = () => {
+    if (!shareUrl) return;
+    window.open(`https://wa.me/?text=${encodeURIComponent(`${shareMessage}\n${shareUrl}`)}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const shareNative = async () => {
+    if (!shareUrl) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text: shareMessage, url: shareUrl });
+        return;
+      } catch {
+        return;
+      }
+    }
+    copyShareLink();
+  };
+
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: printStyles }} />
       <div className="min-h-screen bg-slate-100 text-slate-950 print:bg-white">
-        <div className="no-print fixed bottom-6 right-6 z-50 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={handleGenerateShareLink}
-            disabled={isGeneratingShare}
-            className="rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg hover:bg-emerald-700 disabled:opacity-70"
-          >
-            {isGeneratingShare ? 'Generating link...' : 'Share Public Link'}
-          </button>
-          <button
-            type="button"
-            onClick={handleDownloadProfessionalPDF}
-            disabled={isDownloadingPdf}
-            className="rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-lg hover:bg-slate-800 disabled:opacity-70"
-          >
-            {isDownloadingPdf ? 'Preparing PDF...' : 'Download Professional Report'}
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="no-print fixed inset-x-3 bottom-3 z-50 flex flex-col gap-2 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur sm:inset-x-auto sm:bottom-6 sm:right-6 sm:flex-row sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-0">
+            <button
+              type="button"
+              onClick={handleGenerateShareLink}
+              disabled={isGeneratingShare}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-70 sm:shadow-lg"
+            >
+              <Share2 className="h-4 w-4" />
+              {isGeneratingShare ? 'Generating link...' : 'Share Public Link'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadProfessionalPDF}
+              disabled={isDownloadingPdf}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-70 sm:shadow-lg"
+            >
+              <Download className="h-4 w-4" />
+              {isDownloadingPdf ? 'Preparing PDF...' : 'Download Report'}
+            </button>
+          </div>
+        )}
 
-        <main className="mx-auto max-w-6xl bg-white px-8 py-10 shadow-sm print:max-w-none print:px-0 print:py-0 print:shadow-none">
+        <main className="mx-auto max-w-6xl bg-white px-4 py-6 shadow-sm sm:px-6 lg:px-8 lg:py-10 print:max-w-none print:px-0 print:py-0 print:shadow-none">
           <header className="mb-10 border-b-4 border-blue-700 pb-8">
             <div className="flex flex-col justify-between gap-6 md:flex-row md:items-start">
-              <div>
+              <div className="min-w-0">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Confidential review draft</div>
-                <h1 className="max-w-4xl text-3xl font-bold tracking-tight text-slate-950">{title}</h1>
+                <h1 className="max-w-4xl break-words text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">{title}</h1>
                 <p className="mt-2 text-sm text-slate-600">Automated Novelty Report</p>
               </div>
               <div className="text-left text-sm text-slate-600 md:text-right">
@@ -1236,19 +1277,42 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData }: Cons
         </main>
 
         {showShareModal && shareUrl && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl">
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-3 sm:items-center sm:p-4">
+            <div className="w-full max-w-2xl rounded-lg bg-white p-4 shadow-xl sm:p-6">
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-semibold text-slate-950">Share Link Generated</h3>
-                  <p className="mt-1 text-sm text-slate-600">This report is accessible through the public share URL below.</p>
+                  <p className="mt-1 text-sm text-slate-600">This public URL opens a snapshot copy of the report as it exists now.</p>
                 </div>
-                <button type="button" onClick={() => setShowShareModal(false)} className="text-slate-400 hover:text-slate-600">Close</button>
+                <button type="button" onClick={() => setShowShareModal(false)} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Close share dialog">
+                  <X className="h-4 w-4" />
+                </button>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-sm text-slate-800 break-all">{shareUrl}</div>
-              <div className="mt-5 flex justify-end gap-3">
+              <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <button type="button" onClick={copyShareLink} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  <Copy className="h-4 w-4" />
+                  Copy
+                </button>
+                <button type="button" onClick={shareByGmail} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  <Mail className="h-4 w-4" />
+                  Gmail
+                </button>
+                <button type="button" onClick={shareByEmail} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  <Mail className="h-4 w-4" />
+                  Email
+                </button>
+                <button type="button" onClick={shareByWhatsApp} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  <MessageCircle className="h-4 w-4" />
+                  WhatsApp
+                </button>
+              </div>
+              <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button type="button" onClick={() => setShowShareModal(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close</button>
-                <button type="button" onClick={copyShareLink} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Copy Link</button>
+                <button type="button" onClick={shareNative} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+                  <Share2 className="h-4 w-4" />
+                  Share
+                </button>
               </div>
             </div>
           </div>

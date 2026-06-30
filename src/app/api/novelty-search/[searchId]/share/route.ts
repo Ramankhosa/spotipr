@@ -74,7 +74,14 @@ export async function POST(
         id: true,
         userId: true,
         status: true,
-        title: true
+        title: true,
+        jurisdiction: true,
+        stage0Results: true,
+        stage1Results: true,
+        stage35Results: true,
+        stage4Results: true,
+        createdAt: true,
+        updatedAt: true
       }
     });
 
@@ -99,28 +106,42 @@ export async function POST(
       );
     }
 
-    // Generate share token
-    const timestamp = Date.now().toString();
-    const secret = process.env.SHARE_TOKEN_SECRET || 'default-share-secret';
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const snapshot = {
+      searchId: searchRun.id,
+      title: searchRun.title,
+      jurisdiction: searchRun.jurisdiction,
+      stage0Results: searchRun.stage0Results,
+      stage1Results: searchRun.stage1Results,
+      stage35Results: searchRun.stage35Results,
+      stage4Results: searchRun.stage4Results,
+      createdAt: searchRun.createdAt.toISOString(),
+      updatedAt: searchRun.updatedAt.toISOString(),
+      sharedAt: new Date().toISOString()
+    };
 
-    // Create a simple hash for token integrity
-    const hash = crypto
-      .createHash('sha256')
-      .update(`${searchId}.${timestamp}.${secret}`)
-      .digest('hex')
-      .substring(0, 8);
-
-    // Create token: searchId.timestamp.hash
-    const shareToken = Buffer.from(`${searchId}.${timestamp}.${hash}`).toString('base64url');
+    const share = await prisma.noveltyReportShare.create({
+      data: {
+        searchId: searchRun.id,
+        userId: searchRun.userId,
+        title: searchRun.title || 'Novelty Assessment Report',
+        snapshot,
+        tokenHash,
+        expiresAt
+      }
+    });
 
     // Generate shareable URL
     const baseUrl = getShareBaseUrl(request);
-    const shareUrl = `${baseUrl}/share/novelty-report/${searchId}?token=${shareToken}`;
+    const shareUrl = `${baseUrl}/share/novelty-report/${share.id}?token=${rawToken}`;
 
     return NextResponse.json({
       success: true,
       shareUrl,
       expiresIn: '1 week',
+      expiresAt: expiresAt.toISOString(),
       reportTitle: searchRun.title
     });
 

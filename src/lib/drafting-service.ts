@@ -2059,6 +2059,79 @@ Norms:
     }
   }
 
+  private static truncatePromptValue(value: unknown, maxLength: number): string {
+    const text = String(value || '').replace(/\s+/g, ' ').trim()
+    if (!text) return ''
+    return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
+  }
+
+  private static parsePriorArtUserNotes(patent: any): Record<string, any> {
+    const notes = patent?.userNotes || patent?.user_notes
+    if (!notes || typeof notes !== 'string') return {}
+    try {
+      const parsed = JSON.parse(notes)
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  private static formatPriorArtForBackground(manualPriorArt: any, selectedPriorArtPatents: any[] = []): string {
+    const parts: string[] = []
+    const manualText = this.truncatePromptValue(
+      manualPriorArt?.manualPriorArtText || manualPriorArt?.text || '',
+      2500
+    )
+
+    if (manualText) {
+      parts.push(`Manual prior art analysis:\n${manualText}`)
+    }
+
+    const patentBlocks = selectedPriorArtPatents.map((patent: any, index: number) => {
+      const notes = this.parsePriorArtUserNotes(patent)
+      const pn = patent?.patentNumber || patent?.publicationNumber || patent?.publication_number || patent?.pn || `Reference ${index + 1}`
+      const title = this.truncatePromptValue(patent?.title, 160)
+      const relevance = Number.isFinite(Number(patent?.relevance ?? patent?.score))
+        ? Number(patent?.relevance ?? patent?.score).toFixed(2)
+        : ''
+      const threat = this.truncatePromptValue(patent?.noveltyThreat || patent?.novelty_threat, 40)
+      const summary = this.truncatePromptValue(
+        patent?.aiSummary || patent?.summary || notes.summary || patent?.snippet || patent?.abstract,
+        450
+      )
+      const relevantParts = Array.isArray(notes.relevant_parts)
+        ? this.truncatePromptValue(notes.relevant_parts.join('; '), 350)
+        : ''
+      const gaps = this.truncatePromptValue(
+        patent?.noveltyComparison || notes.novelty_comparison || (Array.isArray(notes.irrelevant_parts) ? notes.irrelevant_parts.join('; ') : ''),
+        450
+      )
+
+      return [
+        `${index + 1}. ${pn}${title ? ` - ${title}` : ''}`,
+        relevance ? `   Relevance score: ${relevance}` : '',
+        threat ? `   AI classification: ${threat}` : '',
+        summary ? `   Analysis summary: ${summary}` : '',
+        relevantParts ? `   Relevant disclosure: ${relevantParts}` : '',
+        gaps ? `   Limitations/gaps for background: ${gaps}` : '',
+      ].filter(Boolean).join('\n')
+    }).filter(Boolean)
+
+    if (patentBlocks.length > 0) {
+      parts.push(`Selected analyzed patents (${patentBlocks.length}):\n${patentBlocks.join('\n\n')}`)
+    }
+
+    if (parts.length === 0) return ''
+
+    return `Prior Art References for Background:
+${parts.join('\n\n')}
+
+Background drafting requirements:
+- Refer to each selected patent by publication/patent number.
+- Use the analysis summaries and limitations/gaps above when explaining the background.
+- Do not treat these references as invention support or import their features into the invention.`
+  }
+
   private static buildSectionPrompt(section: string, payload: any, ctx: SectionPromptContext): string {
     const { idea, referenceMap, figures, approved, instructions, manualPriorArt, selectedPriorArtPatents } = payload
 
@@ -2320,7 +2393,7 @@ ${writingSampleBlock}`
       // ══════════════════════════════════════════════════════════════════════════════
       
       const ctxReqs = ctx?.contextRequirements
-      const shouldInjectPriorArt = ctxReqs?.requiresPriorArt === true
+      const shouldInjectPriorArt = ctxReqs?.requiresPriorArt === true || section === 'background'
       const shouldInjectFigures = ctxReqs?.requiresFigures === true
       const shouldInjectComponents = ctxReqs?.requiresComponents === true
       // Note: requiresClaims is handled by UDB (Claim 1 anchoring), not here
@@ -2328,13 +2401,12 @@ ${writingSampleBlock}`
       let additionalContext = ''
       switch (section) {
         case 'background':
-          // Prior art context - ONLY if admin flag allows AND data exists
+          // Background must receive approved prior-art context even if admin metadata is stale.
           if (shouldInjectPriorArt) {
-            const priorArtText = payload.manualPriorArt?.manualPriorArtText || ''
-            const selectedPatentNumbers = payload.selectedPriorArtPatents?.map((p: any) => p.patentNumber).filter(Boolean).join(', ')
-            if (priorArtText || selectedPatentNumbers) {
-              additionalContext = `Prior Art References: ${priorArtText || selectedPatentNumbers}`
-            }
+            additionalContext = this.formatPriorArtForBackground(
+              payload.manualPriorArt,
+              payload.selectedPriorArtPatents || []
+            )
           }
           break
         case 'briefDescriptionOfDrawings':

@@ -11,7 +11,7 @@ import { renderPlantUml } from '@/lib/plantuml-renderer'
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
 const DEFAULT_JURISDICTION = 'IN'
 const BATCH_PRIOR_ART_PROVIDER_IDS = ['indian-corpus', 'pqai-corpus']
-const BATCH_PRIOR_ART_LIMIT = 5
+const BATCH_PRIOR_ART_LIMIT = 10
 
 const DRAFTING_ACTION_STAGE_LABELS: Record<string, string> = {
   normalize_idea: 'DRAFT_IDEA_ENTRY',
@@ -544,7 +544,7 @@ export function selectReviewedPriorArtDecisions(decisions: any[], limit = BATCH_
       const noveltyThreat = String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase()
       return decision?.analysis_status !== 'unknown' &&
         relevance >= 0.3 &&
-        (noveltyThreat === 'adjacent' || noveltyThreat === 'remote')
+        noveltyThreat === 'adjacent'
     })
     .sort((a: any, b: any) => Number(b?.relevance || 0) - Number(a?.relevance || 0))
     .slice(0, limit)

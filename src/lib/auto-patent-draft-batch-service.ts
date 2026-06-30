@@ -99,7 +99,7 @@ const TEMPLATE_GUIDE_ROWS = [
   ['claimsText', 'Optional', 'Existing claims to use/improve depending on claimsHandling.', '1. A dose tracking inhaler comprising...'],
   ['claimsHandling', 'Optional', 'use as is, improve, draft from brief, or auto. Defaults to draft from brief.', 'draft from brief'],
   ['claimsNotes', 'Optional', 'Specific instructions for claims drafting.', 'Include one broad system claim and dependent sensing claims.'],
-  ['priorArtHandling', 'Optional', 'use only, expand with search, or auto. Defaults based on prior-art text.', 'use only'],
+  ['priorArtHandling', 'Optional', 'use only, expand with search, or auto. Defaults to auto.', 'auto'],
   ['illustrativeData', 'Optional', 'Additional support data for detailed description.', 'Prototype detected 98% of actuation events over 30 days.'],
 ]
 
@@ -142,7 +142,7 @@ export function buildAutoPatentDraftBatchTemplate(format: 'xlsx' | 'csv' = 'xlsx
       claimsText: '',
       claimsHandling: 'draft from brief',
       claimsNotes: 'Include one broad system claim and dependent sensing claims.',
-      priorArtHandling: 'use only',
+      priorArtHandling: 'auto',
       illustrativeData: 'Prototype detected 98% of actuation events over 30 days.',
     }
   ], { header: [...AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS] })

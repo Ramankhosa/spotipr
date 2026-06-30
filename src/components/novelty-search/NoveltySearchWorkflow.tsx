@@ -96,6 +96,29 @@ const STAGE_PROGRESS = {
 
 const STAGE_ORDER = ['PENDING', 'STAGE_0_COMPLETED', 'STAGE_1_COMPLETED', 'STAGE_3_5_COMPLETED', 'COMPLETED'];
 
+const QUERY_PLANNING_STAGES = [
+  {
+    label: 'Reading the disclosure',
+    detail: 'The LLM is identifying the technical problem, core mechanism, and invention field.',
+  },
+  {
+    label: 'Extracting key features',
+    detail: 'The LLM is isolating features that should drive novelty retrieval and comparison.',
+  },
+  {
+    label: 'Drafting the search query',
+    detail: 'The LLM is converting invention features into patent-search language and synonyms.',
+  },
+  {
+    label: 'Checking retrieval balance',
+    detail: 'The LLM is balancing broad coverage with terms that keep unrelated art out.',
+  },
+  {
+    label: 'Preparing Stage 0 output',
+    detail: 'The LLM is formatting the query and feature list for review before search execution.',
+  },
+];
+
 const visibleStatusForReport = (status: string | undefined, quote?: string) => {
   if ((status === 'Present' || status === 'Partial') && quote) return status;
   if (status === 'Unknown') return 'Unknown';
@@ -514,6 +537,7 @@ export default function NoveltySearchWorkflow({
   const [autoMode, setAutoMode] = useState(false);
   const [stage0Approved, setStage0Approved] = useState(false);
   const [isAutoRunning, setIsAutoRunning] = useState(false);
+  const [queryPlanningStageIndex, setQueryPlanningStageIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const latestSearchStateRef = useRef<SearchState | null>(null);
   const autoStageStateRef = useRef<ReturnType<typeof buildNoveltyAutoStageState> | null>(null);
@@ -565,6 +589,19 @@ export default function NoveltySearchWorkflow({
   useEffect(() => {
     stage0ApprovedRef.current = stage0Approved;
   }, [stage0Approved]);
+
+  useEffect(() => {
+    if (!searchState.isLoading || searchState.searchId) {
+      setQueryPlanningStageIndex(0);
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setQueryPlanningStageIndex(current => Math.min(current + 1, QUERY_PLANNING_STAGES.length - 1));
+    }, 1600);
+
+    return () => window.clearInterval(interval);
+  }, [searchState.isLoading, searchState.searchId]);
 
   useEffect(() => {
     setStage1Page(1);
@@ -2284,7 +2321,7 @@ export default function NoveltySearchWorkflow({
               {searchState.isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Starting novelty search...
+                  {QUERY_PLANNING_STAGES[queryPlanningStageIndex]?.label || 'Starting novelty search...'}
                 </>
               ) : (
                 <>
@@ -2295,6 +2332,34 @@ export default function NoveltySearchWorkflow({
               )}
             </Button>
           </motion.div>
+          {searchState.isLoading && !searchState.searchId && (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-lg bg-white p-2 text-indigo-600 shadow-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">
+                      {QUERY_PLANNING_STAGES[queryPlanningStageIndex]?.label || 'Preparing search plan'}
+                    </div>
+                    <div className="text-xs font-medium text-indigo-700">
+                      {Math.round(((queryPlanningStageIndex + 1) / QUERY_PLANNING_STAGES.length) * 100)}%
+                    </div>
+                  </div>
+                  <p className="mt-1 text-sm leading-5 text-slate-600">
+                    {QUERY_PLANNING_STAGES[queryPlanningStageIndex]?.detail || 'The LLM is preparing the initial query plan.'}
+                  </p>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">
+                    <div
+                      className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                      style={{ width: `${Math.round(((queryPlanningStageIndex + 1) / QUERY_PLANNING_STAGES.length) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </motion.div>
@@ -3792,7 +3857,7 @@ export default function NoveltySearchWorkflow({
                       Showing {visiblePatents.length}/{items.length} patents and {visibleFeatures.length}/{features.length} features.
                     </div>
                   )}
-                  <div className="p-3 text-xs text-slate-600 flex items-center gap-4 border-t bg-white">
+                  <div className="flex flex-wrap items-center gap-3 border-t bg-white p-3 text-xs text-slate-600 sm:gap-4">
                     <span className="font-medium text-slate-700">Legend:</span>
                     <span className="flex items-center gap-1">
                       <span className="inline-block w-3 h-3 rounded bg-rose-500"></span>
@@ -3902,12 +3967,12 @@ export default function NoveltySearchWorkflow({
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3 border-b">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
                   <FileText className="h-5 w-5 text-white" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <CardTitle className="text-lg">Detailed Prior Art Analysis</CardTitle>
                   <CardDescription>{remarks.length} patents analyzed for inventor review</CardDescription>
                 </div>
@@ -4180,14 +4245,14 @@ export default function NoveltySearchWorkflow({
 
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+            <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-900">Report actions</div>
               <div className="text-xs text-slate-500">Open the consolidated report for sharing, printing, or saving as PDF.</div>
             </div>
             <Link
               href={`/novelty-search/${searchState.searchId}/consolidated`}
               target="_blank"
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:w-auto"
             >
               <Eye className="h-4 w-4" />
               View Full Report
@@ -4238,17 +4303,17 @@ export default function NoveltySearchWorkflow({
           </div>
           )}
 
-          <div className={`mx-auto w-full px-4 py-6 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-6xl' : selectedStageTab === '2' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+          <div className={`mx-auto w-full px-3 py-5 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-6xl' : selectedStageTab === '2' ? 'max-w-7xl' : 'max-w-5xl'}`}>
             {renderSearchPathTabs()}
             <motion.div
               initial={{ opacity: 0, y: -12 }}
               animate={{ opacity: 1, y: 0 }}
               className="mb-5"
             >
-              <div className="flex items-center justify-between gap-4">
-                <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                <div className="min-w-0">
                   <div className="text-sm font-medium text-slate-500">Novelty Search Workflow</div>
-                  <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                  <h1 className="mt-1 break-words text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
                     {activeSearchPath === 'manual' ? 'Manual Patent Search' : STAGE_TAB_LABELS[selectedStageTab]}
                   </h1>
                   <div className="mt-1 text-sm text-slate-500">
@@ -4310,7 +4375,7 @@ export default function NoveltySearchWorkflow({
               animate={{ x: 0 }}
               exit={{ x: -280 }}
               transition={{ type: 'spring', damping: 28, stiffness: 260 }}
-              className="h-full w-[280px] bg-white shadow-xl"
+              className="h-full w-[min(86vw,280px)] bg-white shadow-xl"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
@@ -4345,16 +4410,16 @@ export default function NoveltySearchWorkflow({
 
       <Dialog open={!!selectedEvidence} onOpenChange={(open) => { if (!open) setSelectedEvidence(null); }}>
         {selectedEvidence && (
-          <DialogContent className="left-auto right-0 top-0 h-full max-w-xl translate-x-0 translate-y-0 gap-0 overflow-y-auto rounded-none border-l border-slate-200 p-0 sm:rounded-none">
+          <DialogContent className="left-auto right-0 top-0 h-full w-full max-w-full translate-x-0 translate-y-0 gap-0 overflow-y-auto rounded-none border-l border-slate-200 p-0 sm:max-w-xl sm:rounded-none">
             <DialogHeader className="border-b border-slate-200 px-6 py-5 text-left">
-              <div className="flex items-start justify-between gap-4 pr-8">
-                <div>
+              <div className="flex flex-col gap-3 pr-8 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                <div className="min-w-0">
                   <DialogTitle className="text-lg font-semibold text-slate-900">Evidence Detail</DialogTitle>
-                  <DialogDescription className="mt-1">
+                  <DialogDescription className="mt-1 break-words">
                     Patent {selectedEvidence.pn}{selectedEvidence.patentTitle ? ` - ${selectedEvidence.patentTitle}` : ''}
                   </DialogDescription>
                 </div>
-                <Badge className={`font-medium ${
+                <Badge className={`w-fit font-medium ${
                   selectedEvidence.status === 'Present' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
                   selectedEvidence.status === 'Partial' ? 'bg-amber-50 text-amber-700 border-amber-200' :
                   'bg-rose-50 text-rose-700 border-rose-200'

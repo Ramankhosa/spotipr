@@ -40,6 +40,29 @@ const literatureSources = [
   { id: 'arxiv', label: 'arXiv' },
   { id: 'core', label: 'CORE' },
 ]
+
+const queryPreparationStages = [
+  {
+    label: 'Reading the disclosure',
+    detail: 'The LLM is identifying the problem, mechanism, and technical field from your invention text.',
+  },
+  {
+    label: 'Extracting claim-worthy features',
+    detail: 'The LLM is separating core inventive features from background context and examples.',
+  },
+  {
+    label: 'Building patent retrieval language',
+    detail: 'The LLM is translating those features into search terms that patent databases can match.',
+  },
+  {
+    label: 'Balancing broad and narrow terms',
+    detail: 'The LLM is adding synonyms and constraints so retrieval is not too generic or too restrictive.',
+  },
+  {
+    label: 'Preparing your review plan',
+    detail: 'The LLM is formatting the query and feature list for your approval before retrieval starts.',
+  },
+]
 type ManualFields = {
   anyText: string
   title: string
@@ -192,6 +215,7 @@ export default function NoveltySearchSubmission(props: {
   const [newEpoAbstractKeyword, setNewEpoAbstractKeyword] = useState('')
   const [newFeature, setNewFeature] = useState('')
   const [isPreparing, setIsPreparing] = useState(false)
+  const [preparationStageIndex, setPreparationStageIndex] = useState(0)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isExtracting, setIsExtracting] = useState(false)
   const [uploadedName, setUploadedName] = useState('')
@@ -220,6 +244,19 @@ export default function NoveltySearchSubmission(props: {
       }
     }).catch(() => setError('Failed to load search organization options.'))
   }, [authFetch, props.initialProjectId])
+
+  useEffect(() => {
+    if (!isPreparing) {
+      setPreparationStageIndex(0)
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      setPreparationStageIndex(current => Math.min(current + 1, queryPreparationStages.length - 1))
+    }, 1600)
+
+    return () => window.clearInterval(interval)
+  }, [isPreparing])
 
   const sourceMode = sourceModeFromProviders(selectedProviderIds)
   const usesEpoSearch = selectedProviderIds.some(id => id.includes('epo'))
@@ -255,6 +292,8 @@ export default function NoveltySearchSubmission(props: {
       minCitations: Math.max(0, Number(paperMinCitations) || 0),
     },
   }
+  const preparationStage = queryPreparationStages[preparationStageIndex] || queryPreparationStages[0]
+  const preparationProgress = Math.round(((preparationStageIndex + 1) / queryPreparationStages.length) * 100)
 
   const manualFilters = useMemo(() => ({
     anyTextContains: splitValues(manualFields.anyText),
@@ -320,6 +359,7 @@ export default function NoveltySearchSubmission(props: {
       return
     }
     setIsPreparing(true)
+    setPreparationStageIndex(0)
     setError('')
     try {
       const response = await authFetch('/api/novelty-search/prepare', {
@@ -969,10 +1009,36 @@ export default function NoveltySearchSubmission(props: {
         )}
 
         {!review ? (
+          <div className="space-y-3">
           <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting || !hasSelectedSources} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
             {isPreparing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
             {isPreparing ? 'Generating search plan…' : 'Generate Search Query & Features'}
           </button>
+          {isPreparing && (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-lg bg-white p-2 text-indigo-600 shadow-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">{preparationStage.label}</div>
+                    <div className="text-xs font-medium text-indigo-700">{preparationProgress}%</div>
+                  </div>
+                  <p className="mt-1 text-sm leading-5 text-slate-600">{preparationStage.detail}</p>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">
+                    <div className="h-full rounded-full bg-indigo-600 transition-all duration-500" style={{ width: `${preparationProgress}%` }} />
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-5">
+                    {queryPreparationStages.map((stage, index) => (
+                      <div key={stage.label} className={`h-1.5 rounded-full ${index <= preparationStageIndex ? 'bg-indigo-500' : 'bg-white'}`} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          </div>
         ) : (
           <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !hasSelectedSources || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
             {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}

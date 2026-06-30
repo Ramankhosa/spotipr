@@ -18,6 +18,39 @@ export async function GET(
       );
     }
 
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const share = await prisma.noveltyReportShare.findFirst({
+      where: {
+        id: reportId,
+        tokenHash,
+        revokedAt: null,
+      },
+    });
+
+    if (share) {
+      if (share.expiresAt.getTime() < Date.now()) {
+        return NextResponse.json(
+          { error: 'This shared link has expired' },
+          { status: 410 }
+        );
+      }
+
+      await prisma.noveltyReportShare.update({
+        where: { id: share.id },
+        data: {
+          accessCount: { increment: 1 },
+          lastAccessedAt: new Date(),
+        },
+      });
+
+      return NextResponse.json({
+        ...(share.snapshot as Record<string, unknown>),
+        shareId: share.id,
+        sharedTitle: share.title,
+        expiresAt: share.expiresAt,
+      });
+    }
+
     // Verify the token format and extract data
     try {
       const decodedToken = Buffer.from(token, 'base64url').toString('utf-8');
@@ -46,6 +79,13 @@ export async function GET(
         .substring(0, 8);
 
       if (hash !== expectedHash) {
+        return NextResponse.json(
+          { error: 'Invalid access token' },
+          { status: 401 }
+        );
+      }
+
+      if (reportId !== searchId) {
         return NextResponse.json(
           { error: 'Invalid access token' },
           { status: 401 }

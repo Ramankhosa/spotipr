@@ -86,7 +86,7 @@ export default function PublicNoveltyReportPage() {
     <div className="min-h-screen bg-slate-50">
       {/* Public notice banner */}
       <div className="bg-blue-50 border-b border-blue-200 px-4 py-3">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+        <div className="max-w-5xl mx-auto flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="text-blue-600">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -108,6 +108,7 @@ export default function PublicNoveltyReportPage() {
       <ConsolidatedNoveltyReport
         searchId={reportData.searchId}
         searchData={reportData}
+        readOnly
       />
     </div>
   );
