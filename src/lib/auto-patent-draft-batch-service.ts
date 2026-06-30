@@ -1426,10 +1426,76 @@ export async function getAutoPatentDraftBatchForUser(batchId: string, userId: st
   })
 }
 
-export async function listAutoPatentDraftBatchesForUser(userId: string) {
-  return (prisma as any).autoPatentDraftBatch.findMany({
-    where: { userId },
-    orderBy: { createdAt: 'desc' },
-    take: 50
-  })
+export type AutoPatentDraftBatchListOptions = {
+  limit?: number
+  cursor?: string
+  status?: string
+  q?: string
+  from?: Date
+  to?: Date
+  attentionOnly?: boolean
+}
+
+function normalizeBatchListLimit(value: unknown) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 20
+  return Math.max(1, Math.min(100, Math.floor(parsed)))
+}
+
+function buildBatchListWhere(userId: string, options: AutoPatentDraftBatchListOptions) {
+  const where: any = { userId }
+  const status = safeString(options.status).toUpperCase()
+  if (status && status !== 'ALL') where.status = status
+  const q = safeString(options.q)
+  if (q) {
+    where.OR = [
+      { name: { contains: q, mode: 'insensitive' } },
+      { sourceFilename: { contains: q, mode: 'insensitive' } },
+    ]
+  }
+  if (options.from || options.to) {
+    where.createdAt = {
+      ...(options.from ? { gte: options.from } : {}),
+      ...(options.to ? { lte: options.to } : {}),
+    }
+  }
+  if (options.attentionOnly) {
+    const attention = [
+      { failedItems: { gt: 0 } },
+      { warningItems: { gt: 0 } },
+      { status: { in: ['FAILED', 'COMPLETED_WITH_ERRORS', 'CANCELLED'] } },
+    ]
+    where.AND = [...(Array.isArray(where.AND) ? where.AND : []), { OR: attention }]
+  }
+  return where
+}
+
+export async function listAutoPatentDraftBatchesForUser(userId: string, options: AutoPatentDraftBatchListOptions = {}) {
+  const limit = normalizeBatchListLimit(options.limit)
+  const where = buildBatchListWhere(userId, options)
+  const countWhere = buildBatchListWhere(userId, { ...options, status: undefined })
+  const [rows, statusGroups, totalCount] = await Promise.all([
+    (prisma as any).autoPatentDraftBatch.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+    }),
+    (prisma as any).autoPatentDraftBatch.groupBy({
+      by: ['status'],
+      where: countWhere,
+      _count: { _all: true },
+    }),
+    (prisma as any).autoPatentDraftBatch.count({ where }),
+  ])
+  const hasMore = rows.length > limit
+  const batches = hasMore ? rows.slice(0, limit) : rows
+  const statusCounts = Object.fromEntries((statusGroups || []).map((group: any) => [group.status, group._count?._all || 0]))
+  return {
+    batches,
+    nextCursor: hasMore ? batches[batches.length - 1]?.id || null : null,
+    hasMore,
+    totalCount,
+    statusCounts,
+  }
 }

@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 const { prismaMock } = vi.hoisted(() => ({
   prismaMock: {
     autoPatentDraftBatch: {
+      count: vi.fn(),
       findFirst: vi.fn(),
       findUnique: vi.fn(),
       findMany: vi.fn(),
+      groupBy: vi.fn(),
       update: vi.fn(),
       updateMany: vi.fn(),
     },
@@ -44,6 +46,7 @@ import {
   cancelAutoPatentDraftBatch,
   getAutoPatentDraftBatchArtifactForUser,
   getAutoPatentDraftBatchArtifactsForUser,
+  listAutoPatentDraftBatchesForUser,
   pauseAutoPatentDraftBatch,
   retryAutoPatentDraftBatchItem,
   resumeAutoPatentDraftBatch,
@@ -259,5 +262,53 @@ describe('auto patent draft batch controls', () => {
     expect(listing?.items[0].artifactGroups.png).toHaveLength(1)
     expect(allowed).toMatchObject({ id: 'doc-1' })
     expect(blocked).toBeNull()
+  })
+
+  test('lists batches with filters, status counts, and cursor pagination', async () => {
+    prismaMock.autoPatentDraftBatch.findMany.mockResolvedValueOnce([
+      { id: 'batch-2', status: 'PROCESSING', name: 'Second batch' },
+      { id: 'batch-1', status: 'COMPLETED_WITH_ERRORS', name: 'First batch' },
+      { id: 'batch-extra', status: 'FAILED', name: 'Extra batch' },
+    ])
+    prismaMock.autoPatentDraftBatch.groupBy.mockResolvedValueOnce([
+      { status: 'PROCESSING', _count: { _all: 1 } },
+      { status: 'COMPLETED_WITH_ERRORS', _count: { _all: 1 } },
+    ])
+    prismaMock.autoPatentDraftBatch.count.mockResolvedValueOnce(3)
+
+    const result = await listAutoPatentDraftBatchesForUser('user-1', {
+      limit: 2,
+      cursor: 'cursor-1',
+      status: 'PROCESSING',
+      q: 'sensor',
+      attentionOnly: true,
+      from: new Date('2026-06-01T00:00:00.000Z'),
+      to: new Date('2026-06-30T23:59:59.999Z'),
+    })
+
+    expect(result.batches.map((batch: any) => batch.id)).toEqual(['batch-2', 'batch-1'])
+    expect(result.nextCursor).toBe('batch-1')
+    expect(result.hasMore).toBe(true)
+    expect(result.statusCounts).toMatchObject({ PROCESSING: 1, COMPLETED_WITH_ERRORS: 1 })
+    expect(prismaMock.autoPatentDraftBatch.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      take: 3,
+      cursor: { id: 'cursor-1' },
+      skip: 1,
+      where: expect.objectContaining({
+        userId: 'user-1',
+        status: 'PROCESSING',
+        OR: expect.arrayContaining([
+          { name: { contains: 'sensor', mode: 'insensitive' } },
+          { sourceFilename: { contains: 'sensor', mode: 'insensitive' } },
+        ]),
+        createdAt: expect.objectContaining({
+          gte: new Date('2026-06-01T00:00:00.000Z'),
+          lte: new Date('2026-06-30T23:59:59.999Z'),
+        }),
+      }),
+    }))
+    expect(prismaMock.autoPatentDraftBatch.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.not.objectContaining({ status: 'PROCESSING' }),
+    }))
   })
 })

@@ -13,11 +13,8 @@ import {
   History,
   Loader2,
   PackageCheck,
-  Pause,
-  Play,
   RefreshCw,
   Upload,
-  XCircle,
 } from 'lucide-react'
 
 type Project = {
@@ -131,7 +128,7 @@ export default function PatentDraftBatchPage() {
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [isLoadingData, setIsLoadingData] = useState(true)
-  const [batchAction, setBatchAction] = useState<string | null>(null)
+  const [createdBatchId, setCreatedBatchId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -146,7 +143,7 @@ export default function PatentDraftBatchPage() {
   const hasActiveBatches = batches.some(batch => POLLING_BATCH_STATUSES.has(batch.status))
 
   const loadBatches = useCallback(async () => {
-    const res = await authFetch('/api/auto-patent-drafting/batches', { cache: 'no-store' })
+    const res = await authFetch('/api/auto-patent-drafting/batches?limit=5', { cache: 'no-store' })
     const body = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(body.error || 'Failed to load patent drafting batches.')
     const nextBatches = body.batches || []
@@ -286,6 +283,7 @@ export default function PatentDraftBatchPage() {
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.error || 'Failed to create patent drafting batch.')
       setNotice(`Batch queued with ${body.totalItems || ideas.length} patent draft${(body.totalItems || ideas.length) === 1 ? '' : 's'}.`)
+      setCreatedBatchId(body.batchId || null)
       setSelectedFile(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
       setPreviewRows([])
@@ -315,33 +313,6 @@ export default function PatentDraftBatchPage() {
       downloadBlob(blob, filenameFromDisposition(res.headers.get('content-disposition'), `${batch.name || 'patent-drafting-batch'}.zip`))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to download batch ZIP.')
-    }
-  }
-
-  const runBatchAction = async (batch: BatchSummary, action: 'pause' | 'resume' | 'cancel') => {
-    if (action === 'cancel' && !window.confirm('Cancel this batch? Queued and running items will be marked cancelled.')) return
-    try {
-      setBatchAction(`${batch.id}:${action}`)
-      setError(null)
-      setNotice(null)
-      const res = await authFetch(`/api/auto-patent-drafting/batches/${batch.id}/${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: action === 'cancel' ? JSON.stringify({ reason: 'Cancelled from batch drafting page.' }) : undefined,
-      })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(body.error || `Failed to ${action} batch.`)
-      await loadBatches()
-      const detailRes = await authFetch(`/api/auto-patent-drafting/batches/${batch.id}`, { cache: 'no-store' })
-      if (detailRes.ok) {
-        const detail = await detailRes.json()
-        setSelectedBatch(detail.batch)
-      }
-      setNotice(action === 'resume' ? 'Batch resumed.' : action === 'pause' ? 'Batch paused.' : 'Batch cancelled.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${action} batch.`)
-    } finally {
-      setBatchAction(null)
     }
   }
 
@@ -397,6 +368,30 @@ export default function PatentDraftBatchPage() {
           <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
             <CheckCircle2 className="mt-0.5 h-4 w-4 flex-none" />
             <span>{notice}</span>
+          </div>
+        ) : null}
+
+        {createdBatchId ? (
+          <div className="mb-4 flex flex-wrap gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+            <Link href={`/patents/draft/batch/${createdBatchId}`} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+              <History className="h-4 w-4" />
+              Open batch workspace
+            </Link>
+            <Link href="/patents/draft/batch/history" className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
+              <History className="h-4 w-4" />
+              View all batches
+            </Link>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatedBatchId(null)
+                setNotice(null)
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              <Upload className="h-4 w-4" />
+              Create another batch
+            </button>
           </div>
         ) : null}
 
@@ -643,16 +638,24 @@ export default function PatentDraftBatchPage() {
               <div className="mb-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <History className="h-5 w-5 text-blue-600" />
-                  <h2 className="text-lg font-semibold text-slate-950">Recent Batches</h2>
+                  <h2 className="text-lg font-semibold text-slate-950">Latest Batches</h2>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => loadBatches().catch(err => setError(err instanceof Error ? err.message : 'Failed to refresh batches.'))}
-                  className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-50"
-                  aria-label="Refresh batches"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </button>
+                <div className="flex gap-2">
+                  <Link
+                    href="/patents/draft/batch/history"
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    View all
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => loadBatches().catch(err => setError(err instanceof Error ? err.message : 'Failed to refresh batches.'))}
+                    className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-50"
+                    aria-label="Refresh batches"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
               <div className="space-y-3">
                 {batches.length ? batches.map(batch => (
@@ -738,70 +741,6 @@ export default function PatentDraftBatchPage() {
                   <History className="h-4 w-4" />
                   Open batch workspace
                 </Link>
-
-                {['QUEUED', 'PROCESSING', 'PAUSED'].includes(selectedBatch.status) ? (
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {['QUEUED', 'PROCESSING'].includes(selectedBatch.status) ? (
-                      <button
-                        type="button"
-                        onClick={() => runBatchAction(selectedBatch, 'pause')}
-                        disabled={batchAction === `${selectedBatch.id}:pause`}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {batchAction === `${selectedBatch.id}:pause` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
-                        Pause
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => runBatchAction(selectedBatch, 'resume')}
-                        disabled={batchAction === `${selectedBatch.id}:resume`}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {batchAction === `${selectedBatch.id}:resume` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                        Resume
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => runBatchAction(selectedBatch, 'cancel')}
-                      disabled={batchAction === `${selectedBatch.id}:cancel`}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {batchAction === `${selectedBatch.id}:cancel` ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
-                      Cancel
-                    </button>
-                  </div>
-                ) : null}
-
-                <div className="mt-5 space-y-2">
-                  {(selectedBatch.itemSummaries || []).length ? selectedBatch.itemSummaries!.map((item, index) => (
-                    <div key={`${item.itemId || item.jobId || item.requestId || index}`} className="rounded-lg border border-slate-200 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-slate-900">
-                            {String(item.itemNo || index + 1).padStart(2, '0')}. {item.generatedTitle || item.title || 'Untitled draft'}
-                          </div>
-                          {item.generatedTitle && item.title && item.generatedTitle !== item.title ? <div className="mt-1 text-xs text-slate-500">Input: {item.title}</div> : null}
-                          {item.currentStep ? <div className="mt-1 text-xs text-slate-500">{item.currentStep.replace(/_/g, ' ')}</div> : null}
-                          {item.jurisdictions?.length ? <div className="mt-1 text-xs text-slate-500">{item.jurisdictions.join(', ')}</div> : null}
-                          {Array.isArray(item.warnings) && item.warnings.length ? <div className="mt-1 text-xs text-amber-700">{item.warnings.join('; ')}</div> : null}
-                          {item.error ? <div className="mt-1 text-xs text-rose-700">{item.error}</div> : null}
-                        </div>
-                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClasses(item.status || 'QUEUED')}`}>
-                          {item.status || 'QUEUED'}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                        {item.patentId ? <Link className="font-medium text-blue-700 hover:underline" href={`/patents/${item.patentId}/draft`}>Patent</Link> : null}
-                      </div>
-                    </div>
-                  )) : (
-                    <div className="rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500">
-                      Item details will appear after the worker picks up the batch.
-                    </div>
-                  )}
-                </div>
               </div>
             ) : null}
           </aside>

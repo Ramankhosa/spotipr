@@ -22,6 +22,12 @@ function readDefaults(value: Record<string, unknown>): AutoPatentDraftBatchDefau
   }
 }
 
+function dateParam(value: string | null) {
+  if (!value) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await authenticateUser(request)
@@ -29,8 +35,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: auth.error?.message || 'Unauthorized' }, { status: auth.error?.status || 401 })
     }
 
-    const batches = await listAutoPatentDraftBatchesForUser(auth.user.id)
-    return NextResponse.json({ batches })
+    const params = request.nextUrl.searchParams
+    const result = await listAutoPatentDraftBatchesForUser(auth.user.id, {
+      limit: params.get('limit') ? Number(params.get('limit')) : undefined,
+      cursor: params.get('cursor') || undefined,
+      status: params.get('status') || undefined,
+      q: params.get('q') || undefined,
+      from: dateParam(params.get('from')),
+      to: dateParam(params.get('to')),
+      attentionOnly: params.get('attentionOnly') === 'true',
+    })
+    return NextResponse.json(result)
   } catch (error) {
     console.error('[AutoPatentDraftBatch] Failed to list batches:', error)
     return NextResponse.json({ error: 'Failed to list automated patent drafting batches.' }, { status: 500 })
