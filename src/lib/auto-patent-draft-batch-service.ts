@@ -69,6 +69,11 @@ const FINAL_JOB_STATUSES = ['COMPLETED', 'FAILED', 'CANCELLED']
 const SUCCESS_JOB_STATUSES = ['COMPLETED']
 const FINAL_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS', 'REJECTED', 'FAILED', 'CANCELED']
 const SUCCESS_REQUEST_STATUSES = ['DELIVERED', 'DELIVERED_WITH_WARNINGS']
+const PAUSABLE_BATCH_STATUSES = ['QUEUED', 'PROCESSING']
+const CANCELLABLE_BATCH_STATUSES = ['QUEUED', 'PROCESSING', 'PAUSED']
+const PRESERVED_BATCH_STATUSES = ['PAUSED', 'CANCELLED']
+const BATCH_REVIEW_STATUSES = ['NEEDS_REVIEW', 'REVIEWED', 'ACCEPTED', 'REJECTED'] as const
+type BatchReviewStatus = typeof BATCH_REVIEW_STATUSES[number]
 
 export const AUTO_PATENT_DRAFT_BATCH_TEMPLATE_COLUMNS = [
   'title',
@@ -501,6 +506,226 @@ function sanitizeZipName(value: string) {
   return value.replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 140) || 'document'
 }
 
+function sanitizePathPart(value: unknown, fallback = 'document', maxLength = 90) {
+  const clean = safeString(value)
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .trim()
+  return (clean || fallback).slice(0, maxLength)
+}
+
+function generatedTitleForRecord(record: any) {
+  return safeString(record.generatedTitle) ||
+    safeString(record.result?.generatedTitle) ||
+    safeString(record.title) ||
+    safeString(record.subject) ||
+    'Patent Draft'
+}
+
+function originalTitleForRecord(record: any) {
+  return safeString(record.title) || safeString(record.subject) || generatedTitleForRecord(record)
+}
+
+function itemNoForRecord(record: any, fallbackIndex: number) {
+  return Number(record.itemNo || record.autoPatentDraftBatchItemNo || fallbackIndex + 1) || fallbackIndex + 1
+}
+
+function itemPrefix(record: any, fallbackIndex: number) {
+  return String(itemNoForRecord(record, fallbackIndex)).padStart(2, '0')
+}
+
+function extensionOf(filename: string) {
+  return path.extname(filename || '').toLowerCase()
+}
+
+function classifyBatchArtifact(document: any) {
+  const filename = safeString(document.filename)
+  const mimeType = safeString(document.mimeType).toLowerCase()
+  const ext = extensionOf(filename)
+  if (ext === '.png' || mimeType.includes('png')) return 'PNG'
+  if (ext === '.svg' || mimeType.includes('svg')) return 'SVG'
+  if (ext === '.docx' || ext === '.doc' || ext === '.pdf' || mimeType.includes('wordprocessingml') || mimeType.includes('pdf')) return 'Drafts'
+  return 'Other'
+}
+
+function inferJurisdictionFromFilename(filename: string, jurisdictions: unknown) {
+  const known = Array.isArray(jurisdictions)
+    ? jurisdictions.map(code => safeString(code).toUpperCase()).filter(Boolean)
+    : []
+  const normalized = safeString(filename).toUpperCase()
+  const firstToken = normalized.split(/[_\-\s.]+/)[0]
+  if (known.includes(firstToken)) return firstToken
+  const match = normalized.match(/(?:^|[_\-\s.])([A-Z]{2})(?:[_\-\s.]|$)/)
+  return match?.[1] || known[0] || 'IN'
+}
+
+function figureExportName(filename: string) {
+  const ext = extensionOf(filename) || '.png'
+  const stem = path.basename(filename, path.extname(filename))
+    .replace(/^([A-Z]+-\d{1,3})(?:[_\-\s]+)?/i, (_match, prefix) => `${prefix.toUpperCase()} - `)
+    .replace(/_/g, ' ')
+  return `${sanitizePathPart(stem, 'figure', 120)}${ext}`
+}
+
+function artifactExportName(document: any, record: any, recordIndex: number) {
+  const category = classifyBatchArtifact(document)
+  const original = safeString(document.filename) || 'document'
+  const ext = extensionOf(original) || ''
+  if (category === 'Drafts') {
+    const jurisdiction = inferJurisdictionFromFilename(original, record.jurisdictions)
+    return `${itemPrefix(record, recordIndex)} - ${jurisdiction} - ${sanitizePathPart(generatedTitleForRecord(record), 'Patent Draft', 110)}${ext || '.docx'}`
+  }
+  if (category === 'PNG' || category === 'SVG') return figureExportName(original)
+  return sanitizePathPart(original, 'document', 140)
+}
+
+function uniqueZipPath(basePath: string, usedPaths: Set<string>) {
+  if (!usedPaths.has(basePath)) {
+    usedPaths.add(basePath)
+    return basePath
+  }
+  const parsed = path.parse(basePath)
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = path.join(parsed.dir, `${parsed.name} (${index})${parsed.ext}`).replace(/\\/g, '/')
+    if (!usedPaths.has(candidate)) {
+      usedPaths.add(candidate)
+      return candidate
+    }
+  }
+  const fallback = path.join(parsed.dir, `${parsed.name} (${Date.now()})${parsed.ext}`).replace(/\\/g, '/')
+  usedPaths.add(fallback)
+  return fallback
+}
+
+function artifactDownloadCategory(document: any) {
+  const category = classifyBatchArtifact(document)
+  if (category === 'Drafts') return 'drafts'
+  if (category === 'PNG') return 'png'
+  if (category === 'SVG') return 'svg'
+  return 'other'
+}
+
+function batchItemFolderName(record: any, recordIndex: number) {
+  return `${itemPrefix(record, recordIndex)} - ${sanitizePathPart(generatedTitleForRecord(record), 'Patent Draft', 90)}`
+}
+
+function csvRows(rows: unknown[][]) {
+  return `${rows.map(row => row.map(csvEscape).join(',')).join('\r\n')}\r\n`
+}
+
+function jsonText(value: unknown) {
+  return `${JSON.stringify(value ?? {}, null, 2)}\n`
+}
+
+function buildBatchManifestRows(records: any[], docsByRecordId: Map<string, any[]>) {
+  const rows: unknown[][] = [[
+    'Item No',
+    'Generated Title',
+    'Original Title',
+    'Jurisdictions',
+    'Status',
+    'Review Status',
+    'Warnings',
+    'Error',
+    'Patent ID',
+    'Session ID',
+    'Artifacts',
+    'Completed At',
+  ]]
+  records.forEach((record, index) => {
+    const recordKey = record.id || record.itemId || `record-${index}`
+    const docs = docsByRecordId.get(recordKey) || []
+    rows.push([
+      itemPrefix(record, index),
+      generatedTitleForRecord(record),
+      originalTitleForRecord(record),
+      Array.isArray(record.jurisdictions) ? record.jurisdictions.join('; ') : '',
+      record.status || '',
+      record.reviewStatus || 'NEEDS_REVIEW',
+      Array.isArray(record.warnings) ? record.warnings.join('; ') : '',
+      record.errorMessage || record.error || '',
+      record.patentId || '',
+      record.sessionId || '',
+      docs.map(document => document.filename).join('; '),
+      record.completedAt || '',
+    ])
+  })
+  return rows
+}
+
+function priorArtAuditRows(audit: any) {
+  const rows: unknown[][] = [[
+    'Provider',
+    'Candidate Count',
+    'Fallback Used',
+    'Selected References',
+    'Remote Count',
+    'Unknown Count',
+    'Below Threshold Count',
+  ]]
+  const counts = audit?.providerCandidateCounts && typeof audit.providerCandidateCounts === 'object'
+    ? audit.providerCandidateCounts
+    : {}
+  const providers = Object.keys(counts).length ? Object.keys(counts) : [
+    ...(Array.isArray(audit?.primaryProviders) ? audit.primaryProviders : []),
+    ...(Array.isArray(audit?.fallbackProviders) && audit.googleFallbackUsed ? audit.fallbackProviders : []),
+  ]
+  for (const provider of providers) {
+    rows.push([
+      provider,
+      counts[provider] || 0,
+      audit?.googleFallbackUsed ? 'yes' : 'no',
+      Array.isArray(audit?.selectedReferences) ? audit.selectedReferences.length : 0,
+      audit?.excludedCounts?.remote || 0,
+      audit?.excludedCounts?.unknown || 0,
+      audit?.excludedCounts?.belowThreshold || 0,
+    ])
+  }
+  return rows
+}
+
+function normalizeReviewStatus(value: unknown): BatchReviewStatus {
+  const normalized = safeString(value).toUpperCase().replace(/[\s-]+/g, '_')
+  return (BATCH_REVIEW_STATUSES as readonly string[]).includes(normalized)
+    ? normalized as BatchReviewStatus
+    : 'NEEDS_REVIEW'
+}
+
+function computeStatusFromJobItems(items: any[]) {
+  const completedItems = items.filter((item: any) => SUCCESS_JOB_STATUSES.includes(item.status)).length
+  const failedItems = items.filter((item: any) => ['FAILED', 'CANCELLED'].includes(item.status)).length
+  const warningItems = items.filter((item: any) => Array.isArray(item.warnings) && item.warnings.length > 0).length
+  const allFinal = items.length > 0 && items.every((item: any) => FINAL_JOB_STATUSES.includes(item.status))
+  const anyStarted = items.some((item: any) => !['QUEUED'].includes(item.status))
+  const status = allFinal
+    ? failedItems > 0
+      ? completedItems > 0 ? 'COMPLETED_WITH_ERRORS' : 'FAILED'
+      : 'COMPLETED'
+    : anyStarted
+      ? 'PROCESSING'
+      : 'QUEUED'
+
+  return { status, completedItems, failedItems, warningItems, allFinal }
+}
+
+function computeStatusFromEmailRequests(requests: any[]) {
+  const completedItems = requests.filter((request: any) => SUCCESS_REQUEST_STATUSES.includes(request.status)).length
+  const failedItems = requests.filter((request: any) => ['REJECTED', 'FAILED', 'CANCELED'].includes(request.status)).length
+  const warningItems = requests.filter((request: any) => request.status === 'DELIVERED_WITH_WARNINGS').length
+  const allFinal = requests.length > 0 && requests.every((request: any) => FINAL_REQUEST_STATUSES.includes(request.status))
+  const anyStarted = requests.some((request: any) => request.status !== 'RECEIVED')
+  const status = allFinal
+    ? failedItems > 0
+      ? completedItems > 0 ? 'COMPLETED_WITH_ERRORS' : 'FAILED'
+      : 'COMPLETED'
+    : anyStarted
+      ? 'PROCESSING'
+      : 'QUEUED'
+
+  return { status, completedItems, failedItems, warningItems, allFinal }
+}
+
 async function createZipAccessLink(documentId: string, userId: string) {
   const token = generateToken()
   await (prisma as any).documentAccessLink.create({
@@ -514,8 +739,8 @@ async function createZipAccessLink(documentId: string, userId: string) {
   return token
 }
 
-async function createBatchZip(batch: any, records: any[]) {
-  if (batch.zipDocumentId) {
+async function createBatchZip(batch: any, records: any[], options: { forceRebuild?: boolean } = {}) {
+  if (batch.zipDocumentId && !options.forceRebuild) {
     const token = await createZipAccessLink(batch.zipDocumentId, batch.userId)
     return { documentId: batch.zipDocumentId, token }
   }
@@ -544,28 +769,49 @@ async function createBatchZip(batch: any, records: any[]) {
       })
 
   const zip = new AdmZip()
-  for (const record of records) {
-    const itemNo = record.itemNo || record.autoPatentDraftBatchItemNo || requestIds.indexOf(record.id) + 1
+  let exportEntryCount = 0
+  const usedZipPaths = new Set<string>()
+  const docsByRecordId = new Map<string, any[]>()
+  for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+    const record = records[recordIndex]
+    const recordKey = record.id || record.itemId || `record-${recordIndex}`
     const recordArtifactIds = Array.isArray(record.artifactIds) ? record.artifactIds : []
     const recordDocs = recordArtifactIds.length
       ? documents.filter(document => recordArtifactIds.includes(document.id))
       : documents.filter(document => String(document.contentPtr || '').includes(record.id))
+    docsByRecordId.set(recordKey, recordDocs)
+    const folder = batchItemFolderName(record, recordIndex)
     for (const document of recordDocs) {
       if (!document.contentPtr) continue
       const buffer = await fs.readFile(document.contentPtr)
-      const prefix = String(itemNo).padStart(2, '0')
-      zip.addFile(`${prefix}-${sanitizeZipName(document.filename)}`, buffer)
+      const category = classifyBatchArtifact(document)
+      zip.addFile(uniqueZipPath(`${folder}/${category}/${artifactExportName(document, record, recordIndex)}`, usedZipPaths), buffer)
+      exportEntryCount += 1
+    }
+
+    const audit = record.priorArtAudit && typeof record.priorArtAudit === 'object' ? record.priorArtAudit : null
+    if (audit) {
+      zip.addFile(`${folder}/Prior Art/prior-art-summary.csv`, Buffer.from(csvRows(priorArtAuditRows(audit)), 'utf8'))
+      zip.addFile(`${folder}/Prior Art/prior-art-summary.json`, Buffer.from(jsonText(audit), 'utf8'))
+      exportEntryCount += 2
+    }
+
+    if (safeString(record.attorneyNotes)) {
+      zip.addFile(`${folder}/Review Notes/attorney-notes.txt`, Buffer.from(`${safeString(record.attorneyNotes)}\n`, 'utf8'))
+      exportEntryCount += 1
     }
   }
 
-  if (zip.getEntries().length === 0) {
+  zip.addFile('Batch Manifest.csv', Buffer.from(csvRows(buildBatchManifestRows(records, docsByRecordId)), 'utf8'))
+
+  if (exportEntryCount === 0) {
     throw new Error('No completed draft artifacts were found for this batch.')
   }
 
   const buffer = zip.toBuffer()
   const outDir = path.join(process.cwd(), 'uploads', 'auto-patent-batches', batch.id)
   await fs.mkdir(outDir, { recursive: true })
-  const filename = `${sanitizeZipName(batch.name)}.zip`
+  const filename = `${sanitizeZipName(batch.name)}-organized.zip`
   const filePath = path.join(outDir, filename)
   await fs.writeFile(filePath, buffer)
 
@@ -654,6 +900,8 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
       const result: Record<string, any> = job?.result && typeof job.result === 'object' ? job.result : {}
       const artifactIds = Array.isArray(result.artifactIds) ? result.artifactIds : item.artifactIds
       const warnings = Array.isArray(result.warnings) ? result.warnings : item.warnings
+      const generatedTitle = safeString(result.generatedTitle) || item.generatedTitle
+      const priorArtAudit = result.priorArtAudit && typeof result.priorArtAudit === 'object' ? result.priorArtAudit : item.priorArtAudit
       const nextStatus = job?.status || item.status
       const nextStep = job?.currentStep || item.currentStep
       const nextSessionId = job?.sessionId || result.sessionId || item.sessionId
@@ -664,6 +912,8 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
         item.sessionId !== nextSessionId ||
         JSON.stringify(item.artifactIds || []) !== JSON.stringify(artifactIds || []) ||
         JSON.stringify(item.warnings || null) !== JSON.stringify(warnings || null) ||
+        item.generatedTitle !== generatedTitle ||
+        JSON.stringify(item.priorArtAudit || null) !== JSON.stringify(priorArtAudit || null) ||
         item.errorMessage !== errorMessage
       ) {
         syncedItems.push(await (prisma as any).autoPatentDraftBatchItem.update({
@@ -674,6 +924,8 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
             sessionId: nextSessionId || null,
             artifactIds: artifactIds || [],
             warnings: warnings || undefined,
+            generatedTitle: generatedTitle || null,
+            priorArtAudit: priorArtAudit || undefined,
             errorMessage: errorMessage || null,
             progressPct: nextStatus === 'COMPLETED' ? 100 : nextStatus === 'FAILED' || nextStatus === 'CANCELLED' ? 100 : item.progressPct,
           }
@@ -683,30 +935,28 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
       }
     }
 
-    const completedItems = syncedItems.filter((item: any) => SUCCESS_JOB_STATUSES.includes(item.status)).length
-    const failedItems = syncedItems.filter((item: any) => ['FAILED', 'CANCELLED'].includes(item.status)).length
-    const warningItems = syncedItems.filter((item: any) => Array.isArray(item.warnings) && item.warnings.length > 0).length
-    const allFinal = syncedItems.length > 0 && syncedItems.every((item: any) => FINAL_JOB_STATUSES.includes(item.status))
-    const anyStarted = syncedItems.some((item: any) => !['QUEUED'].includes(item.status))
-    const nextStatus = allFinal
-      ? failedItems > 0
-        ? completedItems > 0 ? 'COMPLETED_WITH_ERRORS' : 'FAILED'
-        : 'COMPLETED'
-      : anyStarted
-        ? 'PROCESSING'
-        : 'QUEUED'
+    const computed = computeStatusFromJobItems(syncedItems)
+    const completedItems = computed.completedItems
+    const failedItems = computed.failedItems
+    const warningItems = computed.warningItems
+    const allFinal = computed.allFinal
+    const nextStatus = PRESERVED_BATCH_STATUSES.includes(batch.status) ? batch.status : computed.status
 
     const itemSummaries = syncedItems.map((item: any) => ({
       itemId: item.id,
       jobId: item.jobId,
       itemNo: item.itemNo,
       title: item.title,
+      generatedTitle: item.generatedTitle,
       jurisdictions: item.jurisdictions,
       status: item.status,
       currentStep: item.currentStep,
       patentId: item.patentId,
       sessionId: item.sessionId,
       artifactIds: item.artifactIds,
+      priorArtAudit: item.priorArtAudit,
+      reviewStatus: item.reviewStatus,
+      attorneyNotes: item.attorneyNotes,
       warnings: item.warnings,
       error: item.errorMessage || undefined
     }))
@@ -719,11 +969,15 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
         failedItems,
         warningItems,
         itemSummaries,
-        completedAt: allFinal ? (batch.completedAt || new Date()) : null
+        completedAt: batch.status === 'CANCELLED'
+          ? (batch.completedAt || batch.cancelledAt || new Date())
+          : allFinal && !PRESERVED_BATCH_STATUSES.includes(batch.status)
+            ? (batch.completedAt || new Date())
+            : batch.completedAt
       }
     })
 
-    if (!allFinal) return updated
+    if (PRESERVED_BATCH_STATUSES.includes(nextStatus) || !allFinal) return updated
 
     if (completedItems === 0) {
       if (options.sendEmail !== false && !updated.completionEmailSentAt) {
@@ -755,18 +1009,12 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
     orderBy: { autoPatentDraftBatchItemNo: 'asc' }
   })
 
-  const completedItems = requests.filter((request: any) => SUCCESS_REQUEST_STATUSES.includes(request.status)).length
-  const failedItems = requests.filter((request: any) => ['REJECTED', 'FAILED', 'CANCELED'].includes(request.status)).length
-  const warningItems = requests.filter((request: any) => request.status === 'DELIVERED_WITH_WARNINGS').length
-  const allFinal = requests.length > 0 && requests.every((request: any) => FINAL_REQUEST_STATUSES.includes(request.status))
-  const anyStarted = requests.some((request: any) => request.status !== 'RECEIVED')
-  const nextStatus = allFinal
-    ? failedItems > 0
-      ? completedItems > 0 ? 'COMPLETED_WITH_ERRORS' : 'FAILED'
-      : 'COMPLETED'
-    : anyStarted
-      ? 'PROCESSING'
-      : 'QUEUED'
+  const computed = computeStatusFromEmailRequests(requests)
+  const completedItems = computed.completedItems
+  const failedItems = computed.failedItems
+  const warningItems = computed.warningItems
+  const allFinal = computed.allFinal
+  const nextStatus = PRESERVED_BATCH_STATUSES.includes(batch.status) ? batch.status : computed.status
 
   const itemSummaries = requests.map((request: any) => ({
     requestId: request.id,
@@ -786,11 +1034,15 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
       failedItems,
       warningItems,
       itemSummaries,
-      completedAt: allFinal ? (batch.completedAt || new Date()) : null
+      completedAt: batch.status === 'CANCELLED'
+        ? (batch.completedAt || batch.cancelledAt || new Date())
+        : allFinal && !PRESERVED_BATCH_STATUSES.includes(batch.status)
+          ? (batch.completedAt || new Date())
+          : batch.completedAt
     }
   })
 
-  if (!allFinal) return updated
+  if (PRESERVED_BATCH_STATUSES.includes(nextStatus) || !allFinal) return updated
 
   if (completedItems === 0) {
     if (options.sendEmail !== false && !updated.completionEmailSentAt) {
@@ -815,6 +1067,340 @@ export async function refreshAutoPatentDraftBatch(batchId: string, options: { se
   }
 
   return updated
+}
+
+async function getBatchForUser(batchId: string, userId: string) {
+  return (prisma as any).autoPatentDraftBatch.findFirst({
+    where: { id: batchId, userId }
+  })
+}
+
+async function computeResumeStatus(batchId: string) {
+  const items = await (prisma as any).autoPatentDraftBatchItem.findMany({
+    where: { batchId },
+    orderBy: { itemNo: 'asc' }
+  })
+  if (items.length > 0) return computeStatusFromJobItems(items).status
+
+  const requests = await (prisma as any).emailDraftRequest.findMany({
+    where: { autoPatentDraftBatchId: batchId },
+    orderBy: { autoPatentDraftBatchItemNo: 'asc' }
+  })
+  if (requests.length > 0) return computeStatusFromEmailRequests(requests).status
+  return 'QUEUED'
+}
+
+export async function pauseAutoPatentDraftBatch(batchId: string, userId: string) {
+  const batch = await getBatchForUser(batchId, userId)
+  if (!batch) return { outcome: 'not_found' as const }
+  if (batch.status === 'PAUSED') return { outcome: 'paused' as const, batchId, status: 'PAUSED' as const }
+  if (!PAUSABLE_BATCH_STATUSES.includes(batch.status)) {
+    return { outcome: 'not_pausable' as const, status: batch.status }
+  }
+
+  const pausedAt = new Date()
+  const updated = await (prisma as any).autoPatentDraftBatch.updateMany({
+    where: { id: batchId, userId, status: { in: PAUSABLE_BATCH_STATUSES } },
+    data: {
+      status: 'PAUSED',
+      pausedAt,
+      pausedById: userId,
+      resumedAt: null,
+      resumedById: null,
+    }
+  })
+  if (updated.count !== 1) {
+    const current = await getBatchForUser(batchId, userId)
+    return current?.status === 'PAUSED'
+      ? { outcome: 'paused' as const, batchId, status: 'PAUSED' as const }
+      : { outcome: 'not_pausable' as const, status: current?.status || 'UNKNOWN' }
+  }
+  const refreshed = await refreshAutoPatentDraftBatch(batchId, { sendEmail: false })
+  return { outcome: 'paused' as const, batchId, status: refreshed?.status || 'PAUSED' as const }
+}
+
+export async function resumeAutoPatentDraftBatch(batchId: string, userId: string) {
+  const batch = await getBatchForUser(batchId, userId)
+  if (!batch) return { outcome: 'not_found' as const }
+  if (batch.status !== 'PAUSED') return { outcome: 'not_resumable' as const, status: batch.status }
+
+  const nextStatus = await computeResumeStatus(batchId)
+  const resumedAt = new Date()
+  const updated = await (prisma as any).autoPatentDraftBatch.updateMany({
+    where: { id: batchId, userId, status: 'PAUSED' },
+    data: {
+      status: nextStatus,
+      resumedAt,
+      resumedById: userId,
+      pausedAt: null,
+      pausedById: null,
+      completedAt: ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'].includes(nextStatus) ? (batch.completedAt || resumedAt) : null,
+    }
+  })
+  if (updated.count !== 1) {
+    const current = await getBatchForUser(batchId, userId)
+    return current?.status !== 'PAUSED'
+      ? { outcome: 'resumed' as const, batchId, status: current?.status || nextStatus }
+      : { outcome: 'not_resumable' as const, status: current?.status || 'UNKNOWN' }
+  }
+  const refreshed = await refreshAutoPatentDraftBatch(batchId, { sendEmail: false })
+  return { outcome: 'resumed' as const, batchId, status: refreshed?.status || nextStatus }
+}
+
+export async function cancelAutoPatentDraftBatch(batchId: string, userId: string, reason?: string) {
+  const batch = await getBatchForUser(batchId, userId)
+  if (!batch) return { outcome: 'not_found' as const }
+  if (batch.status === 'CANCELLED') return { outcome: 'cancelled' as const, batchId, status: 'CANCELLED' as const }
+  if (!CANCELLABLE_BATCH_STATUSES.includes(batch.status)) {
+    return { outcome: 'not_cancellable' as const, status: batch.status }
+  }
+
+  const cancelledAt = new Date()
+  const message = safeString(reason) || 'Cancelled by user.'
+  const batchUpdate = await (prisma as any).autoPatentDraftBatch.updateMany({
+    where: { id: batchId, userId, status: { in: CANCELLABLE_BATCH_STATUSES } },
+    data: {
+      status: 'CANCELLED',
+      cancelledAt,
+      cancelledById: userId,
+      cancelReason: message,
+      completedAt: batch.completedAt || cancelledAt,
+      pausedAt: null,
+      pausedById: null,
+    }
+  })
+  if (batchUpdate.count !== 1) {
+    const current = await getBatchForUser(batchId, userId)
+    return current?.status === 'CANCELLED'
+      ? { outcome: 'cancelled' as const, batchId, status: 'CANCELLED' as const }
+      : { outcome: 'not_cancellable' as const, status: current?.status || 'UNKNOWN' }
+  }
+
+  await (prisma as any).patentDraftingJob.updateMany({
+    where: {
+      autoPatentDraftBatchId: batchId,
+      userId,
+      status: { in: ['QUEUED', 'PROCESSING'] }
+    },
+    data: {
+      status: 'CANCELLED',
+      currentStep: 'CANCELLED',
+      cancelledAt,
+      cancelledById: userId,
+      lockedBy: null,
+      lockedUntil: null,
+      lastError: null,
+    }
+  })
+
+  await (prisma as any).autoPatentDraftBatchItem.updateMany({
+    where: {
+      batchId,
+      userId,
+      status: { in: ['QUEUED', 'PROCESSING'] }
+    },
+    data: {
+      status: 'CANCELLED',
+      currentStep: 'CANCELLED',
+      progressPct: 100,
+      errorMessage: message,
+    }
+  })
+
+  const refreshed = await refreshAutoPatentDraftBatch(batchId, { sendEmail: false })
+  return { outcome: 'cancelled' as const, batchId, status: refreshed?.status || 'CANCELLED' as const }
+}
+
+async function getBatchItemsForUser(batchId: string, userId: string) {
+  const batch = await getBatchForUser(batchId, userId)
+  if (!batch) return null
+  const items = await (prisma as any).autoPatentDraftBatchItem.findMany({
+    where: { batchId, userId },
+    orderBy: { itemNo: 'asc' }
+  })
+  return { batch, items }
+}
+
+async function documentsForItems(userId: string, items: any[]) {
+  const artifactIds = Array.from(new Set(items.flatMap(item => Array.isArray(item.artifactIds) ? item.artifactIds : [])))
+  if (!artifactIds.length) return []
+  return prisma.document.findMany({
+    where: {
+      id: { in: artifactIds },
+      userId,
+      type: 'PATENT_DRAFT_EXPORT',
+    },
+    orderBy: { createdAt: 'asc' }
+  })
+}
+
+export async function rebuildAutoPatentDraftBatchZip(batchId: string, userId: string) {
+  const data = await getBatchItemsForUser(batchId, userId)
+  if (!data) return { outcome: 'not_found' as const }
+  const completedOrPartialItems = data.items.filter((item: any) =>
+    (Array.isArray(item.artifactIds) && item.artifactIds.length > 0) || item.priorArtAudit || safeString(item.attorneyNotes)
+  )
+  if (!completedOrPartialItems.length) return { outcome: 'no_artifacts' as const }
+  const result = await createBatchZip(data.batch, completedOrPartialItems, { forceRebuild: true })
+  return { outcome: 'rebuilt' as const, batchId, documentId: result.documentId, token: result.token }
+}
+
+export async function getAutoPatentDraftBatchArtifactsForUser(batchId: string, userId: string) {
+  const data = await getBatchItemsForUser(batchId, userId)
+  if (!data) return null
+  const documents = await documentsForItems(userId, data.items)
+  const documentsById = new Map(documents.map((document: any) => [document.id, document]))
+
+  return {
+    batch: data.batch,
+    items: data.items.map((item: any, index: number) => {
+      const itemDocs = (Array.isArray(item.artifactIds) ? item.artifactIds : [])
+        .map((id: string) => documentsById.get(id))
+        .filter(Boolean)
+      const artifacts = itemDocs.map((document: any) => ({
+        id: document.id,
+        filename: document.filename,
+        category: artifactDownloadCategory(document),
+        mimeType: document.mimeType,
+        sizeBytes: document.sizeBytes,
+        createdAt: document.createdAt,
+        downloadUrl: `/api/auto-patent-drafting/batches/${batchId}/artifacts/${document.id}`,
+      }))
+      return {
+        itemId: item.id,
+        itemNo: item.itemNo || index + 1,
+        title: item.title,
+        generatedTitle: item.generatedTitle || generatedTitleForRecord(item),
+        jurisdictions: item.jurisdictions,
+        status: item.status,
+        currentStep: item.currentStep,
+        progressPct: item.progressPct,
+        reviewStatus: item.reviewStatus || 'NEEDS_REVIEW',
+        attorneyNotes: item.attorneyNotes || '',
+        warnings: item.warnings || [],
+        error: item.errorMessage || undefined,
+        patentId: item.patentId,
+        sessionId: item.sessionId,
+        priorArtAudit: item.priorArtAudit,
+        artifacts,
+        artifactGroups: {
+          drafts: artifacts.filter((artifact: any) => artifact.category === 'drafts'),
+          png: artifacts.filter((artifact: any) => artifact.category === 'png'),
+          svg: artifacts.filter((artifact: any) => artifact.category === 'svg'),
+          other: artifacts.filter((artifact: any) => artifact.category === 'other'),
+        },
+      }
+    })
+  }
+}
+
+export async function getAutoPatentDraftBatchArtifactForUser(batchId: string, documentId: string, userId: string) {
+  const data = await getBatchItemsForUser(batchId, userId)
+  if (!data) return null
+  const allowedArtifactIds = new Set(data.items.flatMap((item: any) => Array.isArray(item.artifactIds) ? item.artifactIds : []))
+  if (!allowedArtifactIds.has(documentId)) return null
+  return prisma.document.findFirst({
+    where: {
+      id: documentId,
+      userId,
+      type: 'PATENT_DRAFT_EXPORT',
+    }
+  })
+}
+
+export async function updateAutoPatentDraftBatchItemReview(
+  batchId: string,
+  itemId: string,
+  userId: string,
+  input: { reviewStatus?: unknown; attorneyNotes?: unknown }
+) {
+  const batch = await getBatchForUser(batchId, userId)
+  if (!batch) return { outcome: 'not_found' as const }
+  const item = await (prisma as any).autoPatentDraftBatchItem.findFirst({ where: { id: itemId, batchId, userId } })
+  if (!item) return { outcome: 'item_not_found' as const }
+  const reviewStatus = input.reviewStatus === undefined ? item.reviewStatus || 'NEEDS_REVIEW' : normalizeReviewStatus(input.reviewStatus)
+  const notes = input.attorneyNotes === undefined ? item.attorneyNotes : safeString(input.attorneyNotes).slice(0, 12000)
+  const reviewed = reviewStatus !== 'NEEDS_REVIEW'
+  const updated = await (prisma as any).autoPatentDraftBatchItem.update({
+    where: { id: item.id },
+    data: {
+      reviewStatus,
+      attorneyNotes: notes || null,
+      reviewedAt: reviewed ? new Date() : null,
+      reviewedById: reviewed ? userId : null,
+    }
+  })
+  await refreshAutoPatentDraftBatch(batchId, { sendEmail: false })
+  return { outcome: 'updated' as const, item: updated }
+}
+
+export async function retryAutoPatentDraftBatchItem(batchId: string, itemId: string, userId: string) {
+  const batch = await getBatchForUser(batchId, userId)
+  if (!batch) return { outcome: 'not_found' as const }
+  const item = await (prisma as any).autoPatentDraftBatchItem.findFirst({ where: { id: itemId, batchId, userId } })
+  if (!item) return { outcome: 'item_not_found' as const }
+  if (!['FAILED', 'CANCELLED'].includes(item.status)) return { outcome: 'not_retryable' as const, status: item.status }
+  if (!item.jobId) return { outcome: 'not_retryable' as const, status: 'NO_JOB' }
+
+  const jobUpdate = await (prisma as any).patentDraftingJob.updateMany({
+    where: { id: item.jobId, userId, autoPatentDraftBatchId: batchId, status: { in: ['FAILED', 'CANCELLED'] } },
+    data: {
+      status: 'QUEUED',
+      currentStep: 'QUEUED',
+      attemptCount: 0,
+      nextAttemptAt: new Date(),
+      lockedBy: null,
+      lockedUntil: null,
+      heartbeatAt: null,
+      lastError: null,
+      cancelledAt: null,
+      cancelledById: null,
+      completedAt: null,
+      result: undefined,
+    }
+  })
+  if (jobUpdate.count !== 1) return { outcome: 'not_retryable' as const, status: item.status }
+
+  await (prisma as any).autoPatentDraftBatchItem.update({
+    where: { id: item.id },
+    data: {
+      status: 'QUEUED',
+      currentStep: 'QUEUED',
+      progressPct: 5,
+      errorMessage: null,
+      warnings: null,
+      artifactIds: [],
+      priorArtAudit: null,
+    }
+  })
+  await (prisma as any).autoPatentDraftBatch.update({
+    where: { id: batchId },
+    data: {
+      status: 'QUEUED',
+      completedAt: null,
+      cancelledAt: null,
+      cancelledById: null,
+      cancelReason: null,
+      completionEmailSentAt: null,
+      zipDocumentId: null,
+    }
+  })
+  const refreshed = await refreshAutoPatentDraftBatch(batchId, { sendEmail: false })
+  return { outcome: 'retried' as const, batchId, itemId, status: refreshed?.status || 'QUEUED' }
+}
+
+export async function retryFailedAutoPatentDraftBatchItems(batchId: string, userId: string) {
+  const data = await getBatchItemsForUser(batchId, userId)
+  if (!data) return { outcome: 'not_found' as const }
+  const retryable = data.items.filter((item: any) => ['FAILED', 'CANCELLED'].includes(item.status))
+  let retried = 0
+  for (const item of retryable) {
+    const result = await retryAutoPatentDraftBatchItem(batchId, item.id, userId)
+    if (result.outcome === 'retried') retried += 1
+  }
+  if (!retried) return { outcome: 'none_retryable' as const }
+  const refreshed = await refreshAutoPatentDraftBatch(batchId, { sendEmail: false })
+  return { outcome: 'retried' as const, batchId, retried, status: refreshed?.status || 'QUEUED' }
 }
 
 export async function refreshReadyAutoPatentDraftBatches(limit = 10) {

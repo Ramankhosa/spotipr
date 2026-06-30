@@ -10,7 +10,8 @@ import { renderPlantUml } from '@/lib/plantuml-renderer'
 
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
 const DEFAULT_JURISDICTION = 'IN'
-const BATCH_PRIOR_ART_PROVIDER_IDS = ['indian-corpus', 'pqai-corpus']
+export const BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS = ['pqai-corpus', 'epo-ops-corpus', 'indian-corpus'] as const
+export const BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS = ['google-patents'] as const
 const BATCH_PRIOR_ART_LIMIT = 10
 
 const DRAFTING_ACTION_STAGE_LABELS: Record<string, string> = {
@@ -538,16 +539,57 @@ function mergePriorArtSelections(existing: any[], additions: any[]) {
 }
 
 export function selectReviewedPriorArtDecisions(decisions: any[], limit = BATCH_PRIOR_ART_LIMIT) {
+  const draftRelevantThreats = new Set(['adjacent', 'obvious', 'anticipates'])
   return decisions
     .filter((decision: any) => {
       const relevance = typeof decision?.relevance === 'number' ? decision.relevance : 0
       const noveltyThreat = String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase()
       return decision?.analysis_status !== 'unknown' &&
         relevance >= 0.3 &&
-        noveltyThreat === 'adjacent'
+        draftRelevantThreats.has(noveltyThreat)
     })
     .sort((a: any, b: any) => Number(b?.relevance || 0) - Number(a?.relevance || 0))
     .slice(0, limit)
+}
+
+function providerIdOf(result: any) {
+  return String(result?.providerId || result?.sourceProvider || result?.source || result?.provider || 'unknown').trim() || 'unknown'
+}
+
+function countCandidatesByProvider(results: any[], providerStats: any[] = []) {
+  const counts: Record<string, number> = {}
+  for (const result of results) {
+    const id = providerIdOf(result)
+    counts[id] = (counts[id] || 0) + 1
+  }
+  for (const stat of providerStats) {
+    const id = providerIdOf(stat)
+    const count = Number(stat?.resultCount ?? stat?.results ?? stat?.count ?? stat?.total ?? 0)
+    if (id && Number.isFinite(count) && count > 0) counts[id] = Math.max(counts[id] || 0, count)
+  }
+  return counts
+}
+
+function priorArtAuditReference(selection: any) {
+  return {
+    patentNumber: patentNumberOf(selection),
+    title: selection?.title || '',
+    provider: providerIdOf(selection),
+    relevance: selection?.relevance ?? selection?.score,
+    noveltyThreat: selection?.noveltyThreat || selection?.novelty_threat || '',
+    tags: Array.isArray(selection?.tags) ? selection.tags : [],
+  }
+}
+
+function generatedDraftTitleFromSession(session: any, jurisdictions: string[], fallback: string) {
+  const drafts = Array.isArray(session?.annexureDrafts) ? session.annexureDrafts : []
+  const orderedJurisdictions = jurisdictions.map(code => String(code || '').toUpperCase()).filter(Boolean)
+  for (const jurisdiction of orderedJurisdictions) {
+    const draft = drafts.find((item: any) => String(item?.jurisdiction || '').toUpperCase() === jurisdiction && normalizeText(item?.title))
+    if (draft?.title) return normalizeText(draft.title)
+  }
+  const firstDraft = drafts.find((item: any) => normalizeText(item?.title))
+  return normalizeText(firstDraft?.title) || normalizeText(fallback) || 'Patent Draft'
 }
 
 function addDraftingStageContext(action: unknown, message: string) {
@@ -1098,20 +1140,50 @@ async function runBatchPriorArtSearchAndReview(params: {
   patentId: string
   sessionId: string
 }) {
-  const searchResult = await withHeartbeat(params.job.id, params.workerId, () => invokeDraftingAction({
-    user: params.user,
-    patentId: params.patentId,
-    body: {
-      action: 'related_art_search',
-      sessionId: params.sessionId,
-      limit: BATCH_PRIOR_ART_LIMIT,
-      providerIds: BATCH_PRIOR_ART_PROVIDER_IDS,
-      skipTrigramSearch: true,
-    },
-  }))
+  const runSearch = (providerIds: readonly string[], fallbackAfterEmptyPrimary = false) => withHeartbeat(
+    params.job.id,
+    params.workerId,
+    () => invokeDraftingAction({
+      user: params.user,
+      patentId: params.patentId,
+      body: {
+        action: 'related_art_search',
+        sessionId: params.sessionId,
+        limit: BATCH_PRIOR_ART_LIMIT,
+        providerIds,
+        skipTrigramSearch: true,
+        disableLinkedProviderExpansion: true,
+        batchPriorArtPolicy: fallbackAfterEmptyPrimary ? 'google_fallback_after_empty_primary' : 'stored_corpus_primary',
+      },
+    })
+  )
 
-  const rawResults = Array.isArray(searchResult.json?.results) ? searchResult.json.results : []
-  if (!rawResults.length || !searchResult.json?.runId) return { selections: [], unknownCount: 0 }
+  let searchResult = await runSearch(BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS)
+  let rawResults = Array.isArray(searchResult.json?.results) ? searchResult.json.results : []
+  let providerStats = Array.isArray(searchResult.json?.providerStats) ? searchResult.json.providerStats : []
+  let googleFallbackUsed = false
+  if (!rawResults.length) {
+    googleFallbackUsed = true
+    searchResult = await runSearch(BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS, true)
+    rawResults = Array.isArray(searchResult.json?.results) ? searchResult.json.results : []
+    providerStats = Array.isArray(searchResult.json?.providerStats) ? searchResult.json.providerStats : []
+  }
+  const providerCandidateCounts = countCandidatesByProvider(rawResults, providerStats)
+  const baseAudit = {
+    primaryProviders: [...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS],
+    fallbackProviders: [...BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS],
+    providerCandidateCounts,
+    googleFallbackUsed,
+    totalCandidates: rawResults.length,
+    runId: searchResult.json?.runId || null,
+    selectedReferences: [],
+    excludedCounts: {
+      remote: 0,
+      unknown: 0,
+      belowThreshold: 0,
+    },
+  }
+  if (!rawResults.length || !searchResult.json?.runId) return { selections: [], unknownCount: 0, audit: baseAudit }
 
   const review = await withHeartbeat(params.job.id, params.workerId, () => invokeDraftingAction({
     user: params.user,
@@ -1133,7 +1205,20 @@ async function runBatchPriorArtSearchAndReview(params: {
   const unknownCount = decisions.filter((decision: any) =>
     decision?.analysis_status === 'unknown' || String(decision?.novelty_threat || '').toLowerCase() === 'unknown'
   ).length
-  const reviewedSelections = selectReviewedPriorArtDecisions(decisions)
+  const selectedDecisions = selectReviewedPriorArtDecisions(decisions)
+  const selectedDecisionKeys = new Set(selectedDecisions.map((decision: any) => compactPatentNumber(patentNumberOf(decision))).filter(Boolean))
+  const remoteCount = decisions.filter((decision: any) => String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase() === 'remote').length
+  const belowThresholdCount = decisions.filter((decision: any) => {
+    const key = compactPatentNumber(patentNumberOf(decision))
+    const relevance = typeof decision?.relevance === 'number' ? decision.relevance : 0
+    const noveltyThreat = String(decision?.novelty_threat || decision?.noveltyThreat || '').toLowerCase()
+    return !selectedDecisionKeys.has(key) &&
+      decision?.analysis_status !== 'unknown' &&
+      noveltyThreat !== 'unknown' &&
+      noveltyThreat !== 'remote' &&
+      relevance < 0.3
+  }).length
+  const reviewedSelections = selectedDecisions
     .map((decision: any) => {
       const source = resultsByNumber.get(compactPatentNumber(patentNumberOf(decision)))
       return normalizeReviewedPriorArtSelection(decision, source)
@@ -1154,7 +1239,19 @@ async function runBatchPriorArtSearchAndReview(params: {
 
   }
 
-  return { selections: reviewedSelections, unknownCount }
+  return {
+    selections: reviewedSelections,
+    unknownCount,
+    audit: {
+      ...baseAudit,
+      selectedReferences: reviewedSelections.map(priorArtAuditReference),
+      excludedCounts: {
+        remote: remoteCount,
+        unknown: unknownCount,
+        belowThreshold: belowThresholdCount,
+      },
+    },
+  }
 }
 
 async function runPipeline(job: any, workerId: string) {
@@ -1171,6 +1268,7 @@ async function runPipeline(job: any, workerId: string) {
   const languageByJurisdiction = payload.languageByJurisdiction || Object.fromEntries(jurisdictions.map(code => [code, 'en']))
   const pipelineWarnings: string[] = []
   const generationWarningsByJurisdiction: Record<string, string[]> = {}
+  let priorArtAudit: any = null
   let reviewAttempted = false
   const { suppliedClaimsText, claimsHandling } = payloadValidation
 
@@ -1299,6 +1397,7 @@ async function runPipeline(job: any, workerId: string) {
       if (priorArtReview.selections.length) {
         selectedPatents = mergePriorArtSelections(selectedPatents, priorArtReview.selections)
       }
+      priorArtAudit = priorArtReview.audit || priorArtAudit
       if (priorArtReview.unknownCount > 0) pipelineWarnings.push(
         `Prior art analysis: ${priorArtReview.unknownCount} candidate${priorArtReview.unknownCount === 1 ? '' : 's'} remained unknown after retry.`
       )
@@ -1590,13 +1689,16 @@ async function runPipeline(job: any, workerId: string) {
 
   await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'set_stage', sessionId, stage: 'COMPLETED' } })
   session = await loadSession(sessionId)
+  const generatedTitle = generatedDraftTitleFromSession(session, jurisdictions, payload.title)
 
   return {
     sessionId,
     patentId: job.patentId,
+    generatedTitle,
     jurisdictions,
     activeJurisdiction,
     artifactIds: artifacts.map(artifact => artifact.id),
+    priorArtAudit,
     warnings: pipelineWarnings,
     draftIds: (session?.annexureDrafts || []).map((draft: any) => draft.id),
   }
@@ -1656,10 +1758,33 @@ export async function claimNextPatentDraftingJob(workerId: string) {
       OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
     },
     orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
-    take: 10,
+    take: 100,
   })
 
   for (const candidate of candidates) {
+    if (candidate.autoPatentDraftBatchId) {
+      const batch = await (prisma as any).autoPatentDraftBatch.findUnique({
+        where: { id: candidate.autoPatentDraftBatchId },
+        select: { status: true, cancelledAt: true, cancelledById: true, cancelReason: true },
+      })
+      if (batch?.status === 'PAUSED') continue
+      if (batch?.status === 'CANCELLED') {
+        await (prisma as any).patentDraftingJob.updateMany({
+          where: { id: candidate.id, status: { in: ['QUEUED', 'PROCESSING'] } },
+          data: {
+            status: 'CANCELLED',
+            currentStep: 'CANCELLED',
+            cancelledAt: batch.cancelledAt || now,
+            cancelledById: batch.cancelledById || candidate.userId,
+            lockedBy: null,
+            lockedUntil: null,
+            lastError: null,
+          },
+        })
+        continue
+      }
+    }
+
     const claimed = await (prisma as any).patentDraftingJob.updateMany({
       where: {
         id: candidate.id,

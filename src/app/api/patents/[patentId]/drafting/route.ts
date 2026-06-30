@@ -8219,6 +8219,8 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
   const sourceMode = normalizeRelatedArtSourceMode((data as any)?.sourceMode)
   const requestedProviderIds = normalizeRelatedArtProviderIds((data as any)?.providerIds)
   const skipTrigramSearch = (data as any)?.skipTrigramSearch === true
+  const disableLinkedProviderExpansion = (data as any)?.disableLinkedProviderExpansion === true
+  const batchPriorArtPolicy = typeof (data as any)?.batchPriorArtPolicy === 'string' ? (data as any).batchPriorArtPolicy : undefined
   const publicationDateFrom = normalizeRelatedArtDateText(afterDate)
   const filters: PatentSearchFilters = publicationDateFrom ? { publicationDateFrom } : {}
   const queryPlanOverride = normalizeRelatedArtQueryPlanOverride({
@@ -8233,6 +8235,8 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
     sourceMode,
     requestedProviderIds,
     skipTrigramSearch,
+    disableLinkedProviderExpansion,
+    batchPriorArtPolicy,
     queryPreview: safeQuery.substring(0, 120),
     limit: safeLimit,
     after: publicationDateFrom,
@@ -8257,6 +8261,7 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
       limit: safeLimit,
       requestHeaders,
       skipTrigramSearch,
+      disableLinkedProviderExpansion,
     })
   } catch (error) {
     console.error('Drafting related art provider search failed:', error)
@@ -8294,6 +8299,8 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
     limit: safeLimit,
     after: publicationDateFrom,
     skipTrigramSearch,
+    disableLinkedProviderExpansion,
+    batchPriorArtPolicy,
     queryPlan: searchResponse.queryPlan,
   }
 
@@ -8318,6 +8325,7 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
       requestedProviderIds,
       providerIds: searchResponse.providerStats.map(stat => stat.providerId),
       searchMode: 'intelligent',
+      batchPriorArtPolicy,
     },
   })
 }

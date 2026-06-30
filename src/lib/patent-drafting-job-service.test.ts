@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS,
+  BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS,
   buildAutomationIdeaText,
   buildEnabledJurisdictionToggles,
   evaluateDraftQualityGate,
@@ -38,7 +40,7 @@ describe('buildAutomationIdeaText', () => {
 })
 
 describe('selectReviewedPriorArtDecisions', () => {
-  it('sorts adjacent drafting prior art and excludes remote, high-risk, unknown, and low relevance decisions', () => {
+  it('sorts drafting prior art and excludes remote, unknown, and low relevance decisions', () => {
     const selected = selectReviewedPriorArtDecisions([
       { pn: 'ADJ', relevance: 0.6, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
       { pn: 'ADJ2', relevance: 0.7, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
@@ -48,7 +50,7 @@ describe('selectReviewedPriorArtDecisions', () => {
       { pn: 'UNK', relevance: null, novelty_threat: 'unknown', analysis_status: 'unknown' },
       { pn: 'LOW', relevance: 0.2, novelty_threat: 'adjacent', analysis_status: 'analyzed' },
     ])
-    expect(selected.map(decision => decision.pn)).toEqual(['ADJ2', 'ADJ'])
+    expect(selected.map(decision => decision.pn)).toEqual(['ANT', 'OBV', 'ADJ2', 'ADJ'])
   })
 
   it('defaults to the top 10 adjacent patents', () => {
@@ -74,6 +76,15 @@ describe('selectReviewedPriorArtDecisions', () => {
       'ADJ9',
       'ADJ10',
     ])
+  })
+})
+
+describe('batch prior-art source policy', () => {
+  it('uses stored corpora first and Google only as fallback', () => {
+    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).toEqual(['pqai-corpus', 'epo-ops-corpus', 'indian-corpus'])
+    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).not.toContain('pqai')
+    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).not.toContain('epo-ops')
+    expect([...BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS]).toEqual(['google-patents'])
   })
 })
 

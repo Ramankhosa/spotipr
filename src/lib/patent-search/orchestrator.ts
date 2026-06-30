@@ -211,6 +211,7 @@ export class PatentSearchOrchestrator {
       providerIds: input.providerIds,
       sourceMode: input.sourceMode,
       jurisdictions: input.jurisdictions,
+      disableLinkedProviderExpansion: input.disableLinkedProviderExpansion,
     })
     const warnings = [...queryPlan.warnings]
     const providerStats: PatentSearchProviderStats[] = []

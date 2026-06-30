@@ -135,6 +135,7 @@ export interface PatentSearchRequest {
   queryPlan?: Partial<PatentSearchQueryPlan>
   requestHeaders?: Record<string, string>
   skipTrigramSearch?: boolean
+  disableLinkedProviderExpansion?: boolean
 }
 
 export interface PatentResultScores {

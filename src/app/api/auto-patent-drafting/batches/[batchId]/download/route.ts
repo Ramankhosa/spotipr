@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
-import { getAutoPatentDraftBatchForUser } from '@/lib/auto-patent-draft-batch-service'
+import { getAutoPatentDraftBatchForUser, rebuildAutoPatentDraftBatchZip } from '@/lib/auto-patent-draft-batch-service'
 import { prisma } from '@/lib/prisma'
 
 export const runtime = 'nodejs'
@@ -17,10 +17,14 @@ export async function GET(
       return NextResponse.json({ error: auth.error?.message || 'Unauthorized' }, { status: auth.error?.status || 401 })
     }
 
-    const batch = await getAutoPatentDraftBatchForUser(params.batchId, auth.user.id)
+    let batch = await getAutoPatentDraftBatchForUser(params.batchId, auth.user.id)
     if (!batch) return NextResponse.json({ error: 'Batch not found.' }, { status: 404 })
     if (!batch.zipDocumentId) {
-      return NextResponse.json({ error: 'Batch ZIP is not ready yet.' }, { status: 409 })
+      const rebuild = await rebuildAutoPatentDraftBatchZip(params.batchId, auth.user.id)
+      if (rebuild.outcome !== 'rebuilt') {
+        return NextResponse.json({ error: 'Batch ZIP is not ready yet.' }, { status: 409 })
+      }
+      batch = await getAutoPatentDraftBatchForUser(params.batchId, auth.user.id)
     }
 
     const document = await prisma.document.findFirst({

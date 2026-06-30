@@ -65,8 +65,10 @@ export function resolveProviderIds(params: {
   providerIds?: PatentSearchProviderId[]
   sourceMode?: string
   jurisdictions?: string[]
+  disableLinkedProviderExpansion?: boolean
 }) {
   if (params.providerIds?.length) {
+    if (params.disableLinkedProviderExpansion) return params.providerIds
     const hasEuropeanSelection = params.providerIds.some(id => id === 'epo-ops' || id === 'epo-ops-corpus')
     if (!hasEuropeanSelection) return params.providerIds
 

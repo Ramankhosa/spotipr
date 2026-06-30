@@ -2927,9 +2927,11 @@ model EmailDraftRequest {
 enum AutoPatentDraftBatchStatus {
   QUEUED
   PROCESSING
+  PAUSED
   COMPLETED
   COMPLETED_WITH_ERRORS
   FAILED
+  CANCELLED
 }
 
 model AutoPatentDraftBatch {
@@ -2950,6 +2952,13 @@ model AutoPatentDraftBatch {
   zipDocumentId         String?
   completionEmailSentAt DateTime?
   completedAt           DateTime?
+  pausedAt              DateTime?
+  pausedById            String?
+  resumedAt             DateTime?
+  resumedById           String?
+  cancelledAt           DateTime?
+  cancelledById         String?
+  cancelReason          String?
   createdAt             DateTime                   @default(now())
   updatedAt             DateTime                   @updatedAt
 
@@ -2971,6 +2980,7 @@ model AutoPatentDraftBatchItem {
   jobId         String?
   itemNo        Int
   title         String
+  generatedTitle String?
   jurisdictions String[] @default([])
   status        String   @default("QUEUED")
   currentStep   String?
@@ -2978,6 +2988,11 @@ model AutoPatentDraftBatchItem {
   warnings      Json?
   errorMessage  String?
   artifactIds   String[] @default([])
+  priorArtAudit Json?
+  reviewStatus  String   @default("NEEDS_REVIEW")
+  attorneyNotes String?  @db.Text
+  reviewedAt    DateTime?
+  reviewedById  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

@@ -81,6 +81,17 @@ describe('patent search provider registry', () => {
     })).toEqual(['epo-ops', 'epo-ops-corpus'])
   })
 
+  test('can keep explicit European corpus selection stored-only for batch drafting', () => {
+    process.env.EPO_KEY = 'test-key'
+    process.env.EPO_SECRET = 'test-secret'
+
+    expect(resolveProviderIds({
+      providerIds: ['pqai-corpus', 'epo-ops-corpus', 'indian-corpus'],
+      sourceMode: 'PQAI_PLUS_INDIAN_EPO',
+      disableLinkedProviderExpansion: true,
+    })).toEqual(['pqai-corpus', 'epo-ops-corpus', 'indian-corpus'])
+  })
+
   test('uses stored European corpus when explicit OPS selection has no credentials', () => {
     expect(resolveProviderIds({
       providerIds: ['epo-ops'],
