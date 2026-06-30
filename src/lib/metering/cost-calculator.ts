@@ -305,6 +305,10 @@ export function generateCostLogMessage(
   if (metadata?.patentId) {
     message += `📄 Patent: ${metadata.patentId}\n`
   }
+
+  if (metadata?.userId) {
+    message += `User ID: ${metadata.userId}\n`
+  }
   
   message += `${thinDivider}\n`
   

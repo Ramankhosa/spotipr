@@ -67,6 +67,12 @@ export class LLMGateway {
       }
       console.log('[Gateway] Tenant context resolved:', { tenantId: tenantContext.tenantId, userId: tenantContext.userId, planId: tenantContext.planId })
 
+      llmRequest.metadata = {
+        ...llmRequest.metadata,
+        tenantId: tenantContext.tenantId,
+        userId: tenantContext.userId ?? llmRequest.metadata?.userId
+      }
+
       // 2. Ensure we have a reasonable input token estimate if caller did not supply one
       if (typeof llmRequest.inputTokens !== 'number' || llmRequest.inputTokens <= 0) {
         llmRequest.inputTokens = this.estimateInputTokens(llmRequest)
