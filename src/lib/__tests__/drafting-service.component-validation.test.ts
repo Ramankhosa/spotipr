@@ -49,4 +49,23 @@ describe('DraftingService.validateComponentMap component validation hardening', 
     expect(constituent.valid).toBe(true)
     expect(constituent.components?.map(c => c.referenceLabel)).toEqual(['(a)', '(b)'])
   })
+
+  it('does not emit undefined missing numerals for incomplete reference-map entries', () => {
+    const result = DraftingService.validateDraftConsistencyPublic(
+      { fullText: 'The system includes a controller (101).' },
+      {
+        referenceMap: {
+          components: [
+            { id: 'bad', name: 'Incomplete component' },
+            { id: 'controller', name: 'Controller', numeral: 101 }
+          ]
+        },
+        figurePlans: []
+      }
+    )
+
+    expect(result.valid).toBe(true)
+    expect(result.report.missingNumerals).toEqual([])
+    expect(result.report.missingNumerals).not.toContain(undefined)
+  })
 })

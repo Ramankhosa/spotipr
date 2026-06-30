@@ -159,6 +159,10 @@ const sanitizeStage0TitleInput = (value: unknown): string => {
   return sanitizeStage0TextInput(value).replace(/\s+/g, ' ').trim()
 }
 
+const jsonSafeForPrisma = <T,>(value: T): T => {
+  return JSON.parse(JSON.stringify(value ?? null))
+}
+
 const hashStage0Text = (value: string): string =>
   crypto.createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -15339,9 +15343,9 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
 
   // Lightweight consistency validation using service
   const validation = DraftingService.validateDraftConsistencyPublic({ fullText: fullDraftText }, session as any)
-  const validationReport = {
+  const validationReport = jsonSafeForPrisma({
     ...(validation.report || {})
-  }
+  })
 
   const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
   if (session.tenantId) {

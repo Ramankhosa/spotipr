@@ -4076,7 +4076,13 @@ OUTPUT FORMAT:
       
       const referenceNumerals = new Set<number>();
       for (const component of refMapComps2) {
-        referenceNumerals.add(component.numeral);
+        const rawNumeral = component?.numeral;
+        const numeral = typeof rawNumeral === 'number'
+          ? rawNumeral
+          : (typeof rawNumeral === 'string' && rawNumeral.trim() ? Number(rawNumeral) : NaN);
+        if (Number.isFinite(numeral)) {
+          referenceNumerals.add(numeral);
+        }
       }
 
       // Find missing and unused numerals
