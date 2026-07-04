@@ -77,6 +77,7 @@ async function main() {
 
       // index(0), publication_number(1), kind(2), title(3), abstract_original(4), abstract_normalized(5)
       const publicationNumber = (cols[1] || '').trim();
+      const publicationNumberKey = publicationNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
       const kind = cols[2] ? cols[2].trim() : null;
       const title = (cols[3] || '').trim();
       const abstractOriginal = cols[4] ? cols[4].trim() : null;
@@ -92,6 +93,7 @@ async function main() {
         await prisma.localPatent.update({
           where: { publicationNumber },
           data: {
+            publicationNumberKey,
             kind,
             title,
             abstract,
@@ -103,6 +105,7 @@ async function main() {
         await prisma.localPatent.create({
           data: {
             publicationNumber,
+            publicationNumberKey,
             kind,
             title,
             abstract,

@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import AdmZip from 'adm-zip'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+import { normalizePatentNumberKey } from '@/lib/patent-number'
 import {
   ExtractedPatentRecord,
   PATENT_CORPUS_EXTRACTION_VERSION,
@@ -670,6 +671,7 @@ export async function cancelPatentImportBatch(batchId: string) {
 function localPatentData(record: ExtractedPatentRecord, file: any) {
   return sanitizePostgresText({
     publicationNumber: record.publicationNumber,
+    publicationNumberKey: normalizePatentNumberKey(record.publicationNumber),
     applicationNumberRaw: record.applicationNumberRaw,
     kind: record.kind,
     country: record.country,
@@ -866,6 +868,7 @@ function buildExternalPatentData(
 
   const data: Record<string, any> = {
     publicationNumber: existing?.publicationNumber || publicationNumber,
+    publicationNumberKey: normalizePatentNumberKey(existing?.publicationNumber || publicationNumber),
     applicationNumberRaw: keepExistingIfValuable(existing, 'applicationNumberRaw', result.applicationNumberRaw || result.applicationNumber || null),
     country: keepExistingIfValuable(existing, 'country', inferPatentCountry(publicationNumber, result.jurisdiction)),
     filingDate: keepExistingIfValuable(existing, 'filingDate', parsePatentDate(result.filingDate)),

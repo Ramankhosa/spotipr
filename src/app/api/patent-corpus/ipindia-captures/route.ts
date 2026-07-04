@@ -8,6 +8,7 @@ import {
 import { prisma } from '@/lib/prisma'
 import { kickPatentCorpusRunner } from '@/lib/patent-corpus-runner'
 import { queueEmbeddingForPatent } from '@/lib/patent-corpus-service'
+import { normalizePatentNumberKey } from '@/lib/patent-number'
 
 export const runtime = 'nodejs'
 
@@ -127,6 +128,7 @@ export async function POST(request: NextRequest) {
     } satisfies Prisma.JsonObject
 
     const updateData: Prisma.LocalPatentUpdateInput = {
+      publicationNumberKey: normalizePatentNumberKey(publicationNumber),
       applicationNumberRaw: applicationNumber,
       country: 'IN',
       kind: 'A',
@@ -147,6 +149,7 @@ export async function POST(request: NextRequest) {
       where: { publicationNumber },
       create: {
         publicationNumber,
+        publicationNumberKey: normalizePatentNumberKey(publicationNumber),
         applicationNumberRaw: applicationNumber,
         country: 'IN',
         kind: 'A',

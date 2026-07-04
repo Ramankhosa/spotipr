@@ -136,6 +136,9 @@ export interface PatentSearchRequest {
   requestHeaders?: Record<string, string>
   skipTrigramSearch?: boolean
   disableLinkedProviderExpansion?: boolean
+  strictSemantic?: boolean
+  maxSemanticQueryWords?: number
+  suppressSensitiveLogging?: boolean
 }
 
 export interface PatentResultScores {

@@ -216,15 +216,16 @@ export class PatentSearchOrchestrator {
     const warnings = [...queryPlan.warnings]
     const providerStats: PatentSearchProviderStats[] = []
     const providerResults: Array<{ providerId: PatentSearchProviderId; results: NormalizedPatentResult[] }> = []
+    const suppressSensitiveLogging = input.suppressSensitiveLogging === true
 
     logSearchEvent('dispatch', {
       searchMode: input.searchMode,
       sourceMode: input.sourceMode,
       providerIds,
-      query: queryPlan.searchQuery,
-      inventionFeatures: queryPlan.inventionFeatures,
-      epoTitleKeywords: queryPlan.epoTitleKeywords,
-      epoAbstractKeywords: queryPlan.epoAbstractKeywords,
+      query: suppressSensitiveLogging ? undefined : queryPlan.searchQuery,
+      inventionFeatures: suppressSensitiveLogging ? undefined : queryPlan.inventionFeatures,
+      epoTitleKeywords: suppressSensitiveLogging ? undefined : queryPlan.epoTitleKeywords,
+      epoAbstractKeywords: suppressSensitiveLogging ? undefined : queryPlan.epoAbstractKeywords,
       displayLimit: limit,
       candidateLimit,
     })
@@ -270,7 +271,7 @@ export class PatentSearchOrchestrator {
         logSearchEvent('provider_started', {
           providerId,
           label: provider.label,
-          query: queryPlan.searchQuery,
+          query: suppressSensitiveLogging ? undefined : queryPlan.searchQuery,
           requestedLimit: candidateLimit,
         })
         const results = await provider.search({
@@ -284,7 +285,7 @@ export class PatentSearchOrchestrator {
           label: provider.label,
           resultCount: results.length,
           durationMs: Date.now() - startedAt,
-          results: results.map(resultLogSummary),
+          results: suppressSensitiveLogging ? undefined : results.map(resultLogSummary),
         })
         providerStats.push({
           providerId,
@@ -348,7 +349,7 @@ export class PatentSearchOrchestrator {
           afterProviderId: liveId,
           resultCount: refreshedResults.length,
           durationMs: Date.now() - startedAt,
-          results: refreshedResults.map(resultLogSummary),
+          results: suppressSensitiveLogging ? undefined : refreshedResults.map(resultLogSummary),
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -375,7 +376,7 @@ export class PatentSearchOrchestrator {
       providerCandidateCount: providerResults.reduce((count, providerResult) => count + providerResult.results.length, 0),
       candidateResultCount: candidateResults.length,
       displayResultCount: results.length,
-      candidatePublicationNumbers: candidateResults.map(result => result.publicationNumber),
+      candidatePublicationNumbers: suppressSensitiveLogging ? undefined : candidateResults.map(result => result.publicationNumber),
     })
 
     return {

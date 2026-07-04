@@ -643,6 +643,7 @@ type BatchEmbedOptions = {
   shouldSubmit: boolean
   shouldPoll: boolean
   watch: boolean
+  untilIdle: boolean
   watchIntervalMs: number
   retryFailed: boolean
 }
@@ -669,7 +670,8 @@ function parseOptions(): BatchEmbedOptions {
     ),
     shouldSubmit: hasArg('--watch') || hasArg('--auto') || hasArg('--submit') || hasArg('--run') || (!hasArg('--poll') && !hasArg('--process')),
     shouldPoll: hasArg('--watch') || hasArg('--auto') || hasArg('--poll') || hasArg('--process') || hasArg('--run') || (!hasArg('--submit')),
-    watch: hasArg('--watch') || hasArg('--auto'),
+    watch: hasArg('--watch') || hasArg('--auto') || hasArg('--until-idle'),
+    untilIdle: hasArg('--until-idle'),
     retryFailed: hasArg('--retry-failed') || envBoolean('PATENT_CORPUS_OPENAI_BATCH_RETRY_FAILED', true),
     watchIntervalMs: Math.max(
       60_000,
@@ -694,6 +696,7 @@ async function runOnce(options: BatchEmbedOptions) {
       retryFailed: options.retryFailed,
     })
   }
+  return state
 }
 
 async function main() {
@@ -725,7 +728,11 @@ async function main() {
 
   while (true) {
     try {
-      await runOnce(options)
+      const state = await runOnce(options)
+      if (options.untilIdle && !state.jobs.some(job => job.openaiBatchId && !job.processedAt)) {
+        console.log('[PatentCorpusBatchEmbed] All known batch jobs are processed; exiting.')
+        break
+      }
     } catch (error) {
       console.error('[PatentCorpusBatchEmbed] Watch tick failed:', error)
     }

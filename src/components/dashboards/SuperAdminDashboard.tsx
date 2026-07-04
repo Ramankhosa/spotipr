@@ -287,6 +287,7 @@ export default function SuperAdminDashboard() {
         { label: 'Section Prompts', icon: '📝', href: '/super-admin/section-prompts' },
         { label: 'Jurisdiction Styles', icon: '🎨', href: '/super-admin/jurisdiction-styles' },
         { label: 'Patent Journal Extractor', icon: '📄', href: '/super-admin/patent-corpus', badge: 'NEW' },
+        { label: 'Indian Patent API', icon: '🔑', href: '/super-admin/patent-api', badge: 'NEW' },
         { label: 'Superset Sections', icon: '📚', href: '/super-admin/superset-sections' }
       ]
     },

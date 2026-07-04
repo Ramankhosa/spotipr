@@ -234,10 +234,12 @@ model User {
   sectionInstructions UserSectionInstruction[]
 
   // Payment relations
-  subscriptions     Subscription[]
-  payments          Payment[]
-  createdDiscounts  AdminDiscount[]     @relation("DiscountCreator")
-  PatentImportBatch PatentImportBatch[]
+  subscriptions           Subscription[]
+  payments                Payment[]
+  createdDiscounts        AdminDiscount[]     @relation("DiscountCreator")
+  PatentImportBatch       PatentImportBatch[]
+  patentApiClientsCreated PatentApiClient[]   @relation("PatentApiClientCreator")
+  patentApiKeysCreated    PatentApiKey[]      @relation("PatentApiKeyCreator")
 
   @@map("users")
 }
@@ -1464,9 +1466,26 @@ enum IpIndiaJournalFileStatus {
   FAILED
 }
 
+enum PatentApiClientStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum PatentApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum PatentApiUsagePeriod {
+  MINUTE
+  DAY
+  MONTH
+}
+
 model LocalPatent {
   id                     Int       @id @default(autoincrement())
   publicationNumber      String    @unique
+  publicationNumberKey   String?   @unique
   applicationNumberRaw   String?
   kind                   String?
   country                String?
@@ -1615,6 +1634,92 @@ model LocalPatentEmbedding {
   @@index([status, nextAttemptAt])
   @@index([localPatentId])
   @@map("local_patent_embeddings")
+}
+
+model PatentApiClient {
+  id                  String                @id @default(cuid())
+  name                String
+  slug                String                @unique
+  description         String?
+  status              PatentApiClientStatus @default(ACTIVE)
+  rateLimitPerMinute  Int                   @default(30)
+  dailyRequestLimit   Int                   @default(2000)
+  monthlyRequestLimit Int                   @default(50000)
+  createdByUserId     String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  createdBy    User?                  @relation("PatentApiClientCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  keys         PatentApiKey[]
+  usageBuckets PatentApiUsageBucket[]
+  requestLogs  PatentApiRequestLog[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("patent_api_clients")
+}
+
+model PatentApiKey {
+  id              String             @id @default(cuid())
+  clientId        String
+  name            String
+  keyHash         String             @unique
+  keyPrefix       String
+  keyLastFour     String
+  status          PatentApiKeyStatus @default(ACTIVE)
+  expiresAt       DateTime?
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+  createdByUserId String?
+  createdAt       DateTime           @default(now())
+
+  client      PatentApiClient       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy   User?                 @relation("PatentApiKeyCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  requestLogs PatentApiRequestLog[]
+
+  @@index([clientId, status])
+  @@index([keyPrefix])
+  @@map("patent_api_keys")
+}
+
+model PatentApiUsageBucket {
+  id           String               @id @default(cuid())
+  clientId     String
+  periodType   PatentApiUsagePeriod
+  periodStart  DateTime
+  requestCount Int                  @default(0)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  client PatentApiClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, periodType, periodStart])
+  @@index([periodType, periodStart])
+  @@map("patent_api_usage_buckets")
+}
+
+model PatentApiRequestLog {
+  id          String   @id @default(cuid())
+  clientId    String
+  apiKeyId    String?
+  requestId   String
+  endpoint    String
+  method      String
+  statusCode  Int
+  durationMs  Int
+  resultCount Int?
+  queryHash   String?
+  ipAddress   String?
+  errorCode   String?
+  createdAt   DateTime @default(now())
+
+  client PatentApiClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  apiKey PatentApiKey?   @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+
+  @@index([clientId, createdAt])
+  @@index([apiKeyId, createdAt])
+  @@index([statusCode, createdAt])
+  @@map("patent_api_request_logs")
 }
 
 model IpIndiaJournalFile {

@@ -33,6 +33,8 @@
     "pqai-corpus:backfill": "tsx scripts/backfill-pqai-corpus-from-novelty-runs.ts",
     "patent-corpus:eval": "tsx scripts/eval-patent-retrieval.ts",
     "patent-corpus:diagnose-search": "tsx scripts/diagnose-patent-embedding-search.ts",
+    "patent-api:cleanup": "tsx scripts/cleanup-patent-api-usage.ts",
+    "patent-api:smoke": "tsx scripts/smoke-patent-api.ts",
     "test": "vitest run"
   },
   "dependencies": {

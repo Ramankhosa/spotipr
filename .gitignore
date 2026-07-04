@@ -56,6 +56,8 @@ uploads/
 # Temporary files
 *.tmp
 *.temp
+scripts/.batch-embed-state.json
+scripts/.patent-corpus-batches/
 
 # Database backups
 database-backup-*/

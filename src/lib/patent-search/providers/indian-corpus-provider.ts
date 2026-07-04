@@ -419,10 +419,14 @@ function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number) {
   return Math.max(12, Math.min(24, Math.ceil(safeLimit / 8)))
 }
 
-function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['queryPlan'], title?: string): LocalRetrievalQuery[] {
+function buildFallbackRetrievalQueries(
+  queryPlan: PatentProviderSearchRequest['queryPlan'],
+  title?: string,
+  maxWords = 36
+): LocalRetrievalQuery[] {
   const supplied = (queryPlan.retrievalQueries || [])
     .map((query, index): LocalRetrievalQuery | null => {
-      const text = trimRetrievalText(query.text)
+      const text = trimRetrievalText(query.text, maxWords)
       if (!text) return null
       if (query.type === 'feature_pair') return null
       return {
@@ -437,13 +441,13 @@ function buildFallbackRetrievalQueries(queryPlan: PatentProviderSearchRequest['q
 
   if (supplied.length) return supplied.slice(0, 12)
 
-  const searchQuery = trimRetrievalText(queryPlan.searchQuery || queryPlan.normalizedQuery || title)
-  const semanticQuery = trimRetrievalText(queryPlan.semanticQuery || searchQuery)
+  const searchQuery = trimRetrievalText(queryPlan.searchQuery || queryPlan.normalizedQuery || title, maxWords)
+  const semanticQuery = trimRetrievalText(queryPlan.semanticQuery || searchQuery, maxWords)
   const features = (queryPlan.inventionFeatures || []).map(feature => trimRetrievalText(feature, 18)).filter(Boolean).slice(0, 8)
   const queries: LocalRetrievalQuery[] = []
   const seen = new Set<string>()
   const add = (query: LocalRetrievalQuery) => {
-    const text = trimRetrievalText(query.text)
+    const text = trimRetrievalText(query.text, maxWords)
     const key = text.toLowerCase()
     if (!text || seen.has(key)) return
     seen.add(key)
@@ -754,7 +758,11 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }
     }
 
-    const retrievalQueries = buildFallbackRetrievalQueries(queryPlan, request.title)
+    const retrievalQueries = buildFallbackRetrievalQueries(
+      queryPlan,
+      request.title,
+      Math.max(36, Math.min(256, request.maxSemanticQueryWords || 36))
+    )
     const vectorRetrievalQueries = retrievalQueries.slice(0, MAX_VECTOR_RETRIEVAL_QUERIES)
     logEmbeddingSearch('info', 'search_start', {
       traceId,
@@ -845,6 +853,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
           ...searchErrorDetails(error),
         }, true)
+        if (request.strictSemantic) throw error
       }
     } else {
       const skipReason = !this.semanticSearchEnabled
@@ -863,6 +872,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         retrievalQueryCount: vectorRetrievalQueries.length,
         hasOpenAIKey: hasSearchEmbeddingApiKey(),
       }, forceWarning)
+      if (request.strictSemantic) {
+        throw new Error(`Semantic patent search is unavailable: ${skipReason}.`)
+      }
     }
 
     const hasEnoughCandidatesForRequestedLimit = rows.size >= safeLimit
