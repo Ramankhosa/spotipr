@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import Link from 'next/link'
+import { Check, Image as ImageIcon, Loader2, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import Stage0PatentIntelligenceOverlay, {
   type Stage0PatentIntelligenceStatus
@@ -15,6 +16,14 @@ import {
 } from '@/lib/drafting-constants'
 
 const DRAFTING_INPUT_WARNING_CHARS = Math.floor(MAX_DRAFTING_INPUT_CHARS * 0.9)
+const EXTRACTED_IMAGE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+const EXTERNAL_UPLOAD_ALLOWED_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/svg+xml',
+])
 
 type CountryOption = {
   code: string
@@ -32,8 +41,27 @@ type SourceInputMeta = {
   fileSize?: number
   detectedFormat?: string
   extractedCharCount?: number
+  extractedImageCount?: number
   extractionHash?: string
   extractedAt?: string
+}
+
+type ExtractedDraftImage = {
+  id: string
+  fileName: string
+  mimeType: string
+  size: number
+  dataUrl: string
+  source: string
+  label: string
+  width?: number
+  height?: number
+}
+
+type SelectableDraftImage = ExtractedDraftImage & {
+  selected: boolean
+  status: 'idle' | 'saving' | 'saved' | 'error'
+  error?: string
 }
 
 const areLanguageMapsEqual = (a: Record<string, string>, b: Record<string, string>) => {
@@ -62,6 +90,27 @@ const LANGUAGE_LABELS: Record<string, string> = {
   it: 'Italian (Italiano)',
   nl: 'Dutch (Nederlands)',
   sv: 'Swedish (Svenska)',
+}
+
+function formatImageBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function dataUrlToBase64(dataUrl: string) {
+  return dataUrl.split(',')[1] || ''
+}
+
+function dataUrlToFile(dataUrl: string, fileName: string, mimeType: string) {
+  const base64 = dataUrlToBase64(dataUrl)
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new File([bytes], fileName, { type: mimeType })
 }
 
 interface Project {
@@ -103,6 +152,7 @@ function NewPatentDraftPageContent() {
   const [isFileProcessing, setIsFileProcessing] = useState(false)
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [sourceInputMeta, setSourceInputMeta] = useState<SourceInputMeta | null>(null)
+  const [extractedImages, setExtractedImages] = useState<SelectableDraftImage[]>([])
   const [error, setError] = useState<string | null>(null)
   const [availableCountries, setAvailableCountries] = useState<CountryOption[]>([])
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
@@ -349,6 +399,28 @@ function NewPatentDraftPageContent() {
   }, [])
 
 
+  const selectedExtractedImages = useMemo(
+    () => extractedImages.filter(image => image.selected && image.status !== 'saved'),
+    [extractedImages]
+  )
+
+  const savedExtractedImageCount = useMemo(
+    () => extractedImages.filter(image => image.status === 'saved').length,
+    [extractedImages]
+  )
+
+  const updateExtractedImage = (id: string, patch: Partial<SelectableDraftImage>) => {
+    setExtractedImages(prev => prev.map(image => image.id === id ? { ...image, ...patch } : image))
+  }
+
+  const toggleExtractedImage = (id: string, selected: boolean) => {
+    updateExtractedImage(id, { selected, error: undefined, status: 'idle' })
+  }
+
+  const removeExtractedImage = (id: string) => {
+    setExtractedImages(prev => prev.filter(image => image.id !== id))
+  }
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget
     const file = input.files?.[0]
@@ -361,6 +433,7 @@ function NewPatentDraftPageContent() {
       setError('Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.')
       setUploadedFileName(null)
       setSourceInputMeta(null)
+      setExtractedImages([])
       input.value = ''
       return
     }
@@ -369,6 +442,7 @@ function NewPatentDraftPageContent() {
       setError(`File size must be less than ${MAX_DRAFTING_UPLOAD_MB}MB`)
       setUploadedFileName(null)
       setSourceInputMeta(null)
+      setExtractedImages([])
       input.value = ''
       return
     }
@@ -376,6 +450,7 @@ function NewPatentDraftPageContent() {
     setIsFileProcessing(true)
     setError(null)
     setUploadedFileName(null)
+    setExtractedImages([])
 
     try {
       const formData = new FormData()
@@ -398,15 +473,101 @@ function NewPatentDraftPageContent() {
       setRawIdea(data.textContent)
       setUploadedFileName(data.fileName || file.name)
       setSourceInputMeta(data.sourceInputMeta || null)
+      const images = Array.isArray(data.images) ? data.images : []
+      setExtractedImages(images.map((image: ExtractedDraftImage) => ({
+        ...image,
+        selected: true,
+        status: 'idle' as const
+      })))
       setError(null)
     } catch (error) {
       console.error('File processing error:', error)
       setUploadedFileName(null)
       setSourceInputMeta(null)
+      setExtractedImages([])
       setError(error instanceof Error ? error.message : 'Failed to process file. Please check the file format and try again.')
     } finally {
       setIsFileProcessing(false)
       input.value = ''
+    }
+  }
+
+  const safeExtractedImageUploadName = (image: SelectableDraftImage) => {
+    const extensionMatch = /\.([a-z0-9]+)$/i.exec(image.fileName)
+    const extension = extensionMatch?.[1] || (image.mimeType === 'image/jpeg' ? 'jpg' : image.mimeType.split('/')[1] || 'png')
+    const base = image.fileName
+      .replace(/\.[a-z0-9]+$/i, '')
+      .replace(/[^a-z0-9._-]+/gi, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 72) || 'embedded-figure'
+    const suffix = image.id.replace(/[^a-z0-9]+/gi, '').slice(-12) || Date.now().toString(36)
+    return `${base}-${suffix}.${extension === 'jpeg' ? 'jpg' : extension}`
+  }
+
+  const attachSelectedExtractedImages = async (patentId: string, sessionId: string) => {
+    const targets = selectedExtractedImages
+    if (targets.length === 0) return
+
+    const token = localStorage.getItem('auth_token') || ''
+    const jsonHeaders = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
+
+    for (let index = 0; index < targets.length; index++) {
+      const image = targets[index]
+      try {
+        updateExtractedImage(image.id, { status: 'saving', error: undefined })
+
+        if (!EXTERNAL_UPLOAD_ALLOWED_MIME_TYPES.has(image.mimeType)) {
+          throw new Error('Unsupported embedded image type')
+        }
+
+        const uploadFile = dataUrlToFile(
+          image.dataUrl,
+          safeExtractedImageUploadName(image),
+          image.mimeType === 'image/jpg' ? 'image/jpeg' : image.mimeType
+        )
+        if (uploadFile.size > EXTRACTED_IMAGE_UPLOAD_MAX_BYTES) {
+          throw new Error(`${image.fileName} is larger than the 25MB figure upload limit.`)
+        }
+
+        const formData = new FormData()
+        formData.append('file', uploadFile)
+        const uploadResponse = await fetch(`/api/projects/${selectedProject}/patents/${patentId}/upload`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        })
+        const uploadData = await uploadResponse.json().catch(() => ({}))
+        if (!uploadResponse.ok || !uploadData?.filename || !uploadData?.checksum) {
+          throw new Error(uploadData.error || 'Failed to upload embedded image')
+        }
+
+        const linkResponse = await fetch(`/api/patents/${patentId}/drafting`, {
+          method: 'POST',
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            action: 'import_uploaded_diagram_image',
+            sessionId,
+            language: figuresLanguage || 'en',
+            filename: uploadData.filename,
+            checksum: uploadData.checksum,
+            imagePath: uploadData.path,
+            title: image.label || image.fileName || `Uploaded Figure ${index + 1}`
+          })
+        })
+        const linkData = await linkResponse.json().catch(() => ({}))
+        if (!linkResponse.ok || !linkData?.created?.figureNo) {
+          throw new Error(linkData.error || 'Failed to queue embedded image as a figure')
+        }
+
+        updateExtractedImage(image.id, { status: 'saved', selected: false, error: undefined })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to attach embedded image'
+        updateExtractedImage(image.id, { status: 'error', error: message })
+        throw new Error(`${image.label || image.fileName}: ${message}`)
+      }
     }
   }
 
@@ -558,6 +719,11 @@ function NewPatentDraftPageContent() {
         const errorMessage = errorData.error || 'Failed to normalize idea'
         throw new Error(errorMessage)
       }
+
+      if (!patentId || !sessionId) {
+        throw new Error('Draft session was not initialized correctly')
+      }
+      await attachSelectedExtractedImages(patentId, sessionId)
 
       setStage0OverlayStatus('success')
       setDraftCreationContext(null)
@@ -1057,6 +1223,93 @@ function NewPatentDraftPageContent() {
                 Tip: Uploading a file replaces any text you&apos;ve entered above
               </p>
             </div>
+
+            {extractedImages.length > 0 && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4 text-slate-600" />
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">Extracted Images</div>
+                      <div className="text-xs text-slate-600">
+                        {selectedExtractedImages.length} selected
+                        {savedExtractedImageCount > 0 ? `, ${savedExtractedImageCount} saved` : ''} of {extractedImages.length}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExtractedImages(prev => prev.map(image => image.status === 'saved' ? image : { ...image, selected: true, error: undefined, status: 'idle' }))}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExtractedImages(prev => prev.map(image => image.status === 'saved' ? image : { ...image, selected: false, error: undefined, status: 'idle' }))}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {extractedImages.map((image) => (
+                    <div key={image.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="relative aspect-[4/3] overflow-hidden rounded-md border border-slate-200 bg-white">
+                        <img
+                          src={image.dataUrl}
+                          alt={image.label || image.fileName}
+                          className="h-full w-full object-contain"
+                        />
+                        {image.status !== 'idle' && (
+                          <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-md bg-white/95 px-2 py-1 text-xs font-medium text-slate-700 shadow-sm">
+                            {image.status === 'saving' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                            {image.status === 'saving' ? 'Saving' : image.status === 'saved' ? 'Queued' : 'Error'}
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-3 flex items-start justify-between gap-2">
+                        <label className="flex min-w-0 items-start gap-2 text-sm text-slate-800">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                            checked={image.selected || image.status === 'saved'}
+                            disabled={image.status === 'saved' || image.status === 'saving'}
+                            onChange={(e) => toggleExtractedImage(image.id, e.target.checked)}
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium">{image.label || image.fileName}</span>
+                            <span className="block text-xs text-slate-500">
+                              {image.width && image.height ? `${image.width}x${image.height} - ` : ''}{formatImageBytes(image.size)}
+                            </span>
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          title="Delete extracted image"
+                          onClick={() => removeExtractedImage(image.id)}
+                          disabled={image.status === 'saving' || image.status === 'saved'}
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          <span className="sr-only">Delete extracted image</span>
+                        </button>
+                      </div>
+                      {image.error && (
+                        <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                          {image.error}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Action Buttons */}
             <div className="flex flex-col gap-3 pt-6 border-t border-gray-200">

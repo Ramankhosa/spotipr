@@ -14,6 +14,17 @@ describe('patent search provider registry', () => {
     delete process.env.Serp_API_KEY
     delete process.env.SERP_API_KEY
     delete process.env.SERPAPI_API_KEY
+    delete process.env.GOOGLE_CLOUD_PROJECT
+    delete process.env.GOOGLE_PROJECT_ID
+    delete process.env.GCP_PROJECT_ID
+    delete process.env.BIGQUERY_PROJECT_ID
+    delete process.env.GOOGLE_CLOUD_PROJECT_ID
+    delete process.env.GCLOUD_PROJECT
+    delete process.env.BIGQUERY_BILLING_PROJECT
+    delete process.env.GOOGLE_PATENTS_BQ_MAX_BYTES_BILLED
+    delete process.env.GOOGLE_PATENTS_BIGQUERY_MAX_BYTES_BILLED
+    delete process.env.GOOGLE_BIGQUERY_MAX_BYTES_BILLED
+    delete process.env.BIGQUERY_MAX_BYTES_BILLED
   }
 
   beforeEach(clearEnv)
@@ -64,6 +75,20 @@ describe('patent search provider registry', () => {
     process.env.Serp_API_KEY = 'test-serp'
     expect(resolveProviderIds({ sourceMode: 'INDIAN_ONLY' })).toEqual(['indian-corpus', 'google-patents'])
     expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY' })).toEqual(['pqai-corpus', 'pqai', 'google-patents'])
+  })
+
+  test('adds Google Patents BigQuery to default source-mode resolution when project is configured', () => {
+    process.env.GOOGLE_CLOUD_PROJECT = 'test-project'
+    process.env.GOOGLE_PATENTS_BQ_MAX_BYTES_BILLED = '1000000000'
+    expect(resolveProviderIds({ sourceMode: 'INDIAN_ONLY' })).toEqual(['indian-corpus', 'google-patents-bigquery'])
+    expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY' })).toEqual(['pqai-corpus', 'pqai', 'google-patents-bigquery'])
+  })
+
+  test('keeps both Google patent providers when both live sources are configured', () => {
+    process.env.Serp_API_KEY = 'test-serp'
+    process.env.GOOGLE_CLOUD_PROJECT = 'test-project'
+    process.env.GOOGLE_PATENTS_BQ_MAX_BYTES_BILLED = '1000000000'
+    expect(resolveProviderIds({ sourceMode: 'PQAI_ONLY' })).toEqual(['pqai-corpus', 'pqai', 'google-patents', 'google-patents-bigquery'])
   })
 
   test('honors explicit provider ids for checkbox source selection', () => {

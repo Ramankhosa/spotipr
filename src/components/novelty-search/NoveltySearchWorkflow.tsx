@@ -349,6 +349,7 @@ function displayInternationalPatentText(value: unknown) {
     .replace(/Stored International Patent Corpus/gi, 'International patents')
     .replace(/Stored European Patent Corpus/gi, 'European patents')
     .replace(/European Patent Office OPS/gi, 'European patents')
+    .replace(/Google Patents BigQuery/gi, 'Google Patents BigQuery')
     .replace(/PQAI Global Patent Search/gi, 'International patent search')
     .replace(/PQAI API/gi, 'International patent search')
     .replace(/PQAI patent corpus/gi, 'International patents')
@@ -356,6 +357,8 @@ function displayInternationalPatentText(value: unknown) {
     .replace(/\bepo-ops\b/gi, 'European patents')
     .replace(/\bindian-corpus\b/gi, 'Indian patents')
     .replace(/\bip-australia\b/gi, 'Australian patents')
+    .replace(/\bgoogle-patents-bigquery\b/gi, 'Google Patents BigQuery')
+    .replace(/\bgoogle-patents\b/gi, 'Google Patents')
     .replace(/\bpqai-corpus\b/gi, 'International patents')
     .replace(/\bPQAI\b/gi, 'International patents')
     .replace(/\bpqai\b/gi, 'International patents');
@@ -369,6 +372,8 @@ function displayPatentProviderLabel(value: unknown) {
   if (normalized === 'epo-ops' || normalized === 'epo-ops-corpus') return 'European patents';
   if (normalized === 'indian-corpus') return 'Indian patents';
   if (normalized === 'ip-australia') return 'Australian patents';
+  if (normalized === 'google-patents-bigquery') return 'Google Patents BigQuery';
+  if (normalized === 'google-patents') return 'Google Patents';
   return displayInternationalPatentText(raw);
 }
 

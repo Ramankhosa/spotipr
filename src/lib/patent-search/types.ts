@@ -3,6 +3,7 @@ export type PatentSearchProviderId =
   | 'pqai-corpus'
   | 'pqai'
   | 'google-patents'
+  | 'google-patents-bigquery'
   | 'epo-ops'
   | 'uspto'
   | 'ip-australia'

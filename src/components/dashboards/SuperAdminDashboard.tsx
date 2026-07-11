@@ -59,7 +59,7 @@ export default function SuperAdminDashboard() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     analytics: true,
     ai: true,
-    jurisdiction: false,
+    jurisdiction: true,
     access: true
   })
   const [showUserMenu, setShowUserMenu] = useState(false)
@@ -351,6 +351,17 @@ export default function SuperAdminDashboard() {
             {!sidebarCollapsed && <span>Journal Extractor</span>}
           </button>
 
+          <button
+            onClick={() => router.push('/super-admin/patent-api')}
+            className={`mt-2 w-full flex items-center gap-3 px-3 py-2.5 rounded-xl bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700 border border-slate-700 transition-all ${sidebarCollapsed ? 'justify-center' : ''}`}
+            title="Indian Patent API"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-8.52 5.45L7 20H4v-3l5.55-5.48A6 6 0 1121 9z" />
+            </svg>
+            {!sidebarCollapsed && <span>Indian Patent API</span>}
+          </button>
+
           <div className="pt-4 space-y-1">
             {navGroups.map((group, groupIndex) => (
               <div key={group.title} className="mb-2">
@@ -474,6 +485,15 @@ export default function SuperAdminDashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
                 </svg>
                 <span className="text-sm">Patent Journal Extractor</span>
+              </button>
+              <button
+                onClick={() => router.push('/super-admin/patent-api')}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 border border-emerald-400/60 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-8.52 5.45L7 20H4v-3l5.55-5.48A6 6 0 1121 9z" />
+                </svg>
+                <span className="text-sm">Indian Patent API</span>
               </button>
               <button
                 onClick={checkExpiryNotifications}

@@ -2155,6 +2155,13 @@ enum PatentDraftingJobStatus {
   CANCELLED
 }
 
+enum DiagramImageAnalysisStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum ComponentType {
   MAIN_CONTROLLER
   SUBSYSTEM
@@ -2426,16 +2433,57 @@ model DiagramSource {
   originalImagePath     String?
   originalImageFilename String?
 
+  // Deferred user-uploaded image analysis
+  imageAnalysisStatus      DiagramImageAnalysisStatus?
+  imageAnalysisError       String?
+  imageAnalysisWarnings    Json?
+  imageAnalysisModel       String?
+  imageAnalysisQueuedAt    DateTime?
+  imageAnalysisStartedAt   DateTime?
+  imageAnalysisCompletedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
   session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  imageAnalysisJobs DiagramImageAnalysisJob[]
 
   // Unique per session + figure + language (allows multiple language versions)
   @@unique([sessionId, figureNo, language])
   @@index([sessionId, language]) // Fast lookup by session + language
   @@map("diagram_sources")
+}
+
+model DiagramImageAnalysisJob {
+  id              String                  @id @default(cuid())
+  diagramSourceId String
+  patentId        String
+  sessionId       String
+  userId          String
+  tenantId        String?
+  status          PatentDraftingJobStatus @default(QUEUED)
+  payload         Json?
+  attemptCount    Int                     @default(0)
+  maxAttempts     Int                     @default(3)
+  nextAttemptAt   DateTime                @default(now())
+  lockedBy        String?
+  lockedUntil     DateTime?
+  heartbeatAt     DateTime?
+  lastError       String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  diagramSource DiagramSource @relation(fields: [diagramSourceId], references: [id], onDelete: Cascade)
+
+  @@index([diagramSourceId])
+  @@index([status, nextAttemptAt])
+  @@index([lockedUntil])
+  @@index([sessionId])
+  @@index([patentId])
+  @@map("diagram_image_analysis_jobs")
 }
 
 // === SKETCH GENERATION (Figure Planner - Sketch Tab) ===

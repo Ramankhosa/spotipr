@@ -154,6 +154,7 @@ function displayPatentProviderLabel(value: unknown) {
   if (normalized === 'pqai' || normalized === 'pqai-corpus' || /pqai/i.test(raw) || /international/i.test(raw)) return 'International patents'
   if (normalized === 'epo-ops' || normalized === 'epo-ops-corpus' || /epo/i.test(raw) || /european/i.test(raw)) return 'European patents'
   if (normalized === 'ip-australia' || /australia/i.test(raw)) return 'Australian patents'
+  if (normalized === 'google-patents-bigquery' || /google patents bigquery/i.test(raw)) return 'Google Patents BigQuery'
   if (normalized === 'google-patents' || /google patents/i.test(raw)) return 'Google Patents'
   return raw
 }

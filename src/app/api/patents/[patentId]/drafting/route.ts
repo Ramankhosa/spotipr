@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 // Allow longer-running LLM operations (related_art_llm_review, draft generation) without platform timeouts
@@ -106,6 +107,12 @@ import path from 'path';
 import fs from 'fs/promises';
 import { imageSize } from 'image-size';
 import { appendFigureToSequence, normalizeFigureSequence } from '@/lib/figure-sequence'
+import { IMPORTED_IMAGE_PENDING_DESCRIPTION, cleanFigureDescriptionForDrafting } from '@/lib/diagram-image-analysis'
+import {
+  enqueueDiagramImageAnalysisJob,
+  retryDiagramImageAnalysis
+} from '@/lib/diagram-image-analysis-job-service'
+import { kickDiagramImageAnalysisRunner } from '@/lib/diagram-image-analysis-runner'
 import { buildSourceFactLedgerPromptBlock } from '@/lib/source-fact-ledger'
 import {
   buildSupportDataSourcePromptBlock,
@@ -188,6 +195,7 @@ const coerceSourceInputMeta = (value: unknown): SourceInputMeta => {
     fileSize: numberField('fileSize'),
     detectedFormat: stringField('detectedFormat', 40),
     extractedCharCount: numberField('extractedCharCount'),
+    extractedImageCount: numberField('extractedImageCount'),
     extractionHash: stringField('extractionHash', 128),
     extractedAt: stringField('extractedAt', 80),
   }
@@ -961,6 +969,9 @@ export async function POST(
       case 'upload_diagram':
         return await handleUploadDiagram(authResult.user, patentId, data);
 
+      case 'import_uploaded_diagram_image':
+        return await handleImportUploadedDiagramImage(authResult.user, patentId, data);
+
       case 'generate_draft':
       case 'generate_reference_draft':
       case 'generate_reference_section':
@@ -1066,6 +1077,9 @@ export async function POST(
 
       case 'detect_external_image_content':
         return await handleDetectExternalImageContent(authResult.user, patentId, data, requestHeaders);
+
+      case 'retry_diagram_image_analysis':
+        return await handleRetryDiagramImageAnalysis(authResult.user, patentId, data);
 
       // === SKETCH GENERATION (Figure Planner - Sketch Tab) ===
       case 'generate_sketch':
@@ -12437,6 +12451,226 @@ async function handleCreateManualFigure(user: any, patentId: string, data: any) 
   return NextResponse.json({ created: { figureNo: no } })
 }
 
+async function handleImportUploadedDiagramImage(user: any, patentId: string, data: any) {
+  const {
+    sessionId,
+    filename,
+    checksum,
+    imagePath,
+    language = 'en',
+    title,
+    figureNo
+  } = data
+  const normalizedLanguage = typeof language === 'string' && language.trim()
+    ? language.trim().toLowerCase()
+    : 'en'
+
+  if (!sessionId || !filename || !checksum) {
+    return NextResponse.json(
+      { error: 'Session ID, filename, and checksum are required' },
+      { status: 400 }
+    )
+  }
+
+  const session = await prisma.draftingSession.findFirst({
+    where: { id: sessionId, patentId, userId: user.id },
+    include: {
+      figurePlans: {
+        select: { id: true, figureNo: true },
+        orderBy: { figureNo: 'asc' }
+      },
+      sketchRecords: {
+        where: { isDeleted: false, status: 'SUCCESS' },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' }
+      }
+    }
+  })
+  if (!session) return NextResponse.json({ error: 'Session not found or access denied' }, { status: 404 })
+  await reactivateFiguresForSession(sessionId)
+
+  let loadedSketches = session.sketchRecords || []
+  if (loadedSketches.length === 0) {
+    loadedSketches = await prisma.sketchRecord.findMany({
+      where: {
+        patentId,
+        isDeleted: false,
+        status: 'SUCCESS'
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' }
+    })
+  }
+
+  let no = Number(figureNo)
+  if (!Number.isInteger(no) || no <= 0) no = 0
+  if (!no) {
+    const maxExistingFigureNo = (session.figurePlans || []).reduce(
+      (max, plan) => Math.max(max, plan.figureNo || 0),
+      0
+    )
+    no = maxExistingFigureNo + 1
+  }
+  const wasExistingFigure = (session.figurePlans || []).some(plan => plan.figureNo === no)
+  const cleanedTitle = sanitizeFigureTitleInput(title) || `Imported Figure ${no}`
+
+  const figurePlan = await prisma.figurePlan.upsert({
+    where: { sessionId_figureNo: { sessionId, figureNo: no } },
+    update: {
+      title: cleanedTitle,
+      description: IMPORTED_IMAGE_PENDING_DESCRIPTION
+    },
+    create: {
+      sessionId,
+      figureNo: no,
+      title: cleanedTitle,
+      description: IMPORTED_IMAGE_PENDING_DESCRIPTION,
+      nodes: [],
+      edges: []
+    }
+  })
+
+  const now = new Date()
+  const diagramSource = await prisma.diagramSource.upsert({
+    where: { sessionId_figureNo_language: { sessionId, figureNo: no, language: normalizedLanguage } },
+    update: {
+      imageFilename: filename,
+      imageChecksum: checksum,
+      imagePath,
+      imageUploadedAt: now,
+      imageAnalysisStatus: 'QUEUED',
+      imageAnalysisError: null,
+      imageAnalysisWarnings: Prisma.JsonNull,
+      imageAnalysisModel: null,
+      imageAnalysisQueuedAt: now,
+      imageAnalysisStartedAt: null,
+      imageAnalysisCompletedAt: null
+    },
+    create: {
+      sessionId,
+      figureNo: no,
+      language: normalizedLanguage,
+      plantumlCode: '',
+      checksum: '',
+      imageFilename: filename,
+      imageChecksum: checksum,
+      imagePath,
+      imageUploadedAt: now,
+      imageAnalysisStatus: 'QUEUED',
+      imageAnalysisQueuedAt: now
+    }
+  })
+
+  if (!session.figureSequenceFinalized) {
+    const newId = `diagram-${no}`
+    const existingDiagramPlans = (session.figurePlans || [])
+      .filter(plan => plan.figureNo !== no)
+    const allDiagramFigures = [
+      ...existingDiagramPlans,
+      { id: figurePlan.id, figureNo: no }
+    ]
+      .sort((a, b) => a.figureNo - b.figureNo)
+      .map(plan => ({
+        id: `diagram-${plan.figureNo}`,
+        type: 'diagram' as const,
+        sourceId: plan.id
+      }))
+    const existingSketchFigures = loadedSketches.map(sketch => ({
+      id: `sketch-${sketch.id}`,
+      type: 'sketch' as const,
+      sourceId: sketch.id
+    }))
+    const newFigure = {
+      id: newId,
+      type: 'diagram' as const,
+      sourceId: figurePlan.id
+    }
+    const currentSequence = (session.figureSequence as Array<{ id: string; type: string; sourceId: string; finalFigNo: number }>) || []
+    const { normalized: updatedSequence } = wasExistingFigure
+      ? normalizeFigureSequence(currentSequence, [...allDiagramFigures, ...existingSketchFigures])
+      : appendFigureToSequence(currentSequence, [...allDiagramFigures.filter(figure => figure.id !== newId), ...existingSketchFigures], newFigure)
+
+    await prisma.draftingSession.update({
+      where: { id: sessionId },
+      data: { figureSequence: updatedSequence }
+    })
+  }
+
+  await enqueueDiagramImageAnalysisJob({
+    diagramSourceId: diagramSource.id,
+    patentId,
+    sessionId,
+    userId: user.id,
+    tenantId: user.tenantId || null,
+    payload: {
+      initialTitle: cleanedTitle,
+      filename,
+      imagePath,
+      checksum,
+      language: normalizedLanguage
+    }
+  })
+  kickDiagramImageAnalysisRunner('imported-uploaded-diagram-image')
+
+  return NextResponse.json({
+    success: true,
+    created: { figureNo: no },
+    diagramSourceId: diagramSource.id,
+    imageAnalysisStatus: 'QUEUED'
+  })
+}
+
+async function handleRetryDiagramImageAnalysis(user: any, patentId: string, data: any) {
+  const { sessionId, diagramSourceId } = data
+
+  if (!sessionId || !diagramSourceId) {
+    return NextResponse.json({ error: 'Session ID and diagram source ID are required' }, { status: 400 })
+  }
+
+  const source = await prisma.diagramSource.findFirst({
+    where: {
+      id: diagramSourceId,
+      sessionId,
+      session: {
+        patentId,
+        userId: user.id
+      }
+    },
+    include: {
+      session: true
+    }
+  })
+
+  if (!source) {
+    return NextResponse.json({ error: 'Diagram source not found or access denied' }, { status: 404 })
+  }
+  if (!source.imageFilename && !source.imagePath) {
+    return NextResponse.json({ error: 'Diagram source has no uploaded image to analyze' }, { status: 400 })
+  }
+
+  await retryDiagramImageAnalysis({
+    diagramSourceId: source.id,
+    patentId,
+    sessionId,
+    userId: user.id,
+    tenantId: user.tenantId || null,
+    payload: {
+      initialTitle: undefined,
+      filename: source.imageFilename || undefined,
+      imagePath: source.imagePath || undefined,
+      checksum: source.imageChecksum || undefined,
+      language: source.language || 'en'
+    }
+  })
+  kickDiagramImageAnalysisRunner('retry-diagram-image-analysis')
+
+  return NextResponse.json({
+    success: true,
+    diagramSourceId: source.id,
+    imageAnalysisStatus: 'QUEUED'
+  })
+}
+
 // === SKETCH GENERATION HANDLERS ===
 
 /**
@@ -13088,9 +13322,10 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
     }
 
     // Build list of existing PlantUML diagram titles (to avoid duplicating as sketches)
-    const existingDiagrams = (session.figurePlans || []).map((fp: any) => 
-      `Figure ${fp.figureNo}: ${fp.title}${fp.description ? ` - ${fp.description}` : ''}`
-    )
+    const existingDiagrams = (session.figurePlans || []).map((fp: any) => {
+      const description = cleanFigureDescriptionForDrafting(fp.description)
+      return `Figure ${fp.figureNo}: ${fp.title}${description ? ` - ${description}` : ''}`
+    })
 
     // Build list of existing sketches (to avoid duplicating suggestions)
     const existingSketches = (session.sketchRecords || [])
@@ -13114,7 +13349,7 @@ async function handleGenerateSketchSuggestions(user: any, patentId: string, data
       referenceFigures = [
         ...selectedDiagrams.map((fp: any) => ({ 
           title: fp.title, 
-          description: fp.description 
+          description: cleanFigureDescriptionForDrafting(fp.description)
         })),
         ...selectedSketches.map((sk: any) => ({ 
           title: sk.title, 
@@ -13248,10 +13483,12 @@ async function handleGetCombinedFigures(user: any, patentId: string, data: any) 
         sourceId: fp.id,
         figureNo: fp.figureNo,
         title: fp.title || `Diagram ${fp.figureNo}`,
-        description: fp.description || '',
+        description: cleanFigureDescriptionForDrafting(fp.description),
         imageFilename: imageFilename || null,
         imagePath: publicImagePath,
         rawImagePath: source?.imagePath || null,
+        imageAnalysisStatus: source?.imageAnalysisStatus || null,
+        imageAnalysisError: source?.imageAnalysisError || null,
         createdAt: fp.createdAt
       }
     })
@@ -13466,10 +13703,12 @@ async function handleAIArrangeFigures(user: any, patentId: string, data: any, re
         sourceId: fp.id,
         figureNo: fp.figureNo,
         title: fp.title || `Diagram ${fp.figureNo}`,
-        description: fp.description || '',
+        description: cleanFigureDescriptionForDrafting(fp.description),
         imagePath: publicImagePath,
         imageFilename: imageFilename || null,
-        rawImagePath: source?.imagePath || null
+        rawImagePath: source?.imagePath || null,
+        imageAnalysisStatus: source?.imageAnalysisStatus || null,
+        imageAnalysisError: source?.imageAnalysisError || null
       }
     })
 

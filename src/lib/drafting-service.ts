@@ -60,6 +60,7 @@ import {
   filterDrawingSectionKeys,
   filterDrawingSections
 } from '@/lib/figure-availability';
+import { cleanFigureDescriptionForDrafting } from '@/lib/diagram-image-analysis';
 import crypto from 'crypto';
 
 // NOTE: Legacy SUPERSET_PROMPTS removed - all prompts now come from database
@@ -620,8 +621,14 @@ export class DraftingService {
         const endsWithBrace = output.trim().endsWith('}');
         console.error('Starts with {:', startsWithBrace, 'Ends with }:', endsWithBrace);
 
-        // Provide clearer error when response was truncated
-        const truncated = llmResult.response.metadata?.finishReason === 'MAX_TOKENS';
+        // Provide clearer error when response was truncated. Providers report this
+        // differently: Gemini finishReason 'MAX_TOKENS', OpenAI/Groq/DeepSeek
+        // finishReason 'length', Anthropic stopReason 'max_tokens'.
+        const truncMeta = llmResult.response.metadata as any;
+        const truncated =
+          truncMeta?.finishReason === 'MAX_TOKENS' ||
+          truncMeta?.finishReason === 'length' ||
+          truncMeta?.stopReason === 'max_tokens';
         return {
           success: false,
           error: truncated
@@ -1024,7 +1031,7 @@ export class DraftingService {
               figures.push({
                 figureNo: seqItem.finalFigNo,
                 title: this.sanitizeFigureTitle(plan.title) || `Figure ${seqItem.finalFigNo}`,
-                description: plan.description || source?.description || '',
+                description: cleanFigureDescriptionForDrafting(plan.description || source?.description || ''),
                 type: 'diagram'
               })
             } else {
@@ -1057,7 +1064,7 @@ export class DraftingService {
             figures.push({
               figureNo: figures.length + 1,
               title: this.sanitizeFigureTitle(plan.title) || `Figure ${figures.length + 1}`,
-              description: plan.description || '',
+              description: cleanFigureDescriptionForDrafting(plan.description),
               type: 'diagram'
             })
           }
@@ -1081,7 +1088,7 @@ export class DraftingService {
         const planFigures = (session.figurePlans || []).map((f: any) => ({
           figureNo: f.figureNo,
           title: this.sanitizeFigureTitle(f.title) || `Figure ${f.figureNo}`,
-          description: f.description || ''
+          description: cleanFigureDescriptionForDrafting(f.description)
         }))
         // Include ALL diagram sources, not just uploaded ones - a figure with PlantUML code is still valid
         const diagramFigures = (session.diagramSources || []).map((d: any) => {
@@ -1090,7 +1097,7 @@ export class DraftingService {
           return {
             figureNo: d.figureNo,
             title: sanitized || `Figure ${d.figureNo}`,
-            description: found?.description || d.description || ''
+            description: cleanFigureDescriptionForDrafting(found?.description || d.description || '')
           }
         })
         // Include ALL sketches with SUCCESS status
@@ -3836,7 +3843,7 @@ Use the Super Admin panel to add the missing prompt.
             figures.push({
               figureNo: seqItem.finalFigNo,
               title: this.sanitizeFigureTitle(plan.title) || `Figure ${seqItem.finalFigNo}`,
-              description: plan.description || ''
+              description: cleanFigureDescriptionForDrafting(plan.description)
             })
           } else {
             console.warn(`[DraftingService] Annexure: Diagram in sequence not found: sourceId=${seqItem.sourceId}`)
@@ -3861,7 +3868,7 @@ Use the Super Admin panel to add the missing prompt.
           figures.push({
             figureNo: figures.length + 1,
             title: this.sanitizeFigureTitle(plan.title) || `Figure ${figures.length + 1}`,
-            description: plan.description || ''
+            description: cleanFigureDescriptionForDrafting(plan.description)
           })
         }
       }
@@ -3879,13 +3886,13 @@ Use the Super Admin panel to add the missing prompt.
       const planFigures: any[] = (session.figurePlans || []).map((f: any) => ({
         figureNo: f.figureNo,
         title: this.sanitizeFigureTitle(f.title) || `Figure ${f.figureNo}`,
-        description: f.description || ''
+        description: cleanFigureDescriptionForDrafting(f.description)
       }));
       // Include ALL diagram sources, not just uploaded ones
       const diagramFigures: any[] = (session.diagramSources || []).map((d: any) => {
         const found = planFigures.find((f: any) => f.figureNo === d.figureNo)
         const sanitized = this.sanitizeFigureTitle(found?.title || d.title)
-        return { figureNo: d.figureNo, title: sanitized || `Figure ${d.figureNo}`, description: found?.description || '' }
+        return { figureNo: d.figureNo, title: sanitized || `Figure ${d.figureNo}`, description: cleanFigureDescriptionForDrafting(found?.description || '') }
       })
       const mergedByNo = new Map<number, any>()
       for (const f of planFigures) mergedByNo.set(f.figureNo, { figureNo: f.figureNo, title: f.title, description: f.description })

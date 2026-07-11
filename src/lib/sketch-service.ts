@@ -27,6 +27,7 @@ import { llmGateway } from '@/lib/metering/gateway'
 import { createMeteringSystem } from '@/lib/metering/system'
 import { extractTenantContextFromRequest } from '@/lib/metering/auth-bridge'
 import { CONTINGENCY_MULTIPLIER } from '@/lib/metering/cost-calculator'
+import { cleanFigureDescriptionForDrafting } from '@/lib/diagram-image-analysis'
 import type { TaskCode, FeatureCode } from '@prisma/client'
 
 // Types
@@ -345,9 +346,10 @@ export async function buildSketchContextBundle(
 
   // 4. Diagram Summaries (titles & descriptions, not full PlantUML)
   if (flags.useDiagrams && session?.figurePlans) {
-    bundle.diagramSummaries = session.figurePlans.map((fig: any) => 
-      `Figure ${fig.figureNo}: ${fig.title}${fig.description ? ` - ${fig.description}` : ''}`
-    )
+    bundle.diagramSummaries = session.figurePlans.map((fig: any) => {
+      const description = cleanFigureDescriptionForDrafting(fig.description)
+      return `Figure ${fig.figureNo}: ${fig.title}${description ? ` - ${description}` : ''}`
+    })
   }
 
   return bundle

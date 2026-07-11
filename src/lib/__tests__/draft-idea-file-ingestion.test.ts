@@ -8,6 +8,9 @@ import {
 } from '@/lib/draft-idea-file-ingestion'
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants'
 
+const oneByOnePng =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJX6LwAAAABJRU5ErkJggg=='
+
 describe('draft idea file ingestion', () => {
   test('extracts and normalizes txt files', async () => {
     const result = await extractDraftIdeaTextFromBuffer({
@@ -119,6 +122,38 @@ describe('draft idea file ingestion', () => {
 
     expect(result.detectedFormat).toBe('docx')
     expect(result.textContent).toContain('Smart irrigation controller invention description')
+  })
+
+  test('extracts embedded images from docx packages', async () => {
+    const zip = new AdmZip()
+    zip.addFile('word/document.xml', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:body><w:p><w:r><w:t>Disclosure with embedded figure</w:t></w:r></w:p></w:body>' +
+      '</w:document>'
+    ))
+    zip.addFile('word/media/image1.png', Buffer.from(oneByOnePng, 'base64'))
+
+    const result = await extractDraftIdeaTextFromBuffer(
+      {
+        fileName: 'figure-disclosure.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        buffer: zip.toBuffer(),
+      },
+      { extractDocxText: vi.fn().mockResolvedValue('Disclosure with embedded figure') }
+    )
+
+    expect(result.images).toHaveLength(1)
+    expect(result.images[0]).toMatchObject({
+      fileName: expect.stringMatching(/^image1-[a-f0-9]{10}\.png$/),
+      mimeType: 'image/png',
+      source: 'docx',
+      label: 'Embedded document image 1',
+      width: 1,
+      height: 1,
+    })
+    expect(result.images[0].dataUrl).toBe(`data:image/png;base64,${oneByOnePng}`)
+    expect(result.sourceInputMeta.extractedImageCount).toBe(1)
   })
 
   test('falls back to direct docx zip text extraction when the primary docx parser fails', async () => {

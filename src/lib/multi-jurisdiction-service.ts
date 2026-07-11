@@ -33,6 +33,7 @@ import {
   filterDrawingSectionKeys,
   isDrawingSectionKey
 } from '@/lib/figure-availability'
+import { cleanFigureDescriptionForDrafting } from '@/lib/diagram-image-analysis'
 import crypto from 'crypto'
 
 // ============================================================================
@@ -254,7 +255,7 @@ export function getFiguresForJurisdiction(
         figures.push({
           figureNo: seqItem.finalFigNo,
           title: plan?.title || `Figure ${seqItem.finalFigNo}`,
-          description: plan?.description || '',
+          description: cleanFigureDescriptionForDrafting(plan?.description),
           type: 'diagram',
           language: selectedLanguage
         })
@@ -288,13 +289,13 @@ export function getFiguresForJurisdiction(
         }
       }
       
-      figures.push({
-        figureNo: plan.figureNo,
-        title: plan.title || `Figure ${plan.figureNo}`,
-        description: plan.description || '',
-        type: 'diagram',
-        language: selectedLanguage
-      })
+        figures.push({
+          figureNo: plan.figureNo,
+          title: plan.title || `Figure ${plan.figureNo}`,
+          description: cleanFigureDescriptionForDrafting(plan.description),
+          type: 'diagram',
+          language: selectedLanguage
+        })
     }
   }
   
@@ -1325,7 +1326,7 @@ export async function generateReferenceDraft(
             figures.push({
               figureNo: seqItem.finalFigNo,
               title: plan.title || `Figure ${seqItem.finalFigNo}`,
-              description: plan.description || '',
+              description: cleanFigureDescriptionForDrafting(plan.description),
               type: 'diagram'
             })
           } else {
@@ -1352,7 +1353,7 @@ export async function generateReferenceDraft(
           figures.push({
             figureNo: figures.length + 1,
             title: plan.title || `Figure ${figures.length + 1}`,
-            description: plan.description || '',
+            description: cleanFigureDescriptionForDrafting(plan.description),
             type: 'diagram'
           })
         }
@@ -1373,7 +1374,7 @@ export async function generateReferenceDraft(
       const planFigures = Array.isArray(session.figurePlans) ? session.figurePlans.map((f: any) => ({
         figureNo: f.figureNo,
         title: f.title || `Figure ${f.figureNo}`,
-        description: f.description || '',
+        description: cleanFigureDescriptionForDrafting(f.description),
         type: 'diagram'
       })) : []
       
@@ -2133,7 +2134,7 @@ export async function generateReferenceDraftSection(
             figures.push({
               figureNo: seqItem.finalFigNo,
               title: plan.title || `Figure ${seqItem.finalFigNo}`,
-              description: plan.description || '',
+              description: cleanFigureDescriptionForDrafting(plan.description),
               type: 'diagram'
             })
           }
@@ -2154,7 +2155,7 @@ export async function generateReferenceDraftSection(
       const planFigures = Array.isArray(session.figurePlans) ? session.figurePlans.map((f: any) => ({
         figureNo: f.figureNo,
         title: f.title || `Figure ${f.figureNo}`,
-        description: f.description || '',
+        description: cleanFigureDescriptionForDrafting(f.description),
         type: 'diagram'
       })) : []
       figures = planFigures

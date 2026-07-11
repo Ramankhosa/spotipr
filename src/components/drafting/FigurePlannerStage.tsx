@@ -137,6 +137,41 @@ function createManualUploadSlot(): ManualUploadSlot {
   }
 }
 
+type DiagramImageAnalysisStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
+
+function normalizeDiagramImageAnalysisStatus(value: unknown): DiagramImageAnalysisStatus | null {
+  const status = typeof value === 'string' ? value.toUpperCase() : ''
+  return status === 'QUEUED' || status === 'PROCESSING' || status === 'COMPLETED' || status === 'FAILED'
+    ? status
+    : null
+}
+
+function diagramImageAnalysisLabel(status: DiagramImageAnalysisStatus) {
+  switch (status) {
+    case 'QUEUED':
+      return 'Queued'
+    case 'PROCESSING':
+      return 'Analyzing'
+    case 'COMPLETED':
+      return 'Analyzed'
+    case 'FAILED':
+      return 'Failed'
+  }
+}
+
+function diagramImageAnalysisBadgeClass(status: DiagramImageAnalysisStatus) {
+  switch (status) {
+    case 'QUEUED':
+      return 'border-slate-200 bg-slate-50 text-slate-600'
+    case 'PROCESSING':
+      return 'border-indigo-200 bg-indigo-50 text-indigo-700'
+    case 'COMPLETED':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    case 'FAILED':
+      return 'border-red-200 bg-red-50 text-red-700'
+  }
+}
+
 // Helper function to normalize page sizes from country profiles
 // IMPORTANT: This must be defined before the component to avoid TDZ (Temporal Dead Zone) errors
 function normalizePageSizes(input: any): string[] {
@@ -277,6 +312,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [showManual, setShowManual] = useState(false)
   const [manualDetectingAll, setManualDetectingAll] = useState(false)
   const [manualDetectionProgress, setManualDetectionProgress] = useState<{ current: number; total: number } | null>(null)
+  const [retryingImageAnalysis, setRetryingImageAnalysis] = useState<Record<string, boolean>>({})
   const manualUploadSlotsRef = useRef<ManualUploadSlot[]>([])
   const [showPlantUML, setShowPlantUML] = useState<Record<number, boolean>>({})
   const [countryProfile, setCountryProfile] = useState<any | null>(null)
@@ -439,6 +475,21 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     })
     return grouped
   }, [diagramSources])
+
+  const hasActiveDiagramImageAnalysis = useMemo(() => {
+    return diagramSources.some((source: any) => {
+      const status = normalizeDiagramImageAnalysisStatus(source?.imageAnalysisStatus)
+      return status === 'QUEUED' || status === 'PROCESSING'
+    })
+  }, [diagramSources])
+
+  useEffect(() => {
+    if (!hasActiveDiagramImageAnalysis || !session?.id) return
+    const interval = window.setInterval(() => {
+      void onRefresh().catch((err) => console.warn('Failed to refresh diagram image analysis status:', err))
+    }, 5000)
+    return () => window.clearInterval(interval)
+  }, [hasActiveDiagramImageAnalysis, onRefresh, session?.id])
 
   // Default selected language per figure to English (or first available)
   useEffect(() => {
@@ -2347,6 +2398,24 @@ Now output the JSON array.`
     }
   }
 
+  const handleRetryDiagramImageAnalysis = async (source: any) => {
+    if (!source?.id) return
+    try {
+      setRetryingImageAnalysis(prev => ({ ...prev, [source.id]: true }))
+      setError(null)
+      await onComplete({
+        action: 'retry_diagram_image_analysis',
+        sessionId: session?.id,
+        diagramSourceId: source.id
+      })
+      await onRefresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to retry diagram image analysis')
+    } finally {
+      setRetryingImageAnalysis(prev => ({ ...prev, [source.id]: false }))
+    }
+  }
+
   const handleViewImage = async (figureNo: number, filename?: string) => {
     if (!filename) return
     try {
@@ -2887,6 +2956,7 @@ Now output the JSON array.`
                 })()
 
                 const selectedSource = sources.find((s: any) => (s.language || 'en').toLowerCase() === selectedLang) || sources[0]
+                const imageAnalysisStatus = normalizeDiagramImageAnalysisStatus(selectedSource.imageAnalysisStatus)
 
                 const plan = figurePlans.find((f: any) => f.figureNo === figNo)
                 const diagramKey = getDiagramKey(figNo, selectedSource.language || 'en')
@@ -2911,6 +2981,14 @@ Now output the JSON array.`
                       {diagramTranslations[figNo]?.length > 1 && (
                         <Badge variant="outline" className="text-xs text-green-600 bg-green-50 border-green-200">
                           {diagramTranslations[figNo].length - 1} translation{diagramTranslations[figNo].length > 2 ? 's' : ''}
+                        </Badge>
+                      )}
+                      {imageAnalysisStatus && (
+                        <Badge variant="outline" className={`text-xs ${diagramImageAnalysisBadgeClass(imageAnalysisStatus)}`}>
+                          {(imageAnalysisStatus === 'QUEUED' || imageAnalysisStatus === 'PROCESSING') && (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          )}
+                          {diagramImageAnalysisLabel(imageAnalysisStatus)}
                         </Badge>
                       )}
                     </div>
@@ -3039,6 +3117,33 @@ Now output the JSON array.`
                     </div>
                   )
                 })()}
+
+                {imageAnalysisStatus && (
+                  <div className={`px-4 py-2 border-t text-xs ${diagramImageAnalysisBadgeClass(imageAnalysisStatus)}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>
+                        {imageAnalysisStatus === 'QUEUED' && 'AI diagram reading is queued.'}
+                        {imageAnalysisStatus === 'PROCESSING' && 'AI diagram reading is running in the background.'}
+                        {imageAnalysisStatus === 'COMPLETED' && 'AI diagram reading completed. You can edit the title or description.'}
+                        {imageAnalysisStatus === 'FAILED' && (selectedSource.imageAnalysisError || 'AI diagram reading failed.')}
+                      </span>
+                      {imageAnalysisStatus === 'FAILED' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 shrink-0 bg-white text-xs"
+                          onClick={() => handleRetryDiagramImageAnalysis(selectedSource)}
+                          disabled={!!retryingImageAnalysis[selectedSource.id]}
+                        >
+                          {retryingImageAnalysis[selectedSource.id]
+                            ? <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            : <RefreshCw className="mr-1 h-3 w-3" />}
+                          Retry
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="p-3 bg-white border-t grid grid-cols-4 gap-2">
                   <Button variant="ghost" size="sm" className="w-full" onClick={() => { setModifyFigNo(figNo); setModifyTextSaved('') }}>

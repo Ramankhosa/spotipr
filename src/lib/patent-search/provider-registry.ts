@@ -8,6 +8,7 @@ import { EpoOpsProvider, hasEpoOpsCredentials } from './providers/epo-ops-provid
 import { IndianCorpusProvider } from './providers/indian-corpus-provider'
 import { IpAustraliaProvider, hasIpAustraliaCredentials } from './providers/ip-australia-provider'
 import { GooglePatentsProvider, hasGooglePatentsCredentials } from './providers/google-patents-provider'
+import { GooglePatentsBigQueryProvider, hasGooglePatentsBigQueryCredentials } from './providers/google-patents-bigquery-provider'
 import { PqaiCorpusProvider } from './providers/pqai-corpus-provider'
 import { PqaiProvider } from './providers/pqai-provider'
 import { PatentsViewProvider } from './providers/patentsview-provider'
@@ -40,6 +41,7 @@ const providers: PatentSearchProvider[] = [
   new PqaiCorpusProvider(),
   new PqaiProvider(),
   new GooglePatentsProvider(),
+  new GooglePatentsBigQueryProvider(),
   new PatentsViewProvider(),
   new EpoOpsCorpusProvider(),
   new EpoOpsProvider(),
@@ -89,7 +91,10 @@ export function resolveProviderIds(params: {
   }
 
   const jurisdictions = (params.jurisdictions || []).map(value => value.toUpperCase())
-  const googleProviderIds: PatentSearchProviderId[] = hasGooglePatentsCredentials() ? ['google-patents'] : []
+  const googleProviderIds: PatentSearchProviderId[] = [
+    ...(hasGooglePatentsCredentials() ? ['google-patents'] as PatentSearchProviderId[] : []),
+    ...(hasGooglePatentsBigQueryCredentials() ? ['google-patents-bigquery'] as PatentSearchProviderId[] : []),
+  ]
   const officialProviderIds: PatentSearchProviderId[] = []
   if (jurisdictions.includes('AU') && hasIpAustraliaCredentials()) officialProviderIds.push('ip-australia')
   const epoProviderIds: PatentSearchProviderId[] = hasEpoOpsCredentials()

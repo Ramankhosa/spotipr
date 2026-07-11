@@ -3,6 +3,7 @@ import AdmZip from 'adm-zip'
 import * as XLSX from 'xlsx'
 import { createRequire } from 'module'
 import crypto from 'crypto'
+import { imageSize } from 'image-size'
 import { MAX_DRAFTING_INPUT_CHARS, MAX_DRAFTING_UPLOAD_BYTES } from '@/lib/drafting-constants'
 
 const require = createRequire(import.meta.url)
@@ -11,17 +12,31 @@ export const DRAFT_IDEA_FILE_MAX_BYTES = MAX_DRAFTING_UPLOAD_BYTES
 
 export type DraftIdeaFileFormat = 'txt' | 'md' | 'csv' | 'tsv' | 'xlsx' | 'doc' | 'docx' | 'pdf'
 
+export type DraftIdeaExtractedImage = {
+  id: string
+  fileName: string
+  mimeType: string
+  size: number
+  dataUrl: string
+  source: 'docx' | 'xlsx' | 'pdf-page'
+  label: string
+  width?: number
+  height?: number
+}
+
 export type DraftIdeaFileExtractionResult = {
   textContent: string
   fileName: string
   fileSize: number
   detectedFormat: DraftIdeaFileFormat
+  images: DraftIdeaExtractedImage[]
   sourceInputMeta: {
     originalFileName: string
     mimeType?: string
     fileSize: number
     detectedFormat: DraftIdeaFileFormat
     extractedCharCount: number
+    extractedImageCount: number
     extractionHash: string
     extractedAt: string
   }
@@ -48,6 +63,7 @@ type ExtractionDependencies = {
   extractDocxText?: (buffer: Buffer) => Promise<string>
   extractDocText?: (buffer: Buffer) => Promise<string>
   extractPdfText?: (buffer: Buffer) => Promise<string>
+  extractImages?: (input: ExtractInput, format: DraftIdeaFileFormat) => Promise<DraftIdeaExtractedImage[]>
 }
 
 const MIME_TO_FORMAT: Record<string, DraftIdeaFileFormat> = {
@@ -64,6 +80,13 @@ const MIME_TO_FORMAT: Record<string, DraftIdeaFileFormat> = {
 }
 
 const SUPPORTED_FILE_TYPES_MESSAGE = 'Unsupported file type. Please upload .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, or .pdf files.'
+const MAX_EXTRACTED_IMAGES = 12
+const MAX_EXTRACTED_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_EXTRACTED_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
+const PDF_SNAPSHOT_MAX_PAGES = 12
+const PDF_SNAPSHOT_MAX_SIDE = 1600
+const PDF_SNAPSHOT_MAX_PIXELS = 1600 * 1200
+
 const EXTENSION_TO_FORMAT: Record<string, DraftIdeaFileFormat> = {
   xlsx: 'xlsx',
   docx: 'docx',
@@ -74,6 +97,14 @@ const EXTENSION_TO_FORMAT: Record<string, DraftIdeaFileFormat> = {
   csv: 'csv',
   tsv: 'tsv',
   txt: 'txt',
+}
+
+const IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
 }
 
 function normalizeText(text: string) {
@@ -94,6 +125,73 @@ function decodeXmlEntities(value: string) {
     .replace(/&amp;/g, '&')
 }
 
+function fileExtension(name: string) {
+  const match = /\.([a-z0-9]+)$/i.exec(name)
+  return match?.[1]?.toLowerCase() || ''
+}
+
+function imageMimeTypeForName(name: string) {
+  return IMAGE_EXTENSION_TO_MIME[fileExtension(name)]
+}
+
+function sanitizeImageFileName(name: string, index: number, mimeType: string) {
+  const extensionFromName = fileExtension(name)
+  const fallbackExtension = mimeType === 'image/jpeg'
+    ? 'jpg'
+    : mimeType === 'image/svg+xml'
+      ? 'svg'
+      : mimeType.split('/')[1] || 'png'
+  const extension = IMAGE_EXTENSION_TO_MIME[extensionFromName] ? extensionFromName : fallbackExtension
+  const base = name
+    .replace(/[\\/]/g, '-')
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || `image-${index}`
+  return `${base}.${extension}`
+}
+
+function readImageDimensions(buffer: Buffer, mimeType: string) {
+  if (mimeType === 'image/svg+xml') return {}
+  try {
+    const dimensions = imageSize(buffer)
+    return {
+      ...(dimensions.width ? { width: dimensions.width } : {}),
+      ...(dimensions.height ? { height: dimensions.height } : {}),
+    }
+  } catch {
+    return {}
+  }
+}
+
+function buildExtractedImage(params: {
+  buffer: Buffer
+  originalName: string
+  source: DraftIdeaExtractedImage['source']
+  label: string
+  index: number
+}): DraftIdeaExtractedImage | null {
+  const mimeType = imageMimeTypeForName(params.originalName)
+  if (!mimeType) return null
+  if (params.buffer.byteLength === 0 || params.buffer.byteLength > MAX_EXTRACTED_IMAGE_BYTES) return null
+
+  const hash = crypto.createHash('sha256').update(params.buffer).digest('hex')
+  const sanitizedName = sanitizeImageFileName(params.originalName, params.index, mimeType)
+  const extension = fileExtension(sanitizedName)
+  const base = sanitizedName.replace(/\.[a-z0-9]+$/i, '')
+  const fileName = `${base}-${hash.slice(0, 10)}.${extension}`
+  return {
+    id: `${params.source}-${hash.slice(0, 16)}`,
+    fileName,
+    mimeType,
+    size: params.buffer.byteLength,
+    dataUrl: `data:${mimeType};base64,${params.buffer.toString('base64')}`,
+    source: params.source,
+    label: params.label,
+    ...readImageDimensions(params.buffer, mimeType),
+  }
+}
+
 function extractTextFromDocxXml(xml: string) {
   const pieces: string[] = []
   const tokenRegex = /<(?:w|a):t\b[^>]*>([\s\S]*?)<\/(?:w|a):t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>|<\/w:p>/g
@@ -110,6 +208,142 @@ function extractTextFromDocxXml(xml: string) {
   }
 
   return pieces.join('')
+}
+
+function extractImagesFromZipEntries(
+  buffer: Buffer,
+  source: 'docx' | 'xlsx',
+  entryPrefix: string
+): DraftIdeaExtractedImage[] {
+  try {
+    const zip = new AdmZip(buffer)
+    const seenHashes = new Set<string>()
+    const images: DraftIdeaExtractedImage[] = []
+    let totalBytes = 0
+
+    const mediaEntries = zip.getEntries()
+      .filter(entry => !entry.isDirectory && entry.entryName.startsWith(entryPrefix))
+      .filter(entry => !!imageMimeTypeForName(entry.entryName))
+      .sort((a, b) => a.entryName.localeCompare(b.entryName))
+
+    for (const entry of mediaEntries) {
+      if (images.length >= MAX_EXTRACTED_IMAGES) break
+
+      const imageBuffer = entry.getData()
+      if (imageBuffer.byteLength === 0 || imageBuffer.byteLength > MAX_EXTRACTED_IMAGE_BYTES) continue
+      if (totalBytes + imageBuffer.byteLength > MAX_EXTRACTED_IMAGE_TOTAL_BYTES) break
+
+      const hash = crypto.createHash('sha256').update(imageBuffer).digest('hex')
+      if (seenHashes.has(hash)) continue
+      seenHashes.add(hash)
+
+      const image = buildExtractedImage({
+        buffer: imageBuffer,
+        originalName: entry.entryName.split('/').pop() || `image-${images.length + 1}`,
+        source,
+        label: source === 'docx'
+          ? `Embedded document image ${images.length + 1}`
+          : `Embedded spreadsheet image ${images.length + 1}`,
+        index: images.length + 1,
+      })
+      if (!image) continue
+
+      images.push(image)
+      totalBytes += imageBuffer.byteLength
+    }
+
+    return images
+  } catch {
+    return []
+  }
+}
+
+async function extractPdfPageSnapshots(buffer: Buffer): Promise<DraftIdeaExtractedImage[]> {
+  try {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const nodeRequire = (0, eval)('require') as (moduleName: string) => unknown
+    const { createCanvas } = nodeRequire('@napi-rs/canvas') as {
+      createCanvas: (width: number, height: number) => {
+        getContext: (contextType: '2d') => unknown
+        toBuffer: (mimeType: 'image/png') => Buffer
+      }
+    }
+
+    const loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      disableWorker: true,
+      useSystemFonts: true,
+    })
+    const pdf = await loadingTask.promise
+    const imageOps = new Set([
+      pdfjs.OPS?.paintImageXObject,
+      pdfjs.OPS?.paintInlineImageXObject,
+      pdfjs.OPS?.paintJpegXObject,
+      pdfjs.OPS?.paintImageMaskXObject,
+    ].filter((value): value is number => typeof value === 'number'))
+
+    const snapshots: DraftIdeaExtractedImage[] = []
+    let totalBytes = 0
+    const pageCount = Math.min(Number(pdf.numPages) || 0, PDF_SNAPSHOT_MAX_PAGES)
+
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+      if (snapshots.length >= MAX_EXTRACTED_IMAGES) break
+
+      const page = await pdf.getPage(pageNumber)
+      try {
+        const operatorList = await page.getOperatorList()
+        const hasImage = Array.isArray(operatorList?.fnArray) && operatorList.fnArray.some((fn: number) => imageOps.has(fn))
+        if (!hasImage) continue
+
+        const baseViewport = page.getViewport({ scale: 1 })
+        const scaleBySide = PDF_SNAPSHOT_MAX_SIDE / Math.max(baseViewport.width, baseViewport.height)
+        const scaleByPixels = Math.sqrt(PDF_SNAPSHOT_MAX_PIXELS / (baseViewport.width * baseViewport.height))
+        const scale = Math.min(1.5, scaleBySide, scaleByPixels)
+        const viewport = page.getViewport({ scale })
+        const width = Math.max(1, Math.floor(viewport.width))
+        const height = Math.max(1, Math.floor(viewport.height))
+        const canvas = createCanvas(width, height)
+        const canvasContext = canvas.getContext('2d')
+
+        await page.render({ canvasContext, viewport }).promise
+        const imageBuffer = canvas.toBuffer('image/png')
+        if (imageBuffer.byteLength > MAX_EXTRACTED_IMAGE_BYTES) continue
+        if (totalBytes + imageBuffer.byteLength > MAX_EXTRACTED_IMAGE_TOTAL_BYTES) break
+
+        const image = buildExtractedImage({
+          buffer: imageBuffer,
+          originalName: `pdf-page-${pageNumber}.png`,
+          source: 'pdf-page',
+          label: `PDF page ${pageNumber} image snapshot`,
+          index: snapshots.length + 1,
+        })
+        if (!image) continue
+
+        snapshots.push(image)
+        totalBytes += imageBuffer.byteLength
+      } finally {
+        page.cleanup?.()
+      }
+    }
+
+    await pdf.destroy?.()
+    return snapshots
+  } catch {
+    return []
+  }
+}
+
+async function extractImagesFromBuffer(input: ExtractInput, format: DraftIdeaFileFormat) {
+  if (format === 'docx') {
+    return extractImagesFromZipEntries(input.buffer, 'docx', 'word/media/')
+  }
+  if (format === 'xlsx') {
+    return extractImagesFromZipEntries(input.buffer, 'xlsx', 'xl/media/')
+  }
+  if (format === 'pdf') {
+    return extractPdfPageSnapshots(input.buffer)
+  }
+  return []
 }
 
 function extractDocxTextFromZip(buffer: Buffer, fileName?: string) {
@@ -331,18 +565,21 @@ export async function extractDraftIdeaTextFromBuffer(
 
   const textContent = normalizeText(rawText)
   assertUsableText(textContent, detectedFormat)
+  const images = await (dependencies.extractImages || extractImagesFromBuffer)(input, detectedFormat)
 
   return {
     textContent,
     fileName: input.fileName,
     fileSize: input.buffer.byteLength,
     detectedFormat,
+    images,
     sourceInputMeta: {
       originalFileName: input.fileName,
       ...(input.mimeType ? { mimeType: input.mimeType } : {}),
       fileSize: input.buffer.byteLength,
       detectedFormat,
       extractedCharCount: textContent.length,
+      extractedImageCount: images.length,
       extractionHash: crypto.createHash('sha256').update(textContent, 'utf8').digest('hex'),
       extractedAt: new Date().toISOString(),
     },

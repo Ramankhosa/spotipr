@@ -116,7 +116,7 @@ function splitValues(value: string) {
 }
 
 function defaultProviderIds(providers: ProviderInfo[]) {
-  const defaultIds = new Set(['indian-corpus', 'pqai-corpus', 'pqai', 'google-patents'])
+  const defaultIds = new Set(['indian-corpus', 'pqai-corpus', 'pqai', 'google-patents', 'google-patents-bigquery'])
   const ids = providers
     .filter(provider => provider.enabled && defaultIds.has(provider.id))
     .map(provider => provider.id)
@@ -157,6 +157,7 @@ function displayPatentNationality(value: unknown) {
   if (normalized === 'pqai' || normalized === 'pqai-corpus' || /international/i.test(raw) || /pqai/i.test(raw)) return 'International patents'
   if (normalized === 'epo-ops' || normalized === 'epo-ops-corpus' || /european/i.test(raw) || /epo/i.test(raw)) return 'European patents'
   if (normalized === 'ip-australia' || /australia/i.test(raw)) return 'Australian patents'
+  if (normalized === 'google-patents-bigquery' || /google patents bigquery/i.test(raw)) return 'Google Patents BigQuery'
   if (normalized === 'google-patents' || /google patents/i.test(raw)) return 'Google Patents'
   return raw
 }

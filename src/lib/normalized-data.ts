@@ -25,6 +25,7 @@ export type SourceInputMeta = {
   fileSize?: number
   detectedFormat?: string
   extractedCharCount?: number
+  extractedImageCount?: number
   extractionHash?: string
   extractedAt?: string
   submittedCharCount?: number
