@@ -6,6 +6,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 
@@ -41,7 +42,8 @@ export class GroqProvider implements LLMProvider {
         const OpenAI = require('openai')
         this.client = new OpenAI({
           apiKey: config.apiKey,
-          baseURL: config.baseURL || 'https://api.groq.com/openai/v1'
+          baseURL: config.baseURL || 'https://api.groq.com/openai/v1',
+          timeout: config.timeout ?? PROVIDER_TIMEOUTS.groq(),
         })
         if (SHOULD_LOG_PROVIDER_INIT) {
           console.log('Groq client initialized successfully')

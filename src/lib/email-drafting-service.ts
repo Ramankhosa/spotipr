@@ -1660,7 +1660,13 @@ export async function processPendingEmailDraftRequests(workerId = `worker-${proc
     const result = await processEmailDraftRequestById(requestRecord.id, workerId)
     processed.push(result)
   }
-  await refreshReadyAutoPatentDraftBatches()
+  // Never let a batch-refresh failure (e.g. a missing artifact on disk) escape the
+  // poll loop and crash-loop the worker — the per-request work is already committed.
+  try {
+    await refreshReadyAutoPatentDraftBatches()
+  } catch (refreshError) {
+    console.error('[EmailDraftingWorker] refreshReadyAutoPatentDraftBatches failed (continuing):', refreshError instanceof Error ? refreshError.message : refreshError)
+  }
   return processed
 }
 

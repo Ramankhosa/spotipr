@@ -468,6 +468,44 @@ async function main() {
       isActive: true,
       isDefault: false
     },
+    // o3 / o4 Reasoning Models — handled by the OpenAI provider's reasoning path
+    // (max_completion_tokens, no temperature, reasoning effort).
+    {
+      code: 'o3',
+      displayName: 'OpenAI o3 (Reasoning)',
+      provider: 'openai',
+      contextWindow: 200000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 200,    // $2.00
+      outputCostPer1M: 800,   // $8.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'o3-mini',
+      displayName: 'OpenAI o3 Mini (Reasoning)',
+      provider: 'openai',
+      contextWindow: 200000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 110,    // $1.10
+      outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'o4-mini',
+      displayName: 'OpenAI o4 Mini (Reasoning)',
+      provider: 'openai',
+      contextWindow: 200000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 110,    // $1.10
+      outputCostPer1M: 440,   // $4.40
+      isActive: true,
+      isDefault: false
+    },
 
     // === ANTHROPIC MODELS ===
     // Provider supports: Claude 4.x and Claude 3.x model codes.

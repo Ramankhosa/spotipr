@@ -3,6 +3,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
 export class GrokProvider implements LLMProvider {
   name = 'grok'
@@ -38,6 +39,7 @@ export class GrokProvider implements LLMProvider {
           max_tokens: maxTokens,
           temperature: 0.7,
         }),
+        signal: AbortSignal.timeout(this.config.timeout ?? PROVIDER_TIMEOUTS.grok()),
       })
 
       if (!response.ok) {
@@ -95,6 +97,7 @@ export class GrokProvider implements LLMProvider {
         headers: {
           'Authorization': `Bearer ${this.config.apiKey}`,
         },
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUTS.health()),
       })
       return response.ok
     } catch (error) {

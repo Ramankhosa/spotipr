@@ -39,7 +39,7 @@ export default function AISpotlight({ draftsCount, latestNoveltySearch, userRese
         suggestions.push({
           type: 'novelty',
           title: 'Analysis Complete',
-          message: `"${latestNoveltySearch.title.substring(0, 25)}..." returned ${patentCount} citations. Review the findings to proceed.`,
+          message: `"${(latestNoveltySearch.title ?? 'Untitled search').substring(0, 25)}..." returned ${patentCount} citations. Review the findings to proceed.`,
           actions: [
             { label: 'View Report', action: () => router.push(`/novelty-search/${latestNoveltySearch.id}/pdf`) },
             { label: 'New Search', action: () => router.push('/novelty-search') }

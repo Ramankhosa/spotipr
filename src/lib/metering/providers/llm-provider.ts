@@ -179,7 +179,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
   if (lowerCode.startsWith('gemini') || lowerCode.startsWith('google')) {
     return 'gemini'
   }
-  if (lowerCode.startsWith('gpt') || lowerCode.startsWith('o1') || lowerCode.startsWith('o3') || lowerCode.startsWith('openai')) {
+  // OpenAI: GPT-* and the whole o-series (o1, o3, o4, ...) reasoning family.
+  if (lowerCode.startsWith('gpt') || /^o\d/.test(lowerCode) || lowerCode.startsWith('openai')) {
     return 'openai'
   }
   if (lowerCode.startsWith('claude') || lowerCode.startsWith('anthropic')) {
@@ -200,7 +201,7 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
   
   // FAIL-FAST: Throw error for truly unknown models instead of silently defaulting
   // This catches typos and misconfigured models in admin panel immediately
-  const knownPrefixes = ['gemini', 'gpt', 'o1', 'o3', 'claude', 'deepseek', 'glm', 'zai', 'llama', 'mixtral', 'gemma', 'groq', 'grok']
+  const knownPrefixes = ['gemini', 'gpt', 'o1', 'o3', 'o4', 'claude', 'deepseek', 'glm', 'zai', 'llama', 'mixtral', 'gemma', 'groq', 'grok']
   throw new Error(
     `Unknown model code: "${modelCode}". ` +
     `Model must start with one of: ${knownPrefixes.join(', ')}. ` +

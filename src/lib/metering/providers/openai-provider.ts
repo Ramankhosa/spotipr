@@ -4,6 +4,14 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
+
+// Reasoning models (o-series, GPT-5) spend part of their output-token budget on
+// internal reasoning tokens, which count against max_completion_tokens / max_output_tokens.
+// A budget sized only for the visible answer gets fully consumed by reasoning, returning an
+// EMPTY completion. Give reasoning calls a floor of headroom (capped at the model's real
+// output limit) so they actually produce visible output. Overridable via env.
+const REASONING_MIN_OUTPUT_TOKENS = Number(process.env.OPENAI_REASONING_MIN_OUTPUT_TOKENS) || 25000
 
 export class OpenAIProvider implements LLMProvider {
   name = 'openai'
@@ -33,7 +41,11 @@ export class OpenAIProvider implements LLMProvider {
     // o1 Reasoning Models
     'o1',
     'o1-mini',
-    'o1-preview'
+    'o1-preview',
+    // o3 / o4 Reasoning Models
+    'o3',
+    'o3-mini',
+    'o4-mini'
   ]
 
   private config: ProviderConfig
@@ -62,16 +74,25 @@ export class OpenAIProvider implements LLMProvider {
     const requestedModel = request.modelClass || this.config.model
     const { apiModel: modelToUse, isThinkingVariant } = this.normalizeModelCode(requestedModel)
     
-    // Check if this model requires max_completion_tokens instead of max_tokens
-    // OpenAI's newer models (o1, o1-mini, o1-preview, gpt-5, gpt-5.1, etc.) use max_completion_tokens
-    const isO1Model = modelToUse.startsWith('o1')
+    // Reasoning models require max_completion_tokens (NOT max_tokens), reject temperature
+    // tuning, and support reasoning effort. Detect the WHOLE o-series (o1, o3, o4, ...),
+    // not just o1 — otherwise o3/o4 wrongly get max_tokens + temperature and 400.
+    const isOSeriesReasoning = /^o\d/.test(modelToUse) // o1, o1-mini, o3, o3-mini, o4-mini, ...
     const isGPT5Model = modelToUse.startsWith('gpt-5')
-    const isProModel = isGPT5Model && modelToUse.endsWith('-pro')
-    const usesMaxCompletionTokens = isO1Model || isGPT5Model
-    const supportsTemperatureTuning = !(isO1Model || isGPT5Model)
-    
-    // Apply enforcement limits - some models use max_completion_tokens instead of max_tokens
-    const maxTokens = limits.maxTokensOut || 4096
+    const isReasoningModel = isOSeriesReasoning || isGPT5Model
+    // "pro" reasoning models (o*-pro, gpt-5*-pro) are only served by the Responses API.
+    const isProModel = isReasoningModel && modelToUse.endsWith('-pro')
+    const usesMaxCompletionTokens = isReasoningModel
+    const supportsTemperatureTuning = !isReasoningModel
+
+    // Apply enforcement limits. Reasoning models need enough budget to cover reasoning
+    // tokens AND visible output, so floor the reasoning budget (capped at the model's
+    // real output limit) instead of letting a small stage limit starve the answer.
+    const providerOutputLimit = this.getTokenLimits(modelToUse).output
+    const configuredMaxOut = limits.maxTokensOut || (isReasoningModel ? REASONING_MIN_OUTPUT_TOKENS : 4096)
+    const maxTokens = isReasoningModel
+      ? Math.min(providerOutputLimit, Math.max(configuredMaxOut, REASONING_MIN_OUTPUT_TOKENS))
+      : configuredMaxOut
 
     try {
       // Build message content for OpenAI
@@ -110,28 +131,29 @@ export class OpenAIProvider implements LLMProvider {
       }
 
       // Reasoning / "thinking" controls:
-      // - Thinking variants (e.g., gpt-5.2-thinking) default to higher reasoning effort.
-      // - Non-thinking variants (gpt-5, gpt-5.1, gpt-5.2) default to 'low' for faster responses.
-      // - Request can override via request.parameters.reasoning_effort (string) or request.parameters.reasoning?.effort.
-      // IMPORTANT: This gateway calls OpenAI via /v1/chat/completions and that endpoint rejects an object parameter
-      // named "reasoning" (400: Unknown parameter: 'reasoning'). Use reasoning_effort instead.
-      // Note: We only apply this to GPT-5 family in this gateway to avoid surprising behavior on other models.
-      if (isGPT5Model) {
+      // - Thinking variants (e.g., gpt-5.2-thinking) and pro variants default to 'high'.
+      // - Regular reasoning models default to 'low' for faster responses.
+      // - Request can override via request.parameters.reasoning_effort or reasoning?.effort.
+      let reasoningEffort: string | undefined
+      if (isReasoningModel) {
         const configuredReasoning = request.parameters?.reasoning
         const configuredReasoningEffort = request.parameters?.reasoning_effort
-
-        // Default effort: 'high' for thinking/pro variants, 'low' for regular GPT-5 models (faster responses)
-        // Set to 'medium' or 'high' explicitly if you need more thorough reasoning
         const defaultEffort = isThinkingVariant || isProModel ? 'high' : 'low'
-        const effort = isProModel ? 'high' : (configuredReasoning?.effort ?? configuredReasoningEffort ?? defaultEffort)
+        reasoningEffort = isProModel ? 'high' : (configuredReasoning?.effort ?? configuredReasoningEffort ?? defaultEffort)
+      }
 
-        if (isProModel) {
-          return await this.executeResponsesRequest(request, requestedModel, modelToUse, messageContent, maxTokens, effort)
-        }
+      // "pro" reasoning models are only served by the Responses API (o*-pro, gpt-5*-pro).
+      if (isProModel) {
+        return await this.executeResponsesRequest(request, requestedModel, modelToUse, messageContent, maxTokens, reasoningEffort ?? 'high')
+      }
 
-        // Always set reasoning_effort for GPT-5 models to control response time
-        requestBody.reasoning_effort = effort
-        console.log(`[OpenAIProvider] Using reasoning_effort=${effort} for ${modelToUse}`)
+      // /v1/chat/completions rejects the object parameter "reasoning" (400: Unknown
+      // parameter) but accepts reasoning_effort. GPT-5 chat honors reasoning_effort;
+      // o-series chat support for it is inconsistent across snapshots, so only send it
+      // for GPT-5 to avoid 400s on o-series.
+      if (isGPT5Model && reasoningEffort) {
+        requestBody.reasoning_effort = reasoningEffort
+        console.log(`[OpenAIProvider] Using reasoning_effort=${reasoningEffort} for ${modelToUse}`)
       }
       
       if (usesMaxCompletionTokens) {
@@ -160,6 +182,7 @@ export class OpenAIProvider implements LLMProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(this.config.timeout ?? PROVIDER_TIMEOUTS.openai()),
       })
 
       if (!response.ok) {
@@ -169,12 +192,26 @@ export class OpenAIProvider implements LLMProvider {
 
       const data = await response.json()
 
-      const choice = data.choices[0]
+      // Guard against error-shaped 200 bodies and content-filter/refusal responses:
+      // `choices` may be empty, and `message.content` is null on a content_filter stop.
+      // Without this, downstream `.trim()` on the output throws an opaque TypeError.
+      const choice = data.choices?.[0]
+      if (!choice) {
+        throw new Error(`OpenAI API returned no choices: ${JSON.stringify(data).slice(0, 500)}`)
+      }
       const usage = data.usage
       const thoughtTokens = usage?.completion_tokens_details?.reasoning_tokens || 0
+      const content = choice.message?.content ?? ''
+
+      // Reasoning models can burn the entire token budget on internal reasoning and return
+      // an empty completion with finish_reason 'length'. Surface this as an actionable error
+      // rather than returning '' (which silently breaks downstream JSON parsing / drafting).
+      if (isReasoningModel && !content.trim() && choice.finish_reason === 'length') {
+        throw new Error(`OpenAI reasoning model ${modelToUse} produced no visible output: the ${maxTokens}-token budget was exhausted by reasoning (${thoughtTokens} reasoning tokens, finish_reason=length). Increase the stage's max output tokens.`)
+      }
 
       return {
-        output: choice.message.content,
+        output: content,
         outputTokens: usage?.completion_tokens || 0,
         modelClass: requestedModel, // Preserve the configured model code (may be a thinking alias)
         metadata: {
@@ -233,6 +270,9 @@ export class OpenAIProvider implements LLMProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
+      // Responses API path is used for reasoning models (o-series / GPT-5) which
+      // can run much longer under high reasoning effort — give the longer ceiling.
+      signal: AbortSignal.timeout(this.config.timeout ?? PROVIDER_TIMEOUTS.openaiReasoning()),
     })
 
     if (!response.ok) {
@@ -244,6 +284,13 @@ export class OpenAIProvider implements LLMProvider {
     const usage = data.usage
     const outputText = this.extractResponsesText(data)
     const thoughtTokens = usage?.output_tokens_details?.reasoning_tokens || 0
+
+    // Reasoning budget exhausted before any visible text: the Responses API reports
+    // status 'incomplete' with reason 'max_output_tokens'. Surface it clearly.
+    if (!outputText.trim() && data.status === 'incomplete') {
+      const reason = data.incomplete_details?.reason || 'unknown'
+      throw new Error(`OpenAI reasoning model ${modelToUse} (Responses API) returned no output: status=incomplete, reason=${reason} (${thoughtTokens} reasoning tokens used). Increase max output tokens.`)
+    }
 
     return {
       output: outputText,
@@ -303,7 +350,10 @@ export class OpenAIProvider implements LLMProvider {
       // o1 Reasoning Models
       'o1': { input: 200000, output: 100000 },
       'o1-mini': { input: 128000, output: 65536 },
-      'o1-preview': { input: 128000, output: 32768 }
+      'o1-preview': { input: 128000, output: 32768 },
+      'o3': { input: 200000, output: 100000 },
+      'o3-mini': { input: 200000, output: 100000 },
+      'o4-mini': { input: 200000, output: 100000 }
     }
     
     return limits[normalized] || { input: 128000, output: 16384 }
@@ -335,7 +385,10 @@ export class OpenAIProvider implements LLMProvider {
       // o1 Reasoning Models
       'o1': { input: 0.000015, output: 0.00006 },                 // $15/$60 per M
       'o1-mini': { input: 0.000003, output: 0.000012 },           // $3/$12 per M
-      'o1-preview': { input: 0.000015, output: 0.00006 }          // $15/$60 per M
+      'o1-preview': { input: 0.000015, output: 0.00006 },         // $15/$60 per M
+      'o3': { input: 0.000002, output: 0.000008 },                // $2/$8 per M
+      'o3-mini': { input: 0.0000011, output: 0.0000044 },         // $1.10/$4.40 per M
+      'o4-mini': { input: 0.0000011, output: 0.0000044 }          // $1.10/$4.40 per M
     }
     
     return costs[normalized] || { input: 0.000005, output: 0.000015 }
@@ -347,6 +400,7 @@ export class OpenAIProvider implements LLMProvider {
         headers: {
           'Authorization': `Bearer ${this.config.apiKey}`,
         },
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUTS.health()), // health check must fail fast
       })
       return response.ok
     } catch (error) {

@@ -204,7 +204,9 @@ function buildWhereClause(user: any, query: AnalyticsQuery, isSuperAdmin: boolea
     where.userId = query.userId
   }
   if (query.featureCode) {
-    where.featureId = query.featureCode
+    // featureId is a UUID/CUID column; query.featureCode is a code string like 'PATENT_DRAFTING'.
+    // Filter via the relation so the code resolves to the right feature instead of matching nothing.
+    where.feature = { code: query.featureCode }
   }
   if (query.taskCode) {
     where.taskCode = query.taskCode

@@ -497,7 +497,13 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         return 0
       }
 
-      const meter = await prisma.usageMeter.findFirst({
+      // A feature can span multiple task codes (e.g. NOVELTY_SEARCH → LLM4/LLM5/LLM6),
+      // and updateUsageMeters writes a SEPARATE UsageMeter row per taskCode
+      // (unique key: tenantId, featureId, taskCode, periodType, periodKey).
+      // Sum across all task-code rows so quota checks, alerts, and displayed usage
+      // reflect total feature usage rather than one arbitrary row.
+      const aggregate = await prisma.usageMeter.aggregate({
+        _sum: { currentUsage: true },
         where: {
           tenantId,
           featureId: featureId,
@@ -506,7 +512,7 @@ export function createMeteringService(config: MeteringConfig): MeteringService {
         }
       })
 
-      return meter?.currentUsage || 0
+      return aggregate._sum.currentUsage || 0
     },
 
     async checkQuotaAlerts(tenantId: string, featureId?: string, taskCode?: any): Promise<void> {

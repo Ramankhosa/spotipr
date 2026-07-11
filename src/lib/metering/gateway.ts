@@ -321,7 +321,22 @@ export class LLMGateway {
           }
         }
 
-        await this.system.metering.recordUsage(decision.reservationId, usageStats, tenantContext.userId)
+        // The LLM call has already succeeded and incurred provider cost by this point.
+        // A usage-recording failure must NOT discard the paid result or bubble up to the
+        // outer catch (which would release the reservation and report failure, prompting the
+        // caller to retry and pay for a second provider call). Record best-effort and always
+        // return the successful response; surface recording failures as "unbilled completion".
+        try {
+          const recordResult = await this.system.metering.recordUsage(decision.reservationId, usageStats, tenantContext.userId)
+          if (recordResult && recordResult.success === false) {
+            console.error('[Gateway] Usage recording returned failure for a completed LLM call (UNBILLED COMPLETION):', {
+              reservationId: decision.reservationId,
+              error: recordResult.error?.message
+            })
+          }
+        } catch (recordError) {
+          console.error('[Gateway] Failed to record usage for a completed LLM call (UNBILLED COMPLETION); returning result anyway:', recordError instanceof Error ? recordError.message : recordError)
+        }
       }
 
       return { success: true, response }
@@ -517,7 +532,11 @@ export class LLMGateway {
       'o1': { maxInput: 200000, maxOutput: 100000 },
       'o1-mini': { maxInput: 128000, maxOutput: 65536 },
       'o1-preview': { maxInput: 128000, maxOutput: 32768 },
-      
+      // OpenAI - o3 / o4 Reasoning Models
+      'o3': { maxInput: 200000, maxOutput: 100000 },
+      'o3-mini': { maxInput: 200000, maxOutput: 100000 },
+      'o4-mini': { maxInput: 200000, maxOutput: 100000 },
+
       // Anthropic - Friendly names
       'claude-3.5-sonnet': { maxInput: 200000, maxOutput: 8192 },
       'claude-3.5-haiku': { maxInput: 200000, maxOutput: 8192 },
@@ -593,6 +612,8 @@ export class LLMGateway {
     if (lowerCode.startsWith('gpt-5')) return { maxInput: 400000, maxOutput: 128000 }
     if (lowerCode.startsWith('gpt-3')) return { maxInput: 16385, maxOutput: 4096 }
     if (lowerCode.startsWith('o1')) return { maxInput: 128000, maxOutput: 65536 }
+    // Other o-series reasoning models (o3, o3-mini, o4-mini, ...)
+    if (/^o\d/.test(lowerCode)) return { maxInput: 200000, maxOutput: 100000 }
     if (lowerCode.startsWith('claude')) return { maxInput: 200000, maxOutput: 8192 }
     if (lowerCode.startsWith('gemini')) return { maxInput: 1000000, maxOutput: 8192 }
     if (lowerCode.startsWith('llama') || lowerCode.startsWith('groq-llama')) return { maxInput: 128000, maxOutput: 8192 }

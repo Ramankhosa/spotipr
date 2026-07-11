@@ -5,6 +5,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
@@ -38,7 +39,12 @@ export class AnthropicProvider implements LLMProvider {
 
       try {
         const Anthropic = require('@anthropic-ai/sdk')
-        this.client = new Anthropic({ apiKey: config.apiKey })
+        // Bound each request so a hung connection can't pin a worker indefinitely.
+        // Generous ceiling for extended-thinking Opus drafting (heaviest stage).
+        this.client = new Anthropic({
+          apiKey: config.apiKey,
+          timeout: config.timeout ?? PROVIDER_TIMEOUTS.anthropic(),
+        })
         console.log('Anthropic client initialized successfully')
       } catch (error) {
         console.warn('Anthropic SDK not available:', error)

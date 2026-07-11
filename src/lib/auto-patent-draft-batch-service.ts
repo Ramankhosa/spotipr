@@ -783,7 +783,16 @@ async function createBatchZip(batch: any, records: any[], options: { forceRebuil
     const folder = batchItemFolderName(record, recordIndex)
     for (const document of recordDocs) {
       if (!document.contentPtr) continue
-      const buffer = await fs.readFile(document.contentPtr)
+      let buffer: Buffer
+      try {
+        buffer = await fs.readFile(document.contentPtr)
+      } catch (readError) {
+        // A single missing/unreadable artifact on disk must not abort the whole
+        // batch export (which would otherwise propagate up through
+        // refreshReadyAutoPatentDraftBatches and crash-loop the worker). Skip it.
+        console.error(`[Batch] Skipping unreadable artifact ${document.id} (${document.contentPtr}):`, readError instanceof Error ? readError.message : readError)
+        continue
+      }
       const category = classifyBatchArtifact(document)
       zip.addFile(uniqueZipPath(`${folder}/${category}/${artifactExportName(document, record, recordIndex)}`, usedZipPaths), buffer)
       exportEntryCount += 1

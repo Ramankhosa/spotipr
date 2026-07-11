@@ -3,6 +3,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
 const SHOULD_LOG_PROVIDER_INIT = process.env.LLM_PROVIDER_INIT_LOGS === 'true'
 
@@ -135,6 +136,11 @@ export class GeminiProvider implements LLMProvider {
           temperature: temperature,
           topP: topP
         }
+      }, {
+        // Bound the SDK request so a hung call can't block the worker. The SDK's
+        // default timeout is short relative to heavy Gemini generations; use the
+        // generous provider-specific ceiling instead.
+        timeout: this.config.timeout ?? PROVIDER_TIMEOUTS.gemini()
       })
 
       // Handle multimodal content (text + images)
@@ -347,7 +353,8 @@ export class GeminiProvider implements LLMProvider {
         'Content-Type': 'application/json',
         'x-goog-api-key': this.config.apiKey
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.config.timeout ?? PROVIDER_TIMEOUTS.gemini()),
     })
 
     if (!response.ok) {

@@ -6,6 +6,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
 export class DeepSeekProvider implements LLMProvider {
   name = 'deepseek'
@@ -31,7 +32,8 @@ export class DeepSeekProvider implements LLMProvider {
         const OpenAI = require('openai')
         this.client = new OpenAI({
           apiKey: config.apiKey,
-          baseURL: config.baseURL || 'https://api.deepseek.com/v1'
+          baseURL: config.baseURL || 'https://api.deepseek.com/v1',
+          timeout: config.timeout ?? PROVIDER_TIMEOUTS.deepseek(),
         })
         console.log('DeepSeek client initialized successfully')
       } catch (error) {

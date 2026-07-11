@@ -1865,8 +1865,14 @@ export async function processPendingPatentDraftingJobs(workerId = `drafting-work
     if (!job) break
     processed.push(await processPatentDraftingJob(job, workerId))
   }
-  const { refreshReadyAutoPatentDraftBatches } = await import('@/lib/auto-patent-draft-batch-service')
-  await refreshReadyAutoPatentDraftBatches()
+  // Never let a batch-refresh failure (e.g. a missing artifact on disk) escape the
+  // poll loop and crash-loop the worker — the per-job work is already committed.
+  try {
+    const { refreshReadyAutoPatentDraftBatches } = await import('@/lib/auto-patent-draft-batch-service')
+    await refreshReadyAutoPatentDraftBatches()
+  } catch (refreshError) {
+    console.error('[PatentDraftingWorker] refreshReadyAutoPatentDraftBatches failed (continuing):', refreshError instanceof Error ? refreshError.message : refreshError)
+  }
   return processed
 }
 

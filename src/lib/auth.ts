@@ -56,9 +56,9 @@ export async function sendPasswordResetEmail(email: string, resetToken: string) 
   await sgMail.send(msg)
 }
 
-export function generateResetToken(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
-}
+// NOTE: A previous `generateResetToken()` helper using Math.random() was removed.
+// It was unused (the live password-reset flow uses crypto-strong tokens from
+// token-utils.ts) and Math.random() must never generate security tokens.
 
 // JWT utilities
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secure-jwt-secret-change-in-production-min-32-chars'

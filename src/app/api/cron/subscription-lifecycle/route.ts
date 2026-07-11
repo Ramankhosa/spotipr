@@ -30,7 +30,18 @@ export async function POST(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
     const cronSecret = process.env.CRON_SECRET
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    // Fail closed: without a configured secret this destructive job (expires
+    // subscriptions, deletes abandoned tenants/users/projects) must never run
+    // unauthenticated. A missing secret is a misconfiguration, not an open door.
+    if (!cronSecret) {
+      console.error('[Cron] CRON_SECRET is not set; refusing to run subscription-lifecycle job.')
+      return NextResponse.json(
+        { error: 'Server misconfiguration: CRON_SECRET is not configured' },
+        { status: 503 }
+      )
+    }
+
+    if (authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -93,7 +104,16 @@ export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
 
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  // Fail closed: never process without a configured secret (see POST handler).
+  if (!cronSecret) {
+    console.error('[Cron] CRON_SECRET is not set; refusing to run subscription-lifecycle job.')
+    return NextResponse.json(
+      { error: 'Server misconfiguration: CRON_SECRET is not configured' },
+      { status: 503 }
+    )
+  }
+
+  if (authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json(
       { error: 'Unauthorized' },
       { status: 401 }

@@ -5,6 +5,7 @@
 
 import type { LLMRequest, LLMResponse, EnforcementDecision } from '../types'
 import type { LLMProvider, ProviderConfig } from './llm-provider'
+import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
 export class ZAIProvider implements LLMProvider {
   name = 'zai'
@@ -43,7 +44,8 @@ export class ZAIProvider implements LLMProvider {
         const OpenAI = require('openai')
         this.client = new OpenAI({
           apiKey: config.apiKey,
-          baseURL: config.baseURL || 'https://api.z.ai/api/paas/v4'
+          baseURL: config.baseURL || 'https://api.z.ai/api/paas/v4',
+          timeout: config.timeout ?? PROVIDER_TIMEOUTS.zai(),
         })
       } catch (error) {
         console.warn('Z.AI client initialization failed:', error)

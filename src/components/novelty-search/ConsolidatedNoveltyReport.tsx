@@ -602,7 +602,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `patentnest-novelty-report-${searchId.slice(0, 8)}.pdf`;
+      link.download = `patentnest-novelty-report-${(searchId ?? '').slice(0, 8)}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -719,7 +719,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
               </div>
               <div className="text-left text-sm text-slate-600 md:text-right">
                 <div className="text-xl font-bold text-slate-950">PatentNest.ai</div>
-                <div>Report ID: {searchId.slice(0, 8)}</div>
+                <div>Report ID: {(searchId ?? '').slice(0, 8)}</div>
                 <div>Generated: {generatedDate}</div>
                 <div>Jurisdiction: {cleanText(searchData?.jurisdiction || stage0?.jurisdiction, 'IN')}</div>
               </div>
