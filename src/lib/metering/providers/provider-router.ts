@@ -32,8 +32,10 @@ const VISION_CAPABLE_MODELS = new Set([
   // OpenAI
   'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5-mini', 'gpt-5-nano',
   'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.5-pro',
-  'gpt-5.1-thinking', 'gpt-5.2-thinking',
+  'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+  'gpt-5.1-thinking', 'gpt-5.2-thinking', 'gpt-5.6-sol-thinking', 'gpt-5.6-terra-thinking',
   // Anthropic
+  'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-8-thinking', 'claude-sonnet-5', 'claude-haiku-4-5',
   'claude-opus-4-7', 'claude-opus-4-6',
   'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
   'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
@@ -41,6 +43,7 @@ const VISION_CAPABLE_MODELS = new Set([
   // Z.AI GLM
   'glm-5v-turbo', 'glm-4.5v',
   // Google Gemini
+  'gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview',
   'gemini-2.5-pro',
   'gemini-2.0-flash', 'gemini-2.0-flash-001',
   'gemini-1.5-pro', 'gemini-1.5-pro-002',
@@ -69,11 +72,22 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'gpt-5.4-pro': { maxInput: 1050000, maxOutput: 128000 },
   'gpt-5.5': { maxInput: 1050000, maxOutput: 128000 },
   'gpt-5.5-pro': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.6': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.6-sol': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.6-terra': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.6-luna': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.6-sol-thinking': { maxInput: 1050000, maxOutput: 128000 },
+  'gpt-5.6-terra-thinking': { maxInput: 1050000, maxOutput: 128000 },
   'gpt-5-mini': { maxInput: 128000, maxOutput: 16384 },
   'gpt-5-nano': { maxInput: 64000, maxOutput: 8192 },
   'gpt-5.1-thinking': { maxInput: 400000, maxOutput: 128000 },
   'gpt-5.2-thinking': { maxInput: 400000, maxOutput: 128000 },
   // Anthropic
+  'claude-fable-5': { maxInput: 1000000, maxOutput: 128000 },
+  'claude-opus-4-8': { maxInput: 1000000, maxOutput: 128000 },
+  'claude-opus-4-8-thinking': { maxInput: 1000000, maxOutput: 128000 },
+  'claude-sonnet-5': { maxInput: 1000000, maxOutput: 128000 },
+  'claude-haiku-4-5': { maxInput: 200000, maxOutput: 64000 },
   'claude-opus-4-7': { maxInput: 1000000, maxOutput: 128000 },
   'claude-opus-4-6': { maxInput: 1000000, maxOutput: 128000 },
   'claude-3.5-sonnet': { maxInput: 200000, maxOutput: 8192 },
@@ -82,6 +96,10 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'claude-3-5-haiku-20241022': { maxInput: 200000, maxOutput: 8192 },
   'claude-3-opus': { maxInput: 200000, maxOutput: 4096 },
   // Gemini
+  'gemini-3.5-flash': { maxInput: 1000000, maxOutput: 65536 },
+  'gemini-3.1-pro-preview': { maxInput: 2000000, maxOutput: 65536 },
+  'gemini-3.1-flash-lite': { maxInput: 1000000, maxOutput: 65536 },
+  'gemini-3-flash-preview': { maxInput: 1000000, maxOutput: 65536 },
   'gemini-2.5-pro': { maxInput: 1000000, maxOutput: 8192 },
   'gemini-2.0-flash': { maxInput: 1000000, maxOutput: 8192 },
   'gemini-2.0-flash-001': { maxInput: 1000000, maxOutput: 8192 },
@@ -98,6 +116,8 @@ const MODEL_CONTEXT_LIMITS: Record<string, { maxInput: number; maxOutput: number
   'groq-llama-3.3-70b': { maxInput: 128000, maxOutput: 8192 },
   'mixtral-8x7b-32768': { maxInput: 32768, maxOutput: 8192 },
   // DeepSeek
+  'deepseek-v4-pro': { maxInput: 1000000, maxOutput: 65536 },
+  'deepseek-v4-flash': { maxInput: 1000000, maxOutput: 65536 },
   'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
   // Z.AI GLM
   'glm-5.1': { maxInput: 200000, maxOutput: 128000 },

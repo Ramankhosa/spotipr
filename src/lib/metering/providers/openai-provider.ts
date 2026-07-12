@@ -21,6 +21,11 @@ export class OpenAIProvider implements LLMProvider {
     'gpt-4o-mini', 
     'gpt-4-turbo', 
     'gpt-4',
+    // GPT-5.6 Series (Sol / Terra / Luna). `gpt-5.6` aliases to Sol.
+    'gpt-5.6',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
     // GPT-5 Series
     'gpt-5',
     'gpt-5.1',
@@ -36,6 +41,8 @@ export class OpenAIProvider implements LLMProvider {
     // GPT-5 Thinking Variants (alias to base model + reasoning controls)
     'gpt-5.1-thinking',
     'gpt-5.2-thinking',
+    'gpt-5.6-sol-thinking',
+    'gpt-5.6-terra-thinking',
     // GPT-3.5 Series
     'gpt-3.5-turbo',
     // o1 Reasoning Models
@@ -333,6 +340,11 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-4o-mini': { input: 128000, output: 16384 },
       'gpt-4-turbo': { input: 128000, output: 4096 },
       'gpt-4': { input: 8192, output: 4096 },
+      // GPT-5.6 Series (Sol / Terra / Luna) — 1.05M context, 128K output
+      'gpt-5.6': { input: 1050000, output: 128000 },
+      'gpt-5.6-sol': { input: 1050000, output: 128000 },
+      'gpt-5.6-terra': { input: 1050000, output: 128000 },
+      'gpt-5.6-luna': { input: 1050000, output: 128000 },
       // GPT-5 Series (estimated based on typical patterns)
       'gpt-5': { input: 400000, output: 128000 },
       'gpt-5.1': { input: 400000, output: 128000 },
@@ -368,6 +380,11 @@ export class OpenAIProvider implements LLMProvider {
       'gpt-4o-mini': { input: 0.00000015, output: 0.0000006 },    // $0.15/$0.60 per M
       'gpt-4-turbo': { input: 0.00001, output: 0.00003 },         // $10/$30 per M
       'gpt-4': { input: 0.00003, output: 0.00006 },               // $30/$60 per M
+      // GPT-5.6 Series (Sol / Terra / Luna)
+      'gpt-5.6': { input: 0.000005, output: 0.00003 },            // $5/$30 per M (Sol alias)
+      'gpt-5.6-sol': { input: 0.000005, output: 0.00003 },        // $5/$30 per M
+      'gpt-5.6-terra': { input: 0.0000025, output: 0.000015 },    // $2.50/$15 per M
+      'gpt-5.6-luna': { input: 0.000001, output: 0.000006 },      // $1/$6 per M
       // GPT-5 Series (estimated pricing)
       'gpt-5': { input: 0.00001, output: 0.00003 },               // $10/$30 per M
       'gpt-5.1': { input: 0.000012, output: 0.000036 },           // $12/$36 per M

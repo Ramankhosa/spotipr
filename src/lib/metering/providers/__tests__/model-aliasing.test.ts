@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { OpenAIProvider } from '../openai-provider'
 import { GeminiProvider } from '../gemini-provider'
 import { ZAIProvider } from '../zai-provider'
+import { AnthropicProvider } from '../anthropic-provider'
+import { DeepSeekProvider } from '../deepseek-provider'
 import { getProviderFromModelCode } from '../llm-provider'
 
 describe('Provider model aliasing', () => {
@@ -57,6 +59,133 @@ describe('Provider model aliasing', () => {
     expect(gateway.getModelContextLimits('glm-4.5')).toEqual({ maxInput: 128000, maxOutput: 96000 })
     expect(gateway.getModelContextLimits('gpt-5.5')).toEqual({ maxInput: 1050000, maxOutput: 128000 })
     expect(gateway.isModelVisionCapable('glm-5v-turbo')).toBe(true)
+
+    vi.unstubAllEnvs()
+  })
+})
+
+describe('Latest 2026 models (Claude 5 / GPT-5.6 / Gemini 3.x / DeepSeek V4)', () => {
+  it('routes the new frontier model codes to their providers', () => {
+    // Anthropic
+    expect(getProviderFromModelCode('claude-fable-5')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-opus-4-8')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-sonnet-5')).toBe('anthropic')
+    expect(getProviderFromModelCode('claude-haiku-4-5')).toBe('anthropic')
+    // OpenAI GPT-5.6 family
+    expect(getProviderFromModelCode('gpt-5.6')).toBe('openai')
+    expect(getProviderFromModelCode('gpt-5.6-sol')).toBe('openai')
+    expect(getProviderFromModelCode('gpt-5.6-terra')).toBe('openai')
+    expect(getProviderFromModelCode('gpt-5.6-luna')).toBe('openai')
+    // Gemini — flash-lite routes to the dedicated flash-lite provider
+    expect(getProviderFromModelCode('gemini-3.5-flash')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.1-pro-preview')).toBe('gemini')
+    expect(getProviderFromModelCode('gemini-3.1-flash-lite')).toBe('gemini-flash-lite')
+    // DeepSeek V4
+    expect(getProviderFromModelCode('deepseek-v4-pro')).toBe('deepseek')
+    expect(getProviderFromModelCode('deepseek-v4-flash')).toBe('deepseek')
+  })
+
+  it('OpenAIProvider exposes GPT-5.6 limits and pricing', () => {
+    const p = new OpenAIProvider({ apiKey: 'x', baseURL: 'https://api.openai.com/v1', model: 'gpt-5.6-sol' })
+    expect(p.getTokenLimits('gpt-5.6-sol')).toEqual({ input: 1050000, output: 128000 })
+    expect(p.getCostPerToken('gpt-5.6-terra')).toEqual({ input: 0.0000025, output: 0.000015 })
+  })
+
+  it('AnthropicProvider exposes Claude 5 family limits and pricing', () => {
+    const p = new AnthropicProvider({ apiKey: 'x', baseURL: 'https://api.anthropic.com/v1', model: 'claude-opus-4-8' })
+    expect(p.getTokenLimits('claude-opus-4-8')).toEqual({ input: 1000000, output: 128000 })
+    expect(p.getTokenLimits('claude-haiku-4-5')).toEqual({ input: 200000, output: 64000 })
+    expect(p.getCostPerToken('claude-sonnet-5')).toEqual({ input: 0.000003, output: 0.000015 })
+  })
+
+  it('DeepSeekProvider exposes V4 limits and pricing', () => {
+    const p = new DeepSeekProvider({ apiKey: 'x', baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' })
+    expect(p.getTokenLimits('deepseek-v4-pro')).toEqual({ input: 1000000, output: 65536 })
+    expect(p.getCostPerToken('deepseek-v4-flash')).toEqual({ input: 0.00000009, output: 0.00000018 })
+  })
+
+  it('GeminiProvider exposes Gemini 3.x limits and pricing', () => {
+    const p = new GeminiProvider({ apiKey: 'x', baseURL: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3.5-flash' })
+    expect(p.getTokenLimits('gemini-3.5-flash')).toEqual({ input: 1048576, output: 65536 })
+    expect(p.getCostPerToken('gemini-3.1-pro-preview')).toEqual({ input: 0.000002, output: 0.000012 })
+  })
+
+  it('routes the claim-generation "thinking" aliases to their providers', () => {
+    expect(getProviderFromModelCode('gpt-5.6-sol-thinking')).toBe('openai')
+    expect(getProviderFromModelCode('gpt-5.6-terra-thinking')).toBe('openai')
+    expect(getProviderFromModelCode('claude-opus-4-8-thinking')).toBe('anthropic')
+  })
+
+  it('providers normalize "thinking" aliases to base-model limits/costs', () => {
+    const oa = new OpenAIProvider({ apiKey: 'x', baseURL: 'https://api.openai.com/v1', model: 'gpt-5.6-sol-thinking' })
+    expect(oa.getTokenLimits('gpt-5.6-sol-thinking')).toEqual(oa.getTokenLimits('gpt-5.6-sol'))
+    expect(oa.getCostPerToken('gpt-5.6-sol-thinking')).toEqual(oa.getCostPerToken('gpt-5.6-sol'))
+
+    const an = new AnthropicProvider({ apiKey: 'x', baseURL: 'https://api.anthropic.com/v1', model: 'claude-opus-4-8-thinking' })
+    expect(an.getTokenLimits('claude-opus-4-8-thinking')).toEqual(an.getTokenLimits('claude-opus-4-8'))
+    expect(an.getCostPerToken('claude-opus-4-8-thinking')).toEqual(an.getCostPerToken('claude-opus-4-8'))
+  })
+
+  it('AnthropicProvider enables adaptive thinking (no temperature, floored max_tokens) for -thinking aliases', async () => {
+    const p = new AnthropicProvider({ apiKey: 'x', baseURL: 'https://api.anthropic.com/v1', model: 'claude-opus-4-8-thinking' })
+    const captured: any[] = []
+    ;(p as any).client = {
+      messages: {
+        create: async (body: any) => {
+          captured.push(body)
+          return { content: [{ type: 'text', text: 'claims' }], usage: { input_tokens: 10, output_tokens: 5 }, stop_reason: 'end_turn' }
+        },
+      },
+    }
+
+    await p.execute(
+      { prompt: 'Draft initial patent claims', modelClass: 'claude-opus-4-8-thinking' } as any,
+      { maxTokensOut: 16000 } as any,
+    )
+
+    const body = captured[0]
+    expect(body.model).toBe('claude-opus-4-8')            // -thinking stripped for the API call
+    expect(body.thinking).toEqual({ type: 'adaptive' })   // adaptive thinking turned on
+    expect(body.temperature).toBeUndefined()              // never sent with thinking / Opus 4.x
+    expect(body.max_tokens).toBeGreaterThanOrEqual(24000) // floored above the 16K stage limit
+  })
+
+  it('AnthropicProvider does NOT enable thinking for the plain (non-thinking) model', async () => {
+    const p = new AnthropicProvider({ apiKey: 'x', baseURL: 'https://api.anthropic.com/v1', model: 'claude-opus-4-8' })
+    const captured: any[] = []
+    ;(p as any).client = {
+      messages: {
+        create: async (body: any) => {
+          captured.push(body)
+          return { content: [{ type: 'text', text: 'x' }], usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn' }
+        },
+      },
+    }
+
+    await p.execute(
+      { prompt: 'Draft the field of invention', modelClass: 'claude-opus-4-8' } as any,
+      { maxTokensOut: 4000 } as any,
+    )
+
+    expect(captured[0].thinking).toBeUndefined()
+    expect(captured[0].max_tokens).toBe(4000)
+  })
+
+  it('LLMGateway recognizes the new models for preflight limits and vision', async () => {
+    vi.stubEnv('GOOGLE_AI_API_KEY', '')
+    vi.stubEnv('OPENAI_API_KEY', '')
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
+    vi.stubEnv('DEEPSEEK_API_KEY', '')
+
+    const { LLMGateway } = await import('../../gateway')
+    const gateway = new LLMGateway()
+    expect(gateway.getModelContextLimits('gpt-5.6-sol')).toEqual({ maxInput: 1050000, maxOutput: 128000 })
+    expect(gateway.getModelContextLimits('claude-opus-4-8')).toEqual({ maxInput: 1000000, maxOutput: 128000 })
+    expect(gateway.getModelContextLimits('gemini-3.1-pro-preview')).toEqual({ maxInput: 2000000, maxOutput: 65536 })
+    expect(gateway.getModelContextLimits('deepseek-v4-pro')).toEqual({ maxInput: 1000000, maxOutput: 65536 })
+    expect(gateway.isModelVisionCapable('claude-sonnet-5')).toBe(true)
+    expect(gateway.isModelVisionCapable('gpt-5.6-sol')).toBe(true)
+    expect(gateway.isModelVisionCapable('gemini-3.5-flash')).toBe(true)
 
     vi.unstubAllEnvs()
   })

@@ -7,15 +7,27 @@ import type { LLMRequest, LLMResponse, EnforcementDecision, MultimodalContent } 
 import type { LLMProvider, ProviderConfig } from './llm-provider'
 import { PROVIDER_TIMEOUTS } from './provider-timeouts'
 
+// Adaptive thinking spends part of the output-token budget on internal reasoning.
+// A budget sized only for the visible answer can get consumed by thinking, so floor
+// the output budget when thinking is on (mirrors the OpenAI reasoning-model floor).
+const ANTHROPIC_THINKING_MIN_OUTPUT_TOKENS = Number(process.env.ANTHROPIC_THINKING_MIN_OUTPUT_TOKENS) || 24000
+
 export class AnthropicProvider implements LLMProvider {
   name = 'anthropic'
   supportedModels = [
+    // Claude 5 family + Opus 4.8 + Haiku 4.5 (current generation, 2026)
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-sonnet-5',
+    'claude-haiku-4-5',
+    // "Thinking" alias — enables adaptive extended thinking on the base model
+    'claude-opus-4-8-thinking',
     // Claude 4.x models
     'claude-opus-4-7',
     'claude-opus-4-6',
     // Claude 3.5 models - use the stable aliases that Anthropic actually supports
     'claude-3-5-sonnet',
-    'claude-3-5-haiku', 
+    'claude-3-5-haiku',
     // Claude 3 models
     'claude-3-opus',
     'claude-3-sonnet',
@@ -52,17 +64,33 @@ export class AnthropicProvider implements LLMProvider {
     }
   }
 
+  // "thinking" is represented as a model-code variant in our system (e.g.
+  // "claude-opus-4-8-thinking") and translated into Anthropic's adaptive
+  // extended-thinking request field. The base model is used for the API call.
+  private normalizeModelCode(modelCode: string): { apiModel: string; isThinkingVariant: boolean } {
+    if (!modelCode) return { apiModel: modelCode, isThinkingVariant: false }
+    if (modelCode.endsWith('-thinking')) {
+      return { apiModel: modelCode.replace(/-thinking$/, ''), isThinkingVariant: true }
+    }
+    return { apiModel: modelCode, isThinkingVariant: false }
+  }
+
   async execute(request: LLMRequest, limits: EnforcementDecision): Promise<LLMResponse> {
     if (!this.client) {
       throw new Error('Anthropic client not initialized')
     }
 
     const startTime = Date.now()
-    const modelToUse = request.modelClass || this.config.model || 'claude-3-5-sonnet'
-    
+    const requestedModel = request.modelClass || this.config.model || 'claude-3-5-sonnet'
+    const { apiModel: modelToUse, isThinkingVariant } = this.normalizeModelCode(requestedModel)
+
     // Map friendly model names to Anthropic's canonical API model IDs.
     const modelMap: Record<string, string> = {
-      // Claude 4.x dateless IDs are pinned API model IDs
+      // Claude 5 family + 4.x dateless IDs are pinned API model IDs (no date suffix)
+      'claude-fable-5': 'claude-fable-5',
+      'claude-opus-4-8': 'claude-opus-4-8',
+      'claude-sonnet-5': 'claude-sonnet-5',
+      'claude-haiku-4-5': 'claude-haiku-4-5',
       'claude-opus-4-7': 'claude-opus-4-7',
       'claude-opus-4-6': 'claude-opus-4-6',
       // Claude 3.5 Sonnet variations -> latest dated version
@@ -114,11 +142,20 @@ export class AnthropicProvider implements LLMProvider {
         messages.push({ role: 'user', content: request.prompt })
       }
 
+      // Adaptive extended thinking is supported on Opus 4.6/4.7/4.8, Sonnet 5, and Fable 5.
+      const supportsAdaptiveThinking =
+        actualModel.startsWith('claude-opus-4-') ||
+        actualModel === 'claude-sonnet-5' ||
+        actualModel === 'claude-fable-5'
+      const enableThinking = isThinkingVariant && supportsAdaptiveThinking
+
       const modelLimits = this.getTokenLimits(modelToUse)
-      const maxTokens = Math.min(
-        limits.maxTokensOut || 4096,
-        modelLimits.output
-      )
+      // Thinking tokens count against max_tokens, so give the visible answer headroom
+      // when thinking is on so it isn't starved by the reasoning phase.
+      const baseMaxTokens = Math.min(limits.maxTokensOut || 4096, modelLimits.output)
+      const maxTokens = enableThinking
+        ? Math.min(modelLimits.output, Math.max(baseMaxTokens, ANTHROPIC_THINKING_MIN_OUTPUT_TOKENS))
+        : baseMaxTokens
 
       const requestBody: any = {
         model: actualModel,
@@ -126,7 +163,19 @@ export class AnthropicProvider implements LLMProvider {
         messages
       }
 
-      if (!actualModel.startsWith('claude-opus-4-')) {
+      if (enableThinking) {
+        // Let Claude decide how much to think per request (recommended over budget_tokens).
+        requestBody.thinking = { type: 'adaptive' }
+        console.log(`Anthropic: adaptive thinking enabled for ${actualModel} (max_tokens=${maxTokens})`)
+      }
+
+      // Claude Opus 4.x, Sonnet 5, and Fable 5 reject the `temperature` parameter (HTTP 400);
+      // it is also incompatible with thinking. Haiku 4.5 and Claude 3.x still accept it.
+      const rejectsSampling =
+        actualModel.startsWith('claude-opus-4-') ||
+        actualModel === 'claude-sonnet-5' ||
+        actualModel === 'claude-fable-5'
+      if (!rejectsSampling && !enableThinking) {
         requestBody.temperature = request.parameters?.temperature ?? 0.7
       }
 
@@ -144,13 +193,14 @@ export class AnthropicProvider implements LLMProvider {
       return {
         output: outputText,
         outputTokens,
-        modelClass: modelToUse,
+        modelClass: requestedModel, // Preserve the configured code (may be a thinking alias)
         metadata: {
           provider: this.name,
           model: actualModel,
           inputTokens,
           latencyMs: latency,
-          stopReason: response.stop_reason
+          stopReason: response.stop_reason,
+          thinkingEnabled: enableThinking
         }
       }
     } catch (error: any) {
@@ -161,8 +211,13 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   getTokenLimits(modelName: string): { input: number; output: number } {
+    const normalized = this.normalizeModelCode(modelName).apiModel
     // Claude 3.5 models have 200K context
     const limits: Record<string, { input: number; output: number }> = {
+      'claude-fable-5': { input: 1000000, output: 128000 },
+      'claude-opus-4-8': { input: 1000000, output: 128000 },
+      'claude-sonnet-5': { input: 1000000, output: 128000 },
+      'claude-haiku-4-5': { input: 200000, output: 64000 },
       'claude-opus-4-7': { input: 1000000, output: 128000 },
       'claude-opus-4-6': { input: 1000000, output: 128000 },
       'claude-3-5-sonnet': { input: 200000, output: 8192 },
@@ -171,12 +226,17 @@ export class AnthropicProvider implements LLMProvider {
       'claude-3-sonnet': { input: 200000, output: 4096 },
       'claude-3-haiku': { input: 200000, output: 4096 }
     }
-    return limits[modelName] || { input: 200000, output: 4096 }
+    return limits[normalized] || { input: 200000, output: 4096 }
   }
 
   getCostPerToken(modelName: string): { input: number; output: number } {
+    const normalized = this.normalizeModelCode(modelName).apiModel
     // Cost per token in USD (approximate as of Dec 2024)
     const costs: Record<string, { input: number; output: number }> = {
+      'claude-fable-5': { input: 0.00001, output: 0.00005 },      // $10/$50 per M
+      'claude-opus-4-8': { input: 0.000005, output: 0.000025 },   // $5/$25 per M
+      'claude-sonnet-5': { input: 0.000003, output: 0.000015 },   // $3/$15 per M
+      'claude-haiku-4-5': { input: 0.000001, output: 0.000005 },  // $1/$5 per M
       'claude-opus-4-7': { input: 0.000005, output: 0.000025 },
       'claude-opus-4-6': { input: 0.000005, output: 0.000025 },
       'claude-3-5-sonnet': { input: 0.000003, output: 0.000015 },
@@ -185,7 +245,7 @@ export class AnthropicProvider implements LLMProvider {
       'claude-3-sonnet': { input: 0.000003, output: 0.000015 },
       'claude-3-haiku': { input: 0.00000025, output: 0.00000125 }
     }
-    return costs[modelName] || { input: 0.000003, output: 0.000015 }
+    return costs[normalized] || { input: 0.000003, output: 0.000015 }
   }
 
   async isHealthy(): Promise<boolean> {

@@ -31,6 +31,55 @@ async function main() {
 
   const models = [
     // === GOOGLE MODELS ===
+    // Latest Gemini families (2026): 3.5 Flash + 3.1 Pro/Flash-Lite + 3 Flash
+    {
+      code: 'gemini-3.5-flash',
+      displayName: 'Gemini 3.5 Flash',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 150,    // $1.50
+      outputCostPer1M: 900,   // $9.00 (incl. thinking tokens)
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.1-pro-preview',
+      displayName: 'Gemini 3.1 Pro (Preview)',
+      provider: 'google',
+      contextWindow: 2000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 200,    // $2.00 (≤200k prompt)
+      outputCostPer1M: 1200,  // $12.00 (incl. thinking tokens)
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3.1-flash-lite',
+      displayName: 'Gemini 3.1 Flash Lite',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 25,     // $0.25
+      outputCostPer1M: 150,   // $1.50
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gemini-3-flash-preview',
+      displayName: 'Gemini 3 Flash (Preview)',
+      provider: 'google',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 50,     // $0.50
+      outputCostPer1M: 300,   // $3.00
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'gemini-2.5-pro',
       displayName: 'Gemini 2.5 Pro',
@@ -232,6 +281,82 @@ async function main() {
       supportsStreaming: true,
       inputCostPer1M: 15,     // $0.15
       outputCostPer1M: 60,    // $0.60
+      isActive: true,
+      isDefault: false
+    },
+    // GPT-5.6 Series (latest, 2026) — Sol (flagship) / Terra (balanced) / Luna (budget).
+    // All share a 1.05M context window and 128K max output. `gpt-5.6` aliases to Sol.
+    {
+      code: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6 Sol',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 3000,  // $30.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.6-terra',
+      displayName: 'GPT-5.6 Terra',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 250,    // $2.50
+      outputCostPer1M: 1500,  // $15.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.6-luna',
+      displayName: 'GPT-5.6 Luna',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 600,   // $6.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.6',
+      displayName: 'GPT-5.6 (Sol alias)',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00 (routes to Sol)
+      outputCostPer1M: 3000,  // $30.00
+      isActive: true,
+      isDefault: false
+    },
+    // GPT-5.6 "Thinking" aliases — run the base model at high reasoning effort.
+    // Used for reasoning-heavy stages (initial claim generation). Billed at base rates.
+    {
+      code: 'gpt-5.6-sol-thinking',
+      displayName: 'GPT-5.6 Sol (Thinking)',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 3000,  // $30.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'gpt-5.6-terra-thinking',
+      displayName: 'GPT-5.6 Terra (Thinking)',
+      provider: 'openai',
+      contextWindow: 1050000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 250,    // $2.50
+      outputCostPer1M: 1500,  // $15.00
       isActive: true,
       isDefault: false
     },
@@ -508,7 +633,70 @@ async function main() {
     },
 
     // === ANTHROPIC MODELS ===
-    // Provider supports: Claude 4.x and Claude 3.x model codes.
+    // Provider supports: Claude 5 family, Claude 4.x, and Claude 3.x model codes.
+    // Claude 5 family + Opus 4.8 + Haiku 4.5 are the current generation (2026).
+    {
+      code: 'claude-fable-5',
+      displayName: 'Claude Fable 5',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 1000,   // $10.00
+      outputCostPer1M: 5000,  // $50.00 (most capable model)
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-opus-4-8',
+      displayName: 'Claude Opus 4.8',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      // "Thinking" alias — enables adaptive extended thinking on Opus 4.8.
+      // Used for reasoning-heavy stages (initial claim generation). Billed at base rates.
+      code: 'claude-opus-4-8-thinking',
+      displayName: 'Claude Opus 4.8 (Thinking)',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 500,    // $5.00
+      outputCostPer1M: 2500,  // $25.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-sonnet-5',
+      displayName: 'Claude Sonnet 5',
+      provider: 'anthropic',
+      contextWindow: 1000000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 300,    // $3.00
+      outputCostPer1M: 1500,  // $15.00
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'claude-haiku-4-5',
+      displayName: 'Claude Haiku 4.5',
+      provider: 'anthropic',
+      contextWindow: 200000,
+      supportsVision: true,
+      supportsStreaming: true,
+      inputCostPer1M: 100,    // $1.00
+      outputCostPer1M: 500,   // $5.00
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'claude-opus-4-7',
       displayName: 'Claude Opus 4.7',
@@ -619,6 +807,32 @@ async function main() {
     },
 
     // === DEEPSEEK MODELS ===
+    // DeepSeek V4 (2026) — Pro (1.6T MoE) and Flash (284B MoE), both 1M context.
+    // Note: legacy deepseek-chat / deepseek-reasoner retire after 2026-07-24.
+    {
+      code: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+      provider: 'deepseek',
+      contextWindow: 1000000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 44,     // $0.435
+      outputCostPer1M: 87,    // $0.87
+      isActive: true,
+      isDefault: false
+    },
+    {
+      code: 'deepseek-v4-flash',
+      displayName: 'DeepSeek V4 Flash',
+      provider: 'deepseek',
+      contextWindow: 1000000,
+      supportsVision: false,
+      supportsStreaming: true,
+      inputCostPer1M: 9,      // $0.09
+      outputCostPer1M: 18,    // $0.18
+      isActive: true,
+      isDefault: false
+    },
     {
       code: 'deepseek-chat',
       displayName: 'DeepSeek Chat',
@@ -1109,33 +1323,33 @@ async function main() {
     // FREE_PLAN - Cost-effective: Gemini 2.5 Flash Lite, 2.5 Pro for major sections
     // =========================================================================
     'FREE_PLAN': {
-      // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gemini-2.5-flash-lite',
-      'DRAFT_CLAIM_GENERATION':             'gemini-2.5-flash-lite',
-      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_CLAIM_REFINEMENT':             'gemini-2.5-flash-lite',
-      'DRAFT_FIGURE_PLANNER':               'gemini-2.5-flash-lite',
+      // Core drafting stages — latest cost-effective Gemini 3.x (2026)
+      'DRAFT_IDEA_ENTRY':                   'gemini-3.1-flash-lite',
+      'DRAFT_CLAIM_GENERATION':             'gpt-5.6-terra-thinking',  // reasoning model for claims
+      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.5-flash',       // Major: use 3.5 Flash
+      'DRAFT_CLAIM_REFINEMENT':             'gemini-3.1-flash-lite',
+      'DRAFT_FIGURE_PLANNER':               'gemini-3.1-flash-lite',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gemini-2.5-flash-lite',
+      'DRAFT_DIAGRAM_GENERATION':           'gemini-3.1-flash-lite',
       // Annexure/Section stages
-      'DRAFT_ANNEXURE_TITLE':               'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_PREAMBLE':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_FIELD':               'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_BACKGROUND':          'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_OBJECTS':             'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_SUMMARY':             'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_DRAWINGS':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_ANNEXURE_BEST_MODE':           'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_CLAIMS':              'gemini-2.5-pro',         // Major: use Pro
-      'DRAFT_ANNEXURE_ABSTRACT':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_NUMERALS':            'gemini-2.5-flash-lite',
-      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-2.5-flash-lite',
-      'DRAFT_REVIEW':                       'gemini-2.5-pro',         // Major: use Pro
+      'DRAFT_ANNEXURE_TITLE':               'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_PREAMBLE':            'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_FIELD':               'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_BACKGROUND':          'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_OBJECTS':             'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_SUMMARY':             'gemini-3.5-flash',       // Major: use 3.5 Flash
+      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_DRAWINGS':            'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_DESCRIPTION':         'gemini-3.5-flash',       // Major: use 3.5 Flash
+      'DRAFT_ANNEXURE_BEST_MODE':           'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_CLAIMS':              'gemini-3.5-flash',       // Major: use 3.5 Flash
+      'DRAFT_ANNEXURE_ABSTRACT':            'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_NUMERALS':            'gemini-3.1-flash-lite',
+      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-3.1-flash-lite',
+      'DRAFT_REVIEW':                       'gemini-3.5-flash',       // Major: use 3.5 Flash
       // Novelty search stages
       'NOVELTY_QUERY_GENERATION':           'gemini-2.5-flash-lite',
       'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
@@ -1166,33 +1380,33 @@ async function main() {
     // PRO_PLAN - Balanced: Mix of Gemini 2.5 Pro and GPT-5 models
     // =========================================================================
     'PRO_PLAN': {
-      // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gemini-2.5-pro',
-      'DRAFT_CLAIM_GENERATION':             'gpt-5-mini',
-      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',
-      'DRAFT_CLAIM_REFINEMENT':             'gpt-5-mini',
-      'DRAFT_FIGURE_PLANNER':               'gemini-2.5-pro',
+      // Core drafting stages — balanced latest models (2026)
+      'DRAFT_IDEA_ENTRY':                   'gemini-3.1-pro-preview',
+      'DRAFT_CLAIM_GENERATION':             'gpt-5.6-sol-thinking',    // reasoning model for claims
+      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.1-pro-preview',
+      'DRAFT_CLAIM_REFINEMENT':             'gpt-5.6-terra',
+      'DRAFT_FIGURE_PLANNER':               'gemini-3.1-pro-preview',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gpt-4o',
+      'DRAFT_DIAGRAM_GENERATION':           'gpt-5.6-terra',
       // Annexure/Section stages
-      'DRAFT_ANNEXURE_TITLE':               'gpt-5-mini',
-      'DRAFT_ANNEXURE_PREAMBLE':            'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_FIELD':               'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_BACKGROUND':          'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_OBJECTS':             'gpt-5-mini',
-      'DRAFT_ANNEXURE_SUMMARY':             'gpt-5',
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5-mini',
-      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5-mini',
-      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_DRAWINGS':            'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gpt-5',
-      'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5-mini',
-      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_CLAIMS':              'gpt-5',
-      'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_NUMERALS':            'gemini-2.5-pro',
-      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-2.5-pro',
-      'DRAFT_REVIEW':                       'gpt-5',
+      'DRAFT_ANNEXURE_TITLE':               'gemini-3.5-flash',
+      'DRAFT_ANNEXURE_PREAMBLE':            'gemini-3.5-flash',
+      'DRAFT_ANNEXURE_FIELD':               'gemini-3.5-flash',
+      'DRAFT_ANNEXURE_BACKGROUND':          'gemini-3.1-pro-preview',
+      'DRAFT_ANNEXURE_OBJECTS':             'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_SUMMARY':             'claude-sonnet-5',
+      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gemini-3.1-pro-preview',
+      'DRAFT_ANNEXURE_DRAWINGS':            'gemini-3.1-pro-preview',
+      'DRAFT_ANNEXURE_DESCRIPTION':         'claude-sonnet-5',
+      'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gemini-3.5-flash',
+      'DRAFT_ANNEXURE_CLAIMS':              'claude-opus-4-8',        // Critical section — top model
+      'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_NUMERALS':            'gemini-3.5-flash',
+      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-3.5-flash',
+      'DRAFT_REVIEW':                       'claude-sonnet-5',
       // Novelty search stages
       'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
       'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
@@ -1223,33 +1437,33 @@ async function main() {
     // ENTERPRISE_PLAN - Premium: production model assignments
     // =========================================================================
     'ENTERPRISE_PLAN': {
-      // Core drafting stages
-      'DRAFT_IDEA_ENTRY':                   'gpt-5.4',
-      'DRAFT_CLAIM_GENERATION':             'claude-opus-4-6',
-      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-2.5-pro',
-      'DRAFT_CLAIM_REFINEMENT':             'gpt-5',
-      'DRAFT_FIGURE_PLANNER':               'gpt-5.2',
+      // Core drafting stages — latest frontier models (2026)
+      'DRAFT_IDEA_ENTRY':                   'gpt-5.6-terra',
+      'DRAFT_CLAIM_GENERATION':             'claude-opus-4-8-thinking',  // reasoning model for claims
+      'DRAFT_PRIOR_ART_ANALYSIS':           'gemini-3.1-pro-preview',
+      'DRAFT_CLAIM_REFINEMENT':             'gpt-5.6-sol',
+      'DRAFT_FIGURE_PLANNER':               'gpt-5.6-terra',
       'DRAFT_SKETCH_GENERATION':            'gemini-3-pro-image-preview',  // Nano Banana Pro
-      'DRAFT_DIAGRAM_GENERATION':           'gpt-5.4',
-      // Annexure/Section stages
-      'DRAFT_ANNEXURE_TITLE':               'gpt-5-mini',
-      'DRAFT_ANNEXURE_PREAMBLE':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_FIELD':               'gpt-5-mini',
-      'DRAFT_ANNEXURE_BACKGROUND':          'gpt-5-mini',
-      'DRAFT_ANNEXURE_OBJECTS':             'gpt-5-mini',
-      'DRAFT_ANNEXURE_SUMMARY':             'gpt-5',
-      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5.2',
-      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5',
-      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gpt-5-mini',
-      'DRAFT_ANNEXURE_DRAWINGS':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_DESCRIPTION':         'gpt-5.4',
-      'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5-mini',
-      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gpt-5-mini',
-      'DRAFT_ANNEXURE_CLAIMS':              'gpt-5',
-      'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5-mini',
-      'DRAFT_ANNEXURE_NUMERALS':            'gpt-5-nano',
-      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gpt-5-nano',
-      'DRAFT_REVIEW':                       'gpt-5.2',
+      'DRAFT_DIAGRAM_GENERATION':           'gpt-5.6-terra',
+      // Annexure/Section stages — flagship models on the high-value sections
+      'DRAFT_ANNEXURE_TITLE':               'gpt-5.6-luna',
+      'DRAFT_ANNEXURE_PREAMBLE':            'gpt-5.6-luna',
+      'DRAFT_ANNEXURE_FIELD':               'gpt-5.6-luna',
+      'DRAFT_ANNEXURE_BACKGROUND':          'claude-sonnet-5',
+      'DRAFT_ANNEXURE_OBJECTS':             'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_SUMMARY':             'claude-opus-4-8',
+      'DRAFT_ANNEXURE_TECHNICAL_PROBLEM':   'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_TECHNICAL_SOLUTION':  'gpt-5.6-sol',
+      'DRAFT_ANNEXURE_ADVANTAGEOUS_EFFECTS':'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_DRAWINGS':            'claude-sonnet-5',
+      'DRAFT_ANNEXURE_DESCRIPTION':         'claude-opus-4-8',        // Largest section — top model
+      'DRAFT_ANNEXURE_BEST_MODE':           'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_INDUSTRIAL_APPLICABILITY': 'gpt-5.6-luna',
+      'DRAFT_ANNEXURE_CLAIMS':              'claude-fable-5',         // Crown jewel — most capable model
+      'DRAFT_ANNEXURE_ABSTRACT':            'gpt-5.6-terra',
+      'DRAFT_ANNEXURE_NUMERALS':            'gpt-5.6-luna',
+      'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gpt-5.6-luna',
+      'DRAFT_REVIEW':                       'gpt-5.6-sol',
       // Novelty search stages
       'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
       'NOVELTY_RELEVANCE_SCORING':          'gpt-5-nano',

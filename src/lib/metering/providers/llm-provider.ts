@@ -82,6 +82,11 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gemini-1.5-pro-002': 'gemini',
     'gemini-1.5-flash': 'gemini',
     'gemini-1.5-flash-002': 'gemini',
+    // Google - Latest Gemini families (2026)
+    'gemini-3.5-flash': 'gemini',
+    'gemini-3.1-pro-preview': 'gemini',
+    'gemini-3.1-flash-lite': 'gemini-flash-lite',
+    'gemini-3-flash-preview': 'gemini',
     // Google - Legacy Image Generation Models (backwards compatibility)
     'gemini-3.0-nano-banana': 'gemini',
     'gemini-3-pro-preview': 'gemini',
@@ -93,6 +98,11 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'gpt-4o-mini': 'openai',
     'gpt-4-turbo': 'openai',
     'gpt-4': 'openai',
+    // OpenAI - GPT-5.6 Series (Sol / Terra / Luna)
+    'gpt-5.6': 'openai',
+    'gpt-5.6-sol': 'openai',
+    'gpt-5.6-terra': 'openai',
+    'gpt-5.6-luna': 'openai',
     // OpenAI - GPT-5 Series
     'gpt-5': 'openai',
     'gpt-5.1': 'openai',
@@ -108,6 +118,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     // OpenAI - GPT-5 Thinking Variants
     'gpt-5.1-thinking': 'openai',
     'gpt-5.2-thinking': 'openai',
+    'gpt-5.6-sol-thinking': 'openai',
+    'gpt-5.6-terra-thinking': 'openai',
     // OpenAI - GPT-3.5 Series
     'gpt-3.5-turbo': 'openai',
     // OpenAI - o1 Reasoning Models
@@ -115,6 +127,12 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'o1-mini': 'openai',
     'o1-preview': 'openai',
     
+    // Anthropic - Claude 5 family + Opus 4.8 + Haiku 4.5 (2026)
+    'claude-fable-5': 'anthropic',
+    'claude-opus-4-8': 'anthropic',
+    'claude-opus-4-8-thinking': 'anthropic',
+    'claude-sonnet-5': 'anthropic',
+    'claude-haiku-4-5': 'anthropic',
     // Anthropic - Friendly names
     'claude-3.5-sonnet': 'anthropic',
     'claude-3.5-haiku': 'anthropic',
@@ -131,6 +149,8 @@ export function getProviderFromModelCode(modelCode: string): ProviderType {
     'claude-3-haiku-20240307': 'anthropic',
     
     // DeepSeek
+    'deepseek-v4-pro': 'deepseek',
+    'deepseek-v4-flash': 'deepseek',
     'deepseek-chat': 'deepseek',
     'deepseek-reasoner': 'deepseek',
 

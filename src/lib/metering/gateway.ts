@@ -466,14 +466,17 @@ export class LLMGateway {
     // OpenAI
     'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.1', 'gpt-5.2', 'gpt-5-mini', 'gpt-5-nano',
     'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro', 'gpt-5.5', 'gpt-5.5-pro',
-    'gpt-5.1-thinking', 'gpt-5.2-thinking',
+    'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+    'gpt-5.1-thinking', 'gpt-5.2-thinking', 'gpt-5.6-sol-thinking', 'gpt-5.6-terra-thinking',
     // Anthropic
+    'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-8-thinking', 'claude-sonnet-5', 'claude-haiku-4-5',
     'claude-opus-4-7', 'claude-opus-4-6',
     'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku',
     'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229',
     // Z.AI GLM
     'glm-5v-turbo', 'glm-4.5v',
     // Google Gemini
+    'gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview',
     'gemini-2.5-pro',
     'gemini-2.0-flash', 'gemini-2.0-flash-001',
     'gemini-2.0-flash-lite', 'gemini-2.0-flash-lite-001',
@@ -521,6 +524,13 @@ export class LLMGateway {
       'gpt-5.4-pro': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5.5': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5.5-pro': { maxInput: 1050000, maxOutput: 128000 },
+      // OpenAI - GPT-5.6 Series (Sol / Terra / Luna)
+      'gpt-5.6': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.6-sol': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.6-terra': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.6-luna': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.6-sol-thinking': { maxInput: 1050000, maxOutput: 128000 },
+      'gpt-5.6-terra-thinking': { maxInput: 1050000, maxOutput: 128000 },
       'gpt-5-mini': { maxInput: 200000, maxOutput: 64000 },
       'gpt-5-nano': { maxInput: 128000, maxOutput: 32000 },
       // OpenAI - GPT-5 Thinking Variants (alias to base)
@@ -537,6 +547,14 @@ export class LLMGateway {
       'o3-mini': { maxInput: 200000, maxOutput: 100000 },
       'o4-mini': { maxInput: 200000, maxOutput: 100000 },
 
+      // Anthropic - Claude 5 family + Opus 4.8 + Haiku 4.5 (2026)
+      'claude-fable-5': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-opus-4-8': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-opus-4-8-thinking': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-sonnet-5': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-haiku-4-5': { maxInput: 200000, maxOutput: 64000 },
+      'claude-opus-4-7': { maxInput: 1000000, maxOutput: 128000 },
+      'claude-opus-4-6': { maxInput: 1000000, maxOutput: 128000 },
       // Anthropic - Friendly names
       'claude-3.5-sonnet': { maxInput: 200000, maxOutput: 8192 },
       'claude-3.5-haiku': { maxInput: 200000, maxOutput: 8192 },
@@ -550,6 +568,11 @@ export class LLMGateway {
       'claude-3-sonnet-20240229': { maxInput: 200000, maxOutput: 4096 },
       'claude-3-haiku-20240307': { maxInput: 200000, maxOutput: 4096 },
       
+      // Gemini - Latest families (2026)
+      'gemini-3.5-flash': { maxInput: 1000000, maxOutput: 65536 },
+      'gemini-3.1-pro-preview': { maxInput: 2000000, maxOutput: 65536 },
+      'gemini-3.1-flash-lite': { maxInput: 1000000, maxOutput: 65536 },
+      'gemini-3-flash-preview': { maxInput: 1000000, maxOutput: 65536 },
       // Gemini
       'gemini-2.5-pro': { maxInput: 1000000, maxOutput: 8192 },
       'gemini-2.0-flash': { maxInput: 1000000, maxOutput: 8192 },
@@ -566,6 +589,8 @@ export class LLMGateway {
       'gemini-3-pro-image-preview': { maxInput: 1000000, maxOutput: 8192 },
       
       // DeepSeek
+      'deepseek-v4-pro': { maxInput: 1000000, maxOutput: 65536 },
+      'deepseek-v4-flash': { maxInput: 1000000, maxOutput: 65536 },
       'deepseek-chat': { maxInput: 128000, maxOutput: 8192 },
       'deepseek-reasoner': { maxInput: 128000, maxOutput: 8192 },
 
@@ -608,7 +633,7 @@ export class LLMGateway {
     // Fallback: try to match by prefix for unknown model variants
     const lowerCode = modelCode.toLowerCase()
     if (lowerCode.startsWith('gpt-4')) return { maxInput: 128000, maxOutput: 16384 }
-    if (lowerCode.startsWith('gpt-5.4') || lowerCode.startsWith('gpt-5.5')) return { maxInput: 1050000, maxOutput: 128000 }
+    if (lowerCode.startsWith('gpt-5.4') || lowerCode.startsWith('gpt-5.5') || lowerCode.startsWith('gpt-5.6')) return { maxInput: 1050000, maxOutput: 128000 }
     if (lowerCode.startsWith('gpt-5')) return { maxInput: 400000, maxOutput: 128000 }
     if (lowerCode.startsWith('gpt-3')) return { maxInput: 16385, maxOutput: 4096 }
     if (lowerCode.startsWith('o1')) return { maxInput: 128000, maxOutput: 65536 }
