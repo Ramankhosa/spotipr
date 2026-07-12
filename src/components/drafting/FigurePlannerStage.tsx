@@ -71,6 +71,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
+import { useToast } from '@/components/ui/toast'
+import Hint from '@/components/ui/hint'
 import dynamic from 'next/dynamic'
 import {
   buildFigureScopePromptBlock,
@@ -185,20 +187,23 @@ function normalizePageSizes(input: any): string[] {
   return []
 }
 
-// Patent-specific progress messages for figure generation (no technical jargon)
+// Plain-language progress messages shown while figures generate.
+// They describe the phases of the real pipeline in order, but advance on a
+// timer — so the last one is written to stay honest for long-running jobs.
 const FIGURE_GENERATION_MESSAGES = [
-  "Analyzing patent claims and technical specifications...",
-  "Identifying key inventive elements and subsystems...",
-  "Mapping component relationships and data flows...",
-  "Determining optimal figure perspectives for disclosure...",
-  "Planning system architecture illustrations...",
-  "Structuring method flow visualizations...",
-  "Generating patent-office compliant drawings...",
-  "Applying reference numerals and annotations...",
-  "Finalizing figure set for maximum claim coverage..."
+  "Reading your specification...",
+  "Identifying the components to illustrate...",
+  "Choosing figure types that fit your invention...",
+  "Planning the system overview figure...",
+  "Laying out method and flow figures...",
+  "Drawing the diagrams...",
+  "Adding reference numerals that match your specification...",
+  "Checking the figures against your claims...",
+  "Still working — large inventions can take 2–3 minutes..."
 ]
 
 export default function FigurePlannerStage({ session, patent, onComplete, onRefresh }: FigurePlannerStageProps) {
+  const { toast } = useToast()
   const [isGenerating, setIsGenerating] = useState(false)
   const [figures, setFigures] = useState<LLMFigure[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -207,8 +212,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // User can optionally override by entering a number
   const [diagramCount, setDiagramCount] = useState<number | null>(null)
   
-  // Progress message cycling during generation
-  const [generationMessageIndex, setGenerationMessageIndex] = useState(0)
+  // Elapsed time while generating; the phase message is derived from it.
+  const [generationSeconds, setGenerationSeconds] = useState(0)
+  const generationMessageIndex = Math.min(
+    Math.floor(generationSeconds / 4),
+    FIGURE_GENERATION_MESSAGES.length - 1
+  )
+  const generationElapsedLabel = `${Math.floor(generationSeconds / 60)}:${String(generationSeconds % 60).padStart(2, '0')}`
 
   // Helper for cleaning titles
   const sanitizeFigureLabel = (text?: string | null) => {
@@ -256,10 +266,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [isSkippingFigures, setIsSkippingFigures] = useState(false)
   const [isRestoringFigures, setIsRestoringFigures] = useState(false)
   const [uploaded, setUploaded] = useState<Record<string, boolean>>({})
-  const [modifyIdx, setModifyIdx] = useState<number | null>(null)
   const [processingStatus, setProcessingStatus] = useState<Record<string, string>>({})
   const [processingStep, setProcessingStep] = useState<Record<string, number>>({})
-  const [modifyText, setModifyText] = useState('')
   const [modifyFigNo, setModifyFigNo] = useState<number | null>(null)
   const [modifyTextSaved, setModifyTextSaved] = useState('')
   const [regeneratingFigure, setRegeneratingFigure] = useState<Record<number, boolean>>({})
@@ -267,8 +275,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [rendering, setRendering] = useState<Record<string, boolean>>({})
   const [renderPreview, setRenderPreview] = useState<Record<string, string | null>>({})
   const [expandedFigNo, setExpandedFigNo] = useState<number | null>(null)
-  const [addCount, setAddCount] = useState(0)
-  const [addInputs, setAddInputs] = useState<string[]>([])
   const [overrideCount, setOverrideCount] = useState(0)
   const [overrideInputs, setOverrideInputs] = useState<string[]>([])
   const [stateInitialized, setStateInitialized] = useState(false)
@@ -278,33 +284,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [includeExistingFigures, setIncludeExistingFigures] = useState(true)
   const [replaceExistingDiagrams, setReplaceExistingDiagrams] = useState(false)
 
-  // Map legacy state to new mode
-  const [aiDecides, setAiDecides] = useState(true)
-  const [userDecides, setUserDecides] = useState(false)
-  
-  useEffect(() => {
-    if (mode === 'ai') {
-      setAiDecides(true)
-      setUserDecides(false)
-    } else {
-      setAiDecides(false)
-      setUserDecides(true)
-    }
-  }, [mode])
-
-  // Cycle through progress messages during figure generation
+  // Tick elapsed time while figure generation runs
   useEffect(() => {
     if (!isGenerating) {
-      setGenerationMessageIndex(0)
+      setGenerationSeconds(0)
       return
     }
-    
+
     const interval = setInterval(() => {
-      setGenerationMessageIndex(prev => 
-        prev < FIGURE_GENERATION_MESSAGES.length - 1 ? prev + 1 : prev
-      )
-    }, 4000) // Change message every 4 seconds
-    
+      setGenerationSeconds(prev => prev + 1)
+    }, 1000)
+
     return () => clearInterval(interval)
   }, [isGenerating])
 
@@ -570,14 +560,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         // Refresh to load new translation
         await onRefresh()
         
-        alert(`✓ Figure ${translateFigureNo} translated to ${LANGUAGE_LABELS[translateTargetLang] || translateTargetLang}`)
+        toast({ title: `Figure ${translateFigureNo} translated to ${LANGUAGE_LABELS[translateTargetLang] || translateTargetLang}`, variant: 'success' })
       } else {
         // Translate all diagrams - process one by one with progress
         const englishDiagrams = diagramSources.filter((d: any) => !d.language || d.language === 'en')
         const total = englishDiagrams.length
         
         if (total === 0) {
-          alert('No English diagrams found to translate')
+          toast({ title: 'No English diagrams found to translate', variant: 'warning' })
           return
         }
 
@@ -617,7 +607,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         // Refresh to load new translations
         await onRefresh()
 
-        alert(`✓ Translation complete!\n• ${successCount} diagrams translated\n• ${failCount} failed`)
+        toast({
+          title: 'Translation complete',
+          description: `${successCount} diagram${successCount === 1 ? '' : 's'} translated${failCount > 0 ? `, ${failCount} failed` : ''}.`,
+          variant: failCount > 0 ? 'warning' : 'success'
+        })
       }
 
       setShowTranslateModal(false)
@@ -642,7 +636,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       }
     } catch (err) {
       console.error('Translation error:', err)
-      alert(`❌ Translation failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      toast({
+        title: 'Translation failed',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'error'
+      })
     } finally {
       setTranslating(false)
       setTranslateProgress(null)
@@ -702,15 +700,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     }
   }
 
-  // Intelligent processing messages
+  // Render-pipeline status messages, in the order the steps actually run
   const intelligentMessages = [
-    "🧠 Analyzing diagram architecture...",
-    "⚡ Optimizing layout algorithms...",
-    "🎨 Applying advanced rendering techniques...",
-    "🔬 Validating technical specifications...",
-    "✨ Generating high-resolution output...",
-    "📊 Performing quality assurance checks...",
-    "🎯 Finalizing patent-grade visualization..."
+    "Preparing diagram...",
+    "Rendering diagram...",
+    "Processing image...",
+    "Saving image..."
   ]
 
   // Track which figures have been queued for rendering to prevent duplicate calls (language-aware)
@@ -1490,6 +1485,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       ))
     } catch (err) {
       console.error('Toggle favorite error:', err)
+      toast({ title: 'Could not update favorite', description: 'Please try again.', variant: 'error' })
     }
   }
 
@@ -1655,216 +1651,6 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           throw new Error(errorMsg)
         }
         setGenerationWarning(formatDiagramGenerationWarnings(manualResp))
-        setOverrideCount(0)
-        setOverrideInputs([])
-        await onRefresh()
-        return
-
-        // Build the same rich context and prompt as AI mode, but use user-provided instructions
-        const normalizedIdea = session?.ideaRecord?.normalizedData || {}
-        const figureScope = filterComponentsByScopeForFigures(
-          extractComponentsFromReferenceMap(session?.referenceMap),
-          normalizedIdea?.scopeRecommendations
-        )
-        const components = figureScope.components
-        const figureScopeBlock = buildFigureScopePromptBlock(normalizedIdea?.scopeRecommendations)
-        // Use referenceLabel for universal support (100/200, S100/S200, (a)/(b))
-        const numeralsPreview = components.map((c: any) => `${c.name} (${c.referenceLabel || c.numeral || '?'})`).join(', ')
-        const claimLinkedPreview = components
-          .filter((c: any) => c?.claimSupport?.source === 'frozen_claims' && c?.claimSupport?.claimRole === 'claim_1')
-          .map((c: any) => `- ${c.name} (${c.referenceLabel || c.numeral || '?'})`)
-          .join('\n') || '- No claim-linked components identified for mandatory figure coverage.'
-
-        const drawingRules = countryProfile?.rules?.drawings || {}
-        const figureLabelFormat = countryProfile?.profileData?.diagrams?.figureLabelFormat || countryProfile?.profileData?.rules?.drawings?.figureLabelFormat || 'Fig. {number}'
-        const colorAllowed = drawingRules.colorAllowed !== undefined ? drawingRules.colorAllowed : false
-        const lineStyle = drawingRules.lineStyle || 'black_and_white_solid'
-        const refNumeralsMandatory = drawingRules.referenceNumeralsMandatoryWhenDrawings !== false
-        const minTextSize = drawingRules.minReferenceTextSizePt || 8
-        const allowedPageSizeList = [
-          ...normalizePageSizes(drawingRules.allowedPageSizes),
-          ...normalizePageSizes(drawingRules.paperSize)
-        ]
-        const allowedPageSizes = allowedPageSizeList.join(', ')
-
-        // Determine next figure number based on existing figures
-        const existingFigureCount = session?.figurePlans?.length || 0
-        const startingFigNo = existingFigureCount + 1
-
-        // Create a custom prompt that incorporates the user-provided instructions
-        let customPrompt = `SYSTEM ROLE — Patent Figure Diagram Generator (PlantUML)
-
-You generate patent-office-friendly diagrams (USPTO/EPO/IPO) in black-and-white, suitable for filing.
-Your diagrams MUST be easy to understand when printed.
-
-OUTPUT FORMAT (MANDATORY)
-Return a JSON array of exactly ${overrideList.length} objects.
-Each object must be:
-{
-  "title": "Fig.X - <short title>",
-  "purpose": "<one sentence>",
-  "styleUsed": "STYLE_1" or "STYLE_2" or "SEQUENCE" or "ACTIVITY" (whichever user requested or best fits),
-  "layoutPlan": "One sentence describing the spatial arrangement",
-  "patternsUsed": ["power_bus", "hidden_links", etc. - only patterns actually used],
-  "plantuml": "<PlantUML code from @startuml to @enduml>"
-}
-Return JSON only. No markdown. No commentary.
-
-NUMBERING
-- These new figures will be numbered starting from Fig.${startingFigNo}.
-- Use titles like "Fig.${startingFigNo} - ...", "Fig.${startingFigNo + 1} - ...", etc., in order.
-
-═══════════════════════════════════════════════════════════════════════════════
-USER INSTRUCTIONS FOR EACH NEW FIGURE (HIGHEST PRIORITY)
-═══════════════════════════════════════════════════════════════════════════════
-${overrideList.map((instruction, index) => `Fig.${startingFigNo + index}: ${instruction}`).join('\n')}
-
-THE USER'S INSTRUCTIONS ABOVE TAKE ABSOLUTE PRIORITY. Follow them exactly.
-Follow user content, layout, and diagram type instructions, but the safety and PlantUML validity rules below cannot be overridden.`
-
-        // Include existing figures context if checkbox is checked
-        if (includeExistingFigures && session?.figurePlans?.length > 0) {
-          const existingFigures = session.figurePlans
-            .sort((a: any, b: any) => a.figureNo - b.figureNo)
-            .map((f: any) => {
-              const clean = sanitizeFigureLabel(f.title) || `Figure ${f.figureNo}`
-              const description = f.description ? ` - ${f.description.slice(0, 100)}${f.description.length > 100 ? '...' : ''}` : ''
-              return `Fig.${f.figureNo}: ${clean}${description}`
-            })
-            .join('\n')
-
-          customPrompt += `
-
-EXISTING FIGURES (already created - do NOT duplicate these, but ensure new figures logically follow them):
-${existingFigures}
-
-IMPORTANT: New figures should continue the "zoom-in" progression. If existing figures show the system overview, new figures should show deeper details.`
-        }
-
-        customPrompt += `
-
-═══════════════════════════════════════════════════════════════════════════════
-COMPONENTS / NUMERALS
-═══════════════════════════════════════════════════════════════════════════════
-Available numbered components: ${numeralsPreview}.
-
-REQUIRED CLAIM-LINKED FIGURE COMPONENTS:
-${claimLinkedPreview}
-
-${figureScopeBlock ? `\n${figureScopeBlock}` : ''}
-
-**NUMBERED ELEMENT RULE (STRICT):**
-- Use ONLY the provided **numbered** components and their numerals listed above.
-- Do NOT invent any additional numbered components or numerals.
-- Every component label MUST include its numeral in parentheses, e.g., "Controller (200)".
-- Across the generated figure set, every required claim-linked component listed above MUST appear at least once unless explicitly excluded from figures by USER-APPROVED FIGURE SCOPE.
-- After required claim-linked coverage is satisfied, unclaimed approved registry components may appear when useful for clarity.
-
-**HELPER NODES ALLOWED:**
-- You MAY add **un-numbered helper nodes** ONLY for routing clarity: "Power bus", "Comms bus", "Data bus", "Interface bus"
-- Helper nodes MUST NOT contain numerals.
-
-- Figure label format: ${figureLabelFormat}.
-- Color policy: ${colorAllowed ? 'color permitted if essential' : 'MONOCHROME ONLY (no color)'}.
-- Reference numerals: ${refNumeralsMandatory ? 'MANDATORY in all drawings' : 'Optional'}.
-
-═══════════════════════════════════════════════════════════════════════════════
-CANONICAL STYLE DEFAULTS (INJECTED BY BACKEND)
-═══════════════════════════════════════════════════════════════════════════════
-Do NOT generate any skinparam lines. The backend injects canonical patent-style skinparams automatically.
-
-Default direction: left to right direction (unless user requests different)
-
-**PATENT FIGURE SEMANTICS (Apply unless user overrides):**
-- All connectors should be orthogonal; the backend applies this styling automatically.
-- Avoid arrow crossings. Use hidden links (-[hidden]->) to avoid crossings.
-- Solid arrows (-->) = data/control paths.
-- Dashed arrows (..>) = power/utility ONLY.
-- NO ARROW LABELS: Do not add text after arrows (e.g., NO "A --> B : label").
-- Nesting depth max = 2 levels.
-
-FORBIDDEN DIRECTIVES:
-- No !include / !theme / !pragma
-- No title / caption / header / footer
-- No sprites / icons (unless user explicitly requests)
-
-═══════════════════════════════════════════════════════════════════════════════
-AVAILABLE DIAGRAM STYLES (use based on user request or best fit)
-═══════════════════════════════════════════════════════════════════════════════
-- STYLE 1: Nested block diagram (rectangles with nested rectangles) - DEFAULT for system diagrams
-- STYLE 2: Linear pipeline (rectangles in chain) - for strict linear data flow
-- SEQUENCE: Sequence diagram - for message interactions (if user requests)
-- ACTIVITY: Activity diagram - for method steps/flowcharts (if user requests)
-
-STYLE 1 — NESTED BLOCK (CANONICAL TEMPLATE):
-@startuml
-left to right direction
-
-rectangle "System (10)" as SYS {
-  rectangle "Subsystem A" as A {
-    rectangle "Component A1 (101)" as A1
-  }
-  rectangle "Subsystem B" as B {
-    rectangle "Component B1 (201)" as B1
-  }
-}
-A1 --> B1
-@enduml
-
-SEQUENCE:
-@startuml
-actor "User (900)" as U
-participant "Device (100)" as D
-U -> D
-D --> U
-@enduml
-
-ACTIVITY:
-@startuml
-start
-:Step one (100);
-:Step two (200);
-:Step three (300);
-stop
-@enduml
-
-═══════════════════════════════════════════════════════════════════════════════
-FINAL SELF-CHECK (MANDATORY)
-═══════════════════════════════════════════════════════════════════════════════
-- Follows user's instructions for diagram content, type, and layout while respecting safety rules.
-- Does not include skinparam lines.
-- Uses only allowed numbered components (un-numbered helper nodes like "Power bus" are OK).
-- styleUsed field matches actual diagram style.
-- layoutPlan field accurately describes the spatial arrangement.
-- patternsUsed field only includes patterns actually present.
-- Has @startuml and @enduml.
-Now output the JSON array.`
-
-        const resp = await onComplete({
-          action: 'generate_diagrams_llm',
-          sessionId: session?.id,
-          mode: 'manual',
-          figureInstructions: overrideList,
-          figureCount: overrideList.length,
-          includeExistingFigures,
-          // In manual AI mode, append to existing figures instead of replacing them
-          replaceExisting: false
-        })
-        // Handle error responses
-        if (!resp) throw new Error('LLM did not return valid figure list')
-        if (resp.error) {
-          const baseError = resp.details
-            ? `${resp.error}: ${typeof resp.details === 'string' ? resp.details : JSON.stringify(resp.details)}`
-            : resp.error
-          const repairDetails = formatDiagramGenerationWarnings(resp)
-          const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
-          throw new Error(errorMsg)
-        }
-        setGenerationWarning(formatDiagramGenerationWarnings(resp))
-
-        // Backend already saves figures with correct figure numbers (appended after existing)
-        // No need to call handleSavePlantUML - it would overwrite with wrong figure numbers
-
         setOverrideCount(0)
         setOverrideInputs([])
         await onRefresh()
@@ -2508,8 +2294,12 @@ Now output the JSON array.`
               <LayoutGrid className="w-6 h-6 text-indigo-600" />
             </div>
             Figure Planner
+            <Hint
+              title="What happens here"
+              text="This is where your patent's drawings are created — block diagrams, flowcharts, and sketches. They're generated from your specification and reuse its reference numerals, so figures and text stay consistent."
+            />
           </h2>
-          <p className="text-gray-500 mt-2 text-lg">Design and generate intelligent patent diagrams.</p>
+          <p className="text-gray-500 mt-2 text-lg">Create the drawings your application will file with.</p>
         </div>
 
         {!figuresSkipped && (
@@ -2547,7 +2337,7 @@ Now output the JSON array.`
       )}
 
       {/* Main Tab Bar: Diagrams vs Sketches */}
-      <div className="border-b border-gray-200">
+      <div className="border-b border-gray-200 flex items-center justify-between">
         <nav className="flex space-x-8" aria-label="Figure Planner Tabs">
           <button
             onClick={() => setActiveTab('diagrams')}
@@ -2572,7 +2362,7 @@ Now output the JSON array.`
             }`}
           >
             <Pencil className="w-4 h-4" />
-            Sketches (AI Generated)
+            Sketches
             {sketches.filter(s => s.status === 'SUCCESS').length > 0 && (
               <Badge variant="secondary" className="ml-1">{sketches.filter(s => s.status === 'SUCCESS').length}</Badge>
             )}
@@ -2592,7 +2382,26 @@ Now output the JSON array.`
             )}
           </button>
         </nav>
+        <Hint
+          title="Diagrams, Sketches, Arrange"
+          text="Diagrams are structured drawings (block diagrams, flowcharts) generated from your specification. Sketches are AI line-art illustrations. Arrange sets the final figure order for filing."
+          className="pr-1"
+        />
       </div>
+
+      {/* Errors are shown here so they're visible from any tab */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {generationWarning && (
+        <Alert className="border-amber-200 bg-amber-50 text-amber-900">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{generationWarning}</AlertDescription>
+        </Alert>
+      )}
 
       {/* TAB CONTENT */}
       {activeTab === 'diagrams' && (
@@ -2608,7 +2417,7 @@ Now output the JSON array.`
               }`}
             >
               <Bot className="w-4 h-4" />
-              AI Autopilot
+              Automatic (AI)
             </button>
             <button
               onClick={() => setMode('manual')}
@@ -2619,22 +2428,14 @@ Now output the JSON array.`
               }`}
             >
               <User className="w-4 h-4" />
-              Manual Control
+              Manual
             </button>
+            <Hint
+              title="Automatic vs. Manual"
+              text="Automatic: the AI plans the whole figure set from your specification and draws it. Manual: you describe each figure yourself and the AI draws exactly those."
+              className="ml-1"
+            />
           </div>
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {generationWarning && (
-        <Alert className="border-amber-200 bg-amber-50 text-amber-900">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{generationWarning}</AlertDescription>
-        </Alert>
-      )}
 
       {/* Mode Selection Cards - Only show if no figures yet */}
       {figures.length === 0 && diagramSources.length === 0 && (
@@ -2733,6 +2534,10 @@ Now output the JSON array.`
                 <span className="text-xs text-gray-500">
                   {diagramCount === null ? '(AI will decide)' : '(1-10)'}
                 </span>
+                <Hint
+                  title="How many figures?"
+                  text="Leave on Auto and the AI picks the count that covers your claims — usually 3 to 7. Or set an exact number between 1 and 10."
+                />
               </div>
             </div>
             {hasExistingFigures && (
@@ -2763,12 +2568,12 @@ Now output the JSON array.`
                 {isGenerating ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    Processing Step {generationMessageIndex + 1}/{FIGURE_GENERATION_MESSAGES.length}<AnimatedDots />
+                    Generating figures — {generationElapsedLabel}
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-5 h-5" />
-                    {diagramCount === null ? 'Generate Optimal Figures' : `Generate ${diagramCount} Figures`}
+                    {diagramCount === null ? 'Generate figures' : `Generate ${diagramCount} figure${diagramCount > 1 ? 's' : ''}`}
                   </>
                 )}
               </Button>
@@ -2798,7 +2603,7 @@ Now output the JSON array.`
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-indigo-900 mb-1">
-                      Step {generationMessageIndex + 1} of {FIGURE_GENERATION_MESSAGES.length}
+                      Working for {generationElapsedLabel}
                     </p>
                     <p className="text-sm text-indigo-700 leading-relaxed">
                       {FIGURE_GENERATION_MESSAGES[generationMessageIndex]}
@@ -2810,12 +2615,12 @@ Now output the JSON array.`
                     )}
                   </div>
                 </div>
-                
+
                 {/* Helpful tip */}
                 <div className="mt-4 pt-3 border-t border-indigo-100">
                   <p className="text-xs text-gray-500 flex items-center gap-1.5">
                     <Info className="w-3.5 h-3.5" />
-                    This process ensures patent-office compliant figures with proper reference numerals
+                    Figures reuse the reference numerals from your specification, so drawings and text stay consistent.
                   </p>
                 </div>
               </div>
@@ -2914,6 +2719,12 @@ Now output the JSON array.`
                 <Languages className="w-4 h-4 mr-2" />
                 Translate All
               </Button>
+            )}
+            {diagramSources.length > 0 && (
+              <Hint
+                title="Translating diagrams"
+                text="Translation converts the text labels inside each diagram. Reference numerals stay exactly the same, so translated figures still match your specification."
+              />
             )}
             <motion.div
               animate={showManual ? { scale: [1, 1.05, 1] } : {}}
@@ -3122,10 +2933,10 @@ Now output the JSON array.`
                   <div className={`px-4 py-2 border-t text-xs ${diagramImageAnalysisBadgeClass(imageAnalysisStatus)}`}>
                     <div className="flex items-center justify-between gap-3">
                       <span>
-                        {imageAnalysisStatus === 'QUEUED' && 'AI diagram reading is queued.'}
-                        {imageAnalysisStatus === 'PROCESSING' && 'AI diagram reading is running in the background.'}
-                        {imageAnalysisStatus === 'COMPLETED' && 'AI diagram reading completed. You can edit the title or description.'}
-                        {imageAnalysisStatus === 'FAILED' && (selectedSource.imageAnalysisError || 'AI diagram reading failed.')}
+                        {imageAnalysisStatus === 'QUEUED' && 'AI will describe this image shortly (queued).'}
+                        {imageAnalysisStatus === 'PROCESSING' && 'AI is reading this image in the background — you can keep working.'}
+                        {imageAnalysisStatus === 'COMPLETED' && 'AI has described this image. You can edit the title or description.'}
+                        {imageAnalysisStatus === 'FAILED' && (selectedSource.imageAnalysisError || 'AI could not read this image.')}
                       </span>
                       {imageAnalysisStatus === 'FAILED' && (
                         <Button
@@ -3202,7 +3013,7 @@ Now output the JSON array.`
                           className="w-full text-xs text-gray-500"
                           onClick={() => setShowPlantUML(prev => ({ ...prev, [figNo]: !prev[figNo] }))}
                         >
-                          {showPlantUML[figNo] ? 'Hide Source Code' : 'View Source Code'}
+                          {showPlantUML[figNo] ? 'Hide diagram source' : 'View diagram source'}
                         </Button>
                         {showPlantUML[figNo] && (
                            <div className="mt-2 relative">
@@ -3226,7 +3037,7 @@ Now output the JSON array.`
 
                   {/* Modification Panel */}
                 {modifyFigNo === figNo && (
-                    <div className="col-span-2 mt-2 pt-2 border-t">
+                    <div className="col-span-4 mt-2 pt-2 border-t">
                       <Label className="text-xs mb-1 block">Describe changes:</Label>
                       <Textarea 
                         className="text-sm mb-2"
@@ -3348,7 +3159,7 @@ Now output the JSON array.`
                   disabled={manualDetectingAll || manualUploadSlots.every(slot => !slot.file || countWords(slot.description) >= 20 || slot.status === 'saved')}
                 >
                   {manualDetectingAll ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
-                  Let AI Detect Image Content
+                  Describe images with AI
                 </Button>
                 <Button
                   variant="outline"
@@ -3434,7 +3245,10 @@ Now output the JSON array.`
                         />
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <Label className="text-xs text-gray-500">Description (min 20 words)</Label>
+                            <Label className="text-xs text-gray-500 flex items-center gap-1">
+                              Description (min 20 words)
+                              <Hint text="The description becomes this figure's caption in your specification, so it needs enough detail to stand on its own. Use 'Describe images with AI' to write it for you." />
+                            </Label>
                             <span className={wordCount >= 20 ? 'text-xs text-green-600' : 'text-xs text-gray-500'}>
                               {wordCount} / 20 words
                             </span>
