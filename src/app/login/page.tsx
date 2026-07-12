@@ -29,14 +29,7 @@ export default function LoginPage() {
     setError('')
     setSocialProvider(null)
 
-    // Simulate a minimum loading time to show the animation
-    // This adds to the "premium" feel - sometimes too fast feels glitchy
-    const minLoadTime = new Promise(resolve => setTimeout(resolve, 2000))
-    
-    const [result] = await Promise.all([
-      login(email, password),
-      minLoadTime
-    ])
+    const result = await login(email, password)
 
     if (result.success && result.requiresPayment) {
       // Login succeeded but payment is required - redirect to payment page
@@ -89,7 +82,7 @@ export default function LoginPage() {
             Welcome Back
           </h2>
           <p className="mt-2 text-center text-sm text-ai-graphite-400">
-            Enter the neural link to access your drafts.
+            Sign in to continue to your drafts.
           </p>
         </div>
 
