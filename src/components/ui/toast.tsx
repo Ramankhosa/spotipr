@@ -19,6 +19,8 @@ export interface ToastOptions {
   variant?: ToastVariant
   /** Auto-dismiss delay in ms. Defaults to 5000; errors default to 8000. */
   duration?: number
+  /** Optional action rendered as a button (e.g. Undo). Clicking it dismisses the toast. */
+  action?: { label: string; onClick: () => void }
 }
 
 interface ToastItem extends ToastOptions {
@@ -94,6 +96,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 <p className="text-sm font-semibold text-foreground">{item.title}</p>
                 {item.description && (
                   <p className="mt-0.5 text-sm text-muted-foreground break-words">{item.description}</p>
+                )}
+                {item.action && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      item.action?.onClick()
+                      dismiss(item.id)
+                    }}
+                    className="mt-2 text-xs font-semibold text-primary hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                  >
+                    {item.action.label}
+                  </button>
                 )}
               </div>
               <button
