@@ -163,4 +163,57 @@ describe('GooglePatentsProvider', () => {
     expect(query).toContain('"predictive thermal load"')
     expect(query).toContain('-"fuel cell"')
   })
+
+  test('prefers the full abstract over the snippet fragment', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      organic_results: [{
+        position: 1,
+        patent_id: 'patent/US10905426B2/en',
+        title: 'Thermal battery controller',
+        snippet: 'A controller predicts…',
+        abstract: 'A full abstract describing predictive thermal load estimation and coolant flow modulation for battery packs.',
+      }],
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const provider = new GooglePatentsProvider()
+    const results = await provider.search(request())
+    expect(results[0].abstract).toContain('full abstract describing predictive thermal load')
+  })
+
+  test('falls back to the broad query when a refined concept-group query returns zero results', async () => {
+    const fetchMock = vi.fn()
+      // primary (refined) call → empty
+      .mockResolvedValueOnce(new Response(JSON.stringify({ organic_results: [] }), { status: 200 }))
+      // broad fallback call → one hit
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        organic_results: [{
+          position: 1,
+          patent_id: 'patent/US20220123456A1/en',
+          title: 'Battery cooling arrangement',
+          abstract: 'Coolant channels for battery modules.',
+        }],
+      }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const provider = new GooglePatentsProvider()
+    const results = await provider.search(request({
+      queryPlan: {
+        ...request().queryPlan,
+        patentSearchConceptGroups: [
+          { id: 'core', terms: ['thermal battery controller'], required: true },
+          { id: 'mechanism', terms: ['very rare mechanism phrase'], required: true },
+        ],
+        searchPrecision: 'refined',
+      },
+    }))
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const refinedQuery = new URL(fetchMock.mock.calls[0][0]).searchParams.get('q') || ''
+    const broadQuery = new URL(fetchMock.mock.calls[1][0]).searchParams.get('q') || ''
+    expect(refinedQuery).toContain(' AND ')
+    expect(broadQuery).not.toBe(refinedQuery)
+    expect(results).toHaveLength(1)
+    expect(results[0].publicationNumber).toBe('US20220123456A1')
+  })
 })

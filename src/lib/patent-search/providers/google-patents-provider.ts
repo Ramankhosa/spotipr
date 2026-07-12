@@ -155,9 +155,11 @@ function normalizeGooglePatentsResult(result: any, index: number): NormalizedPat
   const publicationNumber = publicationNumberFromResult(result)
   if (!publicationNumber) return null
 
+  // Prefer the full abstract when SerpApi returns one; the snippet is a 1-2
+  // sentence fragment and starves downstream title/abstract analysis.
   const abstract = normalizeWhitespace(
-    result.snippet ||
     result.abstract ||
+    result.snippet ||
     result.description ||
     result.summary ||
     ''
@@ -246,70 +248,100 @@ export class GooglePatentsProvider implements PatentSearchProvider {
 
     const filters = request.queryPlan.fieldFilters || {}
     const maxResults = clampLimit(request.limit, 50, 100)
-    const query = buildGooglePatentsQueryForTests(request)
-    if (!query) return []
-
-    const params = new URLSearchParams({
-      engine: 'google_patents',
-      q: query,
-      api_key: apiKey,
-      hl: 'en',
-      no_cache: 'false',
-      patents: 'true',
-      scholar: 'false',
-      num: String(Math.min(Math.max(10, maxResults), 100)),
-      dups: 'language',
-    })
     const after = dateParam(filters.publicationDateFrom || filters.filingDateFrom, filters.publicationDateFrom ? 'publication' : 'filing')
     const before = dateParam(filters.publicationDateTo || filters.filingDateTo, filters.publicationDateTo ? 'publication' : 'filing')
     const sort = sortParam(request.sort)
-    if (after) params.set('after', after)
-    if (before) params.set('before', before)
-    if (sort) params.set('sort', sort)
 
-    console.info('[GooglePatentsProvider]', JSON.stringify({
-      event: 'serpapi_request',
-      endpoint: SERPAPI_ENDPOINT,
-      engine: 'google_patents',
-      query,
-      maxResults,
-      after: after || undefined,
-      before: before || undefined,
-      sort,
-    }))
+    const executeQuery = async (query: string, attempt: 'primary' | 'broad_fallback'): Promise<NormalizedPatentResult[]> => {
+      const params = new URLSearchParams({
+        engine: 'google_patents',
+        q: query,
+        api_key: apiKey,
+        hl: 'en',
+        no_cache: 'false',
+        patents: 'true',
+        scholar: 'false',
+        num: String(Math.min(Math.max(10, maxResults), 100)),
+        dups: 'language',
+      })
+      if (after) params.set('after', after)
+      if (before) params.set('before', before)
+      if (sort) params.set('sort', sort)
 
-    await enforceSerpApiRateLimit()
-    const response = await fetchWithProviderTimeout(`${SERPAPI_ENDPOINT}?${params.toString()}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      cache: 'no-store',
-    }, {
-      providerId: GOOGLE_PATENTS_PROVIDER_ID,
-      operation: 'serpapi_search',
-      timeoutMs: providerTimeoutMs(GOOGLE_PATENTS_PROVIDER_ID, 20_000),
-      graceMs: providerTimeoutGraceMs(GOOGLE_PATENTS_PROVIDER_ID),
-    })
+      console.info('[GooglePatentsProvider]', JSON.stringify({
+        event: 'serpapi_request',
+        endpoint: SERPAPI_ENDPOINT,
+        engine: 'google_patents',
+        attempt,
+        query,
+        maxResults,
+        after: after || undefined,
+        before: before || undefined,
+        sort,
+      }))
 
-    const json = await response.json().catch(() => ({}))
-    if (!response.ok || json?.error) {
-      if (response.status === 401 || response.status === 403) throw new Error('Google Patents authentication failed - check SerpApi key.')
-      if (response.status === 429) throw new Error('Google Patents SerpApi rate limit exceeded.')
-      throw new Error(json?.error || `Google Patents request failed (HTTP ${response.status})`)
+      await enforceSerpApiRateLimit()
+      const response = await fetchWithProviderTimeout(`${SERPAPI_ENDPOINT}?${params.toString()}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      }, {
+        providerId: GOOGLE_PATENTS_PROVIDER_ID,
+        operation: 'serpapi_search',
+        timeoutMs: providerTimeoutMs(GOOGLE_PATENTS_PROVIDER_ID, 20_000),
+        graceMs: providerTimeoutGraceMs(GOOGLE_PATENTS_PROVIDER_ID),
+      })
+
+      const json = await response.json().catch(() => ({}))
+      if (!response.ok || json?.error) {
+        if (response.status === 401 || response.status === 403) throw new Error('Google Patents authentication failed - check SerpApi key.')
+        if (response.status === 429) throw new Error('Google Patents SerpApi rate limit exceeded.')
+        throw new Error(json?.error || `Google Patents request failed (HTTP ${response.status})`)
+      }
+
+      const results = Array.isArray(json?.organic_results) ? json.organic_results : []
+      const normalizedResults = results
+        .map((result: any, index: number) => normalizeGooglePatentsResult(result, index))
+        .filter((result: NormalizedPatentResult | null): result is NormalizedPatentResult => Boolean(result))
+        .slice(0, maxResults)
+      console.info('[GooglePatentsProvider]', JSON.stringify({
+        event: 'serpapi_response',
+        status: response.status,
+        attempt,
+        rawResultCount: results.length,
+        resultCount: normalizedResults.length,
+        durationMs: Date.now() - startedAt,
+        samplePublicationNumbers: normalizedResults.slice(0, 5).map((result: NormalizedPatentResult) => result.publicationNumber),
+      }))
+      return normalizedResults
     }
 
-    const results = Array.isArray(json?.organic_results) ? json.organic_results : []
-    const normalizedResults = results
-      .map((result: any, index: number) => normalizeGooglePatentsResult(result, index))
-      .filter((result: NormalizedPatentResult | null): result is NormalizedPatentResult => Boolean(result))
-      .slice(0, maxResults)
-    console.info('[GooglePatentsProvider]', JSON.stringify({
-      event: 'serpapi_response',
-      status: response.status,
-      rawResultCount: results.length,
-      resultCount: normalizedResults.length,
-      durationMs: Date.now() - startedAt,
-      samplePublicationNumbers: normalizedResults.slice(0, 5).map((result: NormalizedPatentResult) => result.publicationNumber),
-    }))
-    return normalizedResults
+    const primaryQuery = buildGooglePatentsQueryForTests(request)
+    if (!primaryQuery) return []
+    const primaryResults = await executeQuery(primaryQuery, 'primary')
+
+    // A refined AND-of-concept-groups query can over-constrain to zero hits.
+    // Fall back once to the broad OR form so precision never costs total recall.
+    if (
+      primaryResults.length === 0 &&
+      request.searchMode !== 'manual' &&
+      request.queryPlan.searchPrecision === 'refined' &&
+      (request.queryPlan.patentSearchConceptGroups || []).some(group => !group?.excluded)
+    ) {
+      const broadQuery = buildGooglePatentsQueryForTests({
+        ...request,
+        queryPlan: { ...request.queryPlan, searchPrecision: 'broad' },
+      })
+      if (broadQuery && broadQuery !== primaryQuery) {
+        console.info('[GooglePatentsProvider]', JSON.stringify({
+          event: 'refined_query_empty_broad_fallback',
+          primaryQuery,
+          broadQuery,
+        }))
+        return executeQuery(broadQuery, 'broad_fallback')
+      }
+    }
+
+    return primaryResults
   }
 }

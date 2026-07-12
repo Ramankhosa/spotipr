@@ -8,7 +8,7 @@ import { trackServiceUsage } from './service-usage-tracker';
 import { checkServiceAccess } from './org-access-service';
 import { sendEmail } from './mailer';
 import crypto from 'crypto';
-import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
+import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchConceptGroup, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
 import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
   literatureSearchService,
@@ -207,6 +207,13 @@ OUTPUT JSON SHAPE:
     }
   ],
   "search_exclusions": ["term that should not dominate search"],
+  "google_concept_groups": [
+    {
+      "label": "short group label",
+      "terms": ["2-5 interchangeable technical phrasings of ONE concept"],
+      "required": true
+    }
+  ],
   "confidence": 0.0,
   "warnings": ["coverage or ambiguity warning"]
 }
@@ -301,6 +308,17 @@ CLASSIFICATION:
 SEARCH EXCLUSIONS:
 - search_exclusions should contain incidental, business-oriented, user-context, brand, marketing, or overly narrow embodiment terms that may pull irrelevant references or suppress close prior art.
 - Do not exclude a term if it is necessary to identify the technical category of the invention.
+
+GOOGLE PATENTS CONCEPT GROUPS (field: "google_concept_groups"):
+- These drive a boolean Google Patents query of the form (group1 term OR synonyms) AND (group2 term OR synonyms).
+- Return 2-3 groups. Each group is ONE concept expressed as 2-5 interchangeable technical phrasings a patent drafter might use.
+- Group 1: the technical object/system/composition/process category (broad, REQUIRED).
+- Group 2: the core operating mechanism, transformation, or control relationship (REQUIRED).
+- Group 3 (optional): the most distinctive narrowing mechanism; set "required": false so it can widen instead of exclude.
+- Terms must be 1-5 words, plain text. No boolean operators, wildcards, quotes, parentheses, or punctuation inside terms.
+- Include domain synonyms and patent-style vocabulary variants (e.g. "dissolvable microneedle", "soluble microneedle array").
+- Do not put two different concepts in the same group; do not repeat the same concept across groups.
+- Groups must stay recall-safe: a close prior-art patent lacking the newest improvement should still match groups 1 and 2.
 
 CONFIDENCE AND WARNINGS:
 - confidence reflects disclosure sufficiency for novelty search, not patentability.
@@ -1137,6 +1155,7 @@ export interface NormalizedIdea {
   architecturalInnovation?: string;
   claimConcepts?: ClaimConcept[];
   searchExclusions?: string[];
+  googleConceptGroups?: PatentSearchConceptGroup[];
   confidence?: number;
   warnings?: string[];
   queryPlan?: any;
@@ -3940,6 +3959,9 @@ RESPONSE:`;
           ? normalizedData.claim_concepts
           : (Array.isArray(normalizedData?.claimConcepts) ? normalizedData.claimConcepts : []),
         searchExclusions: Array.isArray(normalizedData?.search_exclusions) ? normalizedData.search_exclusions.filter(Boolean) : [],
+        googleConceptGroups: this.normalizeGoogleConceptGroups(
+          normalizedData?.google_concept_groups ?? normalizedData?.googleConceptGroups
+        ),
         confidence: typeof normalizedData?.confidence === 'number' ? normalizedData.confidence : undefined,
         warnings: Array.isArray(normalizedData?.warnings) ? normalizedData.warnings.filter(Boolean) : []
       };
@@ -4016,6 +4038,18 @@ RESPONSE:`;
       const stage0EpoCombinedKeywords = includeEpoKeywords ? this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords) : [];
       const stage0SearchExclusions = Array.isArray(stage0Data.searchExclusions) ? stage0Data.searchExclusions.filter(Boolean) : [];
       const stage1Filters = withStage0Exclusions(config.searchSource?.filters || {}, stage0SearchExclusions);
+      // Google Patents boolean concept groups from Stage 0. Exclusions ride along as an
+      // excluded group so the Google query builder emits -"term" clauses (previously the
+      // Stage 0 exclusions never reached Google at all).
+      const stage0ConceptGroups: PatentSearchConceptGroup[] = [
+        ...this.normalizeGoogleConceptGroups(stage0Data.googleConceptGroups),
+        ...(stage0SearchExclusions.length
+          ? [{ label: 'stage0-exclusions', terms: stage0SearchExclusions.slice(0, 4), excluded: true } as PatentSearchConceptGroup]
+          : []),
+      ];
+      // Two or more required groups → precise (A1 OR A2) AND (B1 OR B2) query.
+      // Fewer → leave precision unset so the builder keeps its broad OR behavior.
+      const stage0RequiredGroupCount = stage0ConceptGroups.filter(group => !group.excluded && group.required !== false).length;
       const stage0QueryPlan: Partial<PatentSearchQueryPlan> | undefined = searchMode === 'manual'
         ? undefined
         : {
@@ -4031,6 +4065,10 @@ RESPONSE:`;
           cpcCodes: stage0CpcCodes,
           ipcCodes: stage0IpcCodes,
           classificationHints: Array.from(new Set([...stage0CpcCodes, ...stage0IpcCodes])),
+          ...(stage0ConceptGroups.length ? {
+            patentSearchConceptGroups: stage0ConceptGroups,
+            ...(stage0RequiredGroupCount >= 2 ? { searchPrecision: 'refined' as const } : {}),
+          } : {}),
           ...(includeEpoKeywords ? {
             epoTitleKeywords: stage0EpoTitleKeywords,
             epoAbstractKeywords: stage0EpoAbstractKeywords,
@@ -4520,6 +4558,39 @@ RESPONSE:`;
     return Math.round(Math.max(0, Math.min(1, scaled)) * 100) / 100;
   }
 
+  /**
+   * Normalize LLM-supplied Google Patents concept groups into the shape the
+   * Google Patents boolean query builder consumes. Strips boolean syntax,
+   * bounds group/term counts, and drops empty groups.
+   */
+  private normalizeGoogleConceptGroups(value: unknown, maxGroups = 4, maxTerms = 5): PatentSearchConceptGroup[] {
+    if (!Array.isArray(value)) return [];
+    const groups: PatentSearchConceptGroup[] = [];
+    for (const raw of value) {
+      if (!raw || typeof raw !== 'object') continue;
+      const terms = (Array.isArray((raw as any).terms) ? (raw as any).terms : [])
+        .map((term: unknown) => String(term || '')
+          .replace(/["()*?]/g, ' ')      // strip boolean/query syntax the builder rejects
+          .replace(/\s+/g, ' ')
+          .trim())
+        .filter((term: string) => {
+          const words = term.split(/\s+/).filter(Boolean).length;
+          return term.length >= 3 && term.length <= 120 && words >= 1 && words <= 6;
+        })
+        .slice(0, maxTerms);
+      if (!terms.length) continue;
+      const label = this.normalizeStage0Scalar((raw as any).label || '', 80);
+      groups.push({
+        ...(label ? { label } : {}),
+        terms: Array.from(new Set(terms)),
+        required: (raw as any).required !== false,
+        excluded: (raw as any).excluded === true,
+      });
+      if (groups.length >= maxGroups) break;
+    }
+    return groups;
+  }
+
   private normalizeEpoKeywordList(value: unknown, maxItems = 8): string[] {
     const values = Array.isArray(value)
       ? value.flatMap(item => String(item || '').split(/[,;\n]/))
@@ -4732,6 +4803,9 @@ RESPONSE:`;
         })(),
       } : {}),
       architecturalInnovation: this.normalizeStage0Scalar((stage0Data as any).architecturalInnovation ?? (stage0Data as any).architectural_innovation ?? '', 500),
+      googleConceptGroups: this.normalizeGoogleConceptGroups(
+        (stage0Data as any).googleConceptGroups ?? (stage0Data as any).google_concept_groups
+      ),
       claimConcepts: this.normalizeClaimConcepts(conceptSource, features, warnings),
       noveltyFocusInteractions: this.normalizeNoveltyFocusInteractions(interactionSource, features, warnings),
       noveltyFocus: Array.isArray(stage0Data.noveltyFocus)

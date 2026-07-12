@@ -47,8 +47,9 @@ function normalizePqaiResult(result: any): NormalizedPatentResult {
     result.patent_id ||
     result.id ||
     'Unknown'
-  const abstract = result.snippet ||
-    result.abstract ||
+  // Prefer the full abstract over the snippet fragment for downstream analysis.
+  const abstract = result.abstract ||
+    result.snippet ||
     result.description ||
     result.abstract_text ||
     result.abstractText ||

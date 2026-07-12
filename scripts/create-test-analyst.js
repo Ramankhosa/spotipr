@@ -55,6 +55,25 @@ async function createTestAnalyst() {
       console.log('✅ Assigned FREE_PLAN to tenant')
     }
 
+    // Create ATI token for the tenant (required by auth middleware)
+    console.log('🔑 Setting up ATI token...')
+    const crypto = require('crypto')
+    const tokenHash = crypto.createHash('sha256').update('test-analyst-ati-token').digest('hex')
+    const atiToken = await prisma.aTIToken.upsert({
+      where: { id: 'test-analyst-ati-token-id' },
+      update: { status: 'ACTIVE' },
+      create: {
+        id: 'test-analyst-ati-token-id',
+        tenantId: testTenant.id,
+        tokenHash,
+        fingerprint: 'test-analyst-fingerprint',
+        status: 'ACTIVE',
+        tokenType: 'MANUAL',
+        assignedRole: 'ANALYST'
+      }
+    })
+    console.log('✅ ATI token ready')
+
     // Create the test analyst user
     console.log('👤 Creating test analyst user...')
     const testUser = await prisma.user.upsert({
@@ -62,16 +81,18 @@ async function createTestAnalyst() {
       update: {
         passwordHash,
         name: testName,
-        role: 'ANALYST',
-        status: 'ACTIVE'
+        roles: ['ANALYST'],
+        status: 'ACTIVE',
+        signupAtiTokenId: atiToken.id
       },
       create: {
         email: testEmail,
         passwordHash,
         name: testName,
-        role: 'ANALYST',
+        roles: ['ANALYST'],
         tenantId: testTenant.id,
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        signupAtiTokenId: atiToken.id
       }
     })
 
