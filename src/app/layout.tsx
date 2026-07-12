@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import localFont from 'next/font/local'
 import { Providers } from '@/components/providers'
 import Header from '@/components/Header'
+import AppShell from '@/components/AppShell'
 import './globals.css'
 
 // Configure Inter and Cormorant Garamond fonts with fallbacks for offline development
@@ -44,10 +45,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} ${cormorant.variable} bg-gpt-gray-50 min-h-screen`}>
+      <body className={`${inter.className} ${inter.variable} ${cormorant.variable} bg-gpt-gray-50 min-h-screen`}>
         <Providers>
           <Header />
-          {children}
+          <AppShell>
+            {children}
+          </AppShell>
         </Providers>
       </body>
     </html>
