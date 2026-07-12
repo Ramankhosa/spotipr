@@ -161,6 +161,62 @@ function NewPatentDraftPageContent() {
   const [allowRefine, setAllowRefine] = useState<boolean>(true)
 
   // ============================================================================
+  // WIZARD STATE — three steps with per-field validation
+  // ============================================================================
+  const WIZARD_STEPS = ['Your invention', 'Jurisdictions & languages', 'Review & create'] as const
+  type WizardStep = 1 | 2 | 3
+  const [step, setStep] = useState<WizardStep>(1)
+  const [fieldErrors, setFieldErrors] = useState<{
+    project?: string
+    title?: string
+    rawIdea?: string
+    jurisdictions?: string
+  }>({})
+
+  const clearFieldError = (field: 'project' | 'title' | 'rawIdea' | 'jurisdictions') => {
+    setFieldErrors(prev => (prev[field] ? { ...prev, [field]: undefined } : prev))
+  }
+
+  const titleWordCount = patentTitle.trim() ? patentTitle.trim().split(/\s+/).length : 0
+
+  const validateInventionStep = () => {
+    const errors: typeof fieldErrors = {}
+    if (!selectedProject) errors.project = 'Choose a project to store this draft.'
+    if (!patentTitle.trim()) {
+      errors.title = 'Title is required.'
+    } else if (titleWordCount > 15) {
+      errors.title = `Keep the title to 15 words or fewer — currently ${titleWordCount}.`
+    }
+    if (!rawIdea.trim()) {
+      errors.rawIdea = 'Describe your invention or upload a file.'
+    } else if (rawIdea.length > MAX_DRAFTING_INPUT_CHARS) {
+      errors.rawIdea = `Description exceeds the ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} character limit.`
+    }
+    setFieldErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  const validateJurisdictionStep = () => {
+    const finalSelection = mode === 'single' ? selectedCodes.slice(0, 1) : selectedCodes
+    if (finalSelection.length === 0) {
+      setFieldErrors({ jurisdictions: 'Select at least one jurisdiction.' })
+      return false
+    }
+    setFieldErrors({})
+    return true
+  }
+
+  const goToStep = (target: WizardStep) => {
+    setStep(target)
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleContinue = () => {
+    if (step === 1 && validateInventionStep()) goToStep(2)
+    else if (step === 2 && validateJurisdictionStep()) goToStep(3)
+  }
+
+  // ============================================================================
   // LANGUAGE CONFIGURATION STATE
   // ============================================================================
   // Language Mode:
@@ -755,6 +811,37 @@ function NewPatentDraftPageContent() {
     return null
   }
 
+  // A draft must live in a project — show a clear path instead of a disabled form.
+  if (projects.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="max-w-3xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center text-gray-600 hover:text-gray-900 mb-4"
+          >
+            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to Dashboard
+          </Link>
+          <div className="bg-white rounded-lg shadow-sm p-10 text-center">
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Create a project first</h1>
+            <p className="text-gray-600 mb-6">
+              Every patent draft is stored in a project. Create one and you&apos;ll come straight back here.
+            </p>
+            <Link
+              href="/projects/new"
+              className="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
+            >
+              Create a project
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Stage0PatentIntelligenceOverlay
@@ -786,17 +873,57 @@ function NewPatentDraftPageContent() {
             Back to Dashboard
           </Link>
           <div className="text-center">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Start Patent Drafting</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Start a patent draft</h1>
             <p className="text-lg text-gray-600">
-              Enter your invention details and let AI create a complete patent draft
+              Describe your invention — the AI drafts the application with you, stage by stage
             </p>
             <Link
               href="/patents/draft/batch"
-              className="mt-3 inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
+              className="mt-3 inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
             >
               Upload a batch instead
             </Link>
           </div>
+
+          {/* Stepper */}
+          <nav aria-label="Progress" className="mt-8">
+            <ol className="flex items-center justify-center gap-2 sm:gap-3">
+              {WIZARD_STEPS.map((label, index) => {
+                const stepNumber = (index + 1) as WizardStep
+                const isCurrent = step === stepNumber
+                const isDone = step > stepNumber
+                return (
+                  <li key={label} className="flex items-center gap-2 sm:gap-3">
+                    {index > 0 && (
+                      <span aria-hidden="true" className={`h-px w-6 sm:w-12 ${step > index ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { if (isDone) goToStep(stepNumber) }}
+                      disabled={!isDone}
+                      aria-current={isCurrent ? 'step' : undefined}
+                      className={`flex items-center gap-2 rounded-full py-1 pr-2 sm:pr-3 text-sm transition-colors ${isDone ? 'cursor-pointer hover:text-indigo-700' : 'cursor-default'}`}
+                    >
+                      <span
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                          isCurrent
+                            ? 'bg-indigo-600 text-white'
+                            : isDone
+                              ? 'bg-indigo-100 text-indigo-700'
+                              : 'bg-gray-200 text-gray-500'
+                        }`}
+                      >
+                        {isDone ? <Check className="h-3.5 w-3.5" /> : stepNumber}
+                      </span>
+                      <span className={`hidden sm:inline font-medium ${isCurrent ? 'text-gray-900' : isDone ? 'text-indigo-700' : 'text-gray-400'}`}>
+                        {label}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ol>
+          </nav>
         </div>
 
         {/* Main Form */}
@@ -841,8 +968,10 @@ function NewPatentDraftPageContent() {
           )}
 
           <div className="space-y-6">
+            {step === 2 && (
+            <>
             {/* Jurisdiction Selection */}
-            <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+            <div className={`border rounded-lg p-4 bg-gray-50 ${fieldErrors.jurisdictions ? 'border-red-300' : 'border-gray-200'}`}>
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <div className="text-sm font-semibold text-gray-900">Jurisdiction & Mode</div>
@@ -875,6 +1004,7 @@ function NewPatentDraftPageContent() {
                         className="mt-1 h-4 w-4 text-indigo-600 border-gray-300 rounded"
                         checked={selectedCodes.includes(c.code)}
                         onChange={() => {
+                          clearFieldError('jurisdictions')
                           if (mode === 'single') {
                             setSelectedCodes([c.code])
                           } else {
@@ -890,6 +1020,9 @@ function NewPatentDraftPageContent() {
                     </label>
                   ))}
                 </div>
+              )}
+              {fieldErrors.jurisdictions && (
+                <p className="text-sm text-red-600 mt-2">{fieldErrors.jurisdictions}</p>
               )}
               <p className="text-xs text-gray-500 mt-2">
                 Your chosen active jurisdiction will drive figures and validation; you can generate other jurisdictions later.
@@ -1102,7 +1235,11 @@ function NewPatentDraftPageContent() {
                 </div>
               )}
             </div>
+            </>
+            )}
 
+            {step === 1 && (
+            <>
             {/* Project Display / Selector */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1129,9 +1266,12 @@ function NewPatentDraftPageContent() {
               ) : (
                 <div className="space-y-2">
                   <select
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${fieldErrors.project ? 'border-red-300' : 'border-gray-300'}`}
                     value={selectedProject}
-                    onChange={(e) => setSelectedProject(e.target.value)}
+                    onChange={(e) => {
+                      clearFieldError('project')
+                      setSelectedProject(e.target.value)
+                    }}
                   >
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
@@ -1139,6 +1279,9 @@ function NewPatentDraftPageContent() {
                       </option>
                     ))}
                   </select>
+                  {fieldErrors.project && (
+                    <p className="text-sm text-red-600">{fieldErrors.project}</p>
+                  )}
                   <p className="text-xs text-gray-500">
                     Choose a project to store this draft. Select “Default Project” for quick drafts.
                   </p>
@@ -1155,13 +1298,20 @@ function NewPatentDraftPageContent() {
                 type="text"
                 id="title"
                 value={patentTitle}
-                onChange={(e) => setPatentTitle(e.target.value)}
+                onChange={(e) => {
+                  clearFieldError('title')
+                  setPatentTitle(e.target.value)
+                }}
                 placeholder="Enter a descriptive title for your patent"
-                className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className={`w-full px-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${fieldErrors.title ? 'border-red-300' : 'border-gray-300'}`}
+                aria-invalid={fieldErrors.title ? true : undefined}
                 required
               />
-              <p className="mt-1 text-sm text-gray-500">
-                {patentTitle.trim().split(/\s+/).length} words (max 15) • This will be the title of your patent application
+              {fieldErrors.title && (
+                <p className="mt-1 text-sm text-red-600">{fieldErrors.title}</p>
+              )}
+              <p className={`mt-1 text-sm ${titleWordCount > 15 ? 'text-red-600' : 'text-gray-500'}`}>
+                {titleWordCount} of 15 words • This will be the title of your patent application
               </p>
             </div>
             {/* Invention Description */}
@@ -1172,16 +1322,23 @@ function NewPatentDraftPageContent() {
               <textarea
                 id="description"
                 value={rawIdea}
-                onChange={(e) => setRawIdea(e.target.value)}
+                onChange={(e) => {
+                  clearFieldError('rawIdea')
+                  setRawIdea(e.target.value)
+                }}
                 rows={8}
                 placeholder="Describe your invention in detail. Include the problem it solves, how it works, key components, advantages, and any specific embodiments..."
-                className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-vertical"
+                className={`w-full px-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-vertical ${fieldErrors.rawIdea ? 'border-red-300' : 'border-gray-300'}`}
+                aria-invalid={fieldErrors.rawIdea ? true : undefined}
                 required
               />
+              {fieldErrors.rawIdea && (
+                <p className="mt-1 text-sm text-red-600">{fieldErrors.rawIdea}</p>
+              )}
               <p className={`mt-1 text-sm ${rawIdea.length > MAX_DRAFTING_INPUT_CHARS ? 'text-red-600' : rawIdea.length > DRAFTING_INPUT_WARNING_CHARS ? 'text-orange-600' : 'text-gray-500'}`}>
-                {rawIdea.length} characters (max {MAX_DRAFTING_INPUT_CHARS.toLocaleString()})
-                {rawIdea.length > DRAFTING_INPUT_WARNING_CHARS && rawIdea.length <= MAX_DRAFTING_INPUT_CHARS && ' - Approaching limit'}
-                {rawIdea.length > MAX_DRAFTING_INPUT_CHARS && ' - Exceeds limit!'}
+                {rawIdea.length.toLocaleString()} of {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters
+                {rawIdea.length > DRAFTING_INPUT_WARNING_CHARS && rawIdea.length <= MAX_DRAFTING_INPUT_CHARS && ' — approaching the limit'}
+                {rawIdea.length > MAX_DRAFTING_INPUT_CHARS && ' — over the limit'}
               </p>
               {/* Experimental Data Notice */}
               <div className="mt-3 flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md">
@@ -1219,8 +1376,8 @@ function NewPatentDraftPageContent() {
                   Extracted text from {uploadedFileName} and loaded it into the description.
                 </p>
               )}
-              <p className="mt-1 text-xs text-blue-600">
-                Tip: Uploading a file replaces any text you&apos;ve entered above
+              <p className="mt-1 text-xs text-amber-700">
+                Note: uploading a file will replace the description text above.
               </p>
             </div>
 
@@ -1311,40 +1468,175 @@ function NewPatentDraftPageContent() {
               </div>
             )}
 
-            {/* Action Buttons */}
-            <div className="flex flex-col gap-3 pt-6 border-t border-gray-200">
-              <div className="flex flex-wrap items-center gap-4 text-sm text-gray-700">
-                <span className="font-medium text-gray-900">Idea handling:</span>
-                <label className="inline-flex items-center gap-2">
+            {/* Idea handling — a prominent choice, no longer buried in the footer */}
+            <div className="pt-2">
+              <div className="text-sm font-medium text-gray-900 mb-1">How should the AI treat your text?</div>
+              <p className="text-xs text-gray-500 mb-3">This controls how your idea is processed before drafting begins.</p>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <label
+                  className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                    allowRefine ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                  }`}
+                >
                   <input
                     type="radio"
-                    className="h-4 w-4"
+                    className="mt-1 h-4 w-4 text-indigo-600"
                     checked={allowRefine === true}
                     onChange={() => setAllowRefine(true)}
                   />
-                  Structure and polish my idea without adding technical facts
+                  <span>
+                    <span className="block text-sm font-medium text-gray-900">Structure and polish</span>
+                    <span className="block text-xs text-gray-600 mt-0.5">
+                      Organize and refine your wording without adding technical facts. Recommended.
+                    </span>
+                  </span>
                 </label>
-                <label className="inline-flex items-center gap-2">
+                <label
+                  className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                    !allowRefine ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                  }`}
+                >
                   <input
                     type="radio"
-                    className="h-4 w-4"
+                    className="mt-1 h-4 w-4 text-indigo-600"
                     checked={allowRefine === false}
                     onChange={() => setAllowRefine(false)}
                   />
-                  Keep exactly what I provided
+                  <span>
+                    <span className="block text-sm font-medium text-gray-900">Keep exactly what I provided</span>
+                    <span className="block text-xs text-gray-600 mt-0.5">
+                      Use your text as-is, word for word.
+                    </span>
+                  </span>
                 </label>
               </div>
+            </div>
+            </>
+            )}
 
-              <div className="flex justify-end space-x-4">
+            {/* Review & create (step 3) */}
+            {step === 3 && (
+              <div className="space-y-4">
+                <div className="rounded-lg border border-gray-200 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">Your invention</h3>
+                    <button
+                      type="button"
+                      onClick={() => goToStep(1)}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-500"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                  <dl className="space-y-2 text-sm">
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Project</dt>
+                      <dd className="text-gray-900">{selectedProjectObj?.name || '—'}</dd>
+                    </div>
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Title</dt>
+                      <dd className="text-gray-900">{patentTitle || '—'}</dd>
+                    </div>
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Description</dt>
+                      <dd className="text-gray-900">
+                        {rawIdea.length.toLocaleString()} characters
+                        {uploadedFileName ? ` · extracted from ${uploadedFileName}` : ''}
+                      </dd>
+                    </div>
+                    {extractedImages.length > 0 && (
+                      <div className="flex gap-3">
+                        <dt className="w-32 shrink-0 text-gray-500">Figures</dt>
+                        <dd className="text-gray-900">
+                          {selectedExtractedImages.length} extracted image{selectedExtractedImages.length === 1 ? '' : 's'} will be attached
+                        </dd>
+                      </div>
+                    )}
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Idea handling</dt>
+                      <dd className="text-gray-900">
+                        {allowRefine ? 'Structure and polish (no new technical facts)' : 'Keep exactly as provided'}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div className="rounded-lg border border-gray-200 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">Jurisdictions & languages</h3>
+                    <button
+                      type="button"
+                      onClick={() => goToStep(2)}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-500"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                  <dl className="space-y-2 text-sm">
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Jurisdictions</dt>
+                      <dd className="text-gray-900">
+                        {(mode === 'single' ? selectedCodes.slice(0, 1) : selectedCodes)
+                          .map(code => availableCountries.find(c => c.code === code)?.label || code)
+                          .join(', ') || '—'}
+                      </dd>
+                    </div>
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Language</dt>
+                      <dd className="text-gray-900">
+                        {languageMode === 'common'
+                          ? `Common — ${LANGUAGE_LABELS[commonLanguage] || commonLanguage}`
+                          : 'Per jurisdiction (figures in English)'}
+                      </dd>
+                    </div>
+                    <div className="flex gap-3">
+                      <dt className="w-32 shrink-0 text-gray-500">Figures</dt>
+                      <dd className="text-gray-900">{LANGUAGE_LABELS[figuresLanguage] || figuresLanguage}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <p className="text-xs text-gray-500">
+                  Creating the draft runs Stage 0 analysis on your idea. You can review and edit everything in the later drafting stages.
+                </p>
+              </div>
+            )}
+
+            {/* Footer navigation */}
+            <div className="flex items-center justify-between gap-4 pt-6 border-t border-gray-200">
+              {step === 1 ? (
                 <Link
                   href="/dashboard"
                   className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
                 >
                   Cancel
                 </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => goToStep((step - 1) as WizardStep)}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                >
+                  Back
+                </button>
+              )}
+
+              {step < 3 ? (
+                <button
+                  type="button"
+                  onClick={handleContinue}
+                  disabled={isFileProcessing}
+                  className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Continue
+                  <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              ) : (
                 <button
                   onClick={handleCreateDraft}
-                  disabled={isCreating || isFileProcessing || !selectedProject || !patentTitle.trim()}
+                  disabled={isCreating || isFileProcessing}
                   className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCreating ? (
@@ -1357,29 +1649,15 @@ function NewPatentDraftPageContent() {
                       <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                       </svg>
-                      Initiate Patent Drafting
+                      Start drafting
                     </>
                   )}
                 </button>
-              </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Projects List */}
-        {projects.length === 0 && (
-          <div className="mt-8 text-center">
-            <p className="text-gray-600 mb-4">
-              You need to create a project first before starting patent drafting.
-            </p>
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
-            >
-              Create Project
-            </Link>
-          </div>
-        )}
       </div>
     </div>
   )
