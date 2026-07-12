@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 
 interface TeamInfo {
   id: string
@@ -42,6 +43,7 @@ const ROLE_COLORS: Record<string, string> = {
 
 export default function TenantAdminUsersPage() {
   const { user: authUser, token } = useAuth()
+  const { toast } = useToast()
   const [users, setUsers] = useState<User[]>([])
   const [tenant, setTenant] = useState<{ id: string; name: string; type: string } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -102,7 +104,7 @@ export default function TenantAdminUsersPage() {
       setNewRole('')
       fetchUsers()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to change role')
+      toast({ title: err instanceof Error ? err.message : 'Failed to change role', variant: 'error' })
     } finally {
       setSaving(false)
     }
@@ -128,7 +130,7 @@ export default function TenantAdminUsersPage() {
       
       fetchUsers()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to change status')
+      toast({ title: err instanceof Error ? err.message : 'Failed to change status', variant: 'error' })
     }
   }
 
@@ -154,7 +156,7 @@ export default function TenantAdminUsersPage() {
 
       fetchUsers()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update email')
+      toast({ title: err instanceof Error ? err.message : 'Failed to update email', variant: 'error' })
     }
   }
 
@@ -181,7 +183,7 @@ export default function TenantAdminUsersPage() {
 
       fetchUsers()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update email drafting access')
+      toast({ title: err instanceof Error ? err.message : 'Failed to update email drafting access', variant: 'error' })
     }
   }
 
@@ -203,10 +205,10 @@ export default function TenantAdminUsersPage() {
         throw new Error(data.error || 'Failed to resend verification email')
       }
 
-      alert(data.message || 'Verification email sent successfully')
+      toast({ title: data.message || 'Verification email sent successfully', variant: 'success' })
       fetchUsers()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to resend verification email')
+      toast({ title: err instanceof Error ? err.message : 'Failed to resend verification email', variant: 'error' })
     }
   }
 

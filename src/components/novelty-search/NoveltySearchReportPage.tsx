@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '../ui/button';
+import { useToast } from '../ui/toast';
 import { Printer } from 'lucide-react';
 
 interface NoveltySearchReportPageProps {
@@ -15,6 +16,7 @@ export default function NoveltySearchReportPage({
   searchData,
   title = 'Preliminary Novelty Assessment Report'
 }: NoveltySearchReportPageProps) {
+  const { toast } = useToast();
   const reportRef = useRef<HTMLDivElement>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [patentDetailsMap, setPatentDetailsMap] = useState<Record<string, any>>({});
@@ -182,7 +184,7 @@ export default function NoveltySearchReportPage({
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Professional PDF download failed:', error);
-      alert('Professional PDF generation failed. Please try again.');
+      toast({ title: 'Professional PDF generation failed. Please try again.', variant: 'error' });
     } finally {
       setIsDownloadingPdf(false);
     }

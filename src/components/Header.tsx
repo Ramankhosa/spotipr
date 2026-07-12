@@ -6,12 +6,14 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useTenantView } from '@/lib/tenant-view-context'
 import AnimatedLogo from '@/components/ui/animated-logo'
+import { useToast } from '@/components/ui/toast'
 import { Settings, FileText, Lightbulb } from 'lucide-react'
 
 export default function Header() {
   const { user, logout, isLoading } = useAuth()
   const { viewMode, setViewMode } = useTenantView()
   const router = useRouter()
+  const { toast } = useToast()
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isSendingReset, setIsSendingReset] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -105,10 +107,10 @@ export default function Header() {
       })
       if (!res.ok) throw new Error('Failed to request reset')
       closeMenu()
-      alert('Password reset link sent to ' + user.email)
+      toast({ title: 'Password reset link sent to ' + user.email, variant: 'success' })
     } catch (e) {
       console.error('Reset request failed', e)
-      alert('Could not send reset email. Please try again.')
+      toast({ title: 'Could not send reset email. Please try again.', variant: 'error' })
     } finally {
       setIsSendingReset(false)
     }

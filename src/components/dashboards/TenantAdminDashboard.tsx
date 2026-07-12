@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useTenantView } from '@/lib/tenant-view-context'
+import { useToast } from '@/components/ui/toast'
 import UserDashboard from './UserDashboard'
 
 interface ATIToken {
@@ -48,6 +49,7 @@ interface SignupUser {
 export default function TenantAdminDashboard() {
   const { user, logout } = useAuth()
   const { viewMode, setViewMode } = useTenantView()
+  const { toast } = useToast()
 
   // All hooks must be declared before any conditional returns
   const [tokens, setTokens] = useState<ATIToken[]>([])
@@ -146,11 +148,11 @@ export default function TenantAdminDashboard() {
         setTimeout(() => setCreatedToken(null), 30000)
       } else {
         const error = await response.json()
-        alert(error.message || 'Failed to create token')
+        toast({ title: error.message || 'Failed to create token', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to create token:', error)
-      alert('Failed to create token')
+      toast({ title: 'Failed to create token', variant: 'error' })
     } finally {
       setIsCreating(false)
     }
@@ -172,11 +174,11 @@ export default function TenantAdminDashboard() {
       if (response.ok) {
         fetchTokens()
       } else {
-        alert('Failed to revoke token')
+        toast({ title: 'Failed to revoke token', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to revoke token:', error)
-      alert('Failed to revoke token')
+      toast({ title: 'Failed to revoke token', variant: 'error' })
     }
   }
 
@@ -221,11 +223,11 @@ export default function TenantAdminDashboard() {
         fetchTokens()
       } else {
         const error = await response.json()
-        alert(error.message || 'Failed to update token')
+        toast({ title: error.message || 'Failed to update token', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to update token:', error)
-      alert('Failed to update token')
+      toast({ title: 'Failed to update token', variant: 'error' })
     } finally {
       setIsUpdating(false)
     }
@@ -337,7 +339,7 @@ export default function TenantAdminDashboard() {
 
       await fetchTokenUsers(selectedTokenId)
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to update user status')
+      toast({ title: error instanceof Error ? error.message : 'Failed to update user status', variant: 'error' })
     }
   }
 

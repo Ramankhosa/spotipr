@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 
 interface ATIToken {
   id: string
@@ -43,6 +44,7 @@ interface SignupUser {
 
 export default function SuperAdminATIDashboard() {
   const { user, logout } = useAuth()
+  const { toast } = useToast()
   const [tokens, setTokens] = useState<ATIToken[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -132,11 +134,11 @@ export default function SuperAdminATIDashboard() {
         fetchTokens()
       } else {
         const error = await response.json()
-        alert(error.message || 'Failed to update token')
+        toast({ title: error.message || 'Failed to update token', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to update token:', error)
-      alert('Failed to update token')
+      toast({ title: 'Failed to update token', variant: 'error' })
     } finally {
       setIsUpdating(false)
     }
@@ -158,11 +160,11 @@ export default function SuperAdminATIDashboard() {
       if (response.ok) {
         fetchTokens()
       } else {
-        alert('Failed to revoke token')
+        toast({ title: 'Failed to revoke token', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to revoke token:', error)
-      alert('Failed to revoke token')
+      toast({ title: 'Failed to revoke token', variant: 'error' })
     }
   }
 
@@ -233,7 +235,7 @@ export default function SuperAdminATIDashboard() {
 
       await fetchTokenUsers(selectedTokenId)
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to update user status')
+      toast({ title: error instanceof Error ? error.message : 'Failed to update user status', variant: 'error' })
     }
   }
 

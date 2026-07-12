@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 
@@ -24,6 +25,7 @@ interface Project {
 
 export default function ProjectSetupPage() {
   const { user, isLoading: authLoading } = useAuth()
+  const { toast } = useToast()
   const router = useRouter()
   const params = useParams()
   const projectId = params?.projectId as string
@@ -89,11 +91,11 @@ export default function ProjectSetupPage() {
       } else {
         const error = await response.text()
         console.error('Failed to add collaborator:', error)
-        alert('Failed to add collaborator. Please check the user ID or email address.')
+        toast({ title: 'Failed to add collaborator', description: 'Please check the user ID or email address.', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to add collaborator:', error)
-      alert('Failed to add collaborator.')
+      toast({ title: 'Failed to add collaborator.', variant: 'error' })
     } finally {
       setIsAddingCollaborator(false)
     }
@@ -115,11 +117,11 @@ export default function ProjectSetupPage() {
         setProject(data.project)
       } else {
         console.error('Failed to remove collaborator')
-        alert('Failed to remove collaborator.')
+        toast({ title: 'Failed to remove collaborator.', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to remove collaborator:', error)
-      alert('Failed to remove collaborator.')
+      toast({ title: 'Failed to remove collaborator.', variant: 'error' })
     }
   }
 

@@ -52,6 +52,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { useToast } from '@/components/ui/toast'
 
 // Import custom nodes
 import SeedNode from './nodes/SeedNode'
@@ -221,6 +222,8 @@ function mapStatusToStage(status: string): SessionStage {
 }
 
 export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }: IdeationWorkspaceProps) {
+  const { toast } = useToast()
+
   // Session state
   const [sessions, setSessions] = useState<any[]>([])
   const [currentSession, setCurrentSession] = useState<IdeationSession | null>(null)
@@ -1468,7 +1471,7 @@ export default function IdeationWorkspace({ onExportToBank, onRunNoveltySearch }
         const suggestionsNote = selectedSuggestions && Object.keys(selectedSuggestions).length > 0
           ? ' (including selected improvement directions)'
           : ''
-        alert(`Successfully exported ${data.exportedCount} idea(s) to Idea Bank${suggestionsNote}!`)
+        toast({ title: `Successfully exported ${data.exportedCount} idea(s) to Idea Bank${suggestionsNote}!`, variant: 'success' })
         onExportToBank()
       }
     } catch (e) {

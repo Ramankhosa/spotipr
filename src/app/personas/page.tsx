@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 import { DEFAULT_LIMITS, SECTION_WORD_LIMITS } from '@/lib/writing-sample-limits'
 import Link from 'next/link'
 
@@ -98,6 +99,7 @@ function WordCountIndicator({ text, sectionKey }: { text: string; sectionKey: st
 
 export default function PersonasPage() {
   const { token, user } = useAuth()
+  const { toast } = useToast()
   const [myPersonas, setMyPersonas] = useState<Persona[]>([])
   const [orgPersonas, setOrgPersonas] = useState<Persona[]>([])
   const [loading, setLoading] = useState(true)
@@ -248,7 +250,7 @@ export default function PersonasPage() {
       setNewVisibility('PRIVATE')
       fetchPersonas()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create persona')
+      toast({ title: err instanceof Error ? err.message : 'Failed to create persona', variant: 'error' })
     } finally {
       setSaving(false)
     }
@@ -265,7 +267,7 @@ export default function PersonasPage() {
   const handleDeletePersona = async () => {
     if (!personaToDelete || !token) return
     if (deleteConfirmText.toLowerCase() !== 'delete') {
-      alert('Please type "delete" to confirm')
+      toast({ title: 'Please type "delete" to confirm' })
       return
     }
 
@@ -290,7 +292,7 @@ export default function PersonasPage() {
       setDeleteConfirmText('')
       fetchPersonas()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete persona')
+      toast({ title: err instanceof Error ? err.message : 'Failed to delete persona', variant: 'error' })
     }
   }
   
@@ -329,7 +331,7 @@ export default function PersonasPage() {
       setShowDeleteJurisdictionModal(false)
       setJurisdictionToDelete(null)
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete samples')
+      toast({ title: err instanceof Error ? err.message : 'Failed to delete samples', variant: 'error' })
     }
   }
 
@@ -358,11 +360,11 @@ export default function PersonasPage() {
       if (!res.ok) {
         // Handle specific error codes
         if (data.code === 'ORG_PERSONA_READONLY') {
-          alert('You cannot edit samples in organization personas you did not create.\n\nTo customize this persona, click "Copy" to create your own version.')
+          toast({ title: 'You cannot edit samples in organization personas you did not create', description: 'To customize this persona, click "Copy" to create your own version.', variant: 'warning' })
           return
         }
         if (data.code === 'PERSONA_NOT_FOUND') {
-          alert('This persona was not found or you no longer have access to it. Please refresh the page.')
+          toast({ title: 'This persona was not found or you no longer have access to it', description: 'Please refresh the page.', variant: 'error' })
           return
         }
         
@@ -385,7 +387,7 @@ export default function PersonasPage() {
       fetchSamples(editingPersona.id)
       fetchPersonas() // Update sample counts
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to save sample')
+      toast({ title: err instanceof Error ? err.message : 'Failed to save sample', variant: 'error' })
     } finally {
       setSaving(false)
     }

@@ -12,6 +12,7 @@ import PersonaManager, { type PersonaSelection } from './PersonaManager'
 // REMOVED: InlineSectionValidator - validation now handled by AI Review only
 import type { ValidationIssue as UnifiedValidationIssue } from '@/types/validation'
 import { isDrawingSectionKey } from '@/lib/figure-availability'
+import { useToast } from '@/components/ui/toast'
 
 // ============================================================================
 // AI Review Issue Type
@@ -251,6 +252,7 @@ function ValidationPanel({
   onProceedToExport,
   onAIIssuesChange 
 }: ValidationPanelProps) {
+  const { toast } = useToast()
   // ============================================================================
   // Celebration Messages - Shown when user achieves 100 score
   // Varies by day of week and time of day to avoid repetition
@@ -473,11 +475,11 @@ function ValidationPanel({
           recommendation: 'AI Review is a Pro feature. Upgrade your plan to access AI-powered patent review with comprehensive analysis of claims consistency, diagram alignment, and legal compliance.'
         })
       } else {
-        alert(`AI Review failed: ${data.error || 'Unknown error'}`)
+        toast({ title: 'AI Review failed', description: data.error || 'Unknown error', variant: 'error' })
       }
     } catch (err) {
       console.error('AI review error:', err)
-      alert('Failed to run AI review. Please try again.')
+      toast({ title: 'Failed to run AI review', description: 'Please try again.', variant: 'error' })
     } finally {
       setAiLoading(false)
     }
@@ -525,13 +527,13 @@ function ValidationPanel({
           fixedContent: data.fixedContent
         })
       } else if (data.upgradeRequired) {
-        alert('AI Fix is a Pro feature. Please upgrade your plan to apply AI-suggested fixes automatically.')
+        toast({ title: 'AI Fix is a Pro feature', description: 'Please upgrade your plan to apply AI-suggested fixes automatically.', variant: 'warning' })
       } else {
-        alert(`Failed to generate fix: ${data.error || 'Unknown error'}`)
+        toast({ title: 'Failed to generate fix', description: data.error || 'Unknown error', variant: 'error' })
       }
     } catch (err) {
       console.error('Generate fix preview error:', err)
-      alert('Failed to generate fix preview. Please try again.')
+      toast({ title: 'Failed to generate fix preview', description: 'Please try again.', variant: 'error' })
     } finally {
       setFixingIssue(null)
     }
@@ -1529,19 +1531,20 @@ interface ExportButtonProps {
 }
 
 function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportButtonProps) {
+  const { toast } = useToast()
   const [exporting, setExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState<'docx' | 'pdf'>('docx')
   const [showSuccess, setShowSuccess] = useState(false)
 
   const handleExport = async () => {
     if (!sessionId || !jurisdiction || !patentId) {
-      alert('Missing required information for export. Please ensure you have a valid session and jurisdiction.')
+      toast({ title: 'Missing required information for export', description: 'Please ensure you have a valid session and jurisdiction.', variant: 'warning' })
       return
     }
     
     // Check for unsupported format
     if (exportFormat === 'pdf') {
-      alert('📋 PDF export is coming soon!\n\nPlease use MS Word (.docx) format for now.')
+      toast({ title: 'PDF export is coming soon!', description: 'Please use MS Word (.docx) format for now.' })
       return
     }
     
@@ -1570,7 +1573,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
         } catch {
           errorMsg = `Server error (${res.status})`
         }
-        alert(`❌ Export failed: ${errorMsg}`)
+        toast({ title: 'Export failed', description: errorMsg, variant: 'error' })
         return
       }
 
@@ -1579,7 +1582,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       if (!contentType?.includes('application/vnd.openxmlformats')) {
         // Might be an error response
         const errorText = await res.text()
-        alert(`❌ Export failed: Invalid response format. ${errorText.substring(0, 100)}`)
+        toast({ title: 'Export failed', description: `Invalid response format. ${errorText.substring(0, 100)}`, variant: 'error' })
         return
       }
 
@@ -1599,7 +1602,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       setTimeout(() => setShowSuccess(false), 3000)
     } catch (err) {
       console.error('Export error:', err)
-      alert(`❌ Export failed: ${err instanceof Error ? err.message : 'Network error'}. Please check your connection and try again.`)
+      toast({ title: 'Export failed', description: `${err instanceof Error ? err.message : 'Network error'}. Please check your connection and try again.`, variant: 'error' })
     } finally {
       setExporting(false)
     }
@@ -1699,6 +1702,7 @@ const fallbackSections: SectionConfig[] = [
 ]
 
 export default function AnnexureDraftStage({ session, patent, onComplete, onRefresh }: AnnexureDraftStageProps) {
+  const { toast } = useToast()
   const figuresSkipped = !!session?.figuresSkipped
   const [generated, setGenerated] = useState<Record<string, string>>({})
   const [debugSteps, setDebugSteps] = useState<any[]>([])
@@ -2300,7 +2304,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       await persistPersonaConfig(true, personaSelection)
     } catch (error) {
       console.error('Failed to update persona style:', error)
-      alert(error instanceof Error ? error.message : 'Failed to update persona style.')
+      toast({ title: error instanceof Error ? error.message : 'Failed to update persona style.', variant: 'error' })
     }
   }
 
@@ -2591,14 +2595,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     // Validate non-empty data
     const trimmedData = ddUserData.trim()
     if (!trimmedData) {
-      alert('User data cannot be empty. Please enter some data or delete the existing record.')
+      toast({ title: 'User data cannot be empty', description: 'Please enter some data or delete the existing record.', variant: 'warning' })
       return
     }
     
     // Check size limit
     const dataSize = new TextEncoder().encode(trimmedData).length
     if (dataSize > DD_USER_DATA_MAX_SIZE) {
-      alert(`User data exceeds maximum size of ${DD_USER_DATA_MAX_SIZE / 1024}KB (current: ${Math.round(dataSize / 1024)}KB)`)
+      toast({ title: `User data exceeds maximum size of ${DD_USER_DATA_MAX_SIZE / 1024}KB (current: ${Math.round(dataSize / 1024)}KB)`, variant: 'warning' })
       return
     }
     
@@ -2619,7 +2623,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       })
       if (!res.ok) {
         const err = await res.json()
-        alert(err.error || 'Failed to save user data')
+        toast({ title: err.error || 'Failed to save user data', variant: 'error' })
       } else {
         // Update local state with trimmed data
         setDdUserData(trimmedData)
@@ -2630,7 +2634,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       }
     } catch (err) {
       console.error('Failed to save DD user data:', err)
-      alert('Failed to save user data')
+      toast({ title: 'Failed to save user data', variant: 'error' })
     } finally {
       setDdUserDataSaving(false)
     }
@@ -2709,7 +2713,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       })
       const data = await res.json()
       if (!res.ok) {
-        alert(data.error || 'Failed to save Detailed Description evidence controls')
+        toast({ title: data.error || 'Failed to save Detailed Description evidence controls', variant: 'error' })
         return
       }
       setDdEvidencePreview(data.evidencePreview || null)
@@ -2717,7 +2721,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       setTimeout(() => setDdUserDataSaved(false), 2500)
     } catch (err) {
       console.error('Failed to save DD evidence controls:', err)
-      alert('Failed to save Detailed Description evidence controls')
+      toast({ title: 'Failed to save Detailed Description evidence controls', variant: 'error' })
     } finally {
       setDdEvidenceSaving(false)
     }
@@ -2812,7 +2816,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     if (!ddEvidenceEditingSourceId) return
     const text = ddEvidenceEditDraft.trim()
     if (!text) {
-      alert('Injected text override cannot be empty. Use Reset to original instead.')
+      toast({ title: 'Injected text override cannot be empty', description: 'Use Reset to original instead.', variant: 'warning' })
       return
     }
     void patchDDEvidenceControls({
@@ -3069,18 +3073,18 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       const data = await res.json()
       if (!res.ok) {
         console.error('Reference draft generation failed:', data.error)
-        alert(`❌ Failed to generate reference draft: ${data.error || 'Unknown error'}`)
+        toast({ title: 'Failed to generate reference draft', description: data.error || 'Unknown error', variant: 'error' })
         return
       }
       // Refresh to get updated session with reference draft
       await onRefresh()
       if (data.draft) {
         setGenerated(data.draft)
-        alert('✅ Reference draft generated successfully!\n\nYou can now translate to other jurisdictions.')
+        toast({ title: 'Reference draft generated successfully!', description: 'You can now translate to other jurisdictions.', variant: 'success' })
       }
     } catch (err) {
       console.error('Reference draft generation error:', err)
-      alert(`❌ Failed to generate reference draft: ${err instanceof Error ? err.message : 'Network error'}`)
+      toast({ title: 'Failed to generate reference draft', description: err instanceof Error ? err.message : 'Network error', variant: 'error' })
     } finally {
       setGeneratingReference(false)
     }
@@ -3093,7 +3097,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     
     // Validate jurisdiction exists in available list
     if (!availableJurisdictions.includes(code) && code !== 'REFERENCE') {
-      alert(`Invalid jurisdiction: ${code}. Please select a valid jurisdiction.`)
+      toast({ title: `Invalid jurisdiction: ${code}`, description: 'Please select a valid jurisdiction.', variant: 'warning' })
       return
     }
     
@@ -3115,7 +3119,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       const data = await res.json()
       if (!res.ok) {
         console.error('Translation failed:', data.error)
-        alert(`❌ Translation failed for ${code}: ${data.error || 'Unknown error'}`)
+        toast({ title: `Translation failed for ${code}`, description: data.error || 'Unknown error', variant: 'error' })
         return
       }
       
@@ -3128,23 +3132,23 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       await onRefresh()
       
       // Build comprehensive success message
-      let message = `✅ Translation to ${code} complete!`
-      
+      let message = ''
+
       // Add fallback warning if applicable
       if (data.warning) {
-        message += `\n\n⚠️ ${data.warning}`
+        message += `${data.warning}`
       }
-      
+
       // Add validation issues if any
       if (data.validation?.issues?.length > 0) {
         const errorCount = data.validation.issues.filter((i: any) => i.type === 'error').length
         const warnCount = data.validation.issues.filter((i: any) => i.type === 'warning').length
         if (errorCount > 0 || warnCount > 0) {
-          message += `\n\n📋 Validation Report:\n• ${errorCount} error(s)\n• ${warnCount} warning(s)\n\nPlease review the Validation section.`
+          message += `${message ? ' ' : ''}Validation Report: ${errorCount} error(s), ${warnCount} warning(s). Please review the Validation section.`
         }
       }
-      
-      alert(message)
+
+      toast({ title: `Translation to ${code} complete!`, description: message || undefined, variant: 'success' })
       
       // Switch to translated jurisdiction
       if (data.draft) {
@@ -3153,7 +3157,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       }
     } catch (err) {
       console.error('Translation error:', err)
-      alert(`❌ Translation failed: ${err instanceof Error ? err.message : 'Network error'}. Please try again.`)
+      toast({ title: 'Translation failed', description: `${err instanceof Error ? err.message : 'Network error'}. Please try again.`, variant: 'error' })
     } finally {
       setTranslating(null)
     }
@@ -3169,7 +3173,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     // Check if component numbers are available (handles nested referenceMap storage)
     const components = extractComponentsFromReferenceMap((session as any)?.referenceMap)
     if (components.length === 0) {
-      alert('No component numbers available. Please finalize components in the Component Planner stage first.')
+      toast({ title: 'No component numbers available', description: 'Please finalize components in the Component Planner stage first.', variant: 'warning' })
       return
     }
     
@@ -3177,7 +3181,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
     // This automatically uses either refined claims or preliminary claims
     const claimsContent = generated?.claims || ''
     if (!claimsContent.trim()) {
-      alert('No claims content available. Claims must be present before adding component numbers.')
+      toast({ title: 'No claims content available', description: 'Claims must be present before adding component numbers.', variant: 'warning' })
       return
     }
     
@@ -3215,11 +3219,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         
         // Show success with details about what was done
         const draftNote = data.draftUpdated ? ' Draft saved.' : ''
-        alert(`✅ Successfully added reference numerals from ${data.componentsUsed} components!${draftNote}`)
+        toast({ title: `Successfully added reference numerals from ${data.componentsUsed} components!${draftNote}`, variant: 'success' })
       }
     } catch (err) {
       console.error('Add component numbers error:', err)
-      alert(`❌ Failed to add component numbers: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      toast({ title: 'Failed to add component numbers', description: err instanceof Error ? err.message : 'Unknown error', variant: 'error' })
     } finally {
       setAddingComponentNumbers(false)
     }
@@ -3301,7 +3305,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       }
     } catch (error) {
       console.error('Generation failed:', error)
-      alert(`Generation failed: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again or contact support if the issue persists.`)
+      toast({ title: 'Generation failed', description: `${error instanceof Error ? error.message : 'Unknown error'}. Please try again or contact support if the issue persists.`, variant: 'error' })
       setDebugSteps([{ step: 'error', status: 'fail', meta: { error: error instanceof Error ? error.message : String(error) } }])
     } finally {
       setLoading(false)
@@ -3495,31 +3499,32 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       
       // Show appropriate message based on outcome
       if (autoModeCancelledRef.current) {
-        alert(`⏹ Auto-generation stopped.\n\n${successCount} of ${pendingSections.length} section(s) were generated and saved.`)
+        toast({ title: 'Auto-generation stopped', description: `${successCount} of ${pendingSections.length} section(s) were generated and saved.` })
       } else if (failedSection) {
-        alert(
-          `❌ Auto-generation stopped due to error.\n\n` +
-          `Failed section: ${failedSection}\n` +
-          `Error: ${failedError}\n\n` +
-          `${successCount} of ${pendingSections.length} section(s) were generated before the error.`
-        )
+        toast({
+          title: 'Auto-generation stopped due to error',
+          description: `Failed section: ${failedSection}. Error: ${failedError}. ` +
+            `${successCount} of ${pendingSections.length} section(s) were generated before the error.`,
+          variant: 'error'
+        })
       } else {
         // Success - show different message based on jurisdiction
         if (successCount > 0) {
           if (isReference) {
-            alert(
-              `✅ Reference Draft Complete!\n\n` +
-              `${successCount} section(s) have been generated and saved.\n\n` +
-              `🔓 Other jurisdictions (${availableJurisdictions.join(', ')}) are now unlocked for translation.`
-            )
+            toast({
+              title: 'Reference Draft Complete!',
+              description: `${successCount} section(s) have been generated and saved. ` +
+                `Other jurisdictions (${availableJurisdictions.join(', ')}) are now unlocked for translation.`,
+              variant: 'success'
+            })
           } else {
-            alert(`✅ Auto-generation complete!\n\n${successCount} section(s) have been generated and saved.`)
+            toast({ title: 'Auto-generation complete!', description: `${successCount} section(s) have been generated and saved.`, variant: 'success' })
           }
         }
       }
     } catch (error) {
       console.error('[AutoMode] Unexpected error:', error)
-      alert(`Auto-generation failed unexpectedly: ${error instanceof Error ? error.message : 'Unknown error'}\n\n${successCount} section(s) were generated before the error.`)
+      toast({ title: 'Auto-generation failed unexpectedly', description: `${error instanceof Error ? error.message : 'Unknown error'}. ${successCount} section(s) were generated before the error.`, variant: 'error' })
     } finally {
       setAutoModeRunning(false)
       setAutoModeProgress(null)
@@ -3541,7 +3546,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       .filter(key => key && !generated?.[key]?.trim())
 
     if (pendingSections.length === 0) {
-      alert('All sections already have content. Use the regenerate option to update individual sections.')
+      toast({ title: 'All sections already have content', description: 'Use the regenerate option to update individual sections.' })
       return
     }
 
@@ -3601,7 +3606,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       if (editingKey === key) setEditingKey(null)
     } catch (error) {
       if (previousValue) setGenerated(prev => ({ ...prev, [key]: previousValue }))
-      alert(`Failed to delete section: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      toast({ title: 'Failed to delete section', description: error instanceof Error ? error.message : 'Unknown error', variant: 'error' })
     }
   }
 
@@ -3685,7 +3690,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       setRegenRemarks(prev => ({ ...prev, [key]: '' }))
     } catch (error) {
       console.error('Regeneration failed:', error)
-      alert(`Regeneration failed: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again or contact support if the issue persists.`)
+      toast({ title: 'Regeneration failed', description: `${error instanceof Error ? error.message : 'Unknown error'}. Please try again or contact support if the issue persists.`, variant: 'error' })
       setDebugSteps([{ step: 'error', status: 'fail', meta: { error: error instanceof Error ? error.message : String(error) } }])
     } finally {
       setSectionLoading(prev => ({ ...prev, [key]: false }))
@@ -3807,7 +3812,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                       setConfirmationModal({ isOpen: false, type: 'clear', jurisdiction: '', inputValue: '' })
                     } catch (error) {
                       console.error('Action failed:', error)
-                      alert(`Failed to ${confirmationModal.type} draft. Please try again.`)
+                      toast({ title: `Failed to ${confirmationModal.type} draft`, description: 'Please try again.', variant: 'error' })
                     }
                   }
                 }}
@@ -5613,7 +5618,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 }
               } catch (error) {
                 console.error('Failed to save persona selection:', error)
-                alert(error instanceof Error ? error.message : 'Failed to save persona selection.')
+                toast({ title: error instanceof Error ? error.message : 'Failed to save persona selection.', variant: 'error' })
               }
             })()
           }}

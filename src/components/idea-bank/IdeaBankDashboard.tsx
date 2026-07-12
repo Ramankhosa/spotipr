@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { useToast } from '@/components/ui/toast'
 import { FileSpreadsheet } from 'lucide-react'
 import IdeaCard from './IdeaCard'
 import IdeaListItem from './IdeaListItem'
@@ -38,6 +39,7 @@ type LayoutType = 'tile' | 'list'
 export default function IdeaBankDashboard() {
   const { user } = useAuth()
   const router = useRouter()
+  const { toast } = useToast()
   const [ideas, setIdeas] = useState<IdeaBankIdeaWithDetails[]>([])
   const [stats, setStats] = useState<IdeaBankStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -148,7 +150,11 @@ export default function IdeaBankDashboard() {
         setTotalPages(0)
         setHasMore(false)
         if (page === 1) {
-          alert('You do not have access to the Idea Bank feature. Please contact your administrator to upgrade your plan.')
+          toast({
+            title: 'You do not have access to the Idea Bank feature',
+            description: 'Please contact your administrator to upgrade your plan.',
+            variant: 'warning'
+          })
         }
       }
     } catch (error) {
@@ -161,7 +167,7 @@ export default function IdeaBankDashboard() {
         setIsRefreshing(false)
       }
     }
-  }, [filters, pageSize])
+  }, [filters, pageSize, toast])
 
   // Load initial data
   useEffect(() => {
@@ -241,14 +247,14 @@ export default function IdeaBankDashboard() {
         loadStats() // Refresh stats
       } else if (response.status === 403) {
         // This shouldn't happen since creating ideas doesn't require subscription
-        alert('Failed to create idea. Please try again.')
+        toast({ title: 'Failed to create idea', description: 'Please try again.', variant: 'error' })
       } else {
         const errorData = await response.json()
-        alert(errorData.details || 'Failed to create idea')
+        toast({ title: errorData.details || 'Failed to create idea', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to create idea:', error)
-      alert('Failed to create idea. Please try again.')
+      toast({ title: 'Failed to create idea', description: 'Please try again.', variant: 'error' })
     } finally {
       setCreatingIdea(false)
     }
@@ -279,14 +285,14 @@ export default function IdeaBankDashboard() {
         ))
         loadStats() // Refresh stats
       } else if (response.status === 403) {
-        alert('You do not have permission to reserve ideas. Please upgrade your plan.')
+        toast({ title: 'You do not have permission to reserve ideas', description: 'Please upgrade your plan.', variant: 'warning' })
       } else {
         const errorData = await response.json()
-        alert(errorData.details || 'Failed to reserve idea')
+        toast({ title: errorData.details || 'Failed to reserve idea', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to reserve idea:', error)
-      alert('Failed to reserve idea. Please try again.')
+      toast({ title: 'Failed to reserve idea', description: 'Please try again.', variant: 'error' })
     }
   }
 
@@ -310,11 +316,11 @@ export default function IdeaBankDashboard() {
         loadStats() // Refresh stats
       } else {
         const errorData = await response.json()
-        alert(errorData.details || 'Failed to release reservation')
+        toast({ title: errorData.details || 'Failed to release reservation', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to release reservation:', error)
-      alert('Failed to release reservation. Please try again.')
+      toast({ title: 'Failed to release reservation', description: 'Please try again.', variant: 'error' })
     }
   }
 
@@ -354,13 +360,13 @@ export default function IdeaBankDashboard() {
   const handleSendToSearch = (ideaId: string) => {
     const idea = ideas.find(i => i.id === ideaId)
     if (!idea) {
-      alert('Idea not found')
+      toast({ title: 'Idea not found', variant: 'error' })
       return
     }
-    
+
     // Verify the idea is reserved by current user
     if (!idea._isReservedByCurrentUser) {
-      alert('You must reserve this idea before sending it to novelty search')
+      toast({ title: 'You must reserve this idea before sending it to novelty search', variant: 'warning' })
       return
     }
     
@@ -378,13 +384,13 @@ export default function IdeaBankDashboard() {
   const handleSendToDrafting = (ideaId: string) => {
     const idea = ideas.find(i => i.id === ideaId)
     if (!idea) {
-      alert('Idea not found')
+      toast({ title: 'Idea not found', variant: 'error' })
       return
     }
-    
+
     // Verify the idea is reserved by current user
     if (!idea._isReservedByCurrentUser) {
-      alert('You must reserve this idea before sending it to drafting')
+      toast({ title: 'You must reserve this idea before sending it to drafting', variant: 'warning' })
       return
     }
     
@@ -415,7 +421,7 @@ export default function IdeaBankDashboard() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        alert(errorData.details || errorData.error || 'Failed to export ideas')
+        toast({ title: errorData.details || errorData.error || 'Failed to export ideas', variant: 'error' })
         return
       }
 
@@ -439,14 +445,15 @@ export default function IdeaBankDashboard() {
       window.URL.revokeObjectURL(url)
 
       if (truncated) {
-        alert(
-          `Export capped at ${exportLimit || exportCount} ideas out of ${totalCount || exportCount}. ` +
-          'Refine your filters to export fewer ideas.'
-        )
+        toast({
+          title: `Export capped at ${exportLimit || exportCount} ideas out of ${totalCount || exportCount}`,
+          description: 'Refine your filters to export fewer ideas.',
+          variant: 'warning'
+        })
       }
     } catch (error) {
       console.error('Failed to export ideas:', error)
-      alert('Failed to export ideas. Please try again.')
+      toast({ title: 'Failed to export ideas', description: 'Please try again.', variant: 'error' })
     } finally {
       setExportLoading(false)
     }

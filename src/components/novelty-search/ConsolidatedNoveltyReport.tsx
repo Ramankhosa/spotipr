@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { buildNoveltyAttorneyReportModel } from '@/lib/novelty-attorney-report';
 import { useAuth } from '@/lib/auth-context';
+import { useToast } from '@/components/ui/toast';
 import { Copy, Download, Mail, MessageCircle, Share2, X } from 'lucide-react';
 
 const printStyles = `
@@ -499,6 +500,7 @@ function Cell({ children, className = '', ...props }: React.TdHTMLAttributes<HTM
 
 export default function ConsolidatedNoveltyReport({ searchId, searchData, readOnly = false }: ConsolidatedNoveltyReportProps) {
   const { authFetch } = useAuth();
+  const { toast } = useToast();
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [isGeneratingShare, setIsGeneratingShare] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -609,7 +611,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Professional PDF download error:', err);
-      alert('Professional PDF generation failed. Please try again.');
+      toast({ title: 'Professional PDF generation failed', description: 'Please try again.', variant: 'error' });
     } finally {
       setIsDownloadingPdf(false);
     }
@@ -634,7 +636,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       }
     } catch (err) {
       console.error('Share link generation error:', err);
-      alert('Failed to generate share link. Please try again.');
+      toast({ title: 'Failed to generate share link', description: 'Please try again.', variant: 'error' });
     } finally {
       setIsGeneratingShare(false);
     }
@@ -644,9 +646,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
     if (!shareUrl) return;
     try {
       await navigator.clipboard.writeText(shareUrl);
-      alert('Share link copied to clipboard.');
+      toast({ title: 'Share link copied to clipboard.', variant: 'success' });
     } catch {
-      alert('Failed to copy to clipboard. Please copy the link manually.');
+      toast({ title: 'Failed to copy to clipboard', description: 'Please copy the link manually.', variant: 'error' });
     }
   };
 

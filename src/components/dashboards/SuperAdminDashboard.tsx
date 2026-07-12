@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 
 interface Tenant {
   id: string
@@ -31,6 +32,7 @@ interface NavGroup {
 export default function SuperAdminDashboard() {
   const { user, logout } = useAuth()
   const router = useRouter()
+  const { toast } = useToast()
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showCreateTenant, setShowCreateTenant] = useState(false)
@@ -110,7 +112,7 @@ export default function SuperAdminDashboard() {
   const handleCreateTenant = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newTenant.name.trim() || !newTenant.atiId.trim()) {
-      alert('Please fill in all fields')
+      toast({ title: 'Please fill in all fields' })
       return
     }
 
@@ -180,11 +182,11 @@ export default function SuperAdminDashboard() {
           setShowSuccessModal(true)
         }
       } else {
-        alert(data.message || 'Failed to create tenant')
+        toast({ title: data.message || 'Failed to create tenant', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to create tenant:', error)
-      alert('Failed to create tenant')
+      toast({ title: 'Failed to create tenant', variant: 'error' })
     } finally {
       setIsCreating(false)
     }
@@ -218,11 +220,11 @@ export default function SuperAdminDashboard() {
         const data = await response.json()
         setNotificationStatus(data)
       } else {
-        alert('Failed to check expiry notifications')
+        toast({ title: 'Failed to check expiry notifications', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to check expiry notifications:', error)
-      alert('Failed to check expiry notifications')
+      toast({ title: 'Failed to check expiry notifications', variant: 'error' })
     }
   }
 
@@ -241,15 +243,15 @@ export default function SuperAdminDashboard() {
       })
 
       if (response.ok) {
-        alert('Expiry notifications sent successfully!')
+        toast({ title: 'Expiry notifications sent successfully!', variant: 'success' })
         await checkExpiryNotifications()
       } else {
         const error = await response.json()
-        alert(error.message || 'Failed to send expiry notifications')
+        toast({ title: error.message || 'Failed to send expiry notifications', variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to trigger expiry notifications:', error)
-      alert('Failed to trigger expiry notifications')
+      toast({ title: 'Failed to trigger expiry notifications', variant: 'error' })
     } finally {
       setIsCheckingNotifications(false)
     }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 
 interface Persona {
   id: string
@@ -39,6 +40,7 @@ export default function PersonaManager({
   showSelector = false
 }: PersonaManagerProps) {
   const { token, user } = useAuth()
+  const { toast } = useToast()
   const [myPersonas, setMyPersonas] = useState<Persona[]>([])
   const [orgPersonas, setOrgPersonas] = useState<Persona[]>([])
   const [loading, setLoading] = useState(true)
@@ -119,7 +121,7 @@ export default function PersonaManager({
       setNewVisibility('PRIVATE')
       fetchPersonas()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create persona')
+      toast({ title: err instanceof Error ? err.message : 'Failed to create persona', variant: 'error' })
     } finally {
       setSaving(false)
     }
@@ -142,7 +144,7 @@ export default function PersonaManager({
 
       fetchPersonas()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete persona')
+      toast({ title: err instanceof Error ? err.message : 'Failed to delete persona', variant: 'error' })
     }
   }
 
@@ -173,7 +175,7 @@ export default function PersonaManager({
       setCopyName('')
       fetchPersonas()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to copy persona')
+      toast({ title: err instanceof Error ? err.message : 'Failed to copy persona', variant: 'error' })
     } finally {
       setSaving(false)
     }

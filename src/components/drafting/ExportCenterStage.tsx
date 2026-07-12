@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
+import { useToast } from '@/components/ui/toast'
 
 // Country-specific paragraph numbering format display
 const NUMBERING_FORMATS: Record<string, string> = {
@@ -21,6 +22,7 @@ interface ExportCenterStageProps {
 }
 
 export default function ExportCenterStage({ session, patent, onComplete, onRefresh }: ExportCenterStageProps) {
+  const { toast } = useToast()
   const [issues, setIssues] = useState<string[]>([])
   const [wordLimitIssues, setWordLimitIssues] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -130,7 +132,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
       })
       if (!res.ok) {
         const data = await res.json().catch(()=>({ error: 'Export failed' }))
-        alert(data?.error || 'Export failed')
+        toast({ title: data?.error || 'Export failed', variant: 'error' })
         setShowExportModal(false)
         setExporting(false)
         return
@@ -148,7 +150,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
       window.URL.revokeObjectURL(url)
       setShowExportModal(false)
     } catch (e) {
-      alert('Export failed')
+      toast({ title: 'Export failed', variant: 'error' })
       setShowExportModal(false)
     } finally {
       setExporting(false)

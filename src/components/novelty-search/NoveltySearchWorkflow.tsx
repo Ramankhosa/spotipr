@@ -13,6 +13,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
 import { Alert, AlertDescription } from '../ui/alert';
+import { useToast } from '../ui/toast';
 import { 
   Loader2, 
   Search, 
@@ -436,6 +437,7 @@ export default function NoveltySearchWorkflow({
   ideaId,
   executionMode
 }: NoveltySearchWorkflowProps) {
+  const { toast } = useToast();
   const [activeSearchPath, setActiveSearchPath] = useState<NoveltySearchPath>(
     initialSearchId || initialTitle || initialDescription ? 'intelligent' : 'manual'
   );
@@ -830,7 +832,7 @@ export default function NoveltySearchWorkflow({
   const openIpIndiaForPatentNumbers = useCallback(async (patentNumbers: string[]) => {
     const searchUrl = buildIpIndiaSearchUrl(patentNumbers);
     if (!searchUrl) {
-      window.alert('No valid Indian patent application numbers are available for IP India search.');
+      toast({ title: 'No valid Indian patent application numbers are available for IP India search.' });
       return;
     }
 

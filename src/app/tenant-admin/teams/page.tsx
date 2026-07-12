@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 
 interface TeamMember {
   id: string
@@ -72,6 +73,7 @@ const SERVICE_LABELS: Record<string, string> = {
 
 export default function TenantAdminTeamsPage() {
   const { user: authUser, token } = useAuth()
+  const { toast } = useToast()
   const [teams, setTeams] = useState<Team[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -137,7 +139,7 @@ export default function TenantAdminTeamsPage() {
       setNewTeamIsDefault(false)
       fetchTeams()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create team')
+      toast({ title: err instanceof Error ? err.message : 'Failed to create team', variant: 'error' })
     } finally {
       setSaving(false)
     }
@@ -160,7 +162,7 @@ export default function TenantAdminTeamsPage() {
       
       fetchTeams()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to delete team')
+      toast({ title: err instanceof Error ? err.message : 'Failed to delete team', variant: 'error' })
     }
   }
 
@@ -188,7 +190,7 @@ export default function TenantAdminTeamsPage() {
       
       fetchTeams()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update service access')
+      toast({ title: err instanceof Error ? err.message : 'Failed to update service access', variant: 'error' })
     }
   }
 
@@ -463,6 +465,7 @@ function TeamDetailsModal({
   onUpdate: () => void
   isAdmin: boolean
 }) {
+  const { toast } = useToast()
   const [members, setMembers] = useState<TeamMember[]>(team.members)
   const [teamStats, setTeamStats] = useState<TeamStats>({
     totals: { patentsDrafted: 0, noveltySearches: 0, totalInputTokens: 0, totalOutputTokens: 0 },
@@ -564,7 +567,7 @@ function TeamDetailsModal({
         })
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to add member')
+      toast({ title: err instanceof Error ? err.message : 'Failed to add member', variant: 'error' })
     } finally {
       setLoading(false)
     }
@@ -606,7 +609,7 @@ function TeamDetailsModal({
       }
       onUpdate()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to remove member')
+      toast({ title: err instanceof Error ? err.message : 'Failed to remove member', variant: 'error' })
     }
   }
 
@@ -639,7 +642,7 @@ function TeamDetailsModal({
       ))
       onUpdate()
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to change role')
+      toast({ title: err instanceof Error ? err.message : 'Failed to change role', variant: 'error' })
     }
   }
 

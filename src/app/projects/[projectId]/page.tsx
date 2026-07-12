@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useToast } from '@/components/ui/toast'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
@@ -62,6 +63,7 @@ interface Project {
 
 export default function ProjectDashboardPage() {
   const { user, isLoading: authLoading } = useAuth()
+  const { toast } = useToast()
   const router = useRouter()
   const params = useParams()
   const projectId = params?.projectId as string
@@ -168,11 +170,11 @@ export default function ProjectDashboardPage() {
         setDeleteConfirmText('')
       } else {
         const error = await response.json()
-        alert(`Failed to delete patent: ${error.error || 'Unknown error'}`)
+        toast({ title: `Failed to delete patent: ${error.error || 'Unknown error'}`, variant: 'error' })
       }
     } catch (error) {
       console.error('Failed to delete patent:', error)
-      alert('Failed to delete patent. Please try again.')
+      toast({ title: 'Failed to delete patent', description: 'Please try again.', variant: 'error' })
     } finally {
       setIsDeleting(false)
     }
