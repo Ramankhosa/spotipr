@@ -612,6 +612,12 @@ export default function PatentDraftingPage() {
     const current = getCurrentStage()
     if (targetStage === current) return
 
+    // Stages can flag unsaved work (e.g. the component planner) — confirm before discarding it.
+    if ((window as any).__componentPlannerDirty) {
+      const leave = window.confirm('You have unsaved component changes. Leave this stage and discard them?')
+      if (!leave) return
+    }
+
     const order = getVisibleStageOrder()
 
     // Walk through the visible path so a sidebar click behaves like repeated

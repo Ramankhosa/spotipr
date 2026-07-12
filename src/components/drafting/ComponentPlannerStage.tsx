@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   componentPlannerSeedsFromStage0,
   isScopeRecommendations,
@@ -10,6 +11,8 @@ import {
   type ClaimSupportMetadata,
 } from '@/lib/scope-recommendations'
 import { getAuthoritativeClaims } from '@/lib/claims-context'
+import { useToast } from '@/components/ui/toast'
+import Hint from '@/components/ui/hint'
 
 interface ComponentPlannerStageProps {
   session: any
@@ -48,42 +51,47 @@ type NumberingStyle = 'NUMERIC_BUCKET' | 'STEP_LABEL' | 'CONSTITUENT_LABEL'
 type PatentTypePrimary = 'PRODUCT' | 'SYSTEM' | 'PROCESS' | 'COMPOSITION'
 
 const NUMBERING_STYLES: { value: NumberingStyle; label: string; description: string; example: string }[] = [
-  { 
-    value: 'NUMERIC_BUCKET', 
-    label: 'Numeric (100, 200...)', 
+  {
+    value: 'NUMERIC_BUCKET',
+    label: 'Numeric (100, 200...)',
     description: 'For SYSTEM/PRODUCT patents - hierarchical component numbering',
     example: 'Controller (100), Processor (200), Memory (300)'
   },
-  { 
-    value: 'STEP_LABEL', 
-    label: 'Step Labels (S100, S200...)', 
+  {
+    value: 'STEP_LABEL',
+    label: 'Step Labels (S100, S200...)',
     description: 'For PROCESS patents - sequential method step labels',
     example: 'Receive Input (S100), Process Data (S200), Output Result (S300)'
   },
-  { 
-    value: 'CONSTITUENT_LABEL', 
-    label: 'Constituent ((a), (b)...)', 
+  {
+    value: 'CONSTITUENT_LABEL',
+    label: 'Constituent ((a), (b)...)',
     description: 'For COMPOSITION patents - alphabetical formulation labels',
     example: 'Active Agent (a), Carrier (b), Stabilizer (c)'
   }
 ]
 
+// Types are descriptive only — numerals are assigned by tree order, not type.
 const COMPONENT_TYPES = [
-  { value: 'MAIN_CONTROLLER', label: 'Main Controller (100s)' },
-  { value: 'SUBSYSTEM', label: 'Subsystem (200s)' },
-  { value: 'MODULE', label: 'Module (300s)' },
-  { value: 'INTERFACE', label: 'Interface (400s)' },
-  { value: 'SENSOR', label: 'Sensor/Actuator (500s)' },
-  { value: 'ACTUATOR', label: 'Actuator (500s)' },
-  { value: 'PROCESSOR', label: 'Processor (600s)' },
-  { value: 'MEMORY', label: 'Memory (700s)' },
-  { value: 'DISPLAY', label: 'Display (800s)' },
-  { value: 'COMMUNICATION', label: 'Communication (900s)' },
-  { value: 'POWER_SUPPLY', label: 'Power Supply (900s)' },
+  { value: 'MAIN_CONTROLLER', label: 'Main Controller' },
+  { value: 'SUBSYSTEM', label: 'Subsystem' },
+  { value: 'MODULE', label: 'Module' },
+  { value: 'INTERFACE', label: 'Interface' },
+  { value: 'SENSOR', label: 'Sensor' },
+  { value: 'ACTUATOR', label: 'Actuator' },
+  { value: 'PROCESSOR', label: 'Processor' },
+  { value: 'MEMORY', label: 'Memory' },
+  { value: 'DISPLAY', label: 'Display' },
+  { value: 'COMMUNICATION', label: 'Communication' },
+  { value: 'POWER_SUPPLY', label: 'Power Supply' },
   { value: 'OTHER', label: 'Other' }
 ]
 
+const MAX_MANUAL_NUMERAL = 9999
+
 export default function ComponentPlannerStage({ session, patent, onComplete, onRefresh }: ComponentPlannerStageProps) {
+  const { toast } = useToast()
+
   // Helper to extract components array from referenceMap (handles both nested and direct array formats)
   const extractComponentsFromReferenceMap = (referenceMap: any): any[] => {
     if (!referenceMap?.components) return []
@@ -297,7 +305,15 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   const [showRanges, setShowRanges] = useState(false)
   const [isValidatingComponents, setIsValidatingComponents] = useState(false)
   const [componentReview, setComponentReview] = useState<any | null>(null)
-  
+  const [confirmState, setConfirmState] = useState<{
+    title: string
+    message: string
+    confirmLabel: string
+    tone: 'danger' | 'default'
+    onConfirm: () => void
+  } | null>(null)
+  const undoSnapshotRef = useRef<Component[] | null>(null)
+
   // Patent type and numbering style state
   const patentTypePrimary = session?.patentTypePrimary as PatentTypePrimary | null
   const archetype = (() => {
@@ -305,7 +321,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     if (Array.isArray(types)) return types.join('+')
     return types || 'GENERAL'
   })()
-  
+
   // Derive default numbering style from patent type
   const deriveDefaultNumberingStyle = (): NumberingStyle => {
     if (!patentTypePrimary) return 'NUMERIC_BUCKET'
@@ -315,12 +331,141 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       default: return 'NUMERIC_BUCKET'
     }
   }
-  
+
   // User can override numbering style
   const [numberingStyleOverride, setNumberingStyleOverride] = useState<NumberingStyle | null>(
     session?.referenceMap?.numberingStyle || session?.referenceMap?.components?.numberingStyle || null
   )
   const effectiveNumberingStyle = numberingStyleOverride || deriveDefaultNumberingStyle()
+
+  // Warn before the tab closes with unsaved edits
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+
+  // Expose dirty state so the stage navigation (draft page) can prompt before leaving
+  useEffect(() => {
+    ;(window as any).__componentPlannerDirty = isDirty
+    return () => {
+      ;(window as any).__componentPlannerDirty = false
+    }
+  }, [isDirty])
+
+  // ============================================================================
+  // Tree building + live numbering preview
+  // ============================================================================
+  type TreeNode = Component & { children: TreeNode[] }
+
+  const tree = useMemo<TreeNode[]>(() => {
+    const byId: Record<string, TreeNode> = {}
+    components.forEach((c) => {
+      byId[c.id] = { ...(c as any), children: [] }
+    })
+    const roots: TreeNode[] = []
+    components.forEach((c) => {
+      const pid = c.parentId
+      if (pid && byId[pid]) {
+        byId[pid].children.push(byId[c.id])
+      } else {
+        roots.push(byId[c.id])
+      }
+    })
+    return roots
+  }, [components])
+
+  // Rows in render order, each with its depth and sibling position (for move buttons)
+  const flatRows = useMemo(() => {
+    const rows: { node: TreeNode; level: number; siblingIndex: number; siblingCount: number }[] = []
+    const walk = (nodes: TreeNode[], level: number) => {
+      nodes.forEach((node, index) => {
+        rows.push({ node, level, siblingIndex: index, siblingCount: nodes.length })
+        walk(node.children, level + 1)
+      })
+    }
+    walk(tree, 0)
+    return rows
+  }, [tree])
+
+  // Mirror of the server's assignment rules, so users see numbering before saving:
+  // NUMERIC: first root subtree 100, 101, 102…; second root 200…  STEP: S100 by row
+  // order.  CONSTITUENT: (a), (b)… by row order.
+  const previewLabels = useMemo(() => {
+    const map = new Map<string, string>()
+    if (effectiveNumberingStyle === 'NUMERIC_BUCKET') {
+      tree.forEach((root, rootIndex) => {
+        let counter = (rootIndex + 1) * 100
+        const walk = (node: TreeNode) => {
+          map.set(node.id, String(counter))
+          counter++
+          node.children.forEach(walk)
+        }
+        walk(root)
+      })
+    } else if (effectiveNumberingStyle === 'STEP_LABEL') {
+      flatRows.forEach(({ node }, index) => {
+        map.set(node.id, `S${(index + 1) * 100}`)
+      })
+    } else {
+      const letterLabel = (index: number) =>
+        index < 26
+          ? String.fromCharCode(97 + index)
+          : `${String.fromCharCode(97 + Math.floor(index / 26) - 1)}${String.fromCharCode(97 + (index % 26))}`
+      flatRows.forEach(({ node }, index) => {
+        map.set(node.id, `(${letterLabel(index)})`)
+      })
+    }
+    return map
+  }, [tree, flatRows, effectiveNumberingStyle])
+
+  // ============================================================================
+  // Live row-level validation
+  // ============================================================================
+  const rowIssues = useMemo(() => {
+    const issues = new Map<string, string[]>()
+    const push = (id: string, message: string) => {
+      issues.set(id, [...(issues.get(id) || []), message])
+    }
+
+    const nameOwners = new Map<string, { id: string; name: string }[]>()
+    components.forEach((comp) => {
+      if (!comp.name.trim()) {
+        push(comp.id, 'Name is required')
+        return
+      }
+      const key = normalizeNameKey(comp.name)
+      nameOwners.set(key, [...(nameOwners.get(key) || []), { id: comp.id, name: comp.name }])
+    })
+    nameOwners.forEach((owners) => {
+      if (owners.length > 1) {
+        owners.forEach(({ id }) => push(id, `Duplicate name "${owners[0].name.trim()}"`))
+      }
+    })
+
+    if (effectiveNumberingStyle === 'NUMERIC_BUCKET') {
+      const numeralOwners = new Map<number, string[]>()
+      components.forEach((comp) => {
+        if (comp.numeral === undefined || comp.numeral === null) return
+        if (!Number.isInteger(comp.numeral) || comp.numeral < 1 || comp.numeral > MAX_MANUAL_NUMERAL) {
+          push(comp.id, `Numeral must be a whole number from 1 to ${MAX_MANUAL_NUMERAL}`)
+          return
+        }
+        numeralOwners.set(comp.numeral, [...(numeralOwners.get(comp.numeral) || []), comp.id])
+      })
+      numeralOwners.forEach((ids, numeral) => {
+        if (ids.length > 1) {
+          ids.forEach((id) => push(id, `Duplicate numeral ${numeral}`))
+        }
+      })
+    }
+
+    return issues
+  }, [components, effectiveNumberingStyle])
 
   const applyReferenceMapResult = (result: any, fallbackError: string): boolean => {
     if (!result) {
@@ -346,9 +491,13 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       setValidationErrors([])
     }
 
+    setIsDirty(false)
     return true
   }
 
+  // ============================================================================
+  // Mutations — all functional updates so rapid actions can't overwrite each other
+  // ============================================================================
   const addComponent = () => {
     const newComponent: Component = {
       id: crypto.randomUUID(),
@@ -357,7 +506,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       description: '',
       numeral: undefined
     }
-    setComponents([...components, newComponent])
+    setComponents(prev => [...prev, newComponent])
     setIsDirty(true)
   }
 
@@ -367,54 +516,145 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       name: '',
       type: 'MODULE',
       description: '',
-      numeral: undefined
+      numeral: undefined,
+      parentId
     }
-    // @ts-ignore store parent linkage for persistence
-    ;(newComponent as any).parentId = parentId
-    setComponents([...components, newComponent])
+    setComponents(prev => [...prev, newComponent])
     setIsDirty(true)
   }
 
   const updateComponent = (id: string, updates: Partial<Component>) => {
-    setComponents(components.map(comp =>
+    setComponents(prev => prev.map(comp =>
       comp.id === id ? { ...comp, ...updates } : comp
     ))
     setIsDirty(true)
   }
 
-  const removeComponent = (id: string) => {
-    // Cascade remove: delete the node and all descendants
-    const idsToRemove = new Set<string>()
-    const collect = (targetId: string) => {
-      idsToRemove.add(targetId)
-      components.forEach((c: any) => {
-        if ((c as any).parentId === targetId) collect(c.id)
+  const collectDescendantIds = (list: Component[], targetId: string): Set<string> => {
+    const ids = new Set<string>()
+    const collect = (currentId: string) => {
+      ids.add(currentId)
+      list.forEach((c) => {
+        if (c.parentId === currentId) collect(c.id)
       })
     }
-    collect(id)
+    collect(targetId)
+    return ids
+  }
+
+  const performRemoveComponent = (id: string) => {
+    undoSnapshotRef.current = components
+    let removedCount = 0
+    setComponents(prev => {
+      const idsToRemove = collectDescendantIds(prev, id)
+      removedCount = idsToRemove.size
+      return prev.filter((comp) => !idsToRemove.has(comp.id))
+    })
+    setIsDirty(true)
+    toast({
+      title: removedCount > 1 ? `Deleted ${removedCount} components` : 'Component deleted',
+      duration: 8000,
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          if (undoSnapshotRef.current) {
+            setComponents(undoSnapshotRef.current)
+            setIsDirty(true)
+          }
+        }
+      }
+    })
+  }
+
+  const removeComponent = (id: string) => {
+    const idsToRemove = collectDescendantIds(components, id)
+    const target = components.find((comp) => comp.id === id)
+    const childCount = idsToRemove.size - 1
 
     const claimLinkedComponents = components.filter((comp) =>
       idsToRemove.has(comp.id) && comp.claimSupport?.source === 'frozen_claims'
     )
+
     if (claimLinkedComponents.length > 0) {
       const listedNames = claimLinkedComponents
         .slice(0, 3)
         .map((comp) => comp.name)
         .join(', ')
       const suffix = claimLinkedComponents.length > 3 ? ` and ${claimLinkedComponents.length - 3} more` : ''
-      const confirmed = window.confirm(
-        `This will remove claim-linked component${claimLinkedComponents.length > 1 ? 's' : ''}: ${listedNames}${suffix}.\n\nThese components were matched to frozen claims and may be needed for reference labels, drafting, or figures. Continue?`
-      )
-      if (!confirmed) return
+      setConfirmState({
+        title: 'Delete claim-linked components?',
+        message: `This removes ${listedNames}${suffix}, which are matched to your frozen claims and may be needed for reference labels, drafting, or figures.`,
+        confirmLabel: 'Delete anyway',
+        tone: 'danger',
+        onConfirm: () => performRemoveComponent(id)
+      })
+      return
     }
 
-    setComponents(components.filter((comp) => !idsToRemove.has(comp.id)))
+    if (childCount > 0) {
+      setConfirmState({
+        title: `Delete "${target?.name || 'component'}"?`,
+        message: `This also deletes its ${childCount} sub-component${childCount > 1 ? 's' : ''}.`,
+        confirmLabel: 'Delete',
+        tone: 'danger',
+        onConfirm: () => performRemoveComponent(id)
+      })
+      return
+    }
+
+    performRemoveComponent(id)
+  }
+
+  // Move a component up/down among its siblings (order determines numbering)
+  const moveComponent = (id: string, direction: 'up' | 'down') => {
+    setComponents(prev => {
+      const me = prev.find((c) => c.id === id)
+      if (!me) return prev
+      const parentKey = me.parentId || null
+      const siblingIds = prev.filter((c) => (c.parentId || null) === parentKey).map((c) => c.id)
+      const position = siblingIds.indexOf(id)
+      const targetPosition = direction === 'up' ? position - 1 : position + 1
+      if (targetPosition < 0 || targetPosition >= siblingIds.length) return prev
+      const otherId = siblingIds[targetPosition]
+      const i = prev.findIndex((c) => c.id === id)
+      const j = prev.findIndex((c) => c.id === otherId)
+      const next = [...prev]
+      next[i] = prev[j]
+      next[j] = prev[i]
+      return next
+    })
     setIsDirty(true)
   }
 
-  const normalizeSuggestedComponent = (suggestion: any, sequence: number): Component => {
+  // Promote: move up one level (become a sibling of its parent)
+  const promoteComponent = (id: string) => {
+    setComponents(prev => {
+      const me = prev.find((c) => c.id === id)
+      if (!me?.parentId) return prev
+      const parent = prev.find((c) => c.id === me.parentId)
+      return prev.map((c) => c.id === id ? { ...c, parentId: parent?.parentId || undefined } : c)
+    })
+    setIsDirty(true)
+  }
+
+  // Demote: nest under the sibling directly above it
+  const demoteComponent = (id: string) => {
+    setComponents(prev => {
+      const me = prev.find((c) => c.id === id)
+      if (!me) return prev
+      const parentKey = me.parentId || null
+      const siblings = prev.filter((c) => (c.parentId || null) === parentKey)
+      const position = siblings.findIndex((c) => c.id === id)
+      if (position <= 0) return prev
+      const newParent = siblings[position - 1]
+      return prev.map((c) => c.id === id ? { ...c, parentId: newParent.id } : c)
+    })
+    setIsDirty(true)
+  }
+
+  const normalizeSuggestedComponent = (suggestion: any, sequence: number, existing: Component[]): Component => {
     const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER']
-    const existingIds = new Set(components.map(comp => comp.id))
+    const existingIds = new Set(existing.map(comp => comp.id))
     const suggestedId = typeof suggestion?.id === 'string' && suggestion.id.trim() && !existingIds.has(suggestion.id)
       ? suggestion.id.trim()
       : crypto.randomUUID()
@@ -424,33 +664,39 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       id: suggestedId,
       name: typeof (suggestion?.name || suggestion?.title || suggestion?.label) === 'string' && (suggestion.name || suggestion.title || suggestion.label).trim()
         ? (suggestion.name || suggestion.title || suggestion.label).trim()
-        : `Component ${components.length + sequence}`,
+        : `Component ${existing.length + sequence}`,
       type: validTypes.includes(suggestion?.type) ? suggestion.type : 'OTHER',
       description: typeof suggestion?.description === 'string' ? suggestion.description : '',
-      sequence: components.length + sequence,
+      sequence: existing.length + sequence,
       numeral: undefined,
       referenceLabel: undefined,
     }
   }
 
   const addSuggestedComponents = (suggestions: any[]) => {
-    const existingKeys = new Set(components.map(comp => scopeElementKey(comp.name)).filter(Boolean))
-    const nextComponents = suggestions
-      .filter((suggestion) => {
-        const key = scopeElementKey(suggestion?.name || suggestion?.title || suggestion?.label)
-        if (!key || existingKeys.has(key)) return false
-        existingKeys.add(key)
-        return true
-      })
-      .map((suggestion, index) => normalizeSuggestedComponent(suggestion, index + 1))
+    let addedNames: string[] = []
+    setComponents(prev => {
+      const existingKeys = new Set(prev.map(comp => scopeElementKey(comp.name)).filter(Boolean))
+      const nextComponents = suggestions
+        .filter((suggestion) => {
+          const key = scopeElementKey(suggestion?.name || suggestion?.title || suggestion?.label)
+          if (!key || existingKeys.has(key)) return false
+          existingKeys.add(key)
+          return true
+        })
+        .map((suggestion, index) => normalizeSuggestedComponent(suggestion, index + 1, prev))
 
-    if (nextComponents.length === 0) return
-    setComponents([...components, ...nextComponents])
+      if (nextComponents.length === 0) return prev
+      addedNames = nextComponents.map(comp => comp.name)
+      return [...prev, ...nextComponents]
+    })
+
+    if (addedNames.length === 0) return
     setComponentReview((review: any) => review ? {
       ...review,
       suggestedComponents: (review.suggestedComponents || []).filter((suggestion: any) => {
         const key = scopeElementKey(suggestion?.name || suggestion?.title || suggestion?.label)
-        return !nextComponents.some(comp => scopeElementKey(comp.name) === key)
+        return !addedNames.some(name => scopeElementKey(name) === key)
       })
     } : review)
     setIsDirty(true)
@@ -470,7 +716,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             ...comp,
             name: comp.name.trim(),
             description: (comp.description || '').trim(),
-            parentId: (comp as any).parentId || undefined
+            parentId: comp.parentId || undefined
           }))
       })
 
@@ -487,31 +733,25 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     }
   }
 
-  const handleAutoAssignNumerals = async () => {
-    if (components.length === 0) {
-      setError('Add at least one component first')
-      return
+  const blockOnRowIssues = (): boolean => {
+    if (rowIssues.size > 0) {
+      setError(`Fix the ${rowIssues.size} highlighted row${rowIssues.size > 1 ? 's' : ''} first.`)
+      return true
     }
+    return false
+  }
 
-    // Check for empty component names
-    const emptyNames = components.filter(comp => !comp.name.trim())
-    if (emptyNames.length > 0) {
-      setError(`Please provide names for all components before auto-assigning numerals. ${emptyNames.length} component(s) have empty names.`)
-      return
-    }
-
+  const runAutoAssignNumerals = async () => {
     setIsProcessing(true)
     setError(null)
 
     try {
-      // Filter out components with empty names and validate data
       const validComponents = components
         .filter(comp => comp.name && comp.name.trim())
         .map(comp => {
-          // Normalize type to a valid value
           const validTypes = ['MAIN_CONTROLLER', 'SUBSYSTEM', 'MODULE', 'INTERFACE', 'SENSOR', 'ACTUATOR', 'PROCESSOR', 'MEMORY', 'DISPLAY', 'COMMUNICATION', 'POWER_SUPPLY', 'OTHER'];
           const normalizedType = validTypes.includes(comp.type) ? comp.type : 'OTHER';
-          
+
           return {
             ...comp,
             id: comp.id,
@@ -520,8 +760,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             description: (comp.description || '').trim(),
             numeral: undefined,
             referenceLabel: undefined,
-            // @ts-ignore include optional parentId for submodules
-            parentId: (comp as any).parentId || undefined
+            parentId: comp.parentId || undefined
           };
         });
 
@@ -531,8 +770,6 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         return;
       }
 
-      console.log('Sending components for validation:', validComponents, 'numberingStyle:', numberingStyleOverride);
-
       const result = await onComplete({
         action: 'update_component_map',
         sessionId: session?.id,
@@ -541,41 +778,52 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         numberingStyleOverride: numberingStyleOverride // Pass user override if set
       })
 
-      applyReferenceMapResult(result, 'Failed to assign numerals. Please check the page error above and retry.')
+      if (applyReferenceMapResult(result, 'Failed to assign numerals. Please check the page error above and retry.')) {
+        toast({ title: 'Reference labels assigned', variant: 'success' })
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to assign numerals'
       setError(errorMessage)
-
-      // Try to extract validation errors
-      if (errorMessage.includes('validation')) {
-        try {
-          const errorData = JSON.parse(errorMessage.split('validation errors: ')[1] || '[]')
-          setValidationErrors(errorData)
-        } catch {
-          setValidationErrors([errorMessage])
-        }
-      }
     } finally {
       setIsProcessing(false)
     }
   }
 
+  const handleAutoAssignNumerals = () => {
+    if (components.length === 0) {
+      setError('Add at least one component first')
+      return
+    }
+    if (blockOnRowIssues()) return
+
+    const labeledCount = components.filter(hasAssignedReference).length
+    if (labeledCount > 0) {
+      setConfirmState({
+        title: `Renumber all ${components.length} components?`,
+        message: `${labeledCount} existing reference label${labeledCount > 1 ? 's' : ''} will be replaced with fresh tree-order numbering.`,
+        confirmLabel: 'Renumber',
+        tone: 'default',
+        onConfirm: () => { void runAutoAssignNumerals() }
+      })
+      return
+    }
+    void runAutoAssignNumerals()
+  }
+
   const hasAssignedReference = (comp: Component) =>
     comp.referenceLabel || (comp.numeral !== undefined && comp.numeral !== null)
 
-  const canProceed = components.length > 0 && components.every(comp =>
-    comp.name.trim() && hasAssignedReference(comp)
-  )
+  const canProceed = components.length > 0 && rowIssues.size === 0 && !isProcessing
 
   const handleSaveComponents = async (): Promise<boolean> => {
     if (components.length === 0) {
       setError('Add at least one component first')
       return false
     }
+    if (blockOnRowIssues()) return false
     setIsProcessing(true)
     setError(null)
     try {
-      // Filter out components with empty names and validate data
       const validComponents = components
         .filter(comp => comp.name && comp.name.trim())
         .map(comp => ({
@@ -587,8 +835,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           numeral: comp.numeral,
           referenceLabel: comp.referenceLabel, // Include manual reference label
           sequence: comp.sequence, // Include sequence for ordering
-          // @ts-ignore parent linkage
-          parentId: (comp as any).parentId
+          parentId: comp.parentId
         }));
 
       if (validComponents.length === 0) {
@@ -603,47 +850,37 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         components: validComponents,
         numberingStyleOverride: numberingStyleOverride // Pass user override if set
       })
-      return applyReferenceMapResult(result, 'Failed to save components. Please check the page error above and retry.')
+      const success = applyReferenceMapResult(result, 'Failed to save components. Please check the page error above and retry.')
+      if (success) {
+        toast({ title: 'Components saved', variant: 'success' })
+      }
+      return success
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to save components'
       setError(errorMessage)
-      if (errorMessage.includes('validation')) {
-        try {
-          const errorData = JSON.parse(errorMessage.split('validation errors: ')[1] || '[]')
-          setValidationErrors(errorData)
-        } catch {
-          setValidationErrors([errorMessage])
-        }
-      }
       return false
     } finally {
       setIsProcessing(false)
     }
   }
 
-  // Build a hierarchical tree from flat components using parentId
-  type CompAny = Component & { parentId?: string }
-  const buildTree = () => {
-    const byId: Record<string, CompAny & { children: CompAny[] }> = {}
-    ;(components as any as CompAny[]).forEach((c) => {
-      byId[c.id] = { ...(c as any), children: [] }
-    })
-    const roots: (CompAny & { children: CompAny[] })[] = []
-    ;(components as any as CompAny[]).forEach((c) => {
-      const pid = (c as any).parentId
-      if (pid && byId[pid]) {
-        byId[pid].children.push(byId[c.id])
-      } else {
-        roots.push(byId[c.id])
-      }
-    })
-    return roots
-  }
+  const renderRow = (
+    node: TreeNode,
+    level: number,
+    siblingIndex: number,
+    siblingCount: number
+  ) => {
+    const issues = rowIssues.get(node.id) || []
+    const previewLabel = previewLabels.get(node.id)
+    const hasManualLabel = !!hasAssignedReference(node)
 
-  const tree = buildTree()
-
-  const renderRow = (node: any, level: number) => (
-    <tr key={node.id} className="group hover:bg-gray-50/80 transition-colors border-b border-gray-100 last:border-0">
+    return (
+    <tr
+      key={node.id}
+      className={`group transition-colors border-b border-gray-100 last:border-0 ${
+        issues.length > 0 ? 'bg-red-50/40 hover:bg-red-50/60' : 'hover:bg-gray-50/80'
+      }`}
+    >
       <td className="px-4 py-3 align-top">
         <div style={{ paddingLeft: `${level * 16}px` }} className="flex min-w-0 items-start">
           {level > 0 && (
@@ -657,17 +894,29 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               value={node.name}
               onChange={(e) => updateComponent(node.id, { name: e.target.value })}
               placeholder="Component name"
-              className="block w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+              aria-invalid={issues.length > 0 ? true : undefined}
+              className={`block w-full min-w-0 truncate px-2 py-1.5 bg-transparent border rounded text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all ${
+                issues.length > 0
+                  ? 'border-red-300 focus:bg-white focus:border-red-400'
+                  : 'border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300'
+              }`}
             />
+            {issues.length > 0 && (
+              <div className="mt-1 px-2 space-y-0.5">
+                {issues.map((issue, index) => (
+                  <p key={index} className="text-xs text-red-600">{issue}</p>
+                ))}
+              </div>
+            )}
             {(node.parentId || node.claimSupport?.source === 'frozen_claims') && (
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 px-2">
                 {node.parentId && (
-                  <span className="text-[10px] text-gray-400 uppercase tracking-wider">Submodule</span>
+                  <span className="text-[10px] text-gray-400 uppercase tracking-wider">Sub-part</span>
                 )}
                 {node.claimSupport?.source === 'frozen_claims' && (
                   <span
                     className="inline-flex max-w-full items-center rounded border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
-                    title={node.claimSupport.reason}
+                    title={node.claimSupport.reason || 'Recited in your frozen claims — deleting or renaming it will put the claims out of sync.'}
                   >
                     Claim-linked
                   </span>
@@ -701,72 +950,116 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {/* Manual reference label input - adapts to numbering style */}
           {effectiveNumberingStyle === 'NUMERIC_BUCKET' ? (
-            <input
-              type="number"
-              min={1}
-              value={node.numeral ?? ''}
-              onChange={(e) => {
-                const num = e.target.value === '' ? undefined : Number(e.target.value)
-                const numVal = Number.isNaN(num) ? undefined : num
-                updateComponent(node.id, { 
-                  numeral: numVal,
-                  referenceLabel: numVal ? String(numVal) : undefined
-                })
-              }}
-              placeholder="e.g., 101"
-              className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
-            />
+            <>
+              <input
+                type="number"
+                min={1}
+                max={MAX_MANUAL_NUMERAL}
+                value={node.numeral ?? ''}
+                onChange={(e) => {
+                  const num = e.target.value === '' ? undefined : Number(e.target.value)
+                  const numVal = num === undefined || Number.isNaN(num) ? undefined : num
+                  updateComponent(node.id, {
+                    numeral: numVal,
+                    referenceLabel: numVal !== undefined && numVal >= 1 ? String(numVal) : undefined
+                  })
+                }}
+                placeholder={previewLabel || 'e.g., 101'}
+                className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+              />
+              {hasManualLabel ? (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700 border border-green-100">
+                  {node.referenceLabel || `#${node.numeral}`}
+                </span>
+              ) : previewLabel ? (
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono text-gray-400 border border-dashed border-gray-200"
+                  title="Assigned automatically on save, based on row order"
+                >
+                  → {previewLabel}
+                </span>
+              ) : null}
+            </>
           ) : effectiveNumberingStyle === 'STEP_LABEL' ? (
-            <input
-              type="text"
-              value={node.referenceLabel ?? ''}
-              onChange={(e) => {
-                const val = e.target.value.trim()
-                updateComponent(node.id, { 
-                  referenceLabel: val || undefined,
-                  // Extract numeric part if present (e.g., S100 -> 100)
-                  numeral: val.match(/\d+/) ? parseInt(val.match(/\d+/)![0]) : undefined
-                })
-              }}
-              placeholder="e.g., S100"
-              className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-purple-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500/20 transition-all"
-            />
+            <>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono bg-purple-50 text-purple-700 border border-purple-100">
+                {previewLabel}
+              </span>
+              <span className="text-[10px] text-gray-400" title="Step labels follow row order — use the arrows to reorder steps">
+                auto
+              </span>
+            </>
           ) : (
-            <input
-              type="text"
-              value={node.referenceLabel ?? ''}
-              onChange={(e) => {
-                const val = e.target.value.trim()
-                updateComponent(node.id, { 
-                  referenceLabel: val || undefined,
-                  // For constituent labels like (a), (b), etc.
-                  sequence: val.match(/[a-z]/i) ? val.toLowerCase().charCodeAt(val.match(/[a-z]/i)!.index || 0) - 96 : undefined
-                })
-              }}
-              placeholder="e.g., (a)"
-              className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-amber-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 transition-all"
-            />
-          )}
-          {/* Display the assigned label badge */}
-          {(node.referenceLabel || node.numeral) && (
-             <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
-               effectiveNumberingStyle === 'STEP_LABEL' ? 'bg-purple-50 text-purple-700 border border-purple-100' :
-               effectiveNumberingStyle === 'CONSTITUENT_LABEL' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
-               'bg-green-50 text-green-700 border border-green-100'
-             }`}>
-              {node.referenceLabel || `#${node.numeral}`}
-             </span>
+            <>
+              <input
+                type="text"
+                value={node.referenceLabel ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value.trim()
+                  updateComponent(node.id, {
+                    referenceLabel: val || undefined,
+                    // For constituent labels like (a), (b), etc.
+                    sequence: val.match(/[a-z]/i) ? val.toLowerCase().charCodeAt(val.match(/[a-z]/i)!.index || 0) - 96 : undefined
+                  })
+                }}
+                placeholder={previewLabel || 'e.g., (a)'}
+                className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-amber-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 transition-all"
+              />
+              {hasManualLabel ? (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-100">
+                  {node.referenceLabel}
+                </span>
+              ) : previewLabel ? (
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono text-gray-400 border border-dashed border-gray-200"
+                  title="Assigned automatically on save, based on row order"
+                >
+                  → {previewLabel}
+                </span>
+              ) : null}
+            </>
           )}
         </div>
       </td>
       <td className="px-4 py-3 whitespace-nowrap text-right">
-        <div className="flex items-center justify-end space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <button
+            onClick={() => moveComponent(node.id, 'up')}
+            disabled={siblingIndex === 0}
+            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Move up (changes numbering order)"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => moveComponent(node.id, 'down')}
+            disabled={siblingIndex >= siblingCount - 1}
+            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Move down (changes numbering order)"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => promoteComponent(node.id)}
+            disabled={level === 0}
+            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Promote one level"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => demoteComponent(node.id)}
+            disabled={siblingIndex === 0}
+            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Nest under the row above"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
           <button
             onClick={() => addSubmodule(node.id)}
             className="p-1 text-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-            title="Add Submodule"
+            title="Add a sub-part under this component"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -775,7 +1068,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           <button
             onClick={() => removeComponent(node.id)}
             className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-            title="Remove"
+            title="Delete"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -784,26 +1077,39 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         </div>
       </td>
     </tr>
-  )
+    )
+  }
 
   return (
     <div className="px-6 py-8 max-w-[1200px] mx-auto">
       <div className="mb-8 flex flex-col md:flex-row md:items-start justify-between gap-4">
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <h2 className="text-xl font-semibold text-gray-900">Component Planning</h2>
-            <select
-              aria-label="Reference label style"
-              value={numberingStyleOverride || deriveDefaultNumberingStyle()}
-              onChange={(e) => setNumberingStyleOverride(e.target.value as NumberingStyle)}
-              className="w-full sm:w-auto px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
-            >
-              {NUMBERING_STYLES.map((style) => (
-                <option key={style.value} value={style.value}>
-                  {style.label} {style.value === deriveDefaultNumberingStyle() && !numberingStyleOverride ? '(Auto)' : ''}
-                </option>
-              ))}
-            </select>
+            <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+              Component Planning
+              <Hint
+                title="What happens here"
+                text="List the parts (or steps) of your invention and how they nest. Each one gets a reference label that the figures, claims, and specification all reuse — so this list is the backbone of the whole draft."
+              />
+            </h2>
+            <div className="flex items-center gap-2">
+              <select
+                aria-label="Reference label style"
+                value={numberingStyleOverride || deriveDefaultNumberingStyle()}
+                onChange={(e) => setNumberingStyleOverride(e.target.value as NumberingStyle)}
+                className="w-full sm:w-auto px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
+              >
+                {NUMBERING_STYLES.map((style) => (
+                  <option key={style.value} value={style.value}>
+                    {style.label} {style.value === deriveDefaultNumberingStyle() && !numberingStyleOverride ? '(Auto)' : ''}
+                  </option>
+                ))}
+              </select>
+              <Hint
+                title="Label style"
+                text="Chosen from your patent type: systems and products use numerals (100, 200), methods use step labels (S100), compositions use letters ((a), (b)). Override only if your attorney prefers a different convention."
+              />
+            </div>
           </div>
           <p className="text-sm text-gray-500 mt-1">
             Define invention components and assign reference labels.
@@ -833,33 +1139,58 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             onClick={() => setShowRanges(!showRanges)}
             className={`text-sm font-medium px-3 py-1.5 rounded-md border transition-colors ${showRanges ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
           >
-            Label Guide
+            How numbering works
           </button>
         </div>
       </div>
 
-      {/* Collapsible Numeral Ranges */}
+      {/* Collapsible, style-aware numbering guide */}
       {showRanges && (
         <div className="mb-6 bg-white border border-gray-200 rounded-lg shadow-sm p-4 animate-in fade-in slide-in-from-top-2 duration-200">
-          <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-3">Reference Numeral Standards</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {[
-              { range: '100-199', label: 'Main Controllers' },
-              { range: '200-299', label: 'Subsystems' },
-              { range: '300-399', label: 'Modules' },
-              { range: '400-499', label: 'Interfaces' },
-              { range: '500-599', label: 'Sensors/Actuators' },
-              { range: '600-699', label: 'Processors' },
-              { range: '700-799', label: 'Memory' },
-              { range: '800-899', label: 'Displays' },
-              { range: '900-999', label: 'Other' }
-            ].map((item) => (
-              <div key={item.range} className="flex items-center text-sm">
-                <span className="font-mono text-indigo-600 font-medium w-16">{item.range}</span>
-                <span className="text-gray-600">{item.label}</span>
+          {effectiveNumberingStyle === 'NUMERIC_BUCKET' && (
+            <>
+              <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-2">Numeric labels</h3>
+              <p className="text-sm text-gray-600 mb-3">
+                Numerals follow the order of your tree: the first top-level part gets <span className="font-mono">100</span> and
+                its sub-parts <span className="font-mono">101, 102…</span>; the second top-level part gets <span className="font-mono">200</span>,
+                and so on. Reorder rows with the arrows to change numbering, or type a specific numeral — it is kept as long as it is unique.
+              </p>
+              <div className="rounded-md bg-gray-50 border border-gray-100 p-3 text-sm font-mono text-gray-600 space-y-0.5">
+                <div>Motor assembly <span className="text-indigo-600">100</span></div>
+                <div className="pl-4">Rotor <span className="text-indigo-600">101</span></div>
+                <div className="pl-4">Stator <span className="text-indigo-600">102</span></div>
+                <div>Flight controller <span className="text-indigo-600">200</span></div>
               </div>
-            ))}
-          </div>
+            </>
+          )}
+          {effectiveNumberingStyle === 'STEP_LABEL' && (
+            <>
+              <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-2">Step labels</h3>
+              <p className="text-sm text-gray-600 mb-3">
+                Steps are labelled <span className="font-mono">S100, S200…</span> in row order. Use the ↑↓ arrows to reorder steps —
+                labels update automatically and can&apos;t be typed manually.
+              </p>
+              <div className="rounded-md bg-gray-50 border border-gray-100 p-3 text-sm font-mono text-gray-600 space-y-0.5">
+                <div>Receive input <span className="text-purple-600">S100</span></div>
+                <div>Process data <span className="text-purple-600">S200</span></div>
+                <div>Output result <span className="text-purple-600">S300</span></div>
+              </div>
+            </>
+          )}
+          {effectiveNumberingStyle === 'CONSTITUENT_LABEL' && (
+            <>
+              <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-2">Constituent labels</h3>
+              <p className="text-sm text-gray-600 mb-3">
+                Constituents are labelled <span className="font-mono">(a), (b), (c)…</span> in row order. You can type a
+                specific letter label — it is kept as long as it is unique.
+              </p>
+              <div className="rounded-md bg-gray-50 border border-gray-100 p-3 text-sm font-mono text-gray-600 space-y-0.5">
+                <div>Active agent <span className="text-amber-600">(a)</span></div>
+                <div>Carrier <span className="text-amber-600">(b)</span></div>
+                <div>Stabilizer <span className="text-amber-600">(c)</span></div>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -980,7 +1311,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             <button
               onClick={handleValidateComponentPlan}
               disabled={isValidatingComponents}
-              title="Ask AI to compare frozen claims, Stage 0 components, and this planner list, then suggest missing Stage 0 components or claim terms needing manual review. Uses the diagram-generation LLM control."
+              title="Ask AI to compare frozen claims, Stage 0 components, and this planner list, then suggest missing components or claim terms needing manual review."
               className="inline-flex items-center px-3 py-1.5 border border-indigo-200 shadow-sm text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isValidatingComponents ? (
@@ -1007,14 +1338,14 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className={`overflow-x-auto ${isProcessing ? 'pointer-events-none opacity-60' : ''}`} aria-busy={isProcessing || undefined}>
           <table className="min-w-full table-fixed divide-y divide-gray-100">
             <colgroup>
               <col className="w-[28%]" />
-              <col className="w-[18%]" />
-              <col className="w-[32%]" />
-              <col className="w-[17%]" />
-              <col className="w-[5%]" />
+              <col className="w-[16%]" />
+              <col className="w-[30%]" />
+              <col className="w-[16%]" />
+              <col className="w-[10%]" />
             </colgroup>
             <thead className="bg-gray-50/50">
               <tr>
@@ -1030,31 +1361,21 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   <div className="flex items-center gap-1">
                     <span>Reference</span>
-                    <span className="normal-case font-normal text-gray-300" title="Enter manually or use Auto Assign">(manual/auto)</span>
+                    <Hint
+                      title="Reference labels"
+                      text="The dashed value shows what will be assigned on save, based on row order. Type your own to pin a specific label (numeric and constituent styles only) — it must be unique."
+                    />
                   </div>
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">
-                  
+
                 </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-100">
-              {tree.map((node) => (
-                <React.Fragment key={`node-${node.id}`}>
-                  {renderRow(node, 0)}
-                  {node.children?.map((c1: any) => (
-                    <React.Fragment key={`c1-${node.id}-${c1.id}`}>
-                      {renderRow(c1, 1)}
-                      {c1.children?.map((c2: any) => (
-                        <React.Fragment key={`c2-${node.id}-${c1.id}-${c2.id}`}>
-                          {renderRow(c2, 2)}
-                          {c2.children?.map((c3: any) => renderRow(c3, 3))}
-                        </React.Fragment>
-                      ))}
-                    </React.Fragment>
-                  ))}
-                </React.Fragment>
-              ))}
+              {flatRows.map(({ node, level, siblingIndex, siblingCount }) =>
+                renderRow(node, level, siblingIndex, siblingCount)
+              )}
               {components.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center">
@@ -1079,11 +1400,24 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
 
       {/* Actions Footer */}
       <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-gray-200">
-        <div className="text-sm text-gray-500">
-          <span className="font-medium text-gray-900">{components.length}</span> components defined
-          {components.filter(c => c.referenceLabel || c.numeral).length > 0 && (
-            <span className="ml-1 text-gray-400">
-              ({components.filter(c => c.referenceLabel || c.numeral).length} with labels)
+        <div className="flex items-center gap-3 text-sm text-gray-500">
+          <span>
+            <span className="font-medium text-gray-900">{components.length}</span> components defined
+            {components.filter(hasAssignedReference).length > 0 && (
+              <span className="ml-1 text-gray-400">
+                ({components.filter(hasAssignedReference).length} with labels)
+              </span>
+            )}
+          </span>
+          {rowIssues.size > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 border border-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">
+              {rowIssues.size} row{rowIssues.size > 1 ? 's' : ''} need attention
+            </span>
+          )}
+          {isDirty && rowIssues.size === 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              Unsaved changes
             </span>
           )}
         </div>
@@ -1135,6 +1469,43 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           </button>
         </div>
       </div>
+
+      {/* Confirmation dialog (renumber / cascade delete) */}
+      {confirmState && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cp-confirm-title"
+        >
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h3 id="cp-confirm-title" className="text-base font-semibold text-gray-900">{confirmState.title}</h3>
+            <p className="mt-2 text-sm text-gray-600">{confirmState.message}</p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmState(null)}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const action = confirmState.onConfirm
+                  setConfirmState(null)
+                  action()
+                }}
+                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                  confirmState.tone === 'danger'
+                    ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
+                    : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'
+                }`}
+              >
+                {confirmState.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
