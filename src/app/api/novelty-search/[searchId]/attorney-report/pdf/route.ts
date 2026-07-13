@@ -101,6 +101,17 @@ function cleanText(value: unknown, fallback = '-') {
   return text || fallback;
 }
 
+// Like cleanText but preserves line breaks (cleans whitespace within each line),
+// so values that are intentionally a list can render/measure as multiple lines.
+function cleanMultiline(value: unknown, fallback = '-') {
+  const text = String(value ?? '')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+  return text || fallback;
+}
+
 function truncate(value: unknown, max = 900) {
   const text = cleanText(value, '');
   return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
@@ -208,9 +219,10 @@ function fitTextToHeight(doc: PdfDoc, value: string, width: number, height: numb
   return [value.slice(0, splitAt).trimEnd(), value.slice(splitAt).trimStart()] as const;
 }
 
-function proseAlign(value: unknown): PdfTextAlign {
-  const text = cleanText(value, '');
-  return text.split(/\s+/).filter(Boolean).length >= 8 ? 'justify' : 'left';
+function proseAlign(_value: unknown): PdfTextAlign {
+  // Left-align throughout. PDFKit has no hyphenation, so justified text produces
+  // ragged inter-word "rivers" and one-word-per-line stacking in narrow columns.
+  return 'left';
 }
 
 function drawFlowingLabeledText(
@@ -235,7 +247,7 @@ function drawFlowingLabeledText(
     doc.fillColor(options.color || '#334155').font(FONTS.regular).fontSize(fontSize);
     const available = Math.max(24, pageBottom(doc) - doc.y);
     const [chunk, rest] = fitTextToHeight(doc, remaining, width, available, lineGap);
-    doc.text(chunk, x, doc.y, { width, align: cleanText(chunk, '').split(/\s+/).filter(Boolean).length >= 4 ? 'justify' : 'left', lineGap });
+    doc.text(chunk, x, doc.y, { width, align: 'left', lineGap });
     remaining = rest;
     if (remaining) {
       addPage(doc);
@@ -375,7 +387,7 @@ function measuredTextHeight(
   fontSize: number,
   lineGap = 1.2,
 ) {
-  const text = cleanText(value, '');
+  const text = cleanMultiline(value, '');
   if (!text) return 0;
   doc.font(font).fontSize(fontSize);
   return doc.heightOfString(text, { width, lineGap });
@@ -393,7 +405,7 @@ function drawSnapshotMetric(
   drawCard(doc, x, y, width, 68, 6);
   doc.rect(x, y, 3, 68).fill(accent);
   doc.fillColor(accent).font(FONTS.bold).fontSize(value.length > 12 ? TYPE.h3 : TYPE.h2)
-    .text(value, x + SPACE.md, y + SPACE.md, { width: width - 20, height: 21, ellipsis: true });
+    .text(value, x + SPACE.md, y + SPACE.md, { width: width - 20, height: 21, ellipsis: '...' });
   doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.small)
     .text(label, x + SPACE.md, y + 41, { width: width - 20, height: 18, lineGap: 1 });
 }
@@ -407,9 +419,9 @@ function drawSnapshotInfoItem(doc: PdfDoc, x: number, y: number, width: number, 
   doc.circle(x + 6, y + 7, 5).fill(COLORS.paleBlue);
   doc.circle(x + 6, y + 7, 1.7).fill(COLORS.blue);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(label.toUpperCase(), x + 17, y, { width: width - 17, height: 9, lineBreak: false, ellipsis: true });
+    .text(label.toUpperCase(), x + 17, y, { width: width - 17, height: 9, lineBreak: false, ellipsis: '...' });
   doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.caption)
-    .text(cleanText(value, '-'), x + 17, y + 12, { width: width - 17, lineGap: 1 });
+    .text(cleanMultiline(value, '-'), x + 17, y + 12, { width: width - 17, lineGap: 1 });
 }
 
 function highestMappedRow(report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
@@ -442,7 +454,7 @@ function drawDecisionFact(
   drawCard(doc, x, y, width, height, 6);
   doc.rect(x, y, 3, height).fill(accent);
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(label.toUpperCase(), x + SPACE.md, y + 10, { width: width - 20, height: 9, lineBreak: false, ellipsis: true });
+    .text(label.toUpperCase(), x + SPACE.md, y + 10, { width: width - 20, height: 9, lineBreak: false, ellipsis: '...' });
   const text = options.truncateValue === false ? cleanText(value) : truncate(value, 115);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
     .fontSize(valueFontSize)
@@ -604,8 +616,16 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     });
 
   const infoWidth = (contentWidth(doc) - 24) / 4;
+  // Render the corpus as a vertical list rather than a run-on string.
+  const corpusParts = cleanText(report.methodology.corpus, '')
+    .split(/\s*;\s*/)
+    .flatMap(part => part.split(/\s*\+\s*/))
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1));
+  const corpusValue = corpusParts.length ? corpusParts.map(part => `-  ${part}`).join('\n') : report.methodology.corpus;
   const infoItems = [
-    ['Corpus', report.methodology.corpus],
+    ['Corpus', corpusValue],
     ['Search method', report.methodology.retrievalMode],
     ['Assessment basis', report.evidenceBasis],
     ['Report type', 'AI-assisted patent intelligence'],
@@ -650,10 +670,10 @@ function drawGroupHeading(doc: PdfDoc, number: string, title: string) {
 function drawParagraph(doc: PdfDoc, text: string) {
   const value = cleanText(text);
   doc.font(FONTS.regular).fontSize(TYPE.body);
-  const height = doc.heightOfString(value, { width: contentWidth(doc), align: 'justify', lineGap: 2 });
+  const height = doc.heightOfString(value, { width: contentWidth(doc), align: 'left', lineGap: 2 });
   ensureSpace(doc, Math.min(height + SPACE.md, doc.page.height - PAGE.top - PAGE.bottom));
   doc.fillColor('#334155')
-    .text(value, PAGE.left, doc.y, { width: contentWidth(doc), align: 'justify', lineGap: 2 });
+    .text(value, PAGE.left, doc.y, { width: contentWidth(doc), align: 'left', lineGap: 2 });
   doc.y += SPACE.md;
 }
 
@@ -722,9 +742,9 @@ function drawMetadataGrid(doc: PdfDoc, items: Array<[string, string]>) {
     pair.forEach(([label, value], i) => {
       const x = PAGE.left + i * cellWidth;
       doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.caption)
-        .text(label, x + padding, y + padding, { width: labelWidth - padding, height: rowHeight - padding * 2, ellipsis: true });
+        .text(label, x + padding, y + padding, { width: labelWidth - padding, height: rowHeight - padding * 2, ellipsis: '...' });
       doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.small)
-        .text(truncate(value, 240) || '-', x + labelWidth, y + padding, { width: cellWidth - labelWidth - padding, height: rowHeight - padding * 2, ellipsis: true, lineGap: 1.5 });
+        .text(truncate(value, 240) || '-', x + labelWidth, y + padding, { width: cellWidth - labelWidth - padding, height: rowHeight - padding * 2, ellipsis: '...', lineGap: 1.5 });
     });
     doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + contentWidth(doc), y + rowHeight)
       .lineWidth(0.45).strokeColor(COLORS.border).stroke();
@@ -857,21 +877,24 @@ function labeledLine(label: string, value: unknown) {
 }
 
 function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
+  // Keep each row compact: show a short, feature-specific mapped snippet and the
+  // supporting passage — NOT the full abstract (which is already in the citation
+  // header). The submitted disclosure is dropped here; it is redundant with the
+  // Key Features table (1.3) and the feature name in the first column. Repeating the
+  // full abstract per feature is what previously made rows taller than a page and
+  // left blank continuation pages.
   const supportingPassage = cleanText(row.evidenceQuote, '');
-  const submittedDisclosure = cleanText(row.userDisclosure, '');
-  const mappedDisclosure = cleanText(row.patentDisclosure, 'No mapped patent disclosure was available for this feature.');
+  const mappedDisclosure = cleanText(row.patentDisclosure, '');
+  const mappedSnippet = mappedDisclosure ? truncate(mappedDisclosure, 220) : '';
 
   return [
+    `${cleanText(row.featureNumber)} - ${cleanText(row.userFeature)}`,
     [
-      `${cleanText(row.featureNumber)} - ${cleanText(row.userFeature)}`,
-      submittedDisclosure ? labeledLine('Submitted disclosure', submittedDisclosure) : '',
-    ].filter(Boolean).join('\n'),
-    [
-      mappedDisclosure ? labeledLine('Mapped disclosure', mappedDisclosure) : '',
-      supportingPassage ? labeledLine('Evidence returned by feature mapping', supportingPassage) : '',
+      mappedSnippet ? labeledLine('Mapped disclosure', mappedSnippet) : '',
+      supportingPassage ? labeledLine('Evidence', truncate(supportingPassage, 220)) : '',
       `Evidence strength: ${cleanText(row.evidenceStrength, 'Weak')} - ${cleanText(row.evidenceStrengthReason, 'Evidence should be confirmed from source records.')}`,
     ].filter(Boolean).join('\n'),
-    cleanText(row.professionalRemark || row.crispRemark, 'No professional review note was mapped for this feature.'),
+    truncate(cleanText(row.professionalRemark || row.crispRemark, 'No professional review note was mapped for this feature.'), 320),
   ];
 }
 
@@ -974,7 +997,7 @@ function drawReferenceFeatureRowChunk(
           width: Math.max(20, textWidth - badgeWidth - 5),
           height: 8,
           lineBreak: false,
-          ellipsis: true,
+          ellipsis: '...',
         });
     }
 
@@ -988,7 +1011,7 @@ function drawReferenceFeatureRowChunk(
       .text(renderedText, textX, renderedTextY, {
         width: textWidth,
         height: renderedTextHeight,
-        align: index === 0 ? 'justify' : proseAlign(renderedText),
+        align: index === 0 ? 'left' : proseAlign(renderedText),
         lineGap: REFERENCE_FEATURE_TABLE.lineGap,
       });
     x += widths[index];
@@ -1080,7 +1103,7 @@ function drawDetailedFeatureRow(doc: PdfDoc, row: AttorneyReportFeatureRow, inde
       height: 10,
       align: 'center',
       lineBreak: false,
-      ellipsis: true,
+      ellipsis: '...',
     });
   doc.moveTo(x, y + rowHeight).lineTo(x + width, y + rowHeight).lineWidth(0.5).strokeColor(COLORS.border).stroke();
   doc.y = y + rowHeight + SPACE.md;
@@ -1227,7 +1250,7 @@ function drawFeatureMatrixRow(
           width: width - 16,
           height: 10,
           lineBreak: false,
-          ellipsis: true,
+          ellipsis: '...',
         });
       doc.goTo(linkX, linkY, linkWidth, linkHeight, destination, { Border: [0, 0, 0] });
       doc.moveTo(x + 8, y + 22).lineTo(x + Math.min(width - 8, 8 + doc.widthOfString(publicationNumber)), y + 22)
@@ -1284,20 +1307,20 @@ function drawOverlapSignal(doc: PdfDoc, value: string, x: number, y: number, wid
   const compact = /high|direct/i.test(normalized)
     ? 'High'
     : /medium|moderate|partial/i.test(normalized)
-      ? 'Moderate'
+      ? 'Medium'
       : /low/i.test(normalized)
         ? 'Low'
         : 'Review';
   const color = compact === 'High'
     ? COLORS.red
-    : compact === 'Moderate'
+    : compact === 'Medium'
       ? COLORS.warning
       : compact === 'Low'
         ? COLORS.muted
         : COLORS.blue;
   doc.circle(x + 9, y + height / 2, 2.5).fill(color);
   doc.fillColor(COLORS.text).font(FONTS.medium).fontSize(TYPE.micro)
-    .text(compact, x + 15, y + 11, { width: width - 19, height: 9, lineBreak: false, ellipsis: true });
+    .text(compact, x + 15, y + 11, { width: width - 19, height: 9, lineBreak: false, ellipsis: '...' });
 }
 
 function drawFeatureMatrixLegend(doc: PdfDoc) {
@@ -1306,7 +1329,7 @@ function drawFeatureMatrixLegend(doc: PdfDoc) {
   const items = [
     { label: 'D Directly mapped', fill: STATUS.Present.fill, stroke: STATUS.Present.stroke },
     { label: 'P Partially mapped', fill: STATUS.Partial.fill, stroke: STATUS.Partial.stroke },
-    { label: 'N Not expressly taught', fill: STATUS.Absent.fill, stroke: STATUS.Absent.stroke },
+    { label: 'N Not found', fill: STATUS.Absent.fill, stroke: STATUS.Absent.stroke },
     { label: 'R Full-text review', fill: STATUS.Review.fill, stroke: STATUS.Review.stroke },
   ];
   const itemWidths = [120, 122, 138, 120];
@@ -1340,7 +1363,7 @@ function drawFeatureMatrixInsight(
   doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
     .text('Insight', PAGE.left + 31, y + 9, { width: 45, height: 10, lineBreak: false });
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.caption)
-    .text(insight, PAGE.left + 70, y + 8, { width: contentWidth(doc) - 82, height: 29, lineGap: 1.2, ellipsis: true });
+    .text(insight, PAGE.left + 70, y + 8, { width: contentWidth(doc) - 82, height: 29, lineGap: 1.2, ellipsis: '...' });
   doc.y = y + 48;
 }
 
@@ -1357,7 +1380,7 @@ function drawEvidenceBadge(doc: PdfDoc, label: string, x: number, y: number) {
   doc.roundedRect(x, y, width, 17, 4).fillAndStroke(palette.fill, palette.stroke);
   doc.circle(x + 8, y + 8.5, 2).fill(palette.text);
   doc.fillColor(palette.text).font(FONTS.medium).fontSize(TYPE.micro)
-    .text(label, x + 13, y + 5, { width: width - 17, height: 8, lineBreak: false, ellipsis: true });
+    .text(label, x + 13, y + 5, { width: width - 17, height: 8, lineBreak: false, ellipsis: '...' });
   return width;
 }
 
@@ -1387,13 +1410,13 @@ function drawCitationCardHeader(
     .text(`REFERENCE ${index + 1} OF ${total}`, x + 18, y + 13, { width: 110, height: 9, lineBreak: false });
   doc.roundedRect(x + width - 252, y + 9, 122, 23, 5).fillAndStroke(riskPalette.fill, riskPalette.stroke);
   doc.fillColor(riskPalette.text).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(truncate(item.noveltyThreat || item.overlapRiskLevel, 34), x + width - 244, y + 16, { width: 106, height: 8, align: 'center', lineBreak: false, ellipsis: true });
+    .text(truncate(item.noveltyThreat || item.overlapRiskLevel, 34), x + width - 244, y + 16, { width: 106, height: 8, align: 'center', lineBreak: false, ellipsis: '...' });
   doc.roundedRect(x + width - 124, y + 9, 110, 23, 5).fillAndStroke(COLORS.paleBlue, '#BFDBFE');
   doc.fillColor(COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.micro)
-    .text(item.reviewPriority, x + width - 112, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false, ellipsis: true });
+    .text(item.reviewPriority, x + width - 112, y + 16, { width: 86, height: 8, align: 'center', lineBreak: false, ellipsis: '...' });
 
   doc.fillColor(COLORS.blue2).font(FONTS.bold).fontSize(TYPE.h3)
-    .text(`${cleanText(item.citationNo, `D${index + 1}`)}  ${item.publicationNumber}`, x + 18, y + 38, { width: width - 36, height: 16, lineBreak: false, ellipsis: true });
+    .text(`${cleanText(item.citationNo, `D${index + 1}`)}  ${item.publicationNumber}`, x + 18, y + 38, { width: width - 36, height: 16, lineBreak: false, ellipsis: '...' });
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.small)
     .text(cleanText(item.title), x + 18, y + 59, { width: width - 36, lineGap: 1.5 });
 
@@ -1411,16 +1434,16 @@ function drawCitationCardHeader(
   meta.forEach(([label, value], metaIndex) => {
     const metaX = x + 28 + metaIndex * cellWidth;
     doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
-      .text(label.toUpperCase(), metaX, metaY + 4, { width: cellWidth - 18, height: 9, lineBreak: false, ellipsis: true });
+      .text(label.toUpperCase(), metaX, metaY + 4, { width: cellWidth - 18, height: 9, lineBreak: false, ellipsis: '...' });
     doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.caption)
-      .text(truncate(value, 82), metaX, metaY + 17, { width: cellWidth - 18, height: 20, ellipsis: true, lineGap: 1 });
+      .text(truncate(value, 82), metaX, metaY + 17, { width: cellWidth - 18, height: 20, ellipsis: '...', lineGap: 1 });
   });
 
   const evidenceY = metaY + 57;
   doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.micro)
     .text('REVIEW SIGNAL', x + 18, evidenceY + 4, { width: 72, height: 8, lineBreak: false });
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text(`${item.rows.filter(row => row.status === 'Present').length} directly mapped / ${item.rows.filter(row => row.status === 'Partial').length} partially mapped / ${item.rows.filter(row => row.status === 'Unknown').length} full-text review`, x + 94, evidenceY + 3, { width: 360, height: 10, lineBreak: false, ellipsis: true });
+    .text(`${item.rows.filter(row => row.status === 'Present').length} directly mapped / ${item.rows.filter(row => row.status === 'Partial').length} partially mapped / ${item.rows.filter(row => row.status === 'Unknown').length} full-text review`, x + 94, evidenceY + 3, { width: 360, height: 10, lineBreak: false, ellipsis: '...' });
   doc.y = y + height + SPACE.md;
 }
 
@@ -1611,7 +1634,8 @@ export async function GET(
           ['Citation Count', item.citationCount === null ? '-' : String(item.citationCount)],
           ['Reference Role', item.referenceRole],
           ['Academic Source', item.sourceProviders],
-          ['Record URL', item.link],
+          // Only show a link row when there is a usable link.
+          ...(cleanText(item.link, '') ? [['Record URL', item.link] as [string, string]] : []),
         ] : [
           ['Application No.', item.applicationNumber],
           ['Filing Date', item.filingDate],
@@ -1620,7 +1644,8 @@ export async function GET(
           ['Review Priority', item.reviewPriority],
           ['Inventor(s)', item.inventors],
           ['CPC / IPC', `${item.cpcCodes} / ${item.ipcCodes}`],
-          ['Source', item.link],
+          // Patent links are omitted (see report builder); no Source row when blank.
+          ...(cleanText(item.link, '') ? [['Source', item.link] as [string, string]] : []),
         ]);
         doc.y += SPACE.sm;
         drawFlowingLabeledText(doc, item.referenceType === 'paper' ? 'Paper Abstract' : 'Patent Abstract', item.abstract);
@@ -1764,8 +1789,10 @@ export async function GET(
     drawFlowTextBlock(doc, 'Overall Drafting Direction', report.overallDraftingDirection);
 
     startSection('7', 'Limitations and Next Steps');
-    drawParagraph(doc, report.limitations);
-    drawFlowBulletList(doc, 'What To Do Next', report.nextSteps);
+    drawParagraph(doc, report.limitations || 'This preliminary assessment is limited to abstract-level patent records and bibliographic metadata. Validate every mapping against the full patent documents, claims, drawings, family/legal status, and prosecution history before drawing any conclusion.');
+    if (Array.isArray(report.nextSteps) && report.nextSteps.length > 0) {
+      drawFlowBulletList(doc, 'What To Do Next', report.nextSteps);
+    }
 
     doc.switchToPage(tocPageIndex);
     doc.y = PAGE.top + 10;

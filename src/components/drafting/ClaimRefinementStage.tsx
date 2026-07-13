@@ -382,11 +382,24 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
     }
   }
 
+  // Ensure claims are editable before generating or applying refinements.
+  // Previously the stage relied solely on a mount-time auto-unfreeze effect,
+  // which could silently fail or race with the re-freeze-on-leave cleanup and
+  // leave Generate/Apply permanently disabled behind `isFrozen` (user sees a
+  // generated refinement but cannot apply it). Unfreezing inline here makes both
+  // actions self-sufficient regardless of the frozen flag.
+  const ensureClaimsUnfrozen = async () => {
+    if (!session?.id || !isFrozen) return
+    await onComplete({ action: 'unfreeze_claims', sessionId: session.id })
+    await onRefresh()
+  }
+
   const handlePreview = async () => {
     if (!session?.id) return
     try {
       setLoadingPreview(true)
       setError(null)
+      await ensureClaimsUnfrozen()
       const formatPersonaCoverageWarning = (warnings: any[]) => {
         const jurisdiction = (session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US').toUpperCase()
         const lines = (Array.isArray(warnings) ? warnings : [])
@@ -468,6 +481,7 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
       setApplying(true)
       setError(null)
       setSuccessMessage(null)
+      await ensureClaimsUnfrozen()
       const accepted = Object.entries(acceptMap).filter(([, v]) => v).map(([k]) => Number(k))
 
       const applyResponse = await onComplete({
@@ -777,14 +791,14 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
                 {/* Step 1 */}
                 <button
                   onClick={handlePreview}
-                  disabled={loadingPreview || isFrozen}
+                  disabled={loadingPreview}
                   className="w-full group"
                 >
                   <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
-                    loadingPreview 
-                      ? 'border-indigo-300 bg-indigo-50' 
+                    loadingPreview
+                      ? 'border-indigo-300 bg-indigo-50'
                       : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50'
-                  } ${isFrozen ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  }`}>
                     <div className="w-8 h-8 rounded-full bg-indigo-600 text-white text-sm font-semibold flex items-center justify-center flex-shrink-0">
                       1
                     </div>
@@ -808,16 +822,16 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
                 {/* Step 2 */}
                 <button
                   onClick={handleApply}
-                  disabled={applying || freezing || !preview || isFrozen}
+                  disabled={applying || freezing || !preview}
                   className="w-full group"
                 >
                   <div className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
                     applying || freezing
-                      ? 'border-violet-300 bg-violet-50' 
-                      : !preview 
-                        ? 'border-slate-100 bg-slate-50 opacity-60' 
+                      ? 'border-violet-300 bg-violet-50'
+                      : !preview
+                        ? 'border-slate-100 bg-slate-50 opacity-60'
                         : 'border-slate-200 hover:border-violet-300 hover:bg-violet-50/50'
-                  } ${isFrozen ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  }`}>
                     <div className={`w-8 h-8 rounded-full text-sm font-semibold flex items-center justify-center flex-shrink-0 ${
                       preview ? 'bg-violet-600 text-white' : 'bg-slate-200 text-slate-400'
                     }`}>

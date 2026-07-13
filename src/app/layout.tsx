@@ -14,7 +14,11 @@ const inter = localFont({
     { path: '../fonts/inter/Inter-SemiBold.ttf', weight: '600', style: 'normal' },
     { path: '../fonts/inter/Inter-Bold.ttf', weight: '700', style: 'normal' },
   ],
-  display: 'optional',
+  // 'swap' + preload: render the real, sharp Inter as soon as it loads.
+  // 'optional' (previous value) frequently kept the page on a size-adjusted
+  // fallback whose scaled glyphs land on fractional pixels and look blurry.
+  display: 'swap',
+  preload: true,
   fallback: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
 })
 
@@ -26,7 +30,8 @@ const cormorant = localFont({
     { path: '../fonts/cormorant/Cormorant-SemiBold.ttf', weight: '600', style: 'normal' },
     { path: '../fonts/cormorant/Cormorant-Bold.ttf', weight: '700', style: 'normal' },
   ],
-  display: 'optional',
+  display: 'swap',
+  preload: false,
   fallback: ['Georgia', 'serif'],
 })
 

@@ -431,7 +431,7 @@ function normalizeStatus(value: unknown): FeatureMapCell['status'] {
 function statusLabel(status: FeatureMapCell['status']): string {
   if (status === 'Present') return 'Directly Mapped';
   if (status === 'Partial') return 'Partially Mapped';
-  if (status === 'Absent') return 'Not Expressly Taught';
+  if (status === 'Absent') return 'Not Found in Reviewed Record';
   return 'Requires Full-Text Review';
 }
 
@@ -472,11 +472,19 @@ function evidenceStrengthFor(
 function visibleStatusForReport(
   status: FeatureMapCell['status'],
   evidenceStrength: AttorneyReportEvidenceStrength,
-  evidenceQuote: string
+  evidenceQuote: string,
+  confidence: number | null = null
 ): FeatureMapCell['status'] {
-  if (status === 'Present' && evidenceStrength === 'Weak') return evidenceQuote ? 'Partial' : 'Unknown';
-  if (status === 'Partial' && evidenceStrength === 'Weak' && !evidenceQuote) return 'Unknown';
-  return status;
+  let resolved: FeatureMapCell['status'] = status;
+  if (status === 'Present' && evidenceStrength === 'Weak') resolved = evidenceQuote ? 'Partial' : 'Unknown';
+  else if (status === 'Partial' && evidenceStrength === 'Weak' && !evidenceQuote) resolved = 'Unknown';
+  // Prefer a definite "Not found" (N) over "Requires full-text review" (R) when there
+  // is no positive evidence and the model is not expressly uncertain. R is reserved for
+  // genuinely ambiguous cells: a weak-but-positive passage, or low confidence.
+  if (resolved === 'Unknown' && !evidenceQuote && (confidence == null || confidence >= 0.6)) {
+    return 'Absent';
+  }
+  return resolved;
 }
 
 function safeOverlapLabel(value: unknown): { label: string; level: AttorneyReportPatentComparison['overlapRiskLevel'] } {
@@ -1734,7 +1742,7 @@ function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, 
       ? Math.min(rawConfidence ?? 0.45, 0.45)
       : rawConfidence;
     const evidenceStrength = evidenceStrengthFor(rawStatus, feature, evidenceQuote, evidenceSource, patentDisclosure, confidence);
-    const status = visibleStatusForReport(rawStatus, evidenceStrength.strength, evidenceQuote);
+    const status = visibleStatusForReport(rawStatus, evidenceStrength.strength, evidenceQuote, confidence);
     const mapping = publicMapping(status);
     const extentScore = numberScore(supplied.extent_score ?? supplied.extentScore ?? cell?.extent_score ?? (cell as any)?.extentScore)
       ?? defaultExtentScore(status, feature, patentDisclosure, evidenceQuote, confidence);
@@ -1807,7 +1815,9 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       matchCategoryLabel: matchCategoryLabel(gateDecision),
       referenceRole: referenceRoleFor(category, score, rows),
       reviewPriority: reviewPriorityFor(category, score, relevanceScore),
-      link: firstText(map.link, meta.link, meta.sourceUrl, meta.url, referenceType === 'paper' ? '' : `https://patents.google.com/patent/${pn}`),
+      // Patent record links (incl. the fabricated Google Patents fallback) are not
+      // reliable, so they are omitted; scholarly-paper links/DOIs are kept when present.
+      link: referenceType === 'paper' ? firstText(map.link, meta.link, meta.sourceUrl, meta.url, '') : '',
       abstract: firstText(
         ...sourceAbstractFields(meta),
         ...sourceAbstractFields(rawMeta),

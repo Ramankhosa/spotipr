@@ -292,7 +292,7 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text).toContain('Key Feature')
     expect(parsed.text).toContain('Professional Remark')
     expect(compactText).toContain('Mappeddisclosure:Longpatentdisclosure')
-    expect(compactText).toContain('Evidencereturnedbyfeaturemapping:Longmappedevidence')
+    expect(compactText).toContain('Evidence:Longmappedevidence')
     expect(parsed.text).not.toContain('Relevance / Evidence')
     expect(parsed.text).not.toContain('Retrieval Relevance')
     expect(parsed.text).not.toContain('Evidence sources')
@@ -303,17 +303,23 @@ describe('GET attorney report PDF', () => {
     expect(parsed.text).not.toContain('Claim review note')
     expect(parsed.text).not.toContain('Confidence:')
     expect(parsed.text).not.toContain('Feature coverage:')
+    // Full-length content is preserved in the citation header (abstract / technical
+    // disclosure) and the reference/claim summaries.
     for (const marker of [
       'ABSTRACT_TAIL_MARKER',
       'TECHNICAL_TAIL_MARKER',
+      'REFERENCE_TAIL_MARKER',
+      'CLAIM_TAIL_MARKER',
+    ]) expect(compactText).toContain(marker)
+    // Per-feature comparison cells are intentionally condensed: the submitted-disclosure
+    // line is dropped (redundant with the Key Features table) and the mapped disclosure,
+    // evidence, and remark are truncated so a single feature row can no longer exceed a
+    // page and leave blank continuation pages.
+    for (const marker of [
       'USER_DISCLOSURE_TAIL_MARKER',
       'DISCLOSURE_TAIL_MARKER',
       'EVIDENCE_TAIL_MARKER',
       'PROFESSIONAL_REMARK_TAIL_MARKER',
-      'REFERENCE_TAIL_MARKER',
-      'CLAIM_TAIL_MARKER',
-    ]) expect(compactText).toContain(marker)
-    for (const marker of [
       'ATTORNEY_DISCUSSION_TAIL_MARKER',
       'NOVELTY_IMPACT_TAIL_MARKER',
       'CLAIM_REVIEW_TAIL_MARKER',

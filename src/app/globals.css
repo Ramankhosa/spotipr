@@ -6,6 +6,19 @@
    Consumed by tailwind.config.js (bg-primary, border-input, text-muted-foreground, …)
    and by the ui/ primitives which already reference these class names. */
 @layer base {
+  /* Crisp, sharp UI text on every OS. Antialiasing pair is the industry-standard
+     default (matches design tooling); the rest keeps the webfont sharp on Windows. */
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    font-synthesis-weight: none;
+  }
+
   :root {
     --background: 0 0% 100%;
     --foreground: 222 47% 11%;

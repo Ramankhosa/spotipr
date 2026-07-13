@@ -155,7 +155,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
-    setCollapsed(localStorage.getItem('app_sidebar_collapsed') === '1')
+    const saved = localStorage.getItem('app_sidebar_collapsed')
+    if (saved === '0' || saved === '1') {
+      setCollapsed(saved === '1')
+      return
+    }
+    // No saved preference yet: keep the sidebar as a slim icon rail on smaller
+    // screens so the main content keeps its width; expand only on large displays.
+    setCollapsed(window.innerWidth < 1440)
   }, [])
 
   const toggleCollapsed = () => {

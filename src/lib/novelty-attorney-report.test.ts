@@ -246,8 +246,8 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.comparisons[0].rows[1]).toMatchObject({
       featureNumber: 'KF2',
       status: 'Absent',
-      statusLabel: 'Not Expressly Taught',
-      publicMappingStatus: 'Not Expressly Taught',
+      statusLabel: 'Not Found in Reviewed Record',
+      publicMappingStatus: 'Not Found in Reviewed Record',
       publicMappingCode: 'N',
       patentDisclosure: 'The patent controls irrigation without disclosing the submitted threshold decision rule.',
       evidenceSource: 'none',

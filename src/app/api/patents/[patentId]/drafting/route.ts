@@ -141,6 +141,27 @@ import {
   type RepairSummary
 } from '@/lib/plantuml-diagram-processing'
 
+// User-provided (imported) figures are parked in a high figureNo band so they never
+// consume the low slots that AI-generated / planned figures (Fig. 1..N) use. They sort
+// last by figureNo — hence last in the figure sequence — and receive their final display
+// numbers (finalFigNo) from the arrange/normalize step. This prevents an imported "Fig 3"
+// from occupying slot 1/2/3 and forcing generated figures to start at 4.
+const USER_IMPORTED_FIGURE_BASE = 900
+// Highest figureNo among GENERATED/planned figures (ignores the imported high band).
+const maxGeneratedFigureNo = (figurePlans: Array<{ figureNo?: number | null }> = []): number =>
+  figurePlans.reduce((max, plan) => {
+    const n = plan?.figureNo || 0
+    return n > 0 && n < USER_IMPORTED_FIGURE_BASE ? Math.max(max, n) : max
+  }, 0)
+// Next slot for an imported figure: stacks within the high band (900, 901, 902, ...).
+const nextImportedFigureNo = (figurePlans: Array<{ figureNo?: number | null }> = []): number => {
+  const maxImported = figurePlans.reduce((max, plan) => {
+    const n = plan?.figureNo || 0
+    return n >= USER_IMPORTED_FIGURE_BASE ? Math.max(max, n) : max
+  }, USER_IMPORTED_FIGURE_BASE - 1)
+  return maxImported + 1
+}
+
 const sanitizeFigureTitleInput = (title?: string | null): string => {
   const raw = typeof title === 'string' ? title : ''
   if (!raw.trim()) return ''
@@ -12385,15 +12406,12 @@ async function handleCreateManualFigure(user: any, patentId: string, data: any) 
     })
   }
 
-  // Assign number if not provided
+  // Assign number if not provided. Use the generated/planned band (Fig. 1..N),
+  // ignoring imported user figures (high band) so manual figures stay in front of them.
   let no = Number(figureNo)
   if (!Number.isInteger(no) || no <= 0) no = 0
   if (!no) {
-    const maxExistingFigureNo = (session.figurePlans || []).reduce(
-      (max, plan) => Math.max(max, plan.figureNo || 0),
-      0
-    )
-    no = maxExistingFigureNo + 1
+    no = maxGeneratedFigureNo(session.figurePlans) + 1
   }
   const wasExistingFigure = (session.figurePlans || []).some(plan => plan.figureNo === no)
 
@@ -12502,14 +12520,14 @@ async function handleImportUploadedDiagramImage(user: any, patentId: string, dat
     })
   }
 
+  // Imported user figures are parked in the high band (900+) so they sit LAST and never
+  // take Fig. 1/2/3 from generated figures. Generated figures then fill the low slots in
+  // front, and the arrange/normalize step assigns the final display numbers. An explicit
+  // figureNo (rare; not sent by the Stage 0 importer) is still honored.
   let no = Number(figureNo)
   if (!Number.isInteger(no) || no <= 0) no = 0
   if (!no) {
-    const maxExistingFigureNo = (session.figurePlans || []).reduce(
-      (max, plan) => Math.max(max, plan.figureNo || 0),
-      0
-    )
-    no = maxExistingFigureNo + 1
+    no = nextImportedFigureNo(session.figurePlans)
   }
   const wasExistingFigure = (session.figurePlans || []).some(plan => plan.figureNo === no)
   const cleanedTitle = sanitizeFigureTitleInput(title) || `Imported Figure ${no}`

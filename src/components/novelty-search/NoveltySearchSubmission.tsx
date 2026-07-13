@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { CheckCircle2, FileText, FolderOpen, History, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CheckCircle2, FileText, FolderOpen, History, ListChecks, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 
 type Project = { id: string; name: string }
@@ -41,26 +41,53 @@ const literatureSources = [
   { id: 'core', label: 'CORE' },
 ]
 
+// Paced to cover the ~30–40s the model typically takes to prepare the plan, so
+// the progress never stalls at "done" while the request is still running. The
+// final entries are gentle reassurances in case the model takes a little longer.
 const queryPreparationStages = [
   {
     label: 'Reading the disclosure',
-    detail: 'The LLM is identifying the problem, mechanism, and technical field from your invention text.',
+    detail: 'Identifying the problem, core mechanism, and technical field from your invention text.',
   },
   {
     label: 'Extracting claim-worthy features',
-    detail: 'The LLM is separating core inventive features from background context and examples.',
+    detail: 'Separating the inventive features from background context and worked examples.',
+  },
+  {
+    label: 'Mapping the inventive concept',
+    detail: 'Grouping related features into the distinct ideas that define your novelty.',
   },
   {
     label: 'Building patent retrieval language',
-    detail: 'The LLM is translating those features into search terms that patent databases can match.',
+    detail: 'Translating each feature into search terms that patent databases can match.',
+  },
+  {
+    label: 'Expanding synonyms and variants',
+    detail: 'Adding alternate terminology and technical equivalents so relevant art is not missed.',
+  },
+  {
+    label: 'Aligning with patent classifications',
+    detail: 'Relating your concept to the IPC/CPC technology areas examiners use.',
   },
   {
     label: 'Balancing broad and narrow terms',
-    detail: 'The LLM is adding synonyms and constraints so retrieval is not too generic or too restrictive.',
+    detail: 'Tuning the query so retrieval is neither too generic nor too restrictive.',
   },
   {
-    label: 'Preparing your review plan',
-    detail: 'The LLM is formatting the query and feature list for your approval before retrieval starts.',
+    label: 'Cross-checking feature coverage',
+    detail: 'Making sure every key feature is represented in the search plan.',
+  },
+  {
+    label: 'Filtering out noisy terms',
+    detail: 'Dropping ambiguous words that would pull in unrelated prior art.',
+  },
+  {
+    label: 'Assembling your review plan',
+    detail: 'Formatting the query and feature list for your approval before retrieval starts.',
+  },
+  {
+    label: 'Almost ready',
+    detail: 'Finalizing and validating the plan — this can take a few more moments.',
   },
 ]
 type ManualFields = {
@@ -115,12 +142,16 @@ function splitValues(value: string) {
   return value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean)
 }
 
+// Providers hidden from the UI for now. They are excluded from the source picker
+// and never auto-selected, so they are neither shown nor queried until re-enabled.
+const HIDDEN_PROVIDER_IDS = new Set(['google-patents-bigquery'])
+
 function defaultProviderIds(providers: ProviderInfo[]) {
-  const defaultIds = new Set(['indian-corpus', 'pqai-corpus', 'pqai', 'google-patents', 'google-patents-bigquery'])
+  const defaultIds = new Set(['indian-corpus', 'pqai-corpus', 'pqai', 'google-patents'])
   const ids = providers
-    .filter(provider => provider.enabled && defaultIds.has(provider.id))
+    .filter(provider => provider.enabled && !HIDDEN_PROVIDER_IDS.has(provider.id) && defaultIds.has(provider.id))
     .map(provider => provider.id)
-  return ids.length ? ids : providers.filter(provider => provider.enabled).slice(0, 1).map(provider => provider.id)
+  return ids.length ? ids : providers.filter(provider => provider.enabled && !HIDDEN_PROVIDER_IDS.has(provider.id)).slice(0, 1).map(provider => provider.id)
 }
 
 function sourceModeFromProviders(providerIds: string[]) {
@@ -188,6 +219,9 @@ export default function NoveltySearchSubmission(props: {
   const [groupId, setGroupId] = useState('')
   const jurisdiction = 'IN'
   const [searchPath, setSearchPath] = useState<SearchPath>('automatic')
+  // Two-step automatic flow: describe the invention, then review the plan on a
+  // dedicated screen before approving. 'review' is only meaningful when `review` is set.
+  const [view, setView] = useState<'setup' | 'review'>('setup')
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [selectedProviderIds, setSelectedProviderIds] = useState<string[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -254,7 +288,7 @@ export default function NoveltySearchSubmission(props: {
 
     const interval = window.setInterval(() => {
       setPreparationStageIndex(current => Math.min(current + 1, queryPreparationStages.length - 1))
-    }, 1600)
+    }, 2900)
 
     return () => window.clearInterval(interval)
   }, [isPreparing])
@@ -266,7 +300,7 @@ export default function NoveltySearchSubmission(props: {
   const selectableProviders = useMemo(() => {
     const storedEpo = providers.find(provider => provider.id === 'epo-ops-corpus')
     return providers
-      .filter(provider => provider.id !== 'epo-ops-corpus')
+      .filter(provider => provider.id !== 'epo-ops-corpus' && !HIDDEN_PROVIDER_IDS.has(provider.id))
       .map(provider => provider.id === 'epo-ops'
         ? {
             ...provider,
@@ -293,8 +327,18 @@ export default function NoveltySearchSubmission(props: {
       minCitations: Math.max(0, Number(paperMinCitations) || 0),
     },
   }
+  const selectedSourceLabels = useMemo(() => {
+    const labels = selectedProviderIds
+      .filter(id => !HIDDEN_PROVIDER_IDS.has(id))
+      .map(id => displayPatentNationality(id))
+    if (includePapers && paperSources.length) labels.push('Scholarly papers')
+    return Array.from(new Set(labels.filter(Boolean)))
+  }, [selectedProviderIds, includePapers, paperSources])
+
   const preparationStage = queryPreparationStages[preparationStageIndex] || queryPreparationStages[0]
-  const preparationProgress = Math.round(((preparationStageIndex + 1) / queryPreparationStages.length) * 100)
+  // Approach but never claim 100% until the request actually returns, so the bar
+  // doesn't read as "finished" while the model is still working.
+  const preparationProgress = Math.min(95, Math.round(((preparationStageIndex + 1) / queryPreparationStages.length) * 96))
 
   const manualFilters = useMemo(() => ({
     anyTextContains: splitValues(manualFields.anyText),
@@ -397,6 +441,7 @@ export default function NoveltySearchSubmission(props: {
       setNewFeature('')
       setNewEpoTitleKeyword('')
       setNewEpoAbstractKeyword('')
+      setView('review')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Failed to generate search terms.')
     } finally {
@@ -823,7 +868,62 @@ export default function NoveltySearchSubmission(props: {
       {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       {searchPath === 'manual' ? renderManualSearch() : (
-      <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="space-y-6">
+        {/* Two-step progress indicator */}
+        <ol className="flex items-center gap-3">
+          {[
+            { n: 1, label: 'Describe invention', done: view === 'review' || !!review, active: view === 'setup' && !isPreparing },
+            { n: 2, label: 'Review & approve', done: false, active: view === 'review' || isPreparing },
+          ].map((step, index) => (
+            <li key={step.n} className="flex flex-1 items-center gap-3 last:flex-none">
+              <div className="flex items-center gap-2.5">
+                <span className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ring-1 transition-colors ${step.done ? 'bg-indigo-600 text-white ring-indigo-600' : step.active ? 'bg-white text-indigo-700 ring-indigo-500' : 'bg-white text-slate-400 ring-slate-200'}`}>
+                  {step.done ? <CheckCircle2 className="h-4 w-4" /> : step.n}
+                </span>
+                <span className={`text-sm font-medium ${step.done || step.active ? 'text-slate-900' : 'text-slate-400'}`}>{step.label}</span>
+              </div>
+              {index === 0 && <span className={`hidden h-px flex-1 sm:block ${view === 'review' || !!review ? 'bg-indigo-300' : 'bg-slate-200'}`} />}
+            </li>
+          ))}
+        </ol>
+
+        {isPreparing && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <div className="mx-auto max-w-xl text-center">
+              <div className="relative mx-auto flex h-16 w-16 items-center justify-center">
+                <span className="absolute inset-0 animate-ping rounded-full bg-indigo-400/30" />
+                <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg">
+                  <Sparkles className="h-7 w-7" />
+                </span>
+              </div>
+              <h2 className="mt-5 text-lg font-semibold text-slate-900">Preparing your search plan</h2>
+              <p className="mt-1 text-sm text-slate-500">Our patent AI is turning your disclosure into a precise prior-art search. This usually takes 30–40 seconds.</p>
+
+              <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                    <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
+                    {preparationStage.label}
+                  </div>
+                  <div className="text-xs font-semibold text-indigo-700">{preparationProgress}%</div>
+                </div>
+                <p className="mt-1.5 pl-6 text-sm leading-5 text-slate-600">{preparationStage.detail}</p>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-700 ease-out" style={{ width: `${preparationProgress}%` }} />
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {queryPreparationStages.map((stage, index) => (
+                    <div key={stage.label} className={`h-1.5 flex-1 rounded-full transition-colors ${index <= preparationStageIndex ? 'bg-indigo-500' : 'bg-slate-200'}`} />
+                  ))}
+                </div>
+              </div>
+              <p className="mt-4 text-xs text-slate-400">Keep this tab open — the editable plan appears here as soon as it is ready.</p>
+            </div>
+          </section>
+        )}
+
+        {!isPreparing && view !== 'review' && (
+        <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-2 text-sm font-medium text-slate-700">
             <span className="flex items-center gap-2"><FolderOpen className="h-4 w-4" /> Project</span>
@@ -866,37 +966,71 @@ export default function NoveltySearchSubmission(props: {
 
         {renderSourceSelection()}
 
-        {review && (
-          <section className="space-y-5 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><CheckCircle2 className="h-5 w-5 text-indigo-600" /> Review Search Plan</h2>
-                <p className="mt-1 text-sm text-slate-600">Edit the proposed queries and features. Retrieval will use exactly what you approve below.</p>
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={review ? () => setView('review') : () => void prepareReview()}
+            disabled={isExtracting || !hasSelectedSources || !title.trim() || !description.trim()}
+            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {review ? <>Continue to Review <ArrowRight className="h-5 w-5" /></> : <><Sparkles className="h-5 w-5" /> Generate Search Query & Features</>}
+          </button>
+          {review && (
+            <button type="button" onClick={() => void prepareReview()} className="mx-auto flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800">
+              <RefreshCw className="h-3.5 w-3.5" /> Regenerate a fresh plan
+            </button>
+          )}
+          <p className="flex items-center justify-center gap-2 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" /> You review and approve the plan before any search runs.</p>
+        </div>
+        </div>
+        )}
+
+        {!isPreparing && view === 'review' && review && (
+          <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-5">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm"><Sparkles className="h-5 w-5" /></span>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">Review your search plan</h2>
+                  <p className="mt-1 text-sm text-slate-600">These terms drive prior-art retrieval and the feature-by-feature comparison. Edit anything, then approve.</p>
+                  {selectedSourceLabels.length > 0 && (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                      {selectedSourceLabels.map(label => (
+                        <span key={label} className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600">{label}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-              <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isSubmitting} className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">
-                {isPreparing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate
-              </button>
             </div>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              <span>Patent Search Query</span>
-              <textarea value={editedSearchQuery} onChange={event => setEditedSearchQuery(event.target.value)} rows={3} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-3 font-normal leading-6" />
-            </label>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Search className="h-4 w-4 text-indigo-600" />
+                <span className="text-sm font-semibold text-slate-900">Patent search query</span>
+              </div>
+              <p className="text-xs text-slate-500">The exact query string sent to the patent databases.</p>
+              <textarea value={editedSearchQuery} onChange={event => setEditedSearchQuery(event.target.value)} rows={3} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[13px] leading-6 text-slate-800 outline-none transition-colors focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-500/15" />
+            </div>
 
             <div className="space-y-3">
-              <div className="text-sm font-medium text-slate-700">Key Invention Features ({editedFeatures.length})</div>
+              <div className="flex items-center gap-2">
+                <ListChecks className="h-4 w-4 text-indigo-600" />
+                <span className="text-sm font-semibold text-slate-900">Key invention features</span>
+                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">{editedFeatures.length}</span>
+              </div>
               {editedFeatures.map((feature, index) => (
-                <div key={index} className="flex items-start gap-2">
-                  <div className="mt-3 w-8 shrink-0 text-xs font-semibold text-slate-500">KF{index + 1}</div>
-                  <textarea value={feature} onChange={event => updateFeature(index, event.target.value)} rows={2} className="min-h-11 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-5" />
-                  <button type="button" onClick={() => setEditedFeatures(current => current.filter((_, featureIndex) => featureIndex !== index))} aria-label={`Remove feature ${index + 1}`} className="mt-1 rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-600">
+                <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-500/10">
+                  <span className="mt-0.5 flex h-7 shrink-0 items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 px-2 text-xs font-semibold text-white shadow-sm">KF{index + 1}</span>
+                  <textarea value={feature} onChange={event => updateFeature(index, event.target.value)} rows={2} className="min-h-11 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-5 text-slate-800 outline-none" />
+                  <button type="button" onClick={() => setEditedFeatures(current => current.filter((_, featureIndex) => featureIndex !== index))} aria-label={`Remove feature ${index + 1}`} className="mt-0.5 rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
               ))}
-              <div className="flex gap-2 pl-10">
-                <input value={newFeature} onChange={event => setNewFeature(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFeature() } }} className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm" placeholder="Add another technical feature" />
-                <button type="button" onClick={addFeature} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
+              <div className="flex gap-2">
+                <input value={newFeature} onChange={event => setNewFeature(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFeature() } }} className="h-11 flex-1 rounded-xl border border-dashed border-slate-300 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/15" placeholder="Add another technical feature…" />
+                <button type="button" onClick={addFeature} className="inline-flex h-11 items-center gap-1 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
               </div>
             </div>
 
@@ -1009,44 +1143,25 @@ export default function NoveltySearchSubmission(props: {
           </section>
         )}
 
-        {!review ? (
+        {!isPreparing && view === 'review' && review && (
           <div className="space-y-3">
-          <button type="button" onClick={() => void prepareReview()} disabled={isPreparing || isExtracting || !hasSelectedSources} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
-            {isPreparing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
-            {isPreparing ? 'Generating search plan…' : 'Generate Search Query & Features'}
-          </button>
-          {isPreparing && (
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 rounded-lg bg-white p-2 text-indigo-600 shadow-sm">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-900">{preparationStage.label}</div>
-                    <div className="text-xs font-medium text-indigo-700">{preparationProgress}%</div>
-                  </div>
-                  <p className="mt-1 text-sm leading-5 text-slate-600">{preparationStage.detail}</p>
-                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">
-                    <div className="h-full rounded-full bg-indigo-600 transition-all duration-500" style={{ width: `${preparationProgress}%` }} />
-                  </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-5">
-                    {queryPreparationStages.map((stage, index) => (
-                      <div key={stage.label} className={`h-1.5 rounded-full ${index <= preparationStageIndex ? 'bg-indigo-500' : 'bg-white'}`} />
-                    ))}
-                  </div>
-                </div>
+            <div className="flex flex-col-reverse items-stretch gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <button type="button" onClick={() => setView('setup')} disabled={isSubmitting} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50">
+                <ArrowLeft className="h-4 w-4" /> Back to disclosure
+              </button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button type="button" onClick={() => void prepareReview()} disabled={isSubmitting} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50">
+                  <RefreshCw className="h-4 w-4" /> Regenerate
+                </button>
+                <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !hasSelectedSources || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-6 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:opacity-50">
+                  {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
+                  {isSubmitting ? 'Queueing approved search…' : 'Approve & Queue Search'}
+                </button>
               </div>
             </div>
-          )}
+            <p className="flex items-center justify-center gap-2 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" /> After approval, processing continues in the background.</p>
           </div>
-        ) : (
-          <button type="button" onClick={() => void submit()} disabled={isSubmitting || isPreparing || !hasSelectedSources || !editedSearchQuery.trim() || editedFeatures.every(feature => !feature.trim())} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-            {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
-            {isSubmitting ? 'Queueing approved search…' : 'Approve & Queue Novelty Search'}
-          </button>
         )}
-        <div className="flex items-center justify-center gap-2 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" /> After approval, processing continues in the background.</div>
       </div>
       )}
     </div>
