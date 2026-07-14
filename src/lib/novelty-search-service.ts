@@ -9,6 +9,7 @@ import { checkServiceAccess } from './org-access-service';
 import { sendEmail } from './mailer';
 import crypto from 'crypto';
 import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchConceptGroup, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
+import { fetchGooglePatentsClaims, googlePatentsClaimsEnabled } from '@/lib/google-patents-claims-service';
 import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
   literatureSearchService,
@@ -29,6 +30,15 @@ import {
 
 const FEATURE_MAPPING_CACHE_VERSION = 'v1.2';
 const STAGE15_GATE_CACHE_VERSION = 'stage15-gate-v3';
+
+// How many LLM batches each novelty stage runs at once (per search). Tune via the
+// NOVELTY_LLM_CONCURRENCY env var; hard-capped so a bad value can't hammer the
+// provider's rate limits. NOTE: this is per-search — N concurrent searches multiply it.
+const NOVELTY_LLM_MAX_CONCURRENCY = 12;
+const NOVELTY_LLM_CONCURRENCY = Math.max(
+  1,
+  Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(Number(process.env.NOVELTY_LLM_CONCURRENCY) || 6))
+);
 
 function escapeEmailHtml(value: unknown): string {
   return String(value ?? '')
@@ -517,11 +527,18 @@ For each patent, do all of the following in one pass:
 3. Provide attorney-review comparison rows showing the user invention disclosure side-by-side with the patent disclosure.
 4. Summarize novelty signals across the candidate set.
 
+STATUS DEFINITIONS
+- Present: the same mechanism is concretely disclosed in the supplied patent data.
+- Partial: a related mechanism is disclosed, but a required element, constraint, interaction, material, or step is missing.
+- Absent: the supplied patent data is adequate to compare and the feature is not disclosed.
+- Unknown: the supplied patent data is thin, vague, unavailable, translated poorly, or too generic to assess.
+
 EVIDENCE RULES
 - Use only the supplied reference data fields as evidence.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
 - Use Retrieval hints to focus review, but Present/Partial still require support in the supplied patent data.
-- Present/Partial require a short quote from the supplied patent data. If no supplied patent-data quote supports the feature, use Absent or Unknown.
+- Present/Partial require a verbatim quote of at most 18 words copied exactly, character for character, from the supplied title, abstract, or claims excerpt. Do not paraphrase, reorder, translate, or summarize inside the quote. If no supplied patent-data quote supports the feature, use Absent or Unknown.
+- When a claims excerpt is supplied for a reference, prefer claim language as evidence: claims define the protected scope and are stronger support than abstract wording.
 - user_invention_disclosure must be based only on FEATURE DETAILS or INVENTION DISCLOSURE, not on the prior-art patent.
 - patent_disclosure/evidence_quote must be based only on the supplied patent data.
 - Use Absent when the supplied patent data is adequate to compare and the feature is not disclosed.
@@ -542,8 +559,8 @@ OUTPUT JSON SHAPE:
       "pn": "PN",
       "title": "title",
       "coverage": {"present":0,"partial":0,"absent":0,"coverage_score":0.0},
-      "present": [{"feature":"copy feature exactly","quote":"quote","field":"title|abstract","extent_score":0.0,"confidence":0.0}],
-      "partial": [{"feature":"copy feature exactly","quote":"quote","field":"title|abstract","extent_score":0.0,"confidence":0.0}],
+      "present": [{"feature":"copy feature exactly","quote":"verbatim quote","field":"title|abstract|claims","extent_score":0.0,"confidence":0.0}],
+      "partial": [{"feature":"copy feature exactly","quote":"verbatim quote","field":"title|abstract|claims","extent_score":0.0,"confidence":0.0}],
       "absent": [{"feature":"copy feature exactly","reason":"short reason"}],
       "unknown": [{"feature":"copy feature exactly","reason":"requires full-text review"}],
       "remarks": "2-3 sentence technical assessment",
@@ -564,8 +581,8 @@ OUTPUT JSON SHAPE:
           "user_invention_disclosure": "what the user's invention has or does for this feature",
           "patent_disclosure": "what this patent discloses for the same feature, or why evidence is missing",
           "status": "Present|Partial|Absent|Unknown",
-          "evidence_quote": "short supporting quote or empty string",
-          "evidence_source": "title|abstract|none",
+          "evidence_quote": "verbatim quote copied exactly from the supplied title or abstract, or empty string",
+          "evidence_source": "title|abstract|claims|none",
           "extent_score": 0.0,
           "confidence": 0.0,
           "professional_remark": "one consolidated attorney-grade feature-level observation for the final PDF report"
@@ -605,7 +622,7 @@ RULES
 - extent_score must be the actual disclosure extent for that feature in that specific patent: Present usually 0.75-1.00, Partial 0.35-0.74, Absent 0.00-0.20, Unknown 0.00-0.35.
 - Evaluate extent_score independently for every patent-feature pair. Do not reuse the same feature-level score across different patents unless their evidence is materially identical.
 - confidence means confidence in the row assessment, not degree of feature disclosure.
-- evidence_source must be title, abstract, or none. Do not cite unavailable claims, descriptions, embodiments, examples, or figures.
+- evidence_source must be title, abstract, claims (only when a claims excerpt is supplied for that reference), or none. Do not cite unavailable descriptions, embodiments, examples, or figures.
 - Do not repeat the source-field limitation in narrative fields. Do not use "limited data", "limited available patent data", "missing data", "low evidence", "fallback", or "deterministic" in public-facing remarks.
 - professional_remark is the only final-PDF feature-level remark. Write 1-3 polished sentences for an inventor and patent attorney.
 - professional_remark must explain the mapped teaching, the missing or distinguishable technical point, and the practical claim-review focus where applicable.
@@ -1581,7 +1598,7 @@ export interface PatentFeatureComparisonRow {
   patent_disclosure: string;
   status: FeatureMapCell['status'];
   evidence_quote?: string;
-  evidence_source: 'title' | 'abstract' | 'title/abstract' | 'none';
+  evidence_source: 'title' | 'abstract' | 'title/abstract' | 'claims' | 'none';
   extent_score?: number;
   confidence?: number;
   crisp_remark: string;
@@ -1606,7 +1623,7 @@ export class NoveltySearchService extends BasePatentService {
       borderlineQuota: 5,
       maxCandidates: 120,
       batchSize: 15,
-      concurrency: 3,
+      concurrency: NOVELTY_LLM_CONCURRENCY,
       timeoutMs: 90000,
       visibleLimit: DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
       minimumVisibleConfidence: DEFAULT_MINIMUM_VISIBLE_CONFIDENCE
@@ -1619,7 +1636,7 @@ export class NoveltySearchService extends BasePatentService {
     },
     stage35a: {
       batchSize: 8,
-      concurrency: 3,
+      concurrency: NOVELTY_LLM_CONCURRENCY,
       maxRefsTotal: 60,
       thresholdPresent: 0.70,
       thresholdPartial: 0.40,
@@ -1631,13 +1648,13 @@ export class NoveltySearchService extends BasePatentService {
     stage35c: {
       maxPatentsForRemarks: undefined,
       batchSize: 8,
-      concurrency: 3
+      concurrency: NOVELTY_LLM_CONCURRENCY
     },
     consolidatedAnalysis: {
       enabled: true,
       maxCandidates: 60,
       batchSize: 8,
-      concurrency: 3,
+      concurrency: NOVELTY_LLM_CONCURRENCY,
       maxPatentsForAttorneyReport: 60
     },
     adaptiveAnalysis: {
@@ -2803,7 +2820,7 @@ export class NoveltySearchService extends BasePatentService {
             const partialB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Partial').map((c: FeatureMapCell) => c.feature);
             const absentB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Absent').map((c: FeatureMapCell) => c.feature);
             const unknownB = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Unknown').map((c: FeatureMapCell) => c.feature);
-            const maxAbs = abstractB ? String(abstractB).split(/\s+/).slice(0, 120).join(' ') : '';
+            const maxAbs = abstractB ? String(abstractB).replace(/\s+/g, ' ').trim() : '';
             return [
               `Item ${idx + 1}:`,
               `PN: ${pnB}`,
@@ -2889,7 +2906,7 @@ export class NoveltySearchService extends BasePatentService {
             const present = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Present').map((c: FeatureMapCell) => c.feature);
             const partial = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Partial').map((c: FeatureMapCell) => c.feature);
             const absent = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Absent').map((c: FeatureMapCell) => c.feature);
-            const maxAbstract = abstract ? String(abstract).split(/\s+/).slice(0, 120).join(' ') : '';
+            const maxAbstract = abstract ? String(abstract).replace(/\s+/g, ' ').trim() : '';
 
             let item: PerPatentRemark | null = null;
             const fromParsed = Array.isArray(parsedArr) ? parsedArr[i] : undefined;
@@ -2984,7 +3001,7 @@ export class NoveltySearchService extends BasePatentService {
         const absent = (p.feature_analysis || []).filter((c: FeatureMapCell) => c.status === 'Absent').map((c: FeatureMapCell) => c.feature);
 
         // Build detailed prompt for single patent analysis
-        const maxAbstract = abstract ? String(abstract).split(/\s+/).slice(0, 120).join(' ') : '';
+        const maxAbstract = abstract ? String(abstract).replace(/\s+/g, ' ').trim() : '';
         const prompt = [
           'You are a senior patent analyst providing detailed prior art assessment for inventor review.',
           'Given invention features and a single prior-art patent with feature mapping, output ONLY JSON.',
@@ -4965,7 +4982,25 @@ RESPONSE:`;
     return merged;
   }
 
-  private normalizePatentComparisonRows(rows: any, patentMap: PatentFeatureMap, stage0Data: NormalizedIdea): PatentFeatureComparisonRow[] {
+  // Verbatim check for evidence quotes: a quote is only trusted when it can be found
+  // (after normalization) inside the supplied patent title, abstract, or claims text.
+  private evidenceQuoteVerifies(quote: string, patentSource: { title?: string; abstract?: string; claimsText?: string }): boolean {
+    const normalizedQuote = this.normalizeEvidenceForVerification(String(quote || ''));
+    if (!normalizedQuote) return false;
+    const normalizedTitle = this.normalizeEvidenceForVerification(String(patentSource?.title || ''));
+    const normalizedAbstract = this.normalizeEvidenceForVerification(String(patentSource?.abstract || ''));
+    const normalizedClaims = this.normalizeEvidenceForVerification(String(patentSource?.claimsText || ''));
+    return normalizedAbstract.includes(normalizedQuote) ||
+      normalizedTitle.includes(normalizedQuote) ||
+      Boolean(normalizedClaims && normalizedClaims.includes(normalizedQuote));
+  }
+
+  private normalizePatentComparisonRows(
+    rows: any,
+    patentMap: PatentFeatureMap,
+    stage0Data: NormalizedIdea,
+    patentSource?: { title?: string; abstract?: string; claimsText?: string },
+  ): PatentFeatureComparisonRow[] {
     const features = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
     const details = this.normalizeFeatureDetails(stage0Data, stage0Data.inventionText || '');
     const detailByFeature = new Map(details.map(detail => [detail.feature, detail]));
@@ -4999,15 +5034,32 @@ RESPONSE:`;
       const suppliedRow = suppliedByFeature.get(feature) || {};
       const detail = detailByFeature.get(feature);
       const cell = cellByFeature.get(feature);
-      const status = this.normalizeFeatureStatus(suppliedRow.status || cell?.status);
-      const evidenceQuote = evidenceQuoteFrom(
-        suppliedRow.evidence_quote,
-        suppliedRow.evidence,
-        cell?.quote,
-        cell?.evidence,
+      // The comparison rows come straight from the LLM and previously bypassed the
+      // evidence verification applied to feature-map cells. When the source patent
+      // text is available, reject any supplied quote that is not verbatim from the
+      // title/abstract: an unverifiable quote must never carry a Present/Partial
+      // claim into the report, so the row falls back to the already-verified cell.
+      const suppliedQuote = evidenceQuoteFrom(suppliedRow.evidence_quote, suppliedRow.evidence);
+      const suppliedQuoteRejected = Boolean(
+        patentSource && suppliedQuote && !this.evidenceQuoteVerifies(suppliedQuote, patentSource)
       );
-      const evidenceSource = this.normalizeEvidenceSource(suppliedRow.evidence_source || evidenceSourceFrom(suppliedRow.evidence) || cell?.evidence_source || cell?.field || evidenceSourceFrom(cell?.evidence), status);
-      const confidence = this.normalizeScore(suppliedRow.confidence ?? cell?.confidence);
+      const suppliedStatus = this.normalizeFeatureStatus(suppliedRow.status || cell?.status);
+      const status = suppliedQuoteRejected && (suppliedStatus === 'Present' || suppliedStatus === 'Partial')
+        ? this.normalizeFeatureStatus(cell?.status || 'Unknown')
+        : suppliedStatus;
+      const evidenceQuote = suppliedQuoteRejected
+        ? evidenceQuoteFrom(cell?.quote, cell?.evidence)
+        : (suppliedQuote || evidenceQuoteFrom(cell?.quote, cell?.evidence));
+      const evidenceSource = this.normalizeEvidenceSource(
+        suppliedQuoteRejected
+          ? (cell?.evidence_source || cell?.field || evidenceSourceFrom(cell?.evidence))
+          : (suppliedRow.evidence_source || evidenceSourceFrom(suppliedRow.evidence) || cell?.evidence_source || cell?.field || evidenceSourceFrom(cell?.evidence)),
+        status
+      );
+      const rawConfidence = this.normalizeScore(suppliedRow.confidence ?? cell?.confidence);
+      const confidence = suppliedQuoteRejected && typeof rawConfidence === 'number'
+        ? Math.min(rawConfidence, 0.4)
+        : rawConfidence;
       const patentDisclosure = String(
         suppliedRow.patent_disclosure ||
         cell?.patent_disclosure ||
@@ -5018,10 +5070,12 @@ RESPONSE:`;
           : 'No supporting patent data was identified for this feature.')
       ).trim();
       const suppliedExtentScore = this.normalizeScore(
-        suppliedRow.extent_score ??
-        suppliedRow.extentScore ??
-        cell?.extent_score ??
-        (cell as any)?.extentScore
+        suppliedQuoteRejected
+          ? (cell?.extent_score ?? (cell as any)?.extentScore)
+          : (suppliedRow.extent_score ??
+            suppliedRow.extentScore ??
+            cell?.extent_score ??
+            (cell as any)?.extentScore)
       );
       const extentScore = suppliedExtentScore ?? this.defaultFeatureExtentScore(
         status,
@@ -5114,6 +5168,7 @@ RESPONSE:`;
 
   private normalizeEvidenceSource(value: any, status: FeatureMapCell['status']): PatentFeatureComparisonRow['evidence_source'] {
     const text = String(value || '').toLowerCase();
+    if (text.includes('claim')) return 'claims';
     if (text.includes('title') && text.includes('abstract')) return 'title/abstract';
     if (text.includes('title')) return 'title';
     if (text.includes('abstract')) return 'abstract';
@@ -5452,8 +5507,18 @@ RESPONSE:`;
     const normalizedPatents = adaptiveMode === 'off'
       ? normalizedPatentsUnordered
       : this.orderAdaptiveCandidates(normalizedPatentsUnordered, stage0Data, screeningClusters, batchSize);
-    const concurrency = Math.max(1, Math.min(4, Math.trunc(config.consolidatedAnalysis?.concurrency || 3)));
-    const executionConcurrency = adaptiveMode === 'off' ? concurrency : 1;
+    // Claims-aware deep analysis (flag-gated): hydrate English claims text for the
+    // strongest candidates from the BigQuery claims staging table so the mapping can
+    // cite claim language instead of relying on the abstract alone. US publications
+    // only — the public dataset carries no non-US full text.
+    const claimsTopN = Math.max(0, Math.min(20, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '0') || 0));
+    if (claimsTopN > 0 && googlePatentsClaimsEnabled()) {
+      await this.hydrateClaimsForTopCandidates(normalizedPatents, claimsTopN);
+    }
+    const concurrency = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(config.consolidatedAnalysis?.concurrency || NOVELTY_LLM_CONCURRENCY)));
+    // Only 'enforce' must run sequentially, so its saturation check can early-stop
+    // after each batch. 'off' and 'observe' process every batch anyway → run in parallel.
+    const executionConcurrency = adaptiveMode === 'enforce' ? 1 : concurrency;
     const batches = this.createBatches(normalizedPatents, batchSize);
     const parsedBatches: any[] = [];
     let totalInputTokens = 0;
@@ -5481,13 +5546,16 @@ RESPONSE:`;
 
     const buildPrompt = (batch: any[]) => {
       const patentBatchText = batch.map((patent, index) => {
-        const abstractWords = String(patent.abstract || '').split(/\s+/).filter(Boolean).slice(0, 220).join(' ');
+        // Untrimmed: the mapping stage must see the full abstract, both so the
+        // deciding sentence is never cut and so verbatim evidence quotes verify.
+        const abstractWords = String(patent.abstract || '').replace(/\s+/g, ' ').trim();
         return [
           `Reference ${index + 1}:`,
           `Reference ID: ${patent.canonicalPn}`,
           `Type: ${patent.referenceType === 'paper' ? 'Scholarly paper' : 'Patent'}`,
           `Title: ${patent.title}`,
           `Abstract: ${abstractWords || 'N/A'}`,
+          ...(patent.claimsText ? [`Claims (excerpt): ${String(patent.claimsText).replace(/\s+/g, ' ').trim()}`] : []),
           ...(patent.referenceType === 'paper' ? [
             `Authors: ${(patent.authors || []).join(', ') || 'N/A'}`,
             `Year/Venue: ${patent.year || ''} ${patent.venue || ''}`.trim(),
@@ -5507,8 +5575,7 @@ RESPONSE:`;
         .replace('{patent_batch}', patentBatchText);
     };
 
-    const processBatch = async (batch: any[], batchIndex: number) => {
-      const prompt = buildPrompt(batch);
+    const executeBatchAttempt = async (batch: any[], batchIndex: number, prompt: string) => {
       const llmResult = await llmGateway.executeLLMOperation(
         { headers: requestHeaders || {} },
         {
@@ -5553,7 +5620,40 @@ RESPONSE:`;
       totalOutputTokens += Number(response.outputTokens || 0);
       totalThoughtTokens += Number(response.metadata?.thoughtTokens || 0);
       modelClass = modelClass || response.modelClass || '';
-      parsedBatches[batchIndex] = { parsed, prompt, patentCount: batch.length };
+      return parsed;
+    };
+
+    // A failing batch no longer aborts the whole consolidated stage: retry the LLM
+    // call once, then fall back to a deterministic Unknown map for just that batch so
+    // the successfully analyzed batches are kept. Only a run where EVERY batch fails
+    // still returns failure (and routes to the legacy 3.5a/3.5c chain as before).
+    const CONSOLIDATED_BATCH_ATTEMPTS = 2;
+    const processBatch = async (batch: any[], batchIndex: number) => {
+      const prompt = buildPrompt(batch);
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= CONSOLIDATED_BATCH_ATTEMPTS; attempt++) {
+        try {
+          const parsed = await executeBatchAttempt(batch, batchIndex, prompt);
+          parsedBatches[batchIndex] = { parsed, prompt, patentCount: batch.length };
+          return;
+        } catch (error) {
+          lastError = error;
+          console.warn(`[ConsolidatedAnalysis] Batch ${batchIndex + 1} attempt ${attempt}/${CONSOLIDATED_BATCH_ATTEMPTS} failed:`, error instanceof Error ? error.message : error);
+        }
+      }
+      const fallback = this.createUnknownFeatureMap(batch, inventionFeatures);
+      parsedBatches[batchIndex] = {
+        parsed: {
+          feature_map: fallback.feature_map,
+          per_patent_remarks: [],
+          quality_flags: fallback.quality_flags,
+          stats: fallback.stats,
+        },
+        prompt,
+        patentCount: batch.length,
+        fallback: true,
+        error: lastError instanceof Error ? lastError.message : String(lastError || 'Unknown batch failure'),
+      };
     };
 
     try {
@@ -5606,7 +5706,7 @@ RESPONSE:`;
             totalPatents: normalizedPatents.length,
             processedBatches: processedBatchCount,
             batchCount: batches.length,
-            failedBatches: 0,
+            failedBatches: parsedBatches.filter(item => item?.fallback).length,
           }),
           {
             extra: {
@@ -5653,7 +5753,21 @@ RESPONSE:`;
       };
     }
 
-    const parsed = this.mergeConsolidatedAnalysisBatches(parsedBatches.map(item => item.parsed));
+    const processedBatchEntries = parsedBatches.filter(Boolean);
+    const fallbackBatchEntries = processedBatchEntries.filter(item => item.fallback);
+    if (fallbackBatchEntries.length > 0 && fallbackBatchEntries.length >= processedBatchEntries.length) {
+      // Every batch failed even after retries: preserve the pre-existing behavior of
+      // routing the whole run to the legacy 3.5a/3.5c fallback chain.
+      return {
+        success: false,
+        error: `Consolidated analysis failed for all ${fallbackBatchEntries.length} processed batches. Last error: ${fallbackBatchEntries[fallbackBatchEntries.length - 1]?.error || 'unknown'}`
+      };
+    }
+    if (fallbackBatchEntries.length > 0) {
+      console.warn(`[ConsolidatedAnalysis] ${fallbackBatchEntries.length}/${processedBatchEntries.length} batches fell back to deterministic Unknown maps after retries.`);
+    }
+
+    const parsed = this.mergeConsolidatedAnalysisBatches(processedBatchEntries.map(item => item.parsed));
     const rawFeatureMaps = this.validateAndRepairFeatureMaps(parsed.feature_map, normalizedPatents, inventionFeatures);
     const featureMaps = rawFeatureMaps.map(map => {
       const patent = normalizedPatents.find(item => item.canonicalPn === map.pn) || {};
@@ -5676,11 +5790,17 @@ RESPONSE:`;
       const key = this.canonicalPatentNumber(remark?.pn);
       if (key) remarkByPn.set(key, remark);
     }
+    const patentByCanonicalPn = new Map(normalizedPatents.map((item: any) => [item.canonicalPn, item]));
     const remarks: PerPatentRemark[] = featureMaps.map((map: any) => {
       const key = this.canonicalPatentNumber(map.pn);
       const parsedRemark = remarkByPn.get(key);
       if (parsedRemark) {
-        const comparisonRows = this.normalizePatentComparisonRows(parsedRemark.comparison_rows, map, stage0Data);
+        const comparisonRows = this.normalizePatentComparisonRows(
+          parsedRemark.comparison_rows,
+          map,
+          stage0Data,
+          patentByCanonicalPn.get(map.pn) || patentByCanonicalPn.get(key)
+        );
         this.applyComparisonRowsToFeatureMap(map, comparisonRows);
         return {
           pn: map.pn,
@@ -6061,10 +6181,13 @@ RESPONSE:`;
       const buildBatchPrompt = (batch: any[]) => {
         const feats = JSON.stringify(features);
         const norm = (v: any, max = 800) => String(v || '').replace(/\s+/g, ' ').substring(0, max);
+        // Abstracts are passed untrimmed: truncation can cut the exact sentence the
+        // gate decision depends on, and patent abstracts are naturally bounded.
+        const normFull = (v: any) => String(v || '').replace(/\s+/g, ' ').trim();
         const items = batch.map((it, idx) => {
           const pn = it.publication_number || it.publicationNumber || it.pn || it.id || '';
           const title = norm(it.title || '');
-          const abstract = norm(it.snippet || it.abstract || it.description || '');
+          const abstract = normFull(it.snippet || it.abstract || it.description || '');
           const retrievalHints = this.formatRetrievalHints(it);
           const referenceType = it.referenceType === 'paper' ? 'Scholarly paper' : 'Patent';
           const paperMetadata = it.referenceType === 'paper'
@@ -6173,7 +6296,7 @@ RESPONSE:`;
 
       const byPn: Record<string, PriorArtGateRecord> = { ...(existingByPn as Record<string, PriorArtGateRecord>) };
       const safeBatchSize = Math.max(1, Math.trunc(batchSize || 12));
-      const safeConcurrency = Math.max(1, Math.min(4, Math.trunc(concurrency || 3)));
+      const safeConcurrency = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(concurrency || NOVELTY_LLM_CONCURRENCY)));
       const budgetMs = Math.max(10000, Math.trunc(timeoutMs || 90000));
       const startedAt = Date.now();
       const batches = this.createBatches(candidates, safeBatchSize);
@@ -6491,7 +6614,7 @@ RESPONSE:`;
       console.log(`ðŸ“¦ Processing ${normalizedPatents.length} patents in ${batches.length} batches of ${batchSize}`);
 
       const allFeatureMaps: PatentFeatureMap[] = [];
-      const concurrencyLimit = Math.max(1, Math.min(4, Math.trunc(config.stage35a.concurrency || 3)));
+      const concurrencyLimit = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(config.stage35a.concurrency || NOVELTY_LLM_CONCURRENCY)));
       let failedBatches = 0;
 
       await this.persistDeepAnalysisProgress(
@@ -9592,9 +9715,6 @@ ${candidatesText}`;
       let abstractStr = String(abstractRaw || '').trim();
       if (!abstractStr) abstractStr = 'No abstract available.';
 
-      const words = abstractStr.split(/\s+/).filter(Boolean);
-      if (words.length > 180) abstractStr = words.slice(0, 180).join(' ');
-
       seen.add(canonicalPn);
       normalized.push({
         ...patent,
@@ -9605,6 +9725,34 @@ ${candidatesText}`;
     }
 
     return normalized;
+  }
+
+  // Fetch English claims text for the strongest candidates (BigQuery claims staging
+  // table; US publications only) and attach a bounded excerpt to each normalized
+  // patent so the consolidated prompt and evidence verification can use it.
+  private async hydrateClaimsForTopCandidates(normalizedPatents: any[], topN: number) {
+    const maxChars = Math.max(1000, Number(process.env.NOVELTY_CLAIMS_MAX_CHARS || '6000') || 6000);
+    const targets = normalizedPatents
+      .slice(0, Math.max(0, topN))
+      .filter(patent => patent && patent.referenceType !== 'paper' && !patent.claimsText);
+    if (!targets.length) return;
+    try {
+      const claims = await fetchGooglePatentsClaims(targets.map(patent => String(patent.canonicalPn || '')));
+      let hydrated = 0;
+      for (const patent of targets) {
+        const text = claims.get(String(patent.canonicalPn || ''));
+        if (text) {
+          patent.claimsText = text.replace(/\s+/g, ' ').trim().slice(0, maxChars);
+          hydrated += 1;
+        }
+      }
+      if (hydrated > 0) {
+        console.info(`[ConsolidatedAnalysis] Hydrated claims text for ${hydrated}/${targets.length} top candidates.`);
+      }
+    } catch (error) {
+      console.warn('[ConsolidatedAnalysis] Claims hydration failed; continuing with title/abstract evidence.',
+        error instanceof Error ? error.message : error);
+    }
   }
 
   private createBatches(patents: any[], batchSize: number): any[][] {
@@ -10081,13 +10229,16 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     ).trim();
     const title = String(patent?.title || '');
     const abstract = String(patent?.abstract || '');
+    const claimsText = String(patent?.claimsText || '');
     const normalizedQuote = this.normalizeEvidenceForVerification(quote);
     const normalizedTitle = this.normalizeEvidenceForVerification(title);
     const normalizedAbstract = this.normalizeEvidenceForVerification(abstract);
+    const normalizedClaims = this.normalizeEvidenceForVerification(claimsText);
     const quoteInAbstract = Boolean(normalizedQuote && normalizedAbstract.includes(normalizedQuote));
     const quoteInTitle = Boolean(normalizedQuote && normalizedTitle.includes(normalizedQuote));
+    const quoteInClaims = Boolean(normalizedQuote && normalizedClaims && normalizedClaims.includes(normalizedQuote));
 
-    if (!normalizedQuote || (!quoteInAbstract && !quoteInTitle)) {
+    if (!normalizedQuote || (!quoteInAbstract && !quoteInTitle && !quoteInClaims)) {
       return {
         ...cell,
         status: 'Unknown',
@@ -10105,7 +10256,7 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
     }
 
     const originalConfidence = this.normalizeScore(cell.mappingConfidence ?? cell.confidence) ?? 0.7;
-    if (cell.status === 'Present' && !quoteInAbstract) {
+    if (cell.status === 'Present' && !quoteInAbstract && !quoteInClaims) {
       return {
         ...cell,
         status: 'Partial',
@@ -10121,13 +10272,17 @@ Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
       };
     }
 
+    // Claims are the strongest record-level evidence, then abstract, then title.
+    const matchedField = quoteInClaims && !quoteInAbstract ? 'claims' : quoteInAbstract ? 'abstract' : 'title';
     return {
       ...cell,
       quote,
-      field: quoteInAbstract ? 'abstract' : 'title',
-      evidence_source: quoteInAbstract ? 'abstract' : 'title',
-      evidenceDepth: quoteInAbstract ? (title ? 'TITLE_AND_ABSTRACT' : 'ABSTRACT_ONLY') : 'TITLE_ONLY',
-      legalEvidenceStrength: quoteInAbstract ? 0.65 : 0.30,
+      field: matchedField,
+      evidence_source: matchedField,
+      evidenceDepth: matchedField === 'claims'
+        ? 'CLAIMS_AND_SPECIFICATION'
+        : quoteInAbstract ? (title ? 'TITLE_AND_ABSTRACT' : 'ABSTRACT_ONLY') : 'TITLE_ONLY',
+      legalEvidenceStrength: matchedField === 'claims' ? 0.75 : quoteInAbstract ? 0.65 : 0.30,
       mappingConfidence: originalConfidence,
     };
   }

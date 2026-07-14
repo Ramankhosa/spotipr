@@ -9,6 +9,7 @@ import { IndianCorpusProvider } from './providers/indian-corpus-provider'
 import { IpAustraliaProvider, hasIpAustraliaCredentials } from './providers/ip-australia-provider'
 import { GooglePatentsProvider, hasGooglePatentsCredentials } from './providers/google-patents-provider'
 import { GooglePatentsBigQueryProvider, hasGooglePatentsBigQueryCredentials } from './providers/google-patents-bigquery-provider'
+import { GooglePatentsCorpusProvider } from './providers/google-patents-corpus-provider'
 import { PqaiCorpusProvider } from './providers/pqai-corpus-provider'
 import { PqaiProvider } from './providers/pqai-provider'
 import { PatentsViewProvider } from './providers/patentsview-provider'
@@ -38,6 +39,7 @@ class PlaceholderProvider implements PatentSearchProvider {
 
 const providers: PatentSearchProvider[] = [
   new IndianCorpusProvider(),
+  new GooglePatentsCorpusProvider(),
   new PqaiCorpusProvider(),
   new PqaiProvider(),
   new GooglePatentsProvider(),
@@ -107,19 +109,19 @@ export function resolveProviderIds(params: {
   if (params.sourceMode === 'INDIAN_ONLY') return ['indian-corpus', ...googleProviderIds]
   if (params.sourceMode === 'AUSTRALIA_ONLY') return ['ip-australia', ...googleProviderIds]
   if (params.sourceMode === 'EPO_ONLY') return [...epoProviderIds, ...googleProviderIds]
-  if (params.sourceMode === 'PQAI_ONLY') return [...officialProviderIds, 'pqai-corpus', 'pqai', ...googleProviderIds]
-  if (params.sourceMode === 'PQAI_PLUS_INDIAN') return ['indian-corpus', ...officialProviderIds, 'pqai-corpus', 'pqai', ...googleProviderIds]
-  if (params.sourceMode === 'PQAI_PLUS_AUSTRALIA') return [...officialProviderIds, 'pqai-corpus', 'pqai', ...googleProviderIds]
-  if (params.sourceMode === 'PQAI_PLUS_EPO') return [...epoProviderIds, 'pqai-corpus', 'pqai', ...googleProviderIds]
-  if (params.sourceMode === 'PQAI_PLUS_INDIAN_EPO') return ['indian-corpus', ...epoProviderIds, 'pqai-corpus', 'pqai', ...googleProviderIds]
+  if (params.sourceMode === 'PQAI_ONLY') return [...officialProviderIds, 'pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
+  if (params.sourceMode === 'PQAI_PLUS_INDIAN') return ['indian-corpus', ...officialProviderIds, 'pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
+  if (params.sourceMode === 'PQAI_PLUS_AUSTRALIA') return [...officialProviderIds, 'pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
+  if (params.sourceMode === 'PQAI_PLUS_EPO') return [...epoProviderIds, 'pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
+  if (params.sourceMode === 'PQAI_PLUS_INDIAN_EPO') return ['indian-corpus', ...epoProviderIds, 'pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
 
   if (jurisdictions.length) {
     const ids: PatentSearchProviderId[] = []
     if (jurisdictions.includes('IN')) ids.push('indian-corpus')
     ids.push(...officialProviderIds)
-    ids.push('pqai-corpus', 'pqai')
+    ids.push('pqai-corpus', 'google-patents-corpus', 'pqai')
     ids.push(...googleProviderIds)
-    return ids.length ? ids : ['pqai-corpus', 'pqai', ...googleProviderIds]
+    return ids.length ? ids : ['pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
   }
-  return ['pqai-corpus', 'pqai', ...googleProviderIds]
+  return ['pqai-corpus', 'google-patents-corpus', 'pqai', ...googleProviderIds]
 }

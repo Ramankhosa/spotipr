@@ -701,6 +701,14 @@ async function runOnce(options: BatchEmbedOptions) {
 
 async function main() {
   const options = parseOptions()
+  if (PATENT_CORPUS_EMBEDDING_MODEL.toLowerCase().startsWith('voyage')) {
+    console.error(
+      '[PatentCorpusBatchEmbed] This script drives the OpenAI async Batch API and cannot be used with Voyage models. ' +
+      `PATENT_CORPUS_EMBEDDING_MODEL=${PATENT_CORPUS_EMBEDDING_MODEL} embeds through the realtime worker instead: ` +
+      'run `npm run patent-corpus:worker` with PATENT_CORPUS_REALTIME_EMBEDDINGS enabled (see scripts/google-patents-import/README.md).'
+    )
+    process.exit(1)
+  }
   const embeddingMode = String(process.env.PATENT_CORPUS_EMBEDDING_MODE || 'realtime').trim().toLowerCase()
   const allowBatchSubmissions = embeddingMode === 'batch' ||
     hasArg('--force-submit') ||

@@ -14,10 +14,25 @@ import type { NormalizedPatentResult } from '@/lib/patent-search/types'
 
 export const PATENT_CORPUS_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'patent-corpus')
 export const PATENT_CORPUS_EMBEDDING_MODEL = process.env.PATENT_CORPUS_EMBEDDING_MODEL || 'text-embedding-3-small'
-export const PATENT_CORPUS_EMBEDDING_DIMENSIONS = 1536
+// Voyage models (voyage-3-lite / voyage-3.5-lite) are served from api.voyageai.com and
+// default to 512 dimensions; OpenAI text-embedding-3-* default to 1536. Dimensions are
+// overridable via env so Matryoshka-shortened variants can be used on small servers.
+export const PATENT_CORPUS_EMBEDDING_PROVIDER: 'voyage' | 'openai' =
+  PATENT_CORPUS_EMBEDDING_MODEL.toLowerCase().startsWith('voyage') ? 'voyage' : 'openai'
+export const PATENT_CORPUS_EMBEDDING_DIMENSIONS = Math.max(64, Number(
+  process.env.PATENT_CORPUS_EMBEDDING_DIMENSIONS ||
+  (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage' ? 512 : 1536)
+) || (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage' ? 512 : 1536))
+// Physical storage column on local_patent_embeddings. The legacy column is a fixed
+// vector(1536); shortened embeddings live in the halfvec(512) column added for the
+// Google Patents corpus (half precision keeps the index small enough for modest RAM).
+export const PATENT_CORPUS_EMBEDDING_COLUMN: 'embedding' | 'embeddingHalf' =
+  PATENT_CORPUS_EMBEDDING_DIMENSIONS === 1536 ? 'embedding' : 'embeddingHalf'
+export const PATENT_CORPUS_EMBEDDING_SQL_TYPE = PATENT_CORPUS_EMBEDDING_COLUMN === 'embedding' ? 'vector' : 'halfvec'
 export const PATENT_CORPUS_SOURCE_INDIAN = 'indian-corpus'
 export const PATENT_CORPUS_SOURCE_PQAI = 'pqai'
 export const PATENT_CORPUS_SOURCE_EPO = 'epo-ops'
+export const PATENT_CORPUS_SOURCE_GOOGLE = 'google-patents-corpus'
 export const PATENT_CORPUS_MAX_PDFS_PER_BATCH = Math.max(
   1,
   Number(process.env.PATENT_CORPUS_MAX_PDFS_PER_BATCH || '100') || 100
@@ -1651,10 +1666,12 @@ function logOpenAISearchEmbedding(
 }
 
 export function hasSearchEmbeddingApiKey() {
+  if (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage') return Boolean(process.env.VOYAGE_API_KEY)
   return Boolean(process.env.OPENAI_SEARCH_API_KEY || process.env.OPENAI_API_KEY)
 }
 
 export function hasCorpusEmbeddingApiKey() {
+  if (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage') return Boolean(process.env.VOYAGE_API_KEY)
   return Boolean(process.env.OPENAI_CORPUS_API_KEY || process.env.OPENAI_API_KEY)
 }
 
@@ -1806,12 +1823,114 @@ export async function requestOpenAIEmbedding(text: string, options: EmbeddingReq
   return embedding
 }
 
+const VOYAGE_EMBEDDING_TIMEOUT_MS = Math.max(2000, Number(process.env.VOYAGE_EMBEDDING_TIMEOUT_MS || '45000') || 45000)
+const VOYAGE_EMBEDDING_MAX_ATTEMPTS = Math.max(1, Number(process.env.VOYAGE_EMBEDDING_MAX_ATTEMPTS || '4') || 4)
+// voyage-3-lite is natively 512-dim; only send output_dimension when the configured
+// dimensionality differs (supported by voyage-3.5 family Matryoshka models).
+const VOYAGE_NATIVE_DIMENSIONS: Record<string, number> = {
+  'voyage-3-lite': 512,
+  'voyage-3.5-lite': 1024,
+  'voyage-3.5': 1024,
+  'voyage-3': 1024,
+  'voyage-3-large': 1024,
+}
+
+function shouldRetryVoyageEmbedding(status: number) {
+  return status === 408 || status === 409 || status === 429 || status >= 500
+}
+
+export async function requestVoyageEmbeddings(texts: string[], options: EmbeddingRequestOptions = {}) {
+  const purpose = options.purpose || 'corpus-indexing'
+  const apiKey = process.env.VOYAGE_API_KEY
+  if (!apiKey) throw new Error('VOYAGE_API_KEY is not configured.')
+
+  const inputs = texts.map(text => String(text || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+  if (!inputs.length) return []
+
+  const nativeDimensions = VOYAGE_NATIVE_DIMENSIONS[PATENT_CORPUS_EMBEDDING_MODEL.toLowerCase()]
+  const body: Record<string, unknown> = {
+    model: PATENT_CORPUS_EMBEDDING_MODEL,
+    input: inputs,
+    // Voyage embeddings are asymmetric: corpus texts embed as documents, search
+    // queries as queries. This measurably improves retrieval quality.
+    input_type: purpose === 'search-query' || purpose === 'diagnostic' ? 'query' : 'document',
+  }
+  if (!nativeDimensions || nativeDimensions !== PATENT_CORPUS_EMBEDDING_DIMENSIONS) {
+    body.output_dimension = PATENT_CORPUS_EMBEDDING_DIMENSIONS
+  }
+
+  const timeoutMs = Math.max(1000, options.timeoutMs || VOYAGE_EMBEDDING_TIMEOUT_MS)
+  const maxAttempts = Math.max(1, options.maxAttempts || VOYAGE_EMBEDDING_MAX_ATTEMPTS)
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetch('https://api.voyageai.com/v1/embeddings', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      if (!response.ok) {
+        const responseBody = await response.text()
+        lastError = new Error(`Voyage embedding request failed: ${response.status} ${responseBody.slice(0, 500)}`)
+        if (attempt < maxAttempts - 1 && shouldRetryVoyageEmbedding(response.status)) {
+          const retryAfter = Number(response.headers.get('retry-after') || 0)
+          await sleep(retryAfter > 0 ? retryAfter * 1000 : Math.min(30000, 1000 * 2 ** attempt))
+          continue
+        }
+        throw lastError
+      }
+      const json = await response.json()
+      const rows = Array.isArray(json?.data) ? json.data : []
+      const embeddings = rows
+        .sort((a: any, b: any) => Number(a?.index || 0) - Number(b?.index || 0))
+        .map((row: any) => row?.embedding)
+      if (
+        embeddings.length !== inputs.length ||
+        embeddings.some((embedding: unknown) => !Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS)
+      ) {
+        throw new Error('Voyage embedding response did not contain the expected vectors.')
+      }
+      return embeddings as number[][]
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      if (attempt < maxAttempts - 1 && (lastError.name === 'AbortError' || /fetch failed|network/i.test(lastError.message))) {
+        await sleep(Math.min(30000, 1000 * 2 ** attempt))
+        continue
+      }
+      throw lastError
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+  throw lastError || new Error('Voyage embedding request failed.')
+}
+
+// Provider-agnostic entry points: the configured PATENT_CORPUS_EMBEDDING_MODEL decides
+// whether OpenAI or Voyage serves the request. Corpus writes and query embeddings MUST
+// go through these so the two sides always use the same model and dimensionality.
+export function requestCorpusEmbeddings(texts: string[], options: EmbeddingRequestOptions = {}) {
+  if (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage') return requestVoyageEmbeddings(texts, options)
+  return requestOpenAIEmbeddings(texts, options)
+}
+
+export async function requestCorpusEmbedding(text: string, options: EmbeddingRequestOptions = {}) {
+  const [embedding] = await requestCorpusEmbeddings([text], options)
+  if (!embedding) throw new Error('Embedding response did not contain the expected vector.')
+  return embedding
+}
+
 export function requestSearchQueryEmbeddings(texts: string[], context: { traceId?: string } = {}) {
-  return requestOpenAIEmbeddings(texts, { purpose: 'search-query', traceId: context.traceId })
+  return requestCorpusEmbeddings(texts, { purpose: 'search-query', traceId: context.traceId })
 }
 
 export function requestSearchQueryEmbedding(text: string, context: { traceId?: string } = {}) {
-  return requestOpenAIEmbedding(text, { purpose: 'search-query', traceId: context.traceId })
+  return requestCorpusEmbedding(text, { purpose: 'search-query', traceId: context.traceId })
 }
 
 export async function claimNextPatentEmbeddings(workerId: string, limit = 1) {
@@ -1915,19 +2034,35 @@ export async function claimNextPatentEmbedding(workerId: string) {
 
 export async function setEmbeddingVector(embeddingId: string, vector: number[]) {
   const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
-  const updated = await prisma.$queryRaw<any[]>`
-    UPDATE "local_patent_embeddings"
-    SET "embedding" = ${vectorLiteral}::vector,
-        "status" = 'COMPLETED'::"PatentEmbeddingStatus",
-        "embeddedAt" = now(),
-        "errorMessage" = NULL,
-        "lockedBy" = NULL,
-        "lockedUntil" = NULL,
-        "heartbeatAt" = NULL,
-        "updatedAt" = now()
-    WHERE "id" = ${embeddingId}
-    RETURNING "localPatentId", "model", "textHash"
-  `
+  // Full-width OpenAI vectors live in "embedding" vector(1536); shortened vectors
+  // (e.g. voyage-3-lite @ 512) live in "embeddingHalf" halfvec(512).
+  const updated = PATENT_CORPUS_EMBEDDING_COLUMN === 'embedding'
+    ? await prisma.$queryRaw<any[]>`
+      UPDATE "local_patent_embeddings"
+      SET "embedding" = ${vectorLiteral}::vector,
+          "status" = 'COMPLETED'::"PatentEmbeddingStatus",
+          "embeddedAt" = now(),
+          "errorMessage" = NULL,
+          "lockedBy" = NULL,
+          "lockedUntil" = NULL,
+          "heartbeatAt" = NULL,
+          "updatedAt" = now()
+      WHERE "id" = ${embeddingId}
+      RETURNING "localPatentId", "model", "textHash"
+    `
+    : await prisma.$queryRaw<any[]>`
+      UPDATE "local_patent_embeddings"
+      SET "embeddingHalf" = ${vectorLiteral}::halfvec,
+          "status" = 'COMPLETED'::"PatentEmbeddingStatus",
+          "embeddedAt" = now(),
+          "errorMessage" = NULL,
+          "lockedBy" = NULL,
+          "lockedUntil" = NULL,
+          "heartbeatAt" = NULL,
+          "updatedAt" = now()
+      WHERE "id" = ${embeddingId}
+      RETURNING "localPatentId", "model", "textHash"
+    `
   const current = updated[0]
   if (current?.localPatentId && current?.model && current?.textHash) {
     await (prisma as any).localPatentEmbedding.deleteMany({
@@ -1984,7 +2119,7 @@ export async function processPatentEmbeddingById(embeddingId: string, workerId =
     if (isCancelledBatch(batch)) throw new PatentCorpusCancelledError(batch?.errorMessage || undefined)
     const text = embedding.patent?.embeddingText || embedding.patent?.ragText || embedding.patent?.abstract || embedding.patent?.title
     if (!text) throw new Error('Patent has no text available for embedding.')
-    const vector = await requestOpenAIEmbedding(text, { purpose: 'corpus-indexing' })
+    const vector = await requestCorpusEmbedding(text, { purpose: 'corpus-indexing' })
     await setEmbeddingVector(embedding.id, vector)
     return (prisma as any).localPatentEmbedding.findUnique({ where: { id: embedding.id } })
   } catch (error) {
@@ -2014,14 +2149,14 @@ export async function processPatentEmbeddingBatch(workerId = `patent-corpus-${pr
   for (let start = 0; start < valid.length; start += PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE) {
     const chunk = valid.slice(start, start + PATENT_CORPUS_EMBEDDING_API_BATCH_SIZE)
     try {
-      const vectors = await requestOpenAIEmbeddings(
+      const vectors = await requestCorpusEmbeddings(
         chunk.map((item: PatentEmbeddingWorkItem) => item.text),
         { purpose: 'corpus-indexing' }
       )
       for (let index = 0; index < chunk.length; index += 1) {
         const vector = vectors[index]
         if (!vector) {
-          processed.push(await failPatentEmbedding(chunk[index].embedding, new Error('OpenAI embedding response did not contain the expected vector.')))
+          processed.push(await failPatentEmbedding(chunk[index].embedding, new Error('Embedding response did not contain the expected vector.')))
           continue
         }
         await setEmbeddingVector(chunk[index].embedding.id, vector)

@@ -1,13 +1,22 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
+  PATENT_CORPUS_EMBEDDING_COLUMN,
   PATENT_CORPUS_EMBEDDING_MODEL,
+  PATENT_CORPUS_EMBEDDING_SQL_TYPE,
   PATENT_CORPUS_SOURCE_EPO,
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
   hasSearchEmbeddingApiKey,
   requestSearchQueryEmbeddings,
 } from '@/lib/patent-corpus-service'
+
+// The physical embedding column and cast depend on the configured model: legacy
+// OpenAI vectors live in "embedding" vector(1536), shortened (e.g. voyage-3-lite)
+// vectors live in "embeddingHalf" halfvec(512). Both are trusted module constants,
+// never user input, so Prisma.raw is safe here.
+const EMBEDDING_COLUMN_SQL = Prisma.raw(`e."${PATENT_CORPUS_EMBEDDING_COLUMN}"`)
+const EMBEDDING_CAST_SQL = Prisma.raw(`::${PATENT_CORPUS_EMBEDDING_SQL_TYPE}`)
 import type {
   NormalizedPatentResult,
   PatentProviderSearchRequest,
@@ -120,7 +129,7 @@ async function getVectorInventorySnapshot(corpusSource: string) {
         sourceCondition,
         Prisma.sql`e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}`,
         Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
-        Prisma.sql`e."embedding" IS NOT NULL`,
+        Prisma.sql`${EMBEDDING_COLUMN_SQL} IS NOT NULL`,
       ])}
       LIMIT 1
     `, 3000),
@@ -131,7 +140,7 @@ async function getVectorInventorySnapshot(corpusSource: string) {
       ${whereSql([
         sourceCondition,
         Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
-        Prisma.sql`e."embedding" IS NOT NULL`,
+        Prisma.sql`${EMBEDDING_COLUMN_SQL} IS NOT NULL`,
       ])}
       ORDER BY e."embeddedAt" DESC NULLS LAST
       LIMIT 1
@@ -807,16 +816,16 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           const queryStartedAt = Date.now()
           const vectorRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
             SELECT ${commonSelectSql(Prisma.sql`,
-              1 - (e."embedding" <=> ${vectorLiteral}::vector) AS "vectorScore"`)}
+              1 - (${EMBEDDING_COLUMN_SQL} <=> ${vectorLiteral}${EMBEDDING_CAST_SQL}) AS "vectorScore"`)}
             FROM "local_patents" p
             JOIN "local_patent_embeddings" e ON e."localPatentId" = p."id"
             ${whereSql([
               Prisma.sql`e."status" = 'COMPLETED'::"PatentEmbeddingStatus"`,
               Prisma.sql`e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}`,
-              Prisma.sql`e."embedding" IS NOT NULL`,
+              Prisma.sql`${EMBEDDING_COLUMN_SQL} IS NOT NULL`,
               ...filterConditions,
             ])}
-            ORDER BY e."embedding" <=> ${vectorLiteral}::vector
+            ORDER BY ${EMBEDDING_COLUMN_SQL} <=> ${vectorLiteral}${EMBEDDING_CAST_SQL}
             LIMIT ${limit}
           `)
           vectorQueriesCompleted += 1

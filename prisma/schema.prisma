@@ -1489,6 +1489,7 @@ model LocalPatent {
   applicationNumberRaw   String?
   kind                   String?
   country                String?
+  familyId               String?
   filingDate             DateTime?
   publicationDate        DateTime?
   title                  String
@@ -1532,6 +1533,7 @@ model LocalPatent {
   @@index([filingDate])
   @@index([publicationDate])
   @@index([pqaiFetchedAt])
+  @@index([familyId])
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_title_trgm_idx")
   @@index([abstract(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_abstract_trgm_idx")
   @@index([publicationNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "local_patents_publicationNumber_trgm_idx")
@@ -1619,6 +1621,9 @@ model LocalPatentEmbedding {
   status        PatentEmbeddingStatus        @default(QUEUED)
   errorMessage  String?
   embedding     Unsupported("vector(1536)")?
+  // Shortened embeddings (e.g. voyage-3-lite @ 512 dims) in half precision; keeps the
+  // ANN index small enough for modest-RAM servers. Requires pgvector >= 0.7.
+  embeddingHalf Unsupported("halfvec(512)")?
   lockedBy      String?
   lockedUntil   DateTime?
   heartbeatAt   DateTime?
