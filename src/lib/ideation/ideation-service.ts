@@ -1296,13 +1296,21 @@ export async function checkObviousness(
 // =============================================================================
 
 export async function exportToIdeaBank(input: ExportToIdeaBankInput): Promise<string[]> {
+  // Scope frames to the authorized session. Previously this used
+  // `sessionId: { not: undefined }` — a Prisma no-op that matched frames in
+  // ANY session, letting a caller export another user's/tenant's frames by
+  // passing forged ideaFrameIds. Scope to input.sessionId and reject mismatches.
   const ideaFrames = await prisma.ideaFrame.findMany({
     where: {
       id: { in: input.ideaFrameIds },
-      sessionId: { not: undefined },
+      sessionId: input.sessionId,
     },
     include: { session: true },
   });
+
+  if (ideaFrames.length !== input.ideaFrameIds.length) {
+    throw new Error('Some idea frames do not belong to this session');
+  }
 
   const createdIds: string[] = [];
 

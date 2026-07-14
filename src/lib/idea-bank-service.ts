@@ -296,19 +296,26 @@ export class IdeaBankService extends BasePatentService {
     // Process ideas to add reservation status and redaction
     const processedIdeas = ideas.map(idea => {
       const isReservedByCurrentUser = idea.reservations.length > 0;
+      const isRedacted = idea.status === 'RESERVED' && !isReservedByCurrentUser;
       let redactedDescription = idea.description;
 
       // If reserved and not by current user, redact the description
-      if (idea.status === 'RESERVED' && !isReservedByCurrentUser) {
-        // Show only first 2-3 words and one line of description
+      if (isRedacted) {
+        // Show only first 2-3 words of description
         const words = idea.description.split(' ');
         const visibleWords = words.slice(0, 3).join(' ');
-        const firstLine = idea.description.split('\n')[0];
         redactedDescription = `${visibleWords}... [Content reserved - ${idea.reservedCount} reservations]`;
       }
 
       return {
         ...idea,
+        // Overwrite the sensitive fields server-side when redacted so the full
+        // reserved content never leaves the server. Previously the raw
+        // description/abstract/keyFeatures still shipped alongside the redacted copy.
+        description: isRedacted ? redactedDescription : idea.description,
+        abstract: isRedacted ? null : idea.abstract,
+        keyFeatures: isRedacted ? [] : idea.keyFeatures,
+        potentialApplications: isRedacted ? [] : idea.potentialApplications,
         _isReservedByCurrentUser: isReservedByCurrentUser,
         _redactedDescription: redactedDescription
       };
@@ -417,9 +424,10 @@ export class IdeaBankService extends BasePatentService {
 
     const processedIdeas = ideas.map(idea => {
       const isReservedByCurrentUser = idea.reservations.length > 0;
+      const isRedacted = idea.status === 'RESERVED' && !isReservedByCurrentUser;
       let redactedDescription = idea.description;
 
-      if (idea.status === 'RESERVED' && !isReservedByCurrentUser) {
+      if (isRedacted) {
         const words = idea.description.split(' ');
         const visibleWords = words.slice(0, 3).join(' ');
         redactedDescription = `${visibleWords}... [Content reserved - ${idea.reservedCount} reservations]`;
@@ -427,6 +435,11 @@ export class IdeaBankService extends BasePatentService {
 
       return {
         ...idea,
+        // Strip sensitive fields server-side for ideas reserved by others.
+        description: isRedacted ? redactedDescription : idea.description,
+        abstract: isRedacted ? null : idea.abstract,
+        keyFeatures: isRedacted ? [] : idea.keyFeatures,
+        potentialApplications: isRedacted ? [] : idea.potentialApplications,
         _isReservedByCurrentUser: isReservedByCurrentUser,
         _redactedDescription: redactedDescription
       };
@@ -478,10 +491,11 @@ export class IdeaBankService extends BasePatentService {
     if (!idea) return null;
 
     const isReservedByCurrentUser = idea.reservations.length > 0;
+    const isRedacted = idea.status === 'RESERVED' && !isReservedByCurrentUser;
     let description = idea.description;
 
     // Only show full content if not reserved or reserved by current user
-    if (idea.status === 'RESERVED' && !isReservedByCurrentUser) {
+    if (isRedacted) {
       const words = idea.description.split(' ');
       const visibleWords = words.slice(0, 3).join(' ');
       description = `${visibleWords}... [Content reserved - ${idea.reservedCount} reservations]`;
@@ -489,6 +503,11 @@ export class IdeaBankService extends BasePatentService {
 
     return {
       ...idea,
+      // Overwrite sensitive fields server-side so reserved content never ships.
+      description: isRedacted ? description : idea.description,
+      abstract: isRedacted ? null : idea.abstract,
+      keyFeatures: isRedacted ? [] : idea.keyFeatures,
+      potentialApplications: isRedacted ? [] : idea.potentialApplications,
       _isReservedByCurrentUser: isReservedByCurrentUser,
       _redactedDescription: description
     };
@@ -547,13 +566,26 @@ export class IdeaBankService extends BasePatentService {
     // Any user can clone and edit ideas to create new ones
     // No subscription required for contributing to the idea bank
 
-    // Get the original idea
+    // Get the original idea (include the caller's active reservation so we can
+    // enforce the same redaction rule the read paths use).
     const originalIdea = await prisma.ideaBankIdea.findUnique({
-      where: { id: originalIdeaId }
+      where: { id: originalIdeaId },
+      include: {
+        reservations: {
+          where: { userId: user.id, status: 'ACTIVE' }
+        }
+      }
     });
 
     if (!originalIdea) {
       throw new Error('Original idea not found');
+    }
+
+    // A reserved idea held by another user is redacted everywhere else; block
+    // cloning it too, otherwise clone-and-edit would leak the full description.
+    const isReservedByCurrentUser = originalIdea.reservations.length > 0;
+    if (originalIdea.status === 'RESERVED' && !isReservedByCurrentUser) {
+      throw new Error('This idea is reserved by another user and cannot be cloned');
     }
 
     // Create the edited version
@@ -625,12 +657,23 @@ export class IdeaBankService extends BasePatentService {
     expiresAt.setDate(expiresAt.getDate() + limits.defaultReservationDays);
 
     const reservation = await prisma.$transaction(async (tx) => {
-      // Create reservation
-      const reservation = await tx.ideaBankReservation.create({
-        data: {
+      // Upsert rather than create: a released/expired reservation leaves its
+      // row in place (status RELEASED/EXPIRED), and the @@unique([ideaId, userId])
+      // constraint would make a plain create throw P2002 on re-reservation.
+      // The active-reservation guard above already rejects genuine duplicates,
+      // so the update branch only ever revives a previously-released row.
+      const reservation = await tx.ideaBankReservation.upsert({
+        where: { ideaId_userId: { ideaId, userId: user.id } },
+        create: {
           ideaId,
           userId: user.id,
           expiresAt
+        },
+        update: {
+          status: 'ACTIVE',
+          expiresAt,
+          reservedAt: new Date(),
+          releasedAt: null
         }
       });
 

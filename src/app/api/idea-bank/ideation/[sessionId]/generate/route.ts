@@ -113,13 +113,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     
     // Get user guidance from recipe or top-level body
     const userGuidance = body.recipe?.userGuidance || body.userGuidance || undefined;
-    
+
+    // Clamp the requested idea count to a safe range. An unbounded count is
+    // injected into the generation prompt and drives per-idea LLM cost, so an
+    // attacker (or a runaway client) could request thousands of ideas.
+    const MAX_IDEA_COUNT = 12;
+    const rawCount = body.recipe?.count || body.count || ideationSession.combineTray?.requestedCount || 5;
+    const count = Math.min(Math.max(1, Math.floor(Number(rawCount) || 5)), MAX_IDEA_COUNT);
+
     const recipe = {
       selectedComponents: body.recipe?.selectedComponents || ideationSession.combineTray?.selectedComponents || [],
       selectedDimensions: body.recipe?.selectedDimensions || ideationSession.combineTray?.selectedDimensions || [],
       selectedOperators: body.recipe?.selectedOperators || ideationSession.combineTray?.selectedOperators || [],
       recipeIntent,
-      count: body.recipe?.count || body.count || ideationSession.combineTray?.requestedCount || 5,
+      count,
       userGuidance,
     };
 
