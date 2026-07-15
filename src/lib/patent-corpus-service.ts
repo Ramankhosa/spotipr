@@ -14,21 +14,35 @@ import type { NormalizedPatentResult } from '@/lib/patent-search/types'
 
 export const PATENT_CORPUS_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'patent-corpus')
 export const PATENT_CORPUS_EMBEDDING_MODEL = process.env.PATENT_CORPUS_EMBEDDING_MODEL || 'text-embedding-3-small'
-// Voyage models (voyage-3-lite / voyage-3.5-lite) are served from api.voyageai.com and
-// default to 512 dimensions; OpenAI text-embedding-3-* default to 1536. Dimensions are
-// overridable via env so Matryoshka-shortened variants can be used on small servers.
+// Voyage models (voyage-3-lite / voyage-3.5-lite) are served from api.voyageai.com;
+// OpenAI text-embedding-3-* default to 1536. Two compression axes stack (Voyage):
+//   - MRL / output_dimension: 2048 / 1024 (native 3.5-lite) / 512 / 256
+//   - quantization / output_dtype: float -> int8 -> binary
+// For a ~100M-row corpus on a small-RAM box, MRL 512 + binary => bit(512) @ 64 B/vec.
 export const PATENT_CORPUS_EMBEDDING_PROVIDER: 'voyage' | 'openai' =
   PATENT_CORPUS_EMBEDDING_MODEL.toLowerCase().startsWith('voyage') ? 'voyage' : 'openai'
 export const PATENT_CORPUS_EMBEDDING_DIMENSIONS = Math.max(64, Number(
   process.env.PATENT_CORPUS_EMBEDDING_DIMENSIONS ||
   (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage' ? 512 : 1536)
 ) || (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage' ? 512 : 1536))
-// Physical storage column on local_patent_embeddings. The legacy column is a fixed
-// vector(1536); shortened embeddings live in the halfvec(512) column added for the
-// Google Patents corpus (half precision keeps the index small enough for modest RAM).
-export const PATENT_CORPUS_EMBEDDING_COLUMN: 'embedding' | 'embeddingHalf' =
-  PATENT_CORPUS_EMBEDDING_DIMENSIONS === 1536 ? 'embedding' : 'embeddingHalf'
-export const PATENT_CORPUS_EMBEDDING_SQL_TYPE = PATENT_CORPUS_EMBEDDING_COLUMN === 'embedding' ? 'vector' : 'halfvec'
+// 'binary' quantizes to bits (pgvector bit type, Hamming distance); 'float' keeps
+// real-valued vectors (pgvector vector/halfvec, cosine distance). Default binary for
+// Voyage (memory-compressed corpus), float for OpenAI (legacy Indian corpus).
+export const PATENT_CORPUS_EMBEDDING_DTYPE: 'float' | 'binary' =
+  (process.env.PATENT_CORPUS_EMBEDDING_DTYPE || (PATENT_CORPUS_EMBEDDING_PROVIDER === 'voyage' ? 'binary' : 'float'))
+    .toLowerCase() === 'binary' ? 'binary' : 'float'
+// Physical storage column + operator on local_patent_embeddings:
+//   float 1536 -> "embedding" vector(1536), cosine   (legacy OpenAI)
+//   float !1536 -> "embeddingHalf" halfvec,   cosine
+//   binary     -> "embeddingBinary" bit,       hamming (compressed Google corpus)
+export const PATENT_CORPUS_EMBEDDING_COLUMN: 'embedding' | 'embeddingHalf' | 'embeddingBinary' =
+  PATENT_CORPUS_EMBEDDING_DTYPE === 'binary' ? 'embeddingBinary'
+    : PATENT_CORPUS_EMBEDDING_DIMENSIONS === 1536 ? 'embedding' : 'embeddingHalf'
+export const PATENT_CORPUS_EMBEDDING_SQL_TYPE: 'vector' | 'halfvec' | 'bit' =
+  PATENT_CORPUS_EMBEDDING_COLUMN === 'embedding' ? 'vector'
+    : PATENT_CORPUS_EMBEDDING_COLUMN === 'embeddingHalf' ? 'halfvec' : 'bit'
+// Distance operator: cosine (<=>) for real vectors, Hamming (<~>) for bit vectors.
+export const PATENT_CORPUS_EMBEDDING_DISTANCE_OP = PATENT_CORPUS_EMBEDDING_DTYPE === 'binary' ? '<~>' : '<=>'
 export const PATENT_CORPUS_SOURCE_INDIAN = 'indian-corpus'
 export const PATENT_CORPUS_SOURCE_PQAI = 'pqai'
 export const PATENT_CORPUS_SOURCE_EPO = 'epo-ops'
@@ -1848,16 +1862,22 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
   if (!inputs.length) return []
 
   const nativeDimensions = VOYAGE_NATIVE_DIMENSIONS[PATENT_CORPUS_EMBEDDING_MODEL.toLowerCase()]
+  const binary = PATENT_CORPUS_EMBEDDING_DTYPE === 'binary'
   const body: Record<string, unknown> = {
     model: PATENT_CORPUS_EMBEDDING_MODEL,
     input: inputs,
     // Voyage embeddings are asymmetric: corpus texts embed as documents, search
     // queries as queries. This measurably improves retrieval quality.
     input_type: purpose === 'search-query' || purpose === 'diagnostic' ? 'query' : 'document',
+    // 'ubinary' returns dims/8 packed uint8 bytes (unsigned) that unpack cleanly to a
+    // pgvector bit string; 'float' returns real-valued dims-length vectors.
+    output_dtype: binary ? 'ubinary' : 'float',
   }
   if (!nativeDimensions || nativeDimensions !== PATENT_CORPUS_EMBEDDING_DIMENSIONS) {
     body.output_dimension = PATENT_CORPUS_EMBEDDING_DIMENSIONS
   }
+  // Expected element length: real vectors are dims-long; ubinary is dims/8 bytes.
+  const expectedLength = binary ? PATENT_CORPUS_EMBEDDING_DIMENSIONS / 8 : PATENT_CORPUS_EMBEDDING_DIMENSIONS
 
   const timeoutMs = Math.max(1000, options.timeoutMs || VOYAGE_EMBEDDING_TIMEOUT_MS)
   const maxAttempts = Math.max(1, options.maxAttempts || VOYAGE_EMBEDDING_MAX_ATTEMPTS)
@@ -1892,10 +1912,12 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
         .map((row: any) => row?.embedding)
       if (
         embeddings.length !== inputs.length ||
-        embeddings.some((embedding: unknown) => !Array.isArray(embedding) || embedding.length !== PATENT_CORPUS_EMBEDDING_DIMENSIONS)
+        embeddings.some((embedding: unknown) => !Array.isArray(embedding) || embedding.length !== expectedLength)
       ) {
         throw new Error('Voyage embedding response did not contain the expected vectors.')
       }
+      // For binary (ubinary) the elements are packed uint8 bytes; callers convert to a
+      // pgvector bit string via corpusEmbeddingToLiteral(). For float they are vectors.
       return embeddings as number[][]
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error))
@@ -2032,34 +2054,56 @@ export async function claimNextPatentEmbedding(workerId: string) {
   return embeddings[0] || null
 }
 
+// Unpack Voyage ubinary bytes (uint8, MSB-first) into a pgvector bit string. The same
+// ordering is used for corpus and query vectors, so Hamming distance stays consistent.
+export function bytesToBitString(bytes: number[]): string {
+  let bits = ''
+  for (const byte of bytes) {
+    const value = Number(byte) & 0xff
+    for (let position = 7; position >= 0; position -= 1) {
+      bits += (value >> position) & 1 ? '1' : '0'
+    }
+  }
+  return bits
+}
+
+// Build the SQL literal for the configured dtype: a bracketed float list for
+// vector/halfvec, or a bit string for bit.
+export function corpusEmbeddingToLiteral(vector: number[]): string {
+  if (PATENT_CORPUS_EMBEDDING_DTYPE === 'binary') return bytesToBitString(vector)
+  return `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
+}
+
 export async function setEmbeddingVector(embeddingId: string, vector: number[]) {
-  const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
-  // Full-width OpenAI vectors live in "embedding" vector(1536); shortened vectors
-  // (e.g. voyage-3-lite @ 512) live in "embeddingHalf" halfvec(512).
+  const literal = corpusEmbeddingToLiteral(vector)
+  // Route to the physical column for the configured dtype:
+  //   "embedding" vector(1536) | "embeddingHalf" halfvec | "embeddingBinary" bit.
   const updated = PATENT_CORPUS_EMBEDDING_COLUMN === 'embedding'
     ? await prisma.$queryRaw<any[]>`
       UPDATE "local_patent_embeddings"
-      SET "embedding" = ${vectorLiteral}::vector,
+      SET "embedding" = ${literal}::vector,
           "status" = 'COMPLETED'::"PatentEmbeddingStatus",
-          "embeddedAt" = now(),
-          "errorMessage" = NULL,
-          "lockedBy" = NULL,
-          "lockedUntil" = NULL,
-          "heartbeatAt" = NULL,
-          "updatedAt" = now()
+          "embeddedAt" = now(), "errorMessage" = NULL, "lockedBy" = NULL,
+          "lockedUntil" = NULL, "heartbeatAt" = NULL, "updatedAt" = now()
+      WHERE "id" = ${embeddingId}
+      RETURNING "localPatentId", "model", "textHash"
+    `
+    : PATENT_CORPUS_EMBEDDING_COLUMN === 'embeddingHalf'
+    ? await prisma.$queryRaw<any[]>`
+      UPDATE "local_patent_embeddings"
+      SET "embeddingHalf" = ${literal}::halfvec,
+          "status" = 'COMPLETED'::"PatentEmbeddingStatus",
+          "embeddedAt" = now(), "errorMessage" = NULL, "lockedBy" = NULL,
+          "lockedUntil" = NULL, "heartbeatAt" = NULL, "updatedAt" = now()
       WHERE "id" = ${embeddingId}
       RETURNING "localPatentId", "model", "textHash"
     `
     : await prisma.$queryRaw<any[]>`
       UPDATE "local_patent_embeddings"
-      SET "embeddingHalf" = ${vectorLiteral}::halfvec,
+      SET "embeddingBinary" = ${literal}::bit(${Prisma.raw(String(PATENT_CORPUS_EMBEDDING_DIMENSIONS))}),
           "status" = 'COMPLETED'::"PatentEmbeddingStatus",
-          "embeddedAt" = now(),
-          "errorMessage" = NULL,
-          "lockedBy" = NULL,
-          "lockedUntil" = NULL,
-          "heartbeatAt" = NULL,
-          "updatedAt" = now()
+          "embeddedAt" = now(), "errorMessage" = NULL, "lockedBy" = NULL,
+          "lockedUntil" = NULL, "heartbeatAt" = NULL, "updatedAt" = now()
       WHERE "id" = ${embeddingId}
       RETURNING "localPatentId", "model", "textHash"
     `

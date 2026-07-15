@@ -1621,9 +1621,12 @@ model LocalPatentEmbedding {
   status        PatentEmbeddingStatus        @default(QUEUED)
   errorMessage  String?
   embedding     Unsupported("vector(1536)")?
-  // Shortened embeddings (e.g. voyage-3-lite @ 512 dims) in half precision; keeps the
-  // ANN index small enough for modest-RAM servers. Requires pgvector >= 0.7.
+  // Shortened float embeddings (e.g. voyage @ 512 dims) in half precision.
   embeddingHalf Unsupported("halfvec(512)")?
+  // Binary (Matryoshka 512 + quantized) embeddings — 64 bytes/vector, Hamming ANN.
+  // The memory-compressed representation for the ~100M-row Google Patents corpus.
+  // Requires pgvector >= 0.7.
+  embeddingBinary Unsupported("bit(512)")?
   lockedBy      String?
   lockedUntil   DateTime?
   heartbeatAt   DateTime?

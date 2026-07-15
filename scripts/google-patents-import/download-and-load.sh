@@ -18,11 +18,10 @@ set -euo pipefail
 echo "Ensuring staging tables exist..."
 psql "$DATABASE_URL" -q <<'SQL'
 CREATE UNLOGGED TABLE IF NOT EXISTS google_patents_staging (
-  publication_number TEXT PRIMARY KEY, pub_key TEXT, pub_canonical TEXT,
-  country_code TEXT, kind_code TEXT, family_id TEXT,
-  publication_date TEXT, filing_date TEXT, title TEXT, abstract TEXT,
-  cpc_codes TEXT, assignees TEXT, inventors TEXT,
-  abstract_translated TEXT, is_family_representative TEXT
+  publication_number TEXT PRIMARY KEY, pub_canonical TEXT,
+  title TEXT, abstract TEXT, url TEXT, cpc TEXT, top_terms TEXT,
+  country_code TEXT, publication_date TEXT, filing_date TEXT,
+  kind_code TEXT, family_id TEXT, first_claim TEXT, description_snippet TEXT
 );
 CREATE TABLE IF NOT EXISTS google_patents_import_files (
   file_name TEXT PRIMARY KEY, loaded_at TIMESTAMPTZ NOT NULL DEFAULT now(), row_count BIGINT

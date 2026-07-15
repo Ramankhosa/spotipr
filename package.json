@@ -30,6 +30,7 @@
     "patent-corpus:worker": "tsx scripts/patent-corpus-worker.ts",
     "patent-corpus:worker:once": "tsx scripts/patent-corpus-worker.ts --once",
     "patent-corpus:batch-embed": "tsx scripts/patent-corpus-batch-embed.ts",
+    "patent-corpus:voyage-batch-embed": "tsx scripts/patent-corpus-voyage-batch-embed.ts",
     "patent-corpus:batch-embed:auto": "tsx scripts/patent-corpus-batch-embed.ts --watch --run",
     "patent-corpus:reembed": "tsx scripts/reembed-patent-corpus.ts",
     "pqai-corpus:backfill": "tsx scripts/backfill-pqai-corpus-from-novelty-runs.ts",

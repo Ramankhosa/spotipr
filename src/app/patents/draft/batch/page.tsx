@@ -74,7 +74,23 @@ type BatchSummary = {
 }
 
 const FILE_TYPES = '.xlsx,.csv,.tsv,.json'
+const DOCUMENT_FILE_TYPES = '.pdf,.docx,.doc,.txt,.md'
 const POLLING_BATCH_STATUSES = new Set(['QUEUED', 'PROCESSING'])
+
+type BatchMode = 'spreadsheet' | 'documents'
+
+type DocumentRow = {
+  rowNo: number
+  sourceFilename: string
+  detectedFormat?: string
+  title: string
+  ideaDetails: string
+  imageCount: number
+  errors: string[]
+  warnings: string[]
+  useUploadedFigures: boolean
+  generateDiagrams: boolean
+}
 
 function normalizeJurisdictionText(value: string) {
   return value
@@ -131,6 +147,12 @@ export default function PatentDraftBatchPage() {
   const [createdBatchId, setCreatedBatchId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [batchMode, setBatchMode] = useState<BatchMode>('spreadsheet')
+  const documentInputRef = useRef<HTMLInputElement | null>(null)
+  const [documentFiles, setDocumentFiles] = useState<File[]>([])
+  const [documentRows, setDocumentRows] = useState<DocumentRow[]>([])
+  const [useDocumentImages, setUseDocumentImages] = useState(true)
+  const [generateAiDiagrams, setGenerateAiDiagrams] = useState(true)
 
   const defaults = useMemo(() => ({
     defaultJurisdictions: normalizeJurisdictionText(defaultJurisdictions),
@@ -140,6 +162,7 @@ export default function PatentDraftBatchPage() {
   }), [defaultClaimsHandling, defaultFilingType, defaultJurisdictions, defaultPriorArtHandling])
 
   const hasBlockingErrors = previewRows.some(row => row.errors.length > 0)
+  const hasDocumentBlockingErrors = documentRows.some(row => row.errors.length > 0)
   const hasActiveBatches = batches.some(batch => POLLING_BATCH_STATUSES.has(batch.status))
 
   const loadBatches = useCallback(async () => {
@@ -300,6 +323,119 @@ export default function PatentDraftBatchPage() {
     }
   }
 
+  const previewDocuments = async (files: File[]) => {
+    if (!files.length) {
+      setDocumentRows([])
+      return
+    }
+    try {
+      setIsPreviewing(true)
+      setError(null)
+      setNotice(null)
+      const formData = new FormData()
+      formData.append('mode', 'documents')
+      files.forEach(file => formData.append('files', file))
+      const res = await authFetch('/api/auto-patent-drafting/batches/preview', {
+        method: 'POST',
+        body: formData,
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error || 'Failed to read the uploaded documents.')
+      const rows: DocumentRow[] = (body.rows || []).map((row: any) => ({
+        rowNo: row.rowNo,
+        sourceFilename: row.sourceFilename,
+        detectedFormat: row.detectedFormat,
+        title: row.title || '',
+        ideaDetails: row.ideaDetails || '',
+        imageCount: row.imageCount || 0,
+        errors: Array.isArray(row.errors) ? row.errors : [],
+        warnings: Array.isArray(row.warnings) ? row.warnings : [],
+        useUploadedFigures: useDocumentImages && (row.imageCount || 0) > 0,
+        generateDiagrams: generateAiDiagrams,
+      }))
+      setDocumentRows(rows)
+      setNotice(`Extracted ${rows.length} document${rows.length === 1 ? '' : 's'}.`)
+    } catch (err) {
+      setDocumentRows([])
+      setError(err instanceof Error ? err.message : 'Failed to read the uploaded documents.')
+    } finally {
+      setIsPreviewing(false)
+    }
+  }
+
+  const handleDocumentFilesChange = async (fileList: FileList | null) => {
+    const files = fileList ? Array.from(fileList) : []
+    setDocumentFiles(files)
+    await previewDocuments(files)
+  }
+
+  const updateDocumentRow = (index: number, patch: Partial<DocumentRow>) => {
+    setDocumentRows(prev => prev.map((row, rowIndex) => {
+      if (rowIndex !== index) return row
+      const next = { ...row, ...patch }
+      const errors = next.ideaDetails.trim() ? next.errors.filter(message => !/no readable text/i.test(message)) : (next.errors.length ? next.errors : ['No readable text was extracted from this file.'])
+      return { ...next, errors }
+    }))
+  }
+
+  const applyGlobalUseImages = (value: boolean) => {
+    setUseDocumentImages(value)
+    setDocumentRows(prev => prev.map(row => ({ ...row, useUploadedFigures: value && row.imageCount > 0 })))
+  }
+
+  const applyGlobalGenerateDiagrams = (value: boolean) => {
+    setGenerateAiDiagrams(value)
+    setDocumentRows(prev => prev.map(row => ({ ...row, generateDiagrams: value })))
+  }
+
+  const createDocumentBatch = async () => {
+    if (!documentFiles.length || hasDocumentBlockingErrors) return
+    try {
+      setIsCreating(true)
+      setError(null)
+      setNotice(null)
+      const formData = new FormData()
+      formData.append('mode', 'documents')
+      if (batchName) formData.append('name', batchName)
+      if (projectId) formData.append('projectId', projectId)
+      Object.entries(defaults).forEach(([key, value]) => {
+        if (value) formData.append(key, value)
+      })
+      formData.append('useUploadedFigures', String(useDocumentImages))
+      formData.append('generateDiagrams', String(generateAiDiagrams))
+      documentFiles.forEach(file => formData.append('files', file))
+      const edits = documentRows.map(row => ({
+        title: row.title,
+        ideaDetails: row.ideaDetails,
+        useUploadedFigures: row.useUploadedFigures,
+        generateDiagrams: row.generateDiagrams,
+      }))
+      formData.append('edits', JSON.stringify(edits))
+      const res = await authFetch('/api/auto-patent-drafting/batches', {
+        method: 'POST',
+        body: formData,
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error || 'Failed to create patent drafting batch.')
+      const queued = body.totalItems || documentFiles.length
+      setNotice(`Batch queued with ${queued} patent draft${queued === 1 ? '' : 's'}.`)
+      setCreatedBatchId(body.batchId || null)
+      setDocumentFiles([])
+      setDocumentRows([])
+      if (documentInputRef.current) documentInputRef.current.value = ''
+      await loadBatches()
+      const detailRes = await authFetch(`/api/auto-patent-drafting/batches/${body.batchId}`, { cache: 'no-store' })
+      if (detailRes.ok) {
+        const detail = await detailRes.json()
+        setSelectedBatch(detail.batch)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create patent drafting batch.')
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
   const downloadBatch = async (batch: BatchSummary) => {
     const url = batch.downloadUrl || `/api/auto-patent-drafting/batches/${batch.id}/download`
     try {
@@ -334,27 +470,31 @@ export default function PatentDraftBatchPage() {
             </div>
             <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Batch Patent Drafting</h1>
             <p className="mt-2 max-w-3xl text-sm text-slate-600">
-              Upload a filled template, review every patent row, then queue automated drafting in the background.
+              {batchMode === 'documents'
+                ? 'Upload one disclosure document per invention (Word/PDF/text). Each file is queued as its own patent draft.'
+                : 'Upload a filled template, review every patent row, then queue automated drafting in the background.'}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => handleTemplateDownload('xlsx')}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              <Download className="h-4 w-4" />
-              XLSX template
-            </button>
-            <button
-              type="button"
-              onClick={() => handleTemplateDownload('csv')}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-            >
-              <Download className="h-4 w-4" />
-              CSV template
-            </button>
-          </div>
+          {batchMode === 'spreadsheet' ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => handleTemplateDownload('xlsx')}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                <Download className="h-4 w-4" />
+                XLSX template
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTemplateDownload('csv')}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                <Download className="h-4 w-4" />
+                CSV template
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {error ? (
@@ -397,6 +537,35 @@ export default function PatentDraftBatchPage() {
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
           <section className="space-y-6">
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-950">How do you want to add ideas?</h2>
+              <p className="mt-1 text-sm text-slate-600">Pick one input style for this batch.</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setBatchMode('spreadsheet')}
+                  className={`rounded-lg border p-4 text-left transition ${batchMode === 'spreadsheet' ? 'border-blue-400 bg-blue-50/60 ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-300'}`}
+                >
+                  <div className="flex items-center gap-2 font-semibold text-slate-900">
+                    <FileSpreadsheet className="h-4 w-4 text-blue-600" />
+                    Spreadsheet of ideas
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">Upload one .xlsx/.csv/.tsv/.json file; each row becomes a patent draft.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchMode('documents')}
+                  className={`rounded-lg border p-4 text-left transition ${batchMode === 'documents' ? 'border-blue-400 bg-blue-50/60 ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-300'}`}
+                >
+                  <div className="flex items-center gap-2 font-semibold text-slate-900">
+                    <Upload className="h-4 w-4 text-blue-600" />
+                    Documents — one patent per file
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">Upload Word/PDF/text disclosures; each file becomes its own patent draft.</p>
+                </button>
+              </div>
+            </div>
+
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <FileSpreadsheet className="h-5 w-5 text-blue-600" />
@@ -472,8 +641,39 @@ export default function PatentDraftBatchPage() {
                   </select>
                 </label>
               </div>
+
+              {batchMode === 'documents' ? (
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-medium text-slate-800">Figures (default for every file)</div>
+                  <p className="mt-1 text-xs text-slate-500">Choose how figures are handled. You can override any file in the list below.</p>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:gap-6">
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={useDocumentImages}
+                        onChange={(event) => applyGlobalUseImages(event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Use images from the document as figures
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={generateAiDiagrams}
+                        onChange={(event) => applyGlobalGenerateDiagrams(event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Generate AI diagrams
+                    </label>
+                  </div>
+                  {!useDocumentImages && !generateAiDiagrams ? (
+                    <p className="mt-2 text-xs text-amber-700">No figures will be added — drafts will be prepared without drawings.</p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
+            {batchMode === 'spreadsheet' ? (
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
@@ -631,6 +831,124 @@ export default function PatentDraftBatchPage() {
                 </div>
               ) : null}
             </div>
+            ) : (
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <Upload className="h-5 w-5 text-blue-600" />
+                  <h2 className="text-lg font-semibold text-slate-950">Upload and Preview</h2>
+                </div>
+                {documentFiles.length ? <span className="text-xs text-slate-500">{documentFiles.length} file{documentFiles.length === 1 ? '' : 's'}</span> : null}
+              </div>
+
+              <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center hover:bg-slate-100">
+                {isPreviewing ? <Loader2 className="mb-3 h-6 w-6 animate-spin text-blue-600" /> : <Upload className="mb-3 h-6 w-6 text-slate-500" />}
+                <span className="text-sm font-medium text-slate-900">Upload disclosure documents</span>
+                <span className="mt-1 text-xs text-slate-500">Supported: {DOCUMENT_FILE_TYPES}. Each file becomes one patent draft. Uploading previews the files but does not start drafting.</span>
+                <input
+                  ref={documentInputRef}
+                  type="file"
+                  accept={DOCUMENT_FILE_TYPES}
+                  multiple
+                  className="hidden"
+                  onChange={(event) => handleDocumentFilesChange(event.target.files)}
+                />
+              </label>
+
+              {documentRows.length ? (
+                <div className="mt-5">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm text-slate-600">
+                      {documentRows.length} file{documentRows.length === 1 ? '' : 's'} ready, {documentRows.filter(row => row.errors.length > 0).length} with blocking errors.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={createDocumentBatch}
+                      disabled={hasDocumentBlockingErrors || isCreating}
+                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                      Create batch
+                    </button>
+                  </div>
+
+                  <div className="overflow-hidden rounded-lg border border-slate-200">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2">File</th>
+                            <th className="min-w-56 px-3 py-2">Title</th>
+                            <th className="min-w-80 px-3 py-2">Idea details</th>
+                            <th className="px-3 py-2">Images</th>
+                            <th className="min-w-44 px-3 py-2">Figures</th>
+                            <th className="min-w-40 px-3 py-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 bg-white">
+                          {documentRows.map((row, index) => (
+                            <tr key={row.rowNo} className={row.errors.length ? 'bg-rose-50/40' : ''}>
+                              <td className="px-3 py-3 align-top">
+                                <div className="max-w-[12rem] truncate font-medium text-slate-700" title={row.sourceFilename}>{row.sourceFilename}</div>
+                                {row.detectedFormat ? <div className="mt-1 text-[11px] uppercase text-slate-400">{row.detectedFormat}</div> : null}
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                <input
+                                  value={row.title}
+                                  onChange={(event) => updateDocumentRow(index, { title: event.target.value })}
+                                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                />
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                <textarea
+                                  value={row.ideaDetails}
+                                  onChange={(event) => updateDocumentRow(index, { ideaDetails: event.target.value })}
+                                  rows={3}
+                                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                />
+                                <div className="mt-1 text-[11px] text-slate-400">{row.ideaDetails.length.toLocaleString()} chars</div>
+                              </td>
+                              <td className="px-3 py-3 align-top text-center text-slate-700">{row.imageCount}</td>
+                              <td className="px-3 py-3 align-top">
+                                <label className="flex items-center gap-2 text-xs text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    checked={row.useUploadedFigures}
+                                    onChange={(event) => updateDocumentRow(index, { useUploadedFigures: event.target.checked })}
+                                    disabled={row.imageCount === 0}
+                                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40"
+                                  />
+                                  Use images{row.imageCount === 0 ? ' (none)' : ''}
+                                </label>
+                                <label className="mt-1 flex items-center gap-2 text-xs text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    checked={row.generateDiagrams}
+                                    onChange={(event) => updateDocumentRow(index, { generateDiagrams: event.target.checked })}
+                                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                  />
+                                  AI diagrams
+                                </label>
+                              </td>
+                              <td className="px-3 py-3 align-top">
+                                {row.errors.length ? (
+                                  <div className="text-xs font-medium text-rose-700">{row.errors.join(' ')}</div>
+                                ) : row.warnings.length ? (
+                                  <div className="text-xs font-medium text-amber-700">{row.warnings.join(' ')}</div>
+                                ) : (
+                                  <div className="text-xs font-medium text-emerald-700">Ready</div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            )}
           </section>
 
           <aside className="space-y-6">

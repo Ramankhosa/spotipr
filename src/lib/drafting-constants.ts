@@ -21,6 +21,16 @@ export const AUTO_DRAFTING_BULK_RECIPIENT = 'bulk-auto-drafting@patentnest.local
 
 export const AUTO_DRAFTING_MAX_UPLOAD_ROWS = 25
 
+// Document (one-patent-per-file) batch upload: the extensions accepted for the
+// per-file disclosure upload, and a batch-level total-bytes cap so a single
+// multipart create request cannot balloon past a sane size even when every file
+// is under the per-file MAX_DRAFTING_UPLOAD_MB limit.
+export const AUTO_DRAFTING_DOCUMENT_FILE_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.md'] as const
+
+export const AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_MB = 150
+
+export const AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_BYTES = AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_MB * 1024 * 1024
+
 export const EMAIL_DRAFTING_PROGRESS: Record<string, number> = {
   RECEIVED: 5,
   VALIDATING: 10,

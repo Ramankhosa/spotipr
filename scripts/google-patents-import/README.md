@@ -27,9 +27,12 @@ and serving it through the `google-patents-corpus` search provider.
 | Decision | Choice | Why |
 |---|---|---|
 | What is embedded | `title + '\n' + abstract` (English, research table) | Matches the reference pipeline; uniform language |
-| Embedding model | `voyage-3.5-lite`, `output_dimension: 512` | $0.02/1M tokens; Matryoshka 512-dim keeps the index small |
-| Storage | `local_patent_embeddings.embeddingHalf halfvec(512)` | ~30GB vectors for ~30M rows; fits a 16GB-RAM box with IVFFlat |
-| ANN index | IVFFlat (`lists ≈ 6000`, `probes ≈ 24`) | Builds in hours on 2 vCPU (HNSW would take days and more RAM) |
+| Embedding model | `voyage-3.5-lite`, `output_dimension: 512`, `output_dtype: ubinary` | MRL 1024→512 + binary quantization stack |
+| Storage | `local_patent_embeddings.embeddingBinary bit(512)` | ~64 B/vector → ~6–10 GB for ~100M rows; fits 16 GB RAM |
+| Distance | Hamming (`<~>`), normalized `1 - hamming/512` | Binary recall lane; precision recovered by the reranker |
+| Reranker | Voyage reranker on the merged shortlist | Recovers binary's precision loss; normalizes Google vs Indian scores |
+| ANN index | IVFFlat (`bit_hamming_ops`, `lists ≈ 4000`, `probes ≈ 24`) | Lighter on RAM than HNSW; builds in hours on 2 vCPU |
+| Backfill | Voyage Batch API (12 h windows, −33%) | ~$400 vs ~$600 for the full corpus |
 | Family dedup | One representative per `family_id`, US preferred | US member keeps claims-on-demand available |
 | Indian publications | **All** IN rows kept and tagged `['google-patents-corpus','indian-corpus']` | Product decision: Google-sourced IN patents join the Indian corpus |
 | Claims (US only) | Stay in BigQuery, clustered table, fetched on demand | ~100GB of text; per-run lookups cost fractions of a cent |
@@ -62,12 +65,18 @@ App env (server + workers):
 ```bash
 VOYAGE_API_KEY=...
 PATENT_CORPUS_EMBEDDING_MODEL=voyage-3.5-lite
-PATENT_CORPUS_EMBEDDING_DIMENSIONS=512
+PATENT_CORPUS_EMBEDDING_DIMENSIONS=512      # MRL: 1024 native -> 512
+PATENT_CORPUS_EMBEDDING_DTYPE=binary        # binary -> bit(512) + Hamming; float -> halfvec + cosine
+VOYAGE_RERANK_MODEL=rerank-2.5-lite         # used once the reranker stage is wired
 GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_PATENTS_CLAIMS_TABLE=your-project-id.spotipr_patents.patent_claims
+GOOGLE_PATENTS_CLAIMS_TABLE=your-project-id.spotipr_patents.patent_claims   # optional if claims imported to Postgres
 NOVELTY_CLAIMS_TOP_REFS=10          # 0 disables claims-aware analysis
 NOVELTY_CLAIMS_MAX_CHARS=6000
 ```
+
+> `DTYPE=binary` and `DIMENSIONS=512` bake into the `bit(512)` column type. Changing
+> the dimension later means a new column + a re-embed (cheap via the Batch API).
+> `bit(512)` needs ~6.4 GB for 100M vectors; move to `bit(1024)` only on a ≥32 GB box.
 
 > Switching `PATENT_CORPUS_EMBEDDING_MODEL` switches BOTH query-time and corpus
 > embeddings (they must match). The pre-existing Indian corpus keeps working only
@@ -118,16 +127,20 @@ commented out — review it before running.
 
 ### 5. Run the embedding backfill
 
-Voyage models embed through the **realtime worker** (the OpenAI Batch-API script
-`patent-corpus:batch-embed` refuses voyage models by design):
+Preferred (−33%, Voyage Batch API):
+
+```bash
+npm run patent-corpus:voyage-batch-embed -- --watch
+```
+
+Or the realtime worker (full price; the OpenAI `patent-corpus:batch-embed` script
+refuses voyage models by design):
 
 ```bash
 PATENT_CORPUS_EMBEDDING_BATCH=512 PATENT_CORPUS_EMBEDDING_API_BATCH=128 npm run patent-corpus:worker
 ```
 
-Run 2–4 worker processes in parallel (row locking makes this safe). Throughput
-math: ~128 texts/request, ~2 requests/s/worker → ~30M rows in roughly 1.5–3 days
-with 2 workers. Monitor:
+Monitor:
 
 ```sql
 SELECT status, count(*) FROM local_patent_embeddings WHERE model = 'voyage-3.5-lite' GROUP BY status;
@@ -135,9 +148,20 @@ SELECT status, count(*) FROM local_patent_embeddings WHERE model = 'voyage-3.5-l
 
 ### 6. Build the ANN index (AFTER backfill completes)
 
-Uncomment and run section G of `04-postgres-load-and-upsert.sql`. On the 2 vCPU /
-16GB box set `maintenance_work_mem = '2GB'` first and expect a few hours. Then set
-`ivfflat.probes = 24` at query time (start there; raise for recall, lower for speed).
+Binary corpus (default):
+
+```sql
+SET maintenance_work_mem = '2GB';
+CREATE INDEX CONCURRENTLY local_patent_embeddings_binary_ivf_idx
+  ON local_patent_embeddings USING ivfflat ("embeddingBinary" bit_hamming_ops)
+  WITH (lists = 4000)
+  WHERE "embeddingBinary" IS NOT NULL;
+ANALYZE local_patent_embeddings;
+ALTER DATABASE yourdb SET ivfflat.probes = 24;   -- start here; raise for recall
+```
+
+Expect a few hours on the 2 vCPU box. Binary retrieval over-fetches (e.g. top-200)
+because the reranker produces the final ordering.
 
 ### 7. Verify search
 
@@ -155,6 +179,26 @@ rows carry the `indian-corpus` tag, the Indian provider picks them up automatica
 The dataset updates quarterly. Re-run steps 2–5 with the staging WHERE clause
 narrowed to new publications, e.g. `p.publication_date >= 20260401` — the upsert
 and queue-seeding are idempotent (`ON CONFLICT`), so deltas are cheap.
+
+## Batch embeddings (Voyage Batch API, −33%)
+
+`npm run patent-corpus:voyage-batch-embed -- --watch` (or without `--watch` for one tick
+under a scheduler) drives the full Voyage Batch flow: claims QUEUED rows with a long
+lock, writes a `.jsonl` (custom_id = embedding id), uploads via `/v1/files`, creates the
+`/v1/batches` job (`output_dtype` = ubinary for binary, `output_dimension` = 512), polls,
+and on `completed` downloads the output and writes vectors via `setEmbeddingVector`. State
+persists to `scripts/.voyage-batch-state.json` so it resumes. Tunables: `VOYAGE_BATCH_INPUTS`
+(rows/batch, ≤100K), `VOYAGE_BATCH_MAX_INFLIGHT`, `VOYAGE_BATCH_LOCK_HOURS`, `VOYAGE_BATCH_POLL_MS`.
+The realtime worker (step 5) remains available for full-price top-ups.
+
+## Reranking (built, flag-gated)
+
+The Voyage reranker (`voyage-reranker-service.ts`, `/v1/rerank`) is wired into the search
+orchestrator after candidate merge: it re-scores query → title+abstract for the whole
+merged pool, so the binary Google lane (Hamming) and float Indian lane (cosine) produce
+one comparable ordering, and the gate sees the best candidates first. Enable with
+`NOVELTY_RERANK_ENABLED=1` (+ `VOYAGE_API_KEY`); a reranker outage falls back to the merge
+order (search never breaks). Model via `VOYAGE_RERANK_MODEL` (default `rerank-2.5-lite`).
 
 ## Claims-aware deep analysis
 

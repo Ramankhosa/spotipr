@@ -25,6 +25,7 @@ vi.mock('@/lib/prisma', () => ({
 }))
 
 import {
+  bytesToBitString,
   claimNextPatentEmbeddings,
   mergeLocalPatentDataForImport,
   PATENT_CORPUS_SOURCE_EPO,
@@ -35,6 +36,23 @@ import {
   requestOpenAIEmbeddings,
   requestSearchQueryEmbedding,
 } from '@/lib/patent-corpus-service'
+
+describe('bytesToBitString (Voyage ubinary -> pgvector bit)', () => {
+  it('unpacks each uint8 byte MSB-first into 8 bits', () => {
+    expect(bytesToBitString([0])).toBe('00000000')
+    expect(bytesToBitString([255])).toBe('11111111')
+    expect(bytesToBitString([1])).toBe('00000001')
+    expect(bytesToBitString([128])).toBe('10000000')
+    expect(bytesToBitString([170])).toBe('10101010') // 0xAA
+    // 512-dim binary = 64 bytes -> 512-char bit string, matching bit(512).
+    expect(bytesToBitString(new Array(64).fill(0)).length).toBe(512)
+  })
+
+  it('masks values to a single byte so the bit string length is deterministic', () => {
+    expect(bytesToBitString([256 + 1]).length).toBe(8)
+    expect(bytesToBitString([256 + 1])).toBe('00000001')
+  })
+})
 
 function patentRecord(overrides: Partial<ExtractedPatentRecord> = {}): ExtractedPatentRecord {
   return {

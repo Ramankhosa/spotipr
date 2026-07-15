@@ -162,6 +162,120 @@ function pageBottom(doc: PdfDoc) {
   return doc.page.height - PAGE.bottom;
 }
 
+// --- Table of Contents -------------------------------------------------------------
+// The TOC is laid out with fixed row heights so its page count can be computed BEFORE
+// the content is rendered. The exact number of pages is reserved up front and the rows
+// are placed with explicit coordinates afterwards — the TOC must never rely on PDFKit's
+// implicit page overflow, which appends pages at the END of the document.
+
+type TocEntry = { number: string; title: string; page: number; destination: string; level: 1 | 2 | 3 };
+
+const TOC = {
+  rowHeight: { 1: 24, 2: 18, 3: 15 } as Record<1 | 2 | 3, number>,
+  groupGap: 7,
+  headerBlock: 86,
+  continuationHeaderBlock: 50,
+} as const;
+
+function tocLayout(doc: PdfDoc, levels: Array<1 | 2 | 3>) {
+  const bottom = doc.page.height - PAGE.bottom;
+  const positions: Array<{ pageOffset: number; y: number }> = [];
+  let pageOffset = 0;
+  let y = PAGE.top + TOC.headerBlock;
+  for (const level of levels) {
+    const gap = level === 1 ? TOC.groupGap : 0;
+    const height = TOC.rowHeight[level];
+    if (y + gap + height > bottom) {
+      pageOffset += 1;
+      y = PAGE.top + TOC.continuationHeaderBlock;
+    } else {
+      y += gap;
+    }
+    positions.push({ pageOffset, y });
+    y += height;
+  }
+  return { positions, pageCount: pageOffset + 1 };
+}
+
+// Mirrors the exact sequence of sectionPages.push(...) calls in the GET handler so the
+// reserved TOC page count always matches the rendered entry list.
+function plannedTocLevels(patentCount: number, paperCount: number): Array<1 | 2 | 3> {
+  const levels: Array<1 | 2 | 3> = [];
+  levels.push(1); // Executive Snapshot
+  levels.push(1); // 1 Search Overview
+  for (let i = 0; i < 7; i++) levels.push(2); // 1.1 - 1.7
+  levels.push(1); // 2 Citation Analysis
+  levels.push(2); // 2.1 Relevant Patent Citations
+  for (let i = 0; i < patentCount; i++) levels.push(3);
+  if (paperCount > 0) {
+    levels.push(2); // 2.x Relevant Scholarly Publications
+    for (let i = 0; i < paperCount; i++) levels.push(3);
+  }
+  levels.push(2); // List of Other Shortlisted Citations
+  for (let i = 0; i < 5; i++) levels.push(1); // Sections 3-7
+  return levels;
+}
+
+function drawTocHeader(doc: PdfDoc, first: boolean) {
+  const y = PAGE.top + 10;
+  doc.rect(PAGE.left, y, 82, 5).fill(COLORS.cyan);
+  doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(first ? TYPE.h1 : TYPE.h2)
+    .text(first ? 'Table of Contents' : 'Table of Contents (continued)', PAGE.left, y + SPACE.lg, {
+      width: contentWidth(doc),
+      lineBreak: false,
+    });
+}
+
+function drawTocRow(doc: PdfDoc, item: TocEntry, y: number) {
+  const rowHeight = TOC.rowHeight[item.level];
+  const indent = item.level === 3 ? SPACE.xl : item.level === 2 ? SPACE.lg : 0;
+  const font = item.level === 1 ? FONTS.semibold : FONTS.regular;
+  const fontSize = item.level === 1 ? TYPE.body : item.level === 3 ? TYPE.micro : TYPE.small;
+  const textColor = item.level === 1 ? COLORS.text : item.level === 3 ? COLORS.slate : COLORS.text;
+  const label = `${item.number} ${item.title}`.trim();
+  const numberWidth = 34;
+  const textWidth = contentWidth(doc) - numberWidth - indent - 10;
+
+  doc.font(font).fontSize(fontSize).fillColor(textColor)
+    .text(label, PAGE.left + indent, y, { width: textWidth, height: rowHeight, lineBreak: false, ellipsis: '...' });
+
+  const labelWidth = Math.min(doc.widthOfString(label), textWidth);
+  const dotsStart = PAGE.left + indent + labelWidth + 7;
+  const dotsEnd = doc.page.width - PAGE.right - numberWidth - 5;
+  if (dotsEnd > dotsStart + 14) {
+    const leaderY = y + fontSize * 0.72;
+    doc.save();
+    doc.moveTo(dotsStart, leaderY).lineTo(dotsEnd, leaderY)
+      .lineWidth(0.5).strokeColor('#C9D4E2').dash(1, { space: 3 }).stroke().undash();
+    doc.restore();
+  }
+
+  doc.font(item.level === 1 ? FONTS.semibold : FONTS.regular)
+    .fontSize(item.level === 1 ? TYPE.small : TYPE.caption)
+    .fillColor(item.level === 1 ? COLORS.text : COLORS.muted)
+    .text(String(item.page), doc.page.width - PAGE.right - numberWidth, y, { width: numberWidth, align: 'right', lineBreak: false });
+  doc.goTo(PAGE.left, y - 1, contentWidth(doc), rowHeight, item.destination, { Border: [0, 0, 0] });
+}
+
+function fillTableOfContents(doc: PdfDoc, entries: TocEntry[], tocPageIndexes: number[]) {
+  const layout = tocLayout(doc, entries.map(entry => entry.level));
+  if (layout.pageCount > tocPageIndexes.length) {
+    console.warn(`[AttorneyReportPDF] TOC needs ${layout.pageCount} pages but ${tocPageIndexes.length} were reserved; trailing entries will be omitted.`);
+  }
+  let renderedPageOffset = -1;
+  entries.forEach((entry, index) => {
+    const position = layout.positions[index];
+    if (!position || position.pageOffset >= tocPageIndexes.length) return;
+    if (position.pageOffset !== renderedPageOffset) {
+      renderedPageOffset = position.pageOffset;
+      doc.switchToPage(tocPageIndexes[renderedPageOffset]);
+      drawTocHeader(doc, renderedPageOffset === 0);
+    }
+    drawTocRow(doc, entry, position.y);
+  });
+}
+// -------------------------------------------------------------------------------------
+
 function firstSentence(value: unknown) {
   const text = cleanText(value, 'Review the detailed findings and mapped evidence.');
   const match = text.match(/^.*?[.!?](?:\s|$)/);
@@ -197,8 +311,13 @@ function riskAssessmentFor(report: ReturnType<typeof buildNoveltyAttorneyReportM
   };
 }
 
+// Split `value` so the first chunk fits within `height`. Prefers splitting at line
+// breaks, then sentence ends, then word boundaries, and pulls the split point back
+// when the remainder would be a stranded single line (widow/orphan control).
 function fitTextToHeight(doc: PdfDoc, value: string, width: number, height: number, lineGap: number) {
   if (doc.heightOfString(value, { width, lineGap }) <= height) return [value, ''] as const;
+  const singleLineHeight = doc.heightOfString('Ag', { width: Math.max(width, 40), lineGap });
+  if (height < singleLineHeight) return ['', value] as const;
 
   let low = 1;
   let high = value.length;
@@ -214,9 +333,32 @@ function fitTextToHeight(doc: PdfDoc, value: string, width: number, height: numb
     }
   }
 
-  const whitespace = value.lastIndexOf(' ', best);
-  const splitAt = whitespace > Math.max(0, best - 80) ? whitespace : best;
-  return [value.slice(0, splitAt).trimEnd(), value.slice(splitAt).trimStart()] as const;
+  const window = value.slice(0, best);
+  const newline = window.lastIndexOf('\n');
+  const sentence = Math.max(window.lastIndexOf('. '), window.lastIndexOf('! '), window.lastIndexOf('? '));
+  const whitespace = window.lastIndexOf(' ');
+  let splitAt = best;
+  if (newline > 0 && newline >= best - 220) splitAt = newline;
+  else if (sentence > 0 && sentence >= best - 180) splitAt = sentence + 1;
+  else if (whitespace > Math.max(0, best - 80)) splitAt = whitespace;
+
+  let tail = value.slice(splitAt).trimStart();
+  if (tail && doc.heightOfString(tail, { width, lineGap }) <= singleLineHeight + 1) {
+    const earlierNewline = value.lastIndexOf('\n', Math.max(0, splitAt - 2));
+    const earlierSentence = Math.max(
+      value.lastIndexOf('. ', Math.max(0, splitAt - 2)),
+      value.lastIndexOf('! ', Math.max(0, splitAt - 2)),
+      value.lastIndexOf('? ', Math.max(0, splitAt - 2)),
+    );
+    const earlier = earlierNewline > 0 ? earlierNewline : (earlierSentence > 0 ? earlierSentence + 1 : -1);
+    if (earlier > splitAt * 0.4) {
+      splitAt = earlier;
+      tail = value.slice(splitAt).trimStart();
+    }
+  }
+  const head = value.slice(0, splitAt).trimEnd();
+  if (!head) return [value.slice(0, best).trimEnd(), value.slice(best).trimStart()] as const;
+  return [head, tail] as const;
 }
 
 function proseAlign(_value: unknown): PdfTextAlign {
@@ -240,7 +382,7 @@ function drawFlowingLabeledText(
   const lineGap = 2;
 
   while (remaining) {
-    ensureSpace(doc, 56);
+    ensureSpace(doc, 64);
     doc.fillColor(options.labelColor || COLORS.blue2).font(FONTS.semibold).fontSize(TYPE.caption)
       .text(`${label}${continued ? ' (continued)' : ''}`.toUpperCase(), x, doc.y, { width, lineBreak: false });
     doc.y += SPACE.sm;
@@ -275,7 +417,7 @@ function drawHeaderFooter(doc: PdfDoc, reportNumber: string, title: string) {
     doc.moveTo(PAGE.left, height - 46).lineTo(width - PAGE.right, height - 46).lineWidth(0.6).strokeColor(COLORS.border).stroke();
     doc.font(FONTS.regular).fontSize(TYPE.small).fillColor(COLORS.muted)
       .text('PatentNest.ai - Confidential review draft', PAGE.left, footerY, { width: 330, height: 10, lineBreak: false })
-      .text(`Page ${pageNo}`, width - PAGE.right - 70, footerY, { width: 70, height: 10, align: 'right', lineBreak: false });
+      .text(`Page ${pageNo} of ${range.count}`, width - PAGE.right - 110, footerY, { width: 110, height: 10, align: 'right', lineBreak: false });
   }
 }
 
@@ -346,13 +488,15 @@ function drawCover(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyRe
 
   doc.rect(PAGE.left, 76, 82, 5).fill(COLORS.cyan);
   doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.h1).text('PatentNest.ai', PAGE.left, 96, { width: 300 });
-  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3).text('Preliminary Novelty Assessment Report', PAGE.left, 128, { width: 420 });
+  doc.fillColor('#BFDBFE').font(FONTS.regular).fontSize(TYPE.h3)
+    .text(cleanText(report.reportTitle, 'Preliminary Novelty Assessment Report'), PAGE.left, 128, { width: 420 });
 
-  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(TYPE.display)
-    .text(report.reportTitle, PAGE.left, 254, { width: 405, lineGap: SPACE.xs });
-  doc.y += SPACE.lg;
-  doc.fillColor('#E0F2FE').font(FONTS.medium).fontSize(TYPE.h2)
-    .text(report.inventionTitle, PAGE.left, doc.y, { width: 420, lineGap: SPACE.xs });
+  // The invention itself is the cover headline; the report type is already stated in
+  // the subtitle above (previously the same phrase appeared twice on the cover).
+  const coverTitle = cleanText(report.inventionTitle, report.reportTitle);
+  const coverTitleSize = coverTitle.length > 110 ? 20 : coverTitle.length > 70 ? 24 : TYPE.display;
+  doc.fillColor(COLORS.white).font(FONTS.bold).fontSize(coverTitleSize)
+    .text(coverTitle, PAGE.left, 254, { width: 430, lineGap: SPACE.xs });
 
   const cardY = 500;
   doc.roundedRect(PAGE.left, cardY, width - PAGE.left - PAGE.right, 128, 8).fill('#111C36');
@@ -505,37 +649,35 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     .text('A concise view of retrieval volume, mapped evidence, and the automated overlap signal.', PAGE.left, PAGE.top + 49, { width: contentWidth(doc) });
 
   const rationale = firstSentence(report.finalAssessment.summary);
-  const riskLines = [
-    `${risk.noveltyRiskLabel} - ${risk.noveltyRiskExplanation}`,
-    `${risk.combinationRiskLabel} - ${risk.combinationRiskExplanation}`,
-  ].join('\n');
   const verdictLeftWidth = 180;
   const verdictRightX = PAGE.left + 210;
   const verdictRightWidth = contentWidth(doc) - 226;
   const signalHeight = measuredTextHeight(doc, signal, verdictLeftWidth, FONTS.bold, TYPE.h3, 1.2);
   const stageHeight = measuredTextHeight(doc, 'Review stage: preliminary assessment', verdictLeftWidth, FONTS.semibold, TYPE.micro, 1);
-  const riskLinesHeight = measuredTextHeight(doc, riskLines || rationale, verdictRightWidth, FONTS.regular, TYPE.small, 1.5);
-  const verdictHeight = Math.max(86, SPACE.md + 9 + 8 + signalHeight + 8 + stageHeight + SPACE.md, SPACE.md + riskLinesHeight + SPACE.md);
+  // The two risk lines are shown in the fact cards below; the banner carries the
+  // headline rationale so the same sentences are not printed twice back to back.
+  const rationaleHeight = measuredTextHeight(doc, rationale, verdictRightWidth, FONTS.regular, TYPE.small, 1.5);
+  const verdictHeight = Math.max(86, SPACE.md + 9 + 8 + signalHeight + 8 + stageHeight + SPACE.md, SPACE.md + rationaleHeight + SPACE.md);
   const verdictY = reserveSnapshotBlock(verdictHeight + 12);
 
   doc.roundedRect(PAGE.left, verdictY, contentWidth(doc), verdictHeight, 7).fillAndStroke(palette.fill, palette.stroke);
   doc.rect(PAGE.left, verdictY, 4, verdictHeight).fill(palette.accent);
   doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.caption)
-    .text('DETERMINISTIC RISK VERDICT', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: verdictLeftWidth, lineBreak: false });
+    .text('AUTOMATED RISK SIGNAL', PAGE.left + SPACE.lg, verdictY + SPACE.md, { width: verdictLeftWidth, lineBreak: false });
   doc.fillColor(palette.text).font(FONTS.bold).fontSize(TYPE.h3)
     .text(signal, PAGE.left + SPACE.lg, verdictY + 29, { width: verdictLeftWidth, lineGap: 1.2 });
   doc.fillColor(palette.text).font(FONTS.semibold).fontSize(TYPE.micro)
     .text(`Review stage: preliminary assessment`, PAGE.left + SPACE.lg, verdictY + 29 + signalHeight + 8, { width: verdictLeftWidth, lineGap: 1 });
   doc.fillColor('#334155').font(FONTS.regular).fontSize(TYPE.small)
-    .text(riskLines || rationale, verdictRightX, verdictY + SPACE.md, {
+    .text(rationale, verdictRightX, verdictY + SPACE.md, {
       width: verdictRightWidth,
       lineGap: 1.5,
     });
 
   const factGap = SPACE.sm;
   const factWidth = (contentWidth(doc) - factGap * 2) / 3;
-  const noveltyFact = `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`;
-  const combinationFact = `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`;
+  const noveltyFact = `${risk.noveltyRiskLabel} - ${risk.noveltyRiskExplanation}`;
+  const combinationFact = `${risk.combinationRiskLabel} - ${risk.combinationRiskExplanation}`;
   const factHeight = Math.max(
     96,
     decisionFactHeight(doc, factWidth, noveltyFact, TYPE.caption),
@@ -543,13 +685,13 @@ function drawExecutiveSnapshot(doc: PdfDoc, report: ReturnType<typeof buildNovel
     decisionFactHeight(doc, factWidth, mainDifferentiator, TYPE.caption),
   );
   const factsY = reserveSnapshotBlock(factHeight + 12);
-  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`, COLORS.blue, {
+  drawDecisionFact(doc, PAGE.left, factsY, factWidth, 'Novelty risk', noveltyFact, COLORS.blue, {
     height: factHeight,
     valueHeight: factHeight - 34,
     truncateValue: false,
     valueFontSize: TYPE.caption,
   });
-  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`, COLORS.red, {
+  drawDecisionFact(doc, PAGE.left + factWidth + factGap, factsY, factWidth, 'Combination risk', combinationFact, COLORS.red, {
     height: factHeight,
     valueHeight: factHeight - 34,
     truncateValue: false,
@@ -700,7 +842,7 @@ function drawFlowTextBlock(doc: PdfDoc, label: string, value: string) {
     .fontSize(TYPE.body)
     .text(text, PAGE.left + 8, doc.y, {
       width: contentWidth(doc) - 16,
-      align: 'justify',
+      align: 'left',
       lineGap: 1.4,
     });
   doc.y += SPACE.md;
@@ -731,18 +873,23 @@ function drawMetadataGrid(doc: PdfDoc, items: Array<[string, string]>) {
   for (let index = 0; index < items.length; index += 2) {
     const pair = items.slice(index, index + 2);
     const cellWidth = contentWidth(doc) / 2;
-    const labelWidth = 78;
+    const labelWidth = 92;
     const padding = 7;
     const valueWidths = pair.map(() => cellWidth - labelWidth - padding * 2);
+    // Row height accounts for wrapped labels as well as values, so labels such as
+    // "Candidate records retrieved/ranked" render in full instead of being clipped.
     doc.font(FONTS.regular).fontSize(TYPE.small);
-    const rowHeight = Math.max(28, ...pair.map(([_, value], i) => doc.heightOfString(truncate(value, 240), { width: valueWidths[i], lineGap: 1.5 }) + padding * 2));
+    const valueHeights = pair.map(([_, value], i) => doc.heightOfString(truncate(value, 240), { width: valueWidths[i], lineGap: 1.5 }) + padding * 2);
+    doc.font(FONTS.semibold).fontSize(TYPE.caption);
+    const labelHeights = pair.map(([label]) => doc.heightOfString(cleanText(label), { width: labelWidth - padding, lineGap: 1 }) + padding * 2);
+    const rowHeight = Math.max(28, ...valueHeights, ...labelHeights);
     ensureSpace(doc, rowHeight + 2);
     const y = doc.y;
     doc.rect(PAGE.left, y, contentWidth(doc), rowHeight).fill(index % 4 === 2 ? COLORS.surface : COLORS.white);
     pair.forEach(([label, value], i) => {
       const x = PAGE.left + i * cellWidth;
       doc.fillColor(COLORS.muted).font(FONTS.semibold).fontSize(TYPE.caption)
-        .text(label, x + padding, y + padding, { width: labelWidth - padding, height: rowHeight - padding * 2, ellipsis: '...' });
+        .text(cleanText(label), x + padding, y + padding, { width: labelWidth - padding, height: rowHeight - padding * 2, lineGap: 1 });
       doc.fillColor(COLORS.text).font(FONTS.regular).fontSize(TYPE.small)
         .text(truncate(value, 240) || '-', x + labelWidth, y + padding, { width: cellWidth - labelWidth - padding, height: rowHeight - padding * 2, ellipsis: '...', lineGap: 1.5 });
     });
@@ -769,44 +916,95 @@ function drawTableRow(
 ) {
   const padding = 6;
   const fontSize = opts.fontSize || (opts.header ? TYPE.caption : TYPE.small);
+  const minRowHeight = opts.header ? 26 : 28;
   const prepared = cells.map(cell => opts.header ? truncate(cell, 120) : cleanText(cell));
-  doc.font(opts.header ? FONTS.semibold : FONTS.regular).fontSize(fontSize);
-  const heights = prepared.map((cell, index) => doc.heightOfString(cell || '-', { width: widths[index] - padding * 2, lineGap: 1.5 }) + padding * 2);
-  const rowHeight = Math.max(opts.header ? 26 : 28, ...heights);
-  const pageChanged = ensureSpace(doc, rowHeight + 2);
-  if (pageChanged && opts.repeatHeader && !opts.header) {
-    drawTableRow(doc, opts.repeatHeader.cells, opts.repeatHeader.widths, { header: true });
-    ensureSpace(doc, rowHeight + 2);
-  }
 
-  const y = doc.y;
-  let x = PAGE.left;
-  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
-  const rowFill = opts.header ? COLORS.tableHeader : (opts.fills?.[0] || COLORS.white);
-  doc.rect(PAGE.left, y, totalWidth, rowHeight).fill(rowFill);
-  prepared.forEach((cell, index) => {
-    const text = cell || '-';
-    const textWidth = widths[index] - padding * 2;
-    const align = opts.aligns?.[index] || (opts.header ? 'left' : proseAlign(text));
-    const font = opts.header || opts.boldCells?.includes(index) ? FONTS.semibold : FONTS.regular;
-    const textHeight = doc.heightOfString(text, { width: textWidth, align, lineGap: 1.5 });
-    const textY = opts.verticalAligns?.[index] === 'center'
-      ? y + Math.max(padding, (rowHeight - textHeight) / 2)
-      : y + padding;
-    doc.fillColor(opts.header ? COLORS.white : (opts.textColors?.[index] || COLORS.text))
-      .font(font)
-      .fontSize(fontSize)
-      .text(text, x + padding, textY, {
-        width: textWidth,
-        height: rowHeight - padding * 2,
-        align,
-        lineGap: 1.5,
-      });
-    x += widths[index];
-  });
-  doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + totalWidth, y + rowHeight)
-    .lineWidth(opts.header ? 0.8 : 0.4).strokeColor(opts.header ? COLORS.blue2 : COLORS.border).stroke();
-  doc.y = y + rowHeight;
+  const measureRowHeight = (rowCells: string[], minHeight: number) => {
+    doc.font(opts.header ? FONTS.semibold : FONTS.regular).fontSize(fontSize);
+    const heights = rowCells.map((cell, index) => cell
+      ? doc.heightOfString(cell, { width: widths[index] - padding * 2, lineGap: 1.5 }) + padding * 2
+      : 0);
+    return Math.max(minHeight, ...heights);
+  };
+
+  const drawChunk = (rowCells: string[], rowHeight: number, continuation: boolean) => {
+    const y = doc.y;
+    let x = PAGE.left;
+    const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+    const rowFill = opts.header ? COLORS.tableHeader : (opts.fills?.[0] || COLORS.white);
+    doc.rect(PAGE.left, y, totalWidth, rowHeight).fill(rowFill);
+    rowCells.forEach((cell, index) => {
+      const text = cell || (continuation ? '' : '-');
+      const textWidth = widths[index] - padding * 2;
+      const align = opts.aligns?.[index] || (opts.header ? 'left' : proseAlign(text));
+      const font = opts.header || opts.boldCells?.includes(index) ? FONTS.semibold : FONTS.regular;
+      if (text) {
+        const textHeight = doc.heightOfString(text, { width: textWidth, align, lineGap: 1.5 });
+        const textY = opts.verticalAligns?.[index] === 'center' && !continuation
+          ? y + Math.max(padding, (rowHeight - textHeight) / 2)
+          : y + padding;
+        doc.fillColor(opts.header ? COLORS.white : (opts.textColors?.[index] || COLORS.text))
+          .font(font)
+          .fontSize(fontSize)
+          .text(text, x + padding, textY, {
+            width: textWidth,
+            height: rowHeight - padding * 2,
+            align,
+            lineGap: 1.5,
+          });
+      }
+      x += widths[index];
+    });
+    doc.moveTo(PAGE.left, y + rowHeight).lineTo(PAGE.left + totalWidth, y + rowHeight)
+      .lineWidth(opts.header ? 0.8 : 0.4).strokeColor(opts.header ? COLORS.blue2 : COLORS.border).stroke();
+    doc.y = y + rowHeight;
+  };
+
+  const breakPage = () => {
+    addPage(doc);
+    if (opts.repeatHeader && !opts.header) {
+      drawTableRow(doc, opts.repeatHeader.cells, opts.repeatHeader.widths, { header: true });
+    }
+  };
+
+  doc.font(opts.header ? FONTS.semibold : FONTS.regular).fontSize(fontSize);
+  const lineHeight = doc.heightOfString('Ag', { width: 1000, lineGap: 1.5 });
+  const minChunkHeight = padding * 2 + lineHeight * 2;
+
+  let remaining = prepared;
+  let continuation = false;
+  let guard = 0;
+  while (guard++ < 40) {
+    const rowHeight = measureRowHeight(remaining, continuation ? Math.ceil(padding * 2 + lineHeight) : minRowHeight);
+    const available = pageBottom(doc) - doc.y;
+    if (rowHeight + 2 <= available) {
+      drawChunk(remaining, rowHeight, continuation);
+      return;
+    }
+    // The row does not fit the remaining space. If there is not enough room for a
+    // useful chunk (two text lines), move to the next page; otherwise split the row
+    // so the current page is filled instead of being left partially blank.
+    if (available < minChunkHeight + 2) {
+      breakPage();
+      continue;
+    }
+    doc.font(opts.header ? FONTS.semibold : FONTS.regular).fontSize(fontSize);
+    const chunkTextHeight = available - 2 - padding * 2;
+    const split = remaining.map((cell, index) => cell
+      ? fitTextToHeight(doc, cell, widths[index] - padding * 2, chunkTextHeight, 1.5)
+      : (['', ''] as const));
+    const heads = split.map(([head]) => head);
+    const tails = split.map(([, tail]) => tail);
+    if (!heads.some(head => head)) {
+      breakPage();
+      continue;
+    }
+    drawChunk(heads, measureRowHeight(heads, Math.ceil(padding * 2 + lineHeight)), continuation);
+    if (!tails.some(tail => tail)) return;
+    remaining = tails;
+    continuation = true;
+    breakPage();
+  }
 }
 
 const REFERENCE_FEATURE_TABLE = {
@@ -816,6 +1014,11 @@ const REFERENCE_FEATURE_TABLE = {
   headerFontSize: TYPE.caption,
   lineGap: 1.35,
   minRowHeight: 50,
+  // Height reserved above the disclosure column's text for the status badge row
+  // ("Mapping assessment: ..."). Measurement and rendering MUST both include this,
+  // otherwise rows measure as fitting but spill their last line into a forced
+  // continuation page, leaving the rest of the current page blank.
+  statusBadgeHeight: 18,
   divider: '#D7E0EA',
   continuationFill: '#F1F5F9',
 } as const;
@@ -898,24 +1101,31 @@ function referenceFeatureCells(row: AttorneyReportFeatureRow, _index: number) {
   ];
 }
 
-function referenceFeatureRowHeight(doc: PdfDoc, cells: string[], widths: number[]) {
+function referenceFeatureRowHeight(
+  doc: PdfDoc,
+  cells: string[],
+  widths: number[],
+  minHeight: number = REFERENCE_FEATURE_TABLE.minRowHeight,
+  firstChunk = true,
+) {
   doc.font(FONTS.regular).fontSize(REFERENCE_FEATURE_TABLE.fontSize);
   const heights = cells.map((cell, index) => {
     if (!cell) return 0;
+    const reservedBadgeHeight = firstChunk && index === 1 ? REFERENCE_FEATURE_TABLE.statusBadgeHeight : 0;
     return doc.heightOfString(cell, {
       width: widths[index] - REFERENCE_FEATURE_TABLE.paddingX * 2,
       align: index === 0 ? 'center' : proseAlign(cell),
       lineGap: REFERENCE_FEATURE_TABLE.lineGap,
-    }) + REFERENCE_FEATURE_TABLE.paddingY * 2;
+    }) + REFERENCE_FEATURE_TABLE.paddingY * 2 + reservedBadgeHeight;
   });
-  return Math.max(REFERENCE_FEATURE_TABLE.minRowHeight, ...heights);
+  return Math.max(minHeight, ...heights);
 }
 
 function splitReferenceFeatureCellsToHeight(doc: PdfDoc, cells: string[], widths: number[], rowHeight: number, firstChunk: boolean) {
   doc.font(FONTS.regular).fontSize(REFERENCE_FEATURE_TABLE.fontSize);
   return cells.map((cell, index) => {
     if (!cell) return ['', ''] as const;
-    const reservedBadgeHeight = firstChunk && index === 1 ? 18 : 0;
+    const reservedBadgeHeight = firstChunk && index === 1 ? REFERENCE_FEATURE_TABLE.statusBadgeHeight : 0;
     const availableTextHeight = Math.max(12, rowHeight - REFERENCE_FEATURE_TABLE.paddingY * 2 - reservedBadgeHeight);
     return fitTextToHeight(
       doc,
@@ -1002,8 +1212,8 @@ function drawReferenceFeatureRowChunk(
     }
 
     const renderedText = text;
-    const renderedTextY = index === 1 && !continuation ? textY + 18 : textY;
-    const renderedTextHeight = index === 1 && !continuation ? Math.max(8, textHeight - 18) : textHeight;
+    const renderedTextY = index === 1 && !continuation ? textY + REFERENCE_FEATURE_TABLE.statusBadgeHeight : textY;
+    const renderedTextHeight = index === 1 && !continuation ? Math.max(8, textHeight - REFERENCE_FEATURE_TABLE.statusBadgeHeight) : textHeight;
     const textColor = index === 0 ? COLORS.blue2 : COLORS.text;
     doc.fillColor(textColor)
       .font(index === 0 ? FONTS.semibold : FONTS.regular)
@@ -1031,19 +1241,33 @@ function drawReferenceFeatureRow(
 ) {
   let remaining = referenceFeatureCells(row, rowIndex);
   let continuation = false;
+  let guard = 0;
 
-  while (hasRemainingTableText(remaining)) {
-    if (pageBottom(doc) - doc.y < REFERENCE_FEATURE_TABLE.minRowHeight) {
+  while (hasRemainingTableText(remaining) && guard++ < 40) {
+    // Never start (or continue) a feature row in a sliver of space at the page
+    // bottom: require room for the status badge plus a few readable lines,
+    // otherwise begin on a fresh page.
+    const minStart = continuation ? 44 : 96;
+    if (pageBottom(doc) - doc.y < minStart) {
       addPage(doc);
       drawReferenceFeatureTableHeader(doc, headers, widths);
     }
 
     const available = pageBottom(doc) - doc.y;
-    const fullHeight = referenceFeatureRowHeight(doc, remaining, widths);
-    const rowHeight = fullHeight <= available ? fullHeight : Math.max(REFERENCE_FEATURE_TABLE.minRowHeight, available);
+    const minHeight = continuation ? 30 : REFERENCE_FEATURE_TABLE.minRowHeight;
+    const fullHeight = referenceFeatureRowHeight(doc, remaining, widths, minHeight, !continuation);
+    const rowHeight = fullHeight <= available ? fullHeight : Math.max(minHeight, available);
     const split = splitReferenceFeatureCellsToHeight(doc, remaining, widths, rowHeight, !continuation);
     const chunks = split.map(([chunk]) => chunk);
     const rest = split.map(([, next]) => next);
+
+    if (!chunks.some(chunk => chunk)) {
+      // Nothing fit in the available space (orphan control refused a fragment):
+      // retry on a fresh page rather than drawing an empty row.
+      addPage(doc);
+      drawReferenceFeatureTableHeader(doc, headers, widths);
+      continue;
+    }
 
     if (continuation) {
       if (!chunks[0]) chunks[0] = `${cleanText(row.featureNumber)} cont.`;
@@ -1308,14 +1532,16 @@ function drawOverlapSignal(doc: PdfDoc, value: string, x: number, y: number, wid
     ? 'High'
     : /medium|moderate|partial/i.test(normalized)
       ? 'Medium'
-      : /low/i.test(normalized)
-        ? 'Low'
-        : 'Review';
+      : /standard/i.test(normalized)
+        ? 'Standard'
+        : /low/i.test(normalized)
+          ? 'Low'
+          : 'Review';
   const color = compact === 'High'
     ? COLORS.red
     : compact === 'Medium'
       ? COLORS.warning
-      : compact === 'Low'
+      : compact === 'Low' || compact === 'Standard'
         ? COLORS.muted
         : COLORS.blue;
   doc.circle(x + 9, y + height / 2, 2.5).fill(color);
@@ -1523,18 +1749,40 @@ export async function GET(
 
     drawCover(doc, report);
 
-    addPage(doc);
-    const tocPageIndex = doc.bufferedPageRange().count - 1;
+    // Reserve the exact number of TOC pages up front (the entry sequence is
+    // deterministic), so the TOC can never overflow onto pages appended at the end
+    // of the document.
+    const tocPlan = tocLayout(doc, plannedTocLevels(patentComparisons.length, paperComparisons.length));
+    const tocPageIndexes: number[] = [];
+    for (let i = 0; i < tocPlan.pageCount; i++) {
+      addPage(doc);
+      tocPageIndexes.push(doc.bufferedPageRange().count - 1);
+    }
+
+    // PDF sidebar bookmarks mirroring the TOC hierarchy (best-effort, never fatal).
+    const outlineRoot = (doc as any).outline;
+    let outlineL1: any = null;
+    let outlineL2: any = null;
+    const addOutline = (level: 1 | 2 | 3, title: string) => {
+      try {
+        if (!outlineRoot) return;
+        if (level === 1) { outlineL1 = outlineRoot.addItem(title); outlineL2 = null; }
+        else if (level === 2) { outlineL2 = (outlineL1 || outlineRoot).addItem(title); }
+        else { (outlineL2 || outlineL1 || outlineRoot).addItem(title); }
+      } catch { /* bookmarks are cosmetic */ }
+    };
 
     addPage(doc);
-    drawExecutiveSnapshot(doc, report);
+    addOutline(1, 'Executive Snapshot');
     sectionPages.push({ number: '', title: 'Executive Snapshot', page: doc.bufferedPageRange().count, destination: 'executive-snapshot', level: 1 });
+    drawExecutiveSnapshot(doc, report);
 
     addPage(doc);
     const startGroup = (number: string, title: string) => {
       ensureSpace(doc, 60);
       const destination = `section-${sectionPages.length + 1}`;
       doc.addNamedDestination(destination, 'XYZ', PAGE.left, Math.max(PAGE.top, doc.y - 8), null);
+      addOutline(1, `${number} ${title}`.trim());
       sectionPages.push({ number, title, page: doc.bufferedPageRange().count, destination, level: 1 });
       drawGroupHeading(doc, number, title);
     };
@@ -1542,6 +1790,7 @@ export async function GET(
       ensureSpace(doc, 54);
       const destination = `section-${sectionPages.length + 1}`;
       doc.addNamedDestination(destination, 'XYZ', PAGE.left, Math.max(PAGE.top, doc.y - 8), null);
+      addOutline(level, `${number} ${title}`.trim());
       sectionPages.push({ number, title, page: doc.bufferedPageRange().count, destination, level });
       drawSectionHeading(doc, `${number} ${title}`);
     };
@@ -1569,14 +1818,19 @@ export async function GET(
 
     startSection('1.3', 'Key Features', 2);
     drawParagraph(doc, 'The key features are extracted from the submitted disclosure and classified to separate core mechanisms, implementation details, novelty-candidate features, and generic features that should not be relied on alone.');
-    drawTableRow(doc, ['Key Feature', 'Importance', 'Type', 'Feature Description'], [58, 122, 92, contentWidth(doc) - 272], { header: true });
+    const keyFeatureHeader = ['Key Feature', 'Importance', 'Type', 'Feature Description'];
+    const keyFeatureWidths = [58, 122, 92, contentWidth(doc) - 272];
+    drawTableRow(doc, keyFeatureHeader, keyFeatureWidths, { header: true });
     report.featureSummaries.forEach((feature, index) => {
       drawTableRow(doc, [
         feature.featureNumber,
         feature.importanceLabel,
         feature.typeLabel,
         `${feature.feature}${feature.genericWarning ? `\n${feature.genericWarning}` : ''}`,
-      ], [58, 122, 92, contentWidth(doc) - 272], { fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined });
+      ], keyFeatureWidths, {
+        fills: index % 2 ? [COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt, COLORS.tableAlt] : undefined,
+        repeatHeader: { cells: keyFeatureHeader, widths: keyFeatureWidths },
+      });
     });
     drawFlowTextBlock(doc, 'Generic Feature Risk', report.genericFeatureRisk.summary);
 
@@ -1617,11 +1871,13 @@ export async function GET(
         const itemIndex = Math.max(0, report.comparisons.findIndex(comparison => comparison.publicationNumber === item.publicationNumber));
         const destination = patentDestination(itemIndex);
         drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction, destination);
+        const tocTitle = item.referenceType === 'paper'
+          ? truncate(item.title, 100)
+          : `${cleanText(item.publicationNumber)} - ${truncate(item.title, 74)}`;
+        addOutline(3, `${sectionNumber}.${localIndex + 1} ${tocTitle}`);
         sectionPages.push({
           number: `${sectionNumber}.${localIndex + 1}`,
-          title: item.referenceType === 'paper'
-            ? truncate(item.title, 100)
-            : `${cleanText(item.publicationNumber)} - ${truncate(item.title, 74)}`,
+          title: tocTitle,
           page: doc.bufferedPageRange().count,
           destination,
           level: 3,
@@ -1677,9 +1933,16 @@ export async function GET(
 
     const otherCitationSection = paperComparisons.length > 0 ? '2.3' : '2.2';
     startSection(otherCitationSection, 'List of Other Shortlisted Citations', 2);
+    const excludedShortlistCount = Number((report as any).otherShortlistedExcludedCount || 0);
     if (report.otherShortlistedCitations.length > 0) {
-      drawParagraph(doc, 'The below citations were shortlisted but not mapped in citation detail because the final report focuses on the most relevant mapped references.');
+      drawParagraph(doc, 'The citations below cleared retrieval relevance screening but were not selected for detailed feature mapping because the report focuses on the most relevant mapped references.');
       drawCitationTable(doc, report.otherShortlistedCitations);
+      if (excludedShortlistCount > 0) {
+        doc.y += SPACE.sm;
+        drawParagraph(doc, `${excludedShortlistCount} additional low-relevance retrieval candidate${excludedShortlistCount === 1 ? ' was' : 's were'} screened out by the AI relevance gate and ${excludedShortlistCount === 1 ? 'is' : 'are'} not listed.`);
+      }
+    } else if (excludedShortlistCount > 0) {
+      drawParagraph(doc, `No additional relevant shortlisted citations remained after the detailed mapped references were selected. ${excludedShortlistCount} low-relevance retrieval candidate${excludedShortlistCount === 1 ? ' was' : 's were'} screened out by the AI relevance gate.`);
     } else {
       drawParagraph(doc, 'No additional shortlisted citations remained after the detailed mapped references were selected.');
     }
@@ -1794,27 +2057,7 @@ export async function GET(
       drawFlowBulletList(doc, 'What To Do Next', report.nextSteps);
     }
 
-    doc.switchToPage(tocPageIndex);
-    doc.y = PAGE.top + 10;
-    doc.rect(PAGE.left, doc.y, 82, 5).fill(COLORS.cyan);
-    doc.y += SPACE.xl;
-    doc.fillColor(COLORS.text).font(FONTS.bold).fontSize(TYPE.h1).text('Table of Contents', PAGE.left, doc.y, { width: contentWidth(doc) });
-    doc.y += SPACE.lg;
-    sectionPages.forEach(item => {
-      const y = doc.y;
-      const rowHeight = item.level === 1 ? 22 : item.level === 2 ? 18 : 16;
-      const indent = item.level === 3 ? SPACE.xl : item.level === 2 ? SPACE.lg : 0;
-      const font = item.level === 1 ? FONTS.semibold : item.level === 3 ? FONTS.regular : FONTS.regular;
-      const fontSize = item.level === 1 ? TYPE.body : item.level === 3 ? TYPE.micro : TYPE.small;
-      const textColor = item.level === 3 ? COLORS.blue2 : COLORS.text;
-      doc.font(font).fontSize(fontSize).fillColor(textColor)
-        .text(`${item.number} ${item.title}`.trim(), PAGE.left + indent, y, { width: contentWidth(doc) - 58 - indent });
-      doc.font(FONTS.semibold).fontSize(TYPE.small).fillColor(COLORS.blue)
-        .text(String(item.page), doc.page.width - PAGE.right - 42, y, { width: 42, align: 'right' });
-      doc.goTo(PAGE.left, y - 2, contentWidth(doc), rowHeight, item.destination, { Border: [0, 0, 0] });
-      doc.moveTo(PAGE.left, y + rowHeight - 4).lineTo(doc.page.width - PAGE.right, y + rowHeight - 4).lineWidth(0.3).strokeColor('#E2E8F0').stroke();
-      doc.y = y + rowHeight;
-    });
+    fillTableOfContents(doc, sectionPages, tocPageIndexes);
 
     trimTrailingBlankPages(doc);
     drawHeaderFooter(doc, report.reportNumber, report.inventionTitle);

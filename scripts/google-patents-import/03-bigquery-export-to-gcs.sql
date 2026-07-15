@@ -1,11 +1,12 @@
 -- =============================================================================
 -- Step 3: Export the publications staging table to Cloud Storage as gzip CSV.
 --
+-- Column order MUST match google_patents_staging in 04-postgres-load-and-upsert.sql
+-- and download-and-load.sh. header=FALSE so the loader can \copy directly.
+--
 -- Create the bucket once (same region as the dataset):
 --   gcloud storage buckets create gs://__BUCKET__ --location=US
---
--- Replace __PROJECT__ and __BUCKET__ before running. Arrays are pipe-joined so
--- the CSV stays flat; the Postgres loader splits them back out.
+-- Replace __PROJECT__ and __BUCKET__ before running.
 -- =============================================================================
 
 EXPORT DATA OPTIONS (
@@ -18,18 +19,17 @@ EXPORT DATA OPTIONS (
 ) AS
 SELECT
   publication_number,
-  pub_key,
   pub_canonical,
-  country_code,
-  IFNULL(kind_code, ''),
-  IFNULL(family_id, ''),
-  IFNULL(CAST(publication_date AS STRING), ''),
-  IFNULL(CAST(filing_date AS STRING), ''),
   title,
   abstract,
-  ARRAY_TO_STRING(cpc_codes, '|'),
-  ARRAY_TO_STRING(assignees, '|'),
-  ARRAY_TO_STRING(inventors, '|'),
-  CAST(abstract_translated AS STRING),
-  CAST(is_family_representative AS STRING)
+  IFNULL(url, ''),
+  IFNULL(cpc, ''),
+  IFNULL(top_terms, ''),
+  IFNULL(country_code, ''),
+  publication_date,
+  filing_date,
+  kind_code,
+  family_id,
+  IFNULL(first_claim, ''),
+  IFNULL(description_snippet, '')
 FROM `__PROJECT__.spotipr_patents.publications_staging`;

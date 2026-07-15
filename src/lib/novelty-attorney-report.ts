@@ -193,6 +193,7 @@ export interface AttorneyReportModel {
   directCitations: AttorneyReportCitation[];
   borderlineCitations: AttorneyReportCitation[];
   otherShortlistedCitations: AttorneyReportCitation[];
+  otherShortlistedExcludedCount: number;
   assignees: string[];
   inventors: string[];
   assigneeLandscape: AttorneyReportEntityLandscape;
@@ -316,6 +317,7 @@ function sourceAbstractFields(value: any): unknown[] {
 function displayEvidenceSource(value: unknown, fallback = 'citation record'): string {
   const text = cleanText(value, fallback).toLowerCase();
   if (!text || text === 'none' || text === 'citation record') return 'none';
+  if (/\bclaims?\b/.test(text)) return 'source record';
   if (/\btitle\b/.test(text) && new RegExp(`\\b${sourceDisclosureTerm()}\\b`, 'i').test(text)) return 'source record';
   if (new RegExp(`\\b${sourceDisclosureTerm()}\\b`, 'i').test(text)) return 'source record';
   if (/\btitle\b/.test(text)) return 'source record';
@@ -1871,21 +1873,41 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
   const componentCitations = citations.filter(citation => citation.matchCategory === 'component');
   const borderlineCitations = citations.filter(citation => citation.matchCategory === 'borderline');
   const compared = new Set(comparisons.map(item => canonicalPatentNumber(item.publicationNumber)));
-  const otherShortlistedCitations = Array.from(patentIndex.values())
+  // Only candidates that cleared (or at least reached) the AI relevance gate belong in
+  // the report. Raw retrieval candidates the gate rejected are off-topic noise and must
+  // not be presented to an attorney as pending review work.
+  const shortlistCandidates = Array.from(patentIndex.values())
     .filter(item => !compared.has(canonicalPatentNumber(getPublicationNumber(item))))
+    .map(item => {
+      const gate = gateRecordFor(stage1, getPublicationNumber(item)) || {};
+      const relevance = numberScore(
+        item?.relevanceScore ?? item?.score ?? item?.relevance ?? (gate as any)?.rerankScore ?? (gate as any)?.score
+      );
+      const decision = normalizeRerankDecision(gateDecisionForReport(gate, item));
+      return { item, relevance, decision };
+    });
+  const gateApprovedShortlist = shortlistCandidates
+    .filter(({ decision, relevance }) =>
+      decision === 'accept' ||
+      decision === 'component' ||
+      decision === 'borderline' ||
+      (typeof relevance === 'number' && relevance >= 0.4))
+    .sort((a, b) => (b.relevance ?? -1) - (a.relevance ?? -1));
+  const otherShortlistedCitations = gateApprovedShortlist
     .slice(0, 20)
-    .map((item, index) => ({
+    .map(({ item, relevance }, index) => ({
       citationNo: `S${index + 1}`,
       publicationNumber: getPublicationNumber(item),
       title: firstText(item?.title, item?.invention_title, item?.referenceType === 'paper' ? 'Untitled Paper' : 'Untitled Patent'),
       referenceType: item?.referenceType === 'paper' ? 'paper' as const : 'patent' as const,
-      relevanceScore: numberScore(item?.relevanceScore ?? item?.score ?? item?.relevance),
+      relevanceScore: relevance,
       evidenceQuality: cleanText(item?.evidence_quality, 'not mapped'),
-      referenceRole: 'Requires full-text review',
-      reviewPriority: reviewPriorityFor('rejected', 0, numberScore(item?.relevanceScore ?? item?.score ?? item?.relevance)),
+      referenceRole: 'Shortlisted / not mapped',
+      reviewPriority: reviewPriorityFor('rejected', 0, relevance),
       matchCategory: 'rejected' as const,
       matchCategoryLabel: 'Not mapped / shortlisted',
     }));
+  const otherShortlistedExcludedCount = shortlistCandidates.length - gateApprovedShortlist.length;
   const assigneeSignals = comparisons
     .flatMap(item => item.assignees.split(',').map(value => cleanText(value)))
     .map(value => normalizeEntityName(value, 'assignee'))
@@ -2023,6 +2045,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     componentCitations,
     borderlineCitations,
     otherShortlistedCitations,
+    otherShortlistedExcludedCount,
     assignees,
     inventors,
     assigneeLandscape: buildEntityLandscape(assigneeSignals, 'assignee'),

@@ -2,21 +2,36 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import {
   PATENT_CORPUS_EMBEDDING_COLUMN,
+  PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+  PATENT_CORPUS_EMBEDDING_DISTANCE_OP,
+  PATENT_CORPUS_EMBEDDING_DTYPE,
   PATENT_CORPUS_EMBEDDING_MODEL,
   PATENT_CORPUS_EMBEDDING_SQL_TYPE,
   PATENT_CORPUS_SOURCE_EPO,
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
+  corpusEmbeddingToLiteral,
   hasSearchEmbeddingApiKey,
   requestSearchQueryEmbeddings,
 } from '@/lib/patent-corpus-service'
 
-// The physical embedding column and cast depend on the configured model: legacy
-// OpenAI vectors live in "embedding" vector(1536), shortened (e.g. voyage-3-lite)
-// vectors live in "embeddingHalf" halfvec(512). Both are trusted module constants,
-// never user input, so Prisma.raw is safe here.
+// Physical embedding column, cast, and distance operator for the configured dtype:
+//   float 1536 -> "embedding" vector(1536), cosine (<=>)
+//   float !1536 -> "embeddingHalf" halfvec,   cosine (<=>)
+//   binary     -> "embeddingBinary" bit,       Hamming (<~>)
+// All are trusted module constants (never user input), so Prisma.raw is safe.
 const EMBEDDING_COLUMN_SQL = Prisma.raw(`e."${PATENT_CORPUS_EMBEDDING_COLUMN}"`)
-const EMBEDDING_CAST_SQL = Prisma.raw(`::${PATENT_CORPUS_EMBEDDING_SQL_TYPE}`)
+const EMBEDDING_CAST_SQL = Prisma.raw(
+  PATENT_CORPUS_EMBEDDING_SQL_TYPE === 'bit'
+    ? `::bit(${PATENT_CORPUS_EMBEDDING_DIMENSIONS})`
+    : `::${PATENT_CORPUS_EMBEDDING_SQL_TYPE}`
+)
+const EMBEDDING_DISTANCE_OP_SQL = Prisma.raw(PATENT_CORPUS_EMBEDDING_DISTANCE_OP)
+// Normalized 0..1 similarity: cosine distance is already 0..2 (1 - d); Hamming distance
+// is a 0..N bit count, so divide by N. Higher = closer for both.
+const EMBEDDING_SIMILARITY_DENOM = Prisma.raw(
+  PATENT_CORPUS_EMBEDDING_DTYPE === 'binary' ? ` / ${PATENT_CORPUS_EMBEDDING_DIMENSIONS}.0` : ''
+)
 import type {
   NormalizedPatentResult,
   PatentProviderSearchRequest,
@@ -812,11 +827,11 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           }
           const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
           if (limit <= 0) continue
-          const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
+          const vectorLiteral = corpusEmbeddingToLiteral(vector)
           const queryStartedAt = Date.now()
           const vectorRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
             SELECT ${commonSelectSql(Prisma.sql`,
-              1 - (${EMBEDDING_COLUMN_SQL} <=> ${vectorLiteral}${EMBEDDING_CAST_SQL}) AS "vectorScore"`)}
+              1 - ((${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorLiteral}${EMBEDDING_CAST_SQL})${EMBEDDING_SIMILARITY_DENOM}) AS "vectorScore"`)}
             FROM "local_patents" p
             JOIN "local_patent_embeddings" e ON e."localPatentId" = p."id"
             ${whereSql([
@@ -825,7 +840,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
               Prisma.sql`${EMBEDDING_COLUMN_SQL} IS NOT NULL`,
               ...filterConditions,
             ])}
-            ORDER BY ${EMBEDDING_COLUMN_SQL} <=> ${vectorLiteral}${EMBEDDING_CAST_SQL}
+            ORDER BY ${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorLiteral}${EMBEDDING_CAST_SQL}
             LIMIT ${limit}
           `)
           vectorQueriesCompleted += 1

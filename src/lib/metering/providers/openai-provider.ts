@@ -182,15 +182,14 @@ export class OpenAIProvider implements LLMProvider {
         }
       }
       
-      const response = await fetch(`${this.config.baseURL}/chat/completions`, {
+      const response = await this.fetchWithRetry(`${this.config.baseURL}/chat/completions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.config.apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(this.config.timeout ?? PROVIDER_TIMEOUTS.openai()),
-      })
+      }, { timeoutMs: this.config.timeout ?? PROVIDER_TIMEOUTS.openai(), label: `chat:${modelToUse}` })
 
       if (!response.ok) {
         const error = await response.text()
@@ -270,17 +269,16 @@ export class OpenAIProvider implements LLMProvider {
 
     console.log(`[OpenAIProvider] Using Responses API for ${modelToUse} with reasoning.effort=${reasoningEffort}`)
 
-    const response = await fetch(`${this.config.baseURL}/responses`, {
+    // Responses API path is used for reasoning models (o-series / GPT-5) which
+    // can run much longer under high reasoning effort — give the longer ceiling.
+    const response = await this.fetchWithRetry(`${this.config.baseURL}/responses`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.config.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
-      // Responses API path is used for reasoning models (o-series / GPT-5) which
-      // can run much longer under high reasoning effort — give the longer ceiling.
-      signal: AbortSignal.timeout(this.config.timeout ?? PROVIDER_TIMEOUTS.openaiReasoning()),
-    })
+    }, { timeoutMs: this.config.timeout ?? PROVIDER_TIMEOUTS.openaiReasoning(), label: `responses:${modelToUse}` })
 
     if (!response.ok) {
       const error = await response.text()
@@ -369,6 +367,39 @@ export class OpenAIProvider implements LLMProvider {
     }
     
     return limits[normalized] || { input: 128000, output: 16384 }
+  }
+
+  // POST with exponential-backoff retry on transient throttling (429) and 5xx, honoring
+  // Retry-After. A fresh AbortSignal is created per attempt (a used signal can't be reused).
+  // Timeouts and 4xx (other than 429) are NOT retried — they are surfaced to the caller.
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    opts: { timeoutMs: number; maxRetries?: number; label?: string }
+  ): Promise<Response> {
+    const maxRetries = opts.maxRetries ?? 4
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await fetch(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs) })
+        if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+          const retryAfterHeader = Number(response.headers.get('retry-after'))
+          const retryAfterMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : null
+          try { await response.text() } catch { /* drain body before retry */ }
+          const waitMs = retryAfterMs ?? (Math.min(8000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250))
+          console.warn(`[OpenAIProvider] ${response.status} on ${opts.label ?? url} — retry ${attempt + 1}/${maxRetries} in ${waitMs}ms`)
+          await new Promise(resolve => setTimeout(resolve, waitMs))
+          continue
+        }
+        return response
+      } catch (err) {
+        const name = err instanceof Error ? err.name : ''
+        const isTimeout = name === 'AbortError' || name === 'TimeoutError'
+        if (isTimeout || attempt >= maxRetries) throw err
+        const waitMs = Math.min(8000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250)
+        console.warn(`[OpenAIProvider] fetch error on ${opts.label ?? url} (${err instanceof Error ? err.message : err}) — retry ${attempt + 1}/${maxRetries} in ${waitMs}ms`)
+        await new Promise(resolve => setTimeout(resolve, waitMs))
+      }
+    }
   }
 
   getCostPerToken(modelName: string): { input: number, output: number } {

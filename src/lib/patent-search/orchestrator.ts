@@ -9,6 +9,7 @@ import { createPatentSearchQueryPlan } from './query-planner'
 import { getPatentSearchProvider, listPatentSearchProviders, resolveProviderIds } from './provider-registry'
 import { canonicalPatentResultKey, clampLimit, uniqueStrings } from './utils'
 import { compactLogDetails } from './provider-runtime'
+import { isVoyageRerankerEnabled, rerankItems } from '@/lib/voyage-reranker-service'
 
 function logSearchEvent(event: string, details: Record<string, unknown>) {
   console.info('[PatentSearch]', JSON.stringify(compactLogDetails({ event, ...details })))
@@ -363,7 +364,43 @@ export class PatentSearchOrchestrator {
     }
 
     providerResults.sort((a, b) => providerIds.indexOf(a.providerId) - providerIds.indexOf(b.providerId))
-    const candidateResults = mergeProviderResults(providerResults, candidateLimit)
+    let candidateResults = mergeProviderResults(providerResults, candidateLimit)
+
+    // Second-stage reranking: the binary-embedding recall lane (Google corpus) and the
+    // float lane (Indian corpus) return candidates scored on different bases (Hamming vs
+    // cosine). The Voyage reranker re-scores query -> title+abstract for the whole merged
+    // pool, producing one comparable ordering and recovering the precision binary trades
+    // away. Gated by NOVELTY_RERANK_ENABLED + VOYAGE_API_KEY; failure keeps the merge order.
+    const rerankQuery = String(queryPlan.searchQuery || input.query || '').trim()
+    if (isVoyageRerankerEnabled() && rerankQuery && candidateResults.length > 1) {
+      const rerankStartedAt = Date.now()
+      try {
+        const scored = await rerankItems(
+          rerankQuery,
+          candidateResults.map(result => ({
+            item: result,
+            text: `${result.title || ''}\n${result.abstract || result.snippet || ''}`,
+          })),
+        )
+        if (scored.length) {
+          candidateResults = scored.map(entry => ({
+            ...entry.item,
+            rerankScore: entry.relevanceScore,
+            scores: { ...(entry.item.scores || {}), rerank: entry.relevanceScore },
+          }))
+          logSearchEvent('rerank_completed', {
+            candidateCount: candidateResults.length,
+            durationMs: Date.now() - rerankStartedAt,
+            topScore: scored[0]?.relevanceScore,
+          })
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        warnings.push(`Reranking skipped: ${message}`)
+        logSearchEvent('rerank_failed', { error: message })
+      }
+    }
+
     const results = candidateResults.slice(0, limit)
     const providerContributionCounts = Object.fromEntries(providerIds.map(providerId => [
       providerId,

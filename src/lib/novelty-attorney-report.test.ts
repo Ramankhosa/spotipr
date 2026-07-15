@@ -653,4 +653,49 @@ describe('buildNoveltyAttorneyReportModel', () => {
       patentDisclosure: 'The reference discloses dosage adjustment based on patient variables.',
     });
   });
+
+  it('keeps gate-rejected retrieval candidates out of the other-shortlisted citations list', () => {
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'shortlistfilter1',
+      title: 'Battery healing controller',
+      jurisdiction: 'IN',
+      stage0Results: {
+        searchQuery: 'battery healing',
+        inventionFeatures: ['acoustic defect localization'],
+      },
+      stage1Results: {
+        retrievalCandidates: [
+          { publicationNumber: 'IN100A', title: 'Mapped battery reference', abstract: 'Battery reference.', relevanceScore: 0.9 },
+          { publicationNumber: 'IN200A', title: 'Gate-accepted battery monitor', abstract: 'Battery monitor.', relevanceScore: 0.72 },
+          { publicationNumber: 'IN300A', title: 'Score-only borderline candidate', abstract: 'Cell diagnostics.', relevanceScore: 0.55 },
+          { publicationNumber: 'IN400A', title: 'Water quality inspection drone', abstract: 'A drone inspects water quality.', relevanceScore: 0.12 },
+          { publicationNumber: 'IN500A', title: 'Aquatic environment monitor', abstract: 'Aquarium environment control.' },
+        ],
+        aiRelevance: {
+          accepted: ['IN200A'],
+          byPn: {
+            IN100: { decision: 'accept', score: 0.9, evidence_quality: 'high' },
+            IN200: { decision: 'accept', score: 0.72, evidence_quality: 'high' },
+            IN400: { decision: 'reject', score: 0.12, evidence_quality: 'low' },
+          },
+        },
+      },
+      stage35Results: {
+        feature_map: [{
+          pn: 'IN100A',
+          title: 'Mapped battery reference',
+          feature_analysis: [{ feature: 'acoustic defect localization', status: 'Present', quote: 'battery', field: 'abstract' }],
+        }],
+      },
+      stage4Results: {},
+    });
+
+    // IN100A is mapped in detail; IN200A/IN300A cleared the gate (explicit accept /
+    // score-derived borderline); IN400A was gate-rejected and IN500A has neither a
+    // gate record nor a usable relevance score.
+    expect(model.otherShortlistedCitations.map(item => item.publicationNumber)).toEqual(['IN200A', 'IN300A']);
+    expect(model.otherShortlistedCitations[0].referenceRole).toBe('Shortlisted / not mapped');
+    expect(model.otherShortlistedCitations.some(item => item.referenceRole === 'Requires full-text review')).toBe(false);
+    expect(model.otherShortlistedExcludedCount).toBe(2);
+  });
 });

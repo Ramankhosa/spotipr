@@ -399,6 +399,35 @@ describe('GET attorney report PDF', () => {
     expect(buffer.toString('latin1')).toContain('/GoTo')
   }, 20_000)
 
+  test('lays the table of contents out across reserved pages for large reports', async () => {
+    const rows = Array.from({ length: 8 }, (_, index) => featureRow(index))
+    const comparisons = Array.from({ length: 48 }, (_, index) => citation(rows, {
+      publicationNumber: `US-2026-${String(index + 1).padStart(6, '0')}-A1`,
+      title: `Reference number ${index + 1} with a reasonably descriptive citation title for the index`,
+    }))
+    mockedBuildReport.mockReturnValue(reportModel({
+      citations: comparisons,
+      directCitations: comparisons,
+      comparisons,
+    }) as any)
+
+    const response = await GET(request(), { params: { searchId: 'search-1' } })
+    const buffer = await responseBuffer(response)
+    const parsed = await pdfParse(buffer)
+
+    expect(response.status).toBe(200)
+    // Every citation is indexed in the TOC, including entries past the first TOC page.
+    expect(parsed.text).toContain('2.1.1 US-2026-000001-A1')
+    expect(parsed.text).toContain('2.1.30 US-2026-000030-A1')
+    expect(parsed.text).toContain('2.1.48 US-2026-000048-A1')
+    // No TOC entries leak past the end of the report: the old single-page TOC
+    // overflowed and appended one-entry-per-page fragments after the final section.
+    const tail = parsed.text.slice(parsed.text.lastIndexOf('What To Do Next'))
+    expect(tail).not.toMatch(/2\.1\.\d+ US-2026/)
+    // Sidebar bookmarks are emitted for navigation.
+    expect(buffer.toString('latin1')).toContain('/Outlines')
+  }, 60_000)
+
   test('renders empty comparison and matrix states without changing endpoint behavior', async () => {
     mockedBuildReport.mockReturnValue(reportModel({
       inventionFeatures: [],

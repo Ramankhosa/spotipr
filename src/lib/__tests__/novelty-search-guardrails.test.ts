@@ -179,6 +179,12 @@ describe('novelty search guardrails', () => {
       'If no supplied patent-data quote supports the feature, use Absent or Unknown'
     );
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      'verbatim quote of at most 18 words copied exactly'
+    );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
+      'Partial: a related mechanism is disclosed, but a required element, constraint, interaction, material, or step is missing.'
+    );
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
       'Use Absent when the supplied patent data is adequate to compare'
     );
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain(
@@ -189,7 +195,7 @@ describe('novelty search guardrails', () => {
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Unknown evidence lowers confidence');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('"extent_score": 0.0');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Evaluate extent_score independently for every patent-feature pair');
-    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, or none');
+    expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('evidence_source must be title, abstract, claims (only when a claims excerpt is supplied for that reference), or none');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Do not use "limited data"');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('same mechanism');
     expect(CONSOLIDATED_CANDIDATE_ANALYSIS_PROMPT).toContain('Do not repeat the source-field limitation in narrative fields');
@@ -270,6 +276,73 @@ describe('novelty search guardrails', () => {
     expect(rows[1].attorney_remark).toContain('IN123A');
     expect(rows[1].claim_review_note).toContain('threshold-based irrigation decision rule');
     expect(rows[1].professional_remark).toContain('threshold-based irrigation decision rule');
+  });
+
+  test('rejects unverifiable comparison-row evidence quotes and falls back to the verified cell', () => {
+    const service = new NoveltySearchService() as any;
+    const patentSource = {
+      title: 'Closed-loop irrigation controller',
+      abstract: 'A soil moisture sensor controls irrigation delivery through a valve.',
+    };
+
+    // Fabricated supplied quote, but the (already-verified) cell corroborates Present:
+    // the row keeps the cell status and the cell quote, not the fabricated quote.
+    const corroborated = service.normalizePatentComparisonRows(
+      [{
+        feature: 'soil moisture measurement loop',
+        status: 'Present',
+        evidence_quote: 'this sentence does not appear in the patent text',
+        evidence_source: 'abstract',
+        extent_score: 0.95,
+      }],
+      {
+        pn: 'IN123A',
+        feature_analysis: [
+          { feature: 'soil moisture measurement loop', status: 'Present', quote: 'soil moisture sensor controls irrigation', field: 'abstract', extent_score: 0.8 },
+        ],
+      },
+      { searchQuery: 'q', inventionFeatures: ['soil moisture measurement loop'] },
+      patentSource,
+    );
+    expect(corroborated[0].status).toBe('Present');
+    expect(corroborated[0].evidence_quote).toBe('soil moisture sensor controls irrigation');
+    expect(corroborated[0].extent_score).toBe(0.8);
+
+    // Fabricated supplied quote with no corroborating cell: the Present claim is
+    // downgraded to Unknown and the quote is dropped.
+    const uncorroborated = service.normalizePatentComparisonRows(
+      [{
+        feature: 'soil moisture measurement loop',
+        status: 'Present',
+        evidence_quote: 'this sentence does not appear in the patent text',
+        evidence_source: 'abstract',
+        extent_score: 0.95,
+        confidence: 0.9,
+      }],
+      { pn: 'IN123A', feature_analysis: [] },
+      { searchQuery: 'q', inventionFeatures: ['soil moisture measurement loop'] },
+      patentSource,
+    );
+    expect(uncorroborated[0].status).toBe('Unknown');
+    expect(uncorroborated[0].evidence_quote).toBeFalsy();
+    expect(uncorroborated[0].confidence).toBeLessThanOrEqual(0.4);
+
+    // Verbatim supplied quote passes through unchanged.
+    const verified = service.normalizePatentComparisonRows(
+      [{
+        feature: 'soil moisture measurement loop',
+        status: 'Present',
+        evidence_quote: 'moisture sensor controls irrigation delivery',
+        evidence_source: 'abstract',
+        extent_score: 0.9,
+      }],
+      { pn: 'IN123A', feature_analysis: [] },
+      { searchQuery: 'q', inventionFeatures: ['soil moisture measurement loop'] },
+      patentSource,
+    );
+    expect(verified[0].status).toBe('Present');
+    expect(verified[0].evidence_quote).toBe('moisture sensor controls irrigation delivery');
+    expect(verified[0].extent_score).toBe(0.9);
   });
 
   test('preserves Unknown cells in the feature matrix', () => {

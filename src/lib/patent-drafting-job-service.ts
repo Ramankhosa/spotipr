@@ -26,6 +26,17 @@ const DRAFTING_ACTION_STAGE_LABELS: Record<string, string> = {
 
 type JsonRecord = Record<string, any>
 
+// A pointer to an image file already written to disk (e.g. figures extracted
+// from an uploaded disclosure document during batch creation). Only lightweight
+// references are carried in the job payload — never the image bytes/base64.
+export type UploadedFigureRef = {
+  filename: string
+  checksum: string
+  imagePath: string
+  mimeType?: string
+  label?: string
+}
+
 export type PatentDraftingAutomationPayload = {
   sessionId?: string
   title: string
@@ -56,6 +67,14 @@ export type PatentDraftingAutomationPayload = {
   figureRemarks?: string
   figureMode?: 'generate' | 'skip'
   figureCount?: number
+  // Figures extracted from an uploaded disclosure document. When
+  // useUploadedFigures is true these are imported into the drafting session as
+  // image-based figures (see the FIGURES step in runPipeline). generateDiagrams
+  // controls whether the AI diagram-generation step also runs; when it is false
+  // (and images are present) the pipeline uses only the uploaded figures.
+  uploadedFigures?: UploadedFigureRef[]
+  useUploadedFigures?: boolean
+  generateDiagrams?: boolean
   illustrativeData?: string
   languageMode?: 'common' | 'individual_english_figures'
   commonLanguage?: string
@@ -332,7 +351,10 @@ function figureArtifactInfos(session: any) {
   }
 
   return sources
-    .filter((source: any) => String(source?.plantumlCode || '').trim())
+    // Include AI-generated diagrams (have PlantUML source) AND image-based figures
+    // imported from an uploaded disclosure document (have an image file but no
+    // PlantUML), so both kinds are exported into the batch ZIP figure folder.
+    .filter((source: any) => String(source?.plantumlCode || '').trim() || String(source?.imageFilename || '').trim())
     .map((source: any) => {
       const originalNo = Number(source.figureNo)
       const finalNo = finalNoByFigureNo.get(originalNo) || originalNo
@@ -1451,12 +1473,65 @@ async function runPipeline(job: any, workerId: string) {
   }
 
   await setStep(job.id, workerId, 'FIGURES')
-  let figuresUsable = payload.figureMode !== 'skip'
   session = await loadSession(sessionId)
+
+  // Figures extracted from an uploaded disclosure document are imported first so
+  // they become the session's figures. generateDiagrams decides whether the AI
+  // diagram step also runs, so the caller can pick uploaded-only, generated-only,
+  // both, or neither (mirroring the interactive Figure stage options).
+  const uploadedFigures = Array.isArray(payload.uploadedFigures) ? payload.uploadedFigures : []
+  const wantUploadedFigures = payload.useUploadedFigures === true && uploadedFigures.length > 0
+  const countImportedImageFigures = (loaded: any) => (loaded?.diagramSources || [])
+    .filter((source: any) => !String(source.plantumlCode || '').trim() && String(source.imageFilename || '').trim())
+    .length
+
+  if (wantUploadedFigures) {
+    for (const figure of uploadedFigures) {
+      try {
+        await invokeDraftingAction({
+          user,
+          patentId: job.patentId,
+          body: {
+            action: 'import_uploaded_diagram_image',
+            sessionId,
+            language: payload.figuresLanguage || payload.commonLanguage || 'en',
+            filename: figure.filename,
+            checksum: figure.checksum,
+            imagePath: figure.imagePath,
+            title: figure.label || figure.filename,
+          },
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to import uploaded figure'
+        pipelineWarnings.push(`Uploaded figure "${figure.label || figure.filename}": ${message}`)
+      }
+    }
+    // Best-effort: drain the queued vision analysis for the just-imported images
+    // inline so figure titles/descriptions are populated before section drafting.
+    try {
+      const { processPendingDiagramImageAnalysisJobs } = await import('@/lib/diagram-image-analysis-job-service')
+      await withHeartbeat(job.id, workerId, async () => {
+        for (let pass = 0; pass < uploadedFigures.length + 2; pass += 1) {
+          const processed = await processPendingDiagramImageAnalysisJobs(`${workerId}-uploaded-figures`, 3)
+          if (!processed.filter(Boolean).length) break
+        }
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'analysis deferred'
+      pipelineWarnings.push(`Uploaded figure analysis: ${message}`)
+    }
+    session = await loadSession(sessionId)
+  }
+
+  const wantGenerateDiagrams = payload.figureMode !== 'skip' && payload.generateDiagrams !== false
+  const figuresRequested = wantGenerateDiagrams || wantUploadedFigures
+  let figuresUsable = figuresRequested
   const hasDiagram = (session?.diagramSources || []).some((source: any) => String(source.plantumlCode || '').trim())
-  if (payload.figureMode === 'skip') {
+
+  if (!figuresRequested) {
     await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'skip_figures', sessionId } })
-  } else if (!hasDiagram) {
+    figuresUsable = false
+  } else if (wantGenerateDiagrams && !hasDiagram) {
     try {
       await withHeartbeat(job.id, workerId, () => invokeDraftingAction({
         user,
@@ -1472,12 +1547,15 @@ async function runPipeline(job: any, workerId: string) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Figure generation failed'
       pipelineWarnings.push(`Figure generation: ${message}`)
-      figuresUsable = false
+      if (countImportedImageFigures(await loadSession(sessionId)) === 0) figuresUsable = false
     }
   }
+
   session = await loadSession(sessionId)
   const diagramCount = (session?.diagramSources || []).filter((source: any) => String(source.plantumlCode || '').trim()).length
-  if (diagramCount > 0 && !session?.figureSequenceFinalized) {
+  const importedFigureCount = countImportedImageFigures(session)
+  const totalFigureCount = diagramCount + importedFigureCount
+  if (totalFigureCount > 0 && !session?.figureSequenceFinalized) {
     try {
       await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'get_combined_figures', sessionId } })
       await invokeDraftingAction({ user, patentId: job.patentId, body: { action: 'finalize_figure_sequence', sessionId } })
@@ -1486,14 +1564,14 @@ async function runPipeline(job: any, workerId: string) {
       pipelineWarnings.push(`Figure finalization: ${message}`)
       figuresUsable = false
     }
-  } else if (payload.figureMode !== 'skip' && diagramCount === 0) {
+  } else if (figuresRequested && totalFigureCount === 0) {
     figuresUsable = false
   }
-  if (payload.figureMode !== 'skip' && diagramCount > 0) {
+  if (figuresRequested && diagramCount > 0) {
     const renderResult = await ensureRenderedDiagramImages({ job, session })
     if (renderResult.errors.length > 0) {
       pipelineWarnings.push(`Figure rendering: ${renderResult.errors.slice(0, 3).join('; ')}`)
-      if (renderResult.renderedCount === 0) figuresUsable = false
+      if (renderResult.renderedCount === 0 && importedFigureCount === 0) figuresUsable = false
     }
     if (renderResult.renderedCount > 0) {
       session = await loadSession(sessionId)

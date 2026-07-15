@@ -10,8 +10,23 @@ import {
   AUTO_PATENT_DRAFTING_PROJECT_NAME,
   AUTO_DRAFTING_MAX_UPLOAD_ROWS,
   EMAIL_DRAFTING_DOWNLOAD_TTL_DAYS,
+  AUTO_DRAFTING_DOCUMENT_FILE_EXTENSIONS,
+  AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_BYTES,
+  AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_MB,
+  MAX_DRAFTING_UPLOAD_BYTES,
+  MAX_DRAFTING_UPLOAD_MB,
 } from '@/lib/drafting-constants'
-import { enqueuePatentDraftingJob, type PatentDraftingAutomationPayload } from '@/lib/patent-drafting-job-service'
+import {
+  enqueuePatentDraftingJob,
+  type PatentDraftingAutomationPayload,
+  type UploadedFigureRef,
+} from '@/lib/patent-drafting-job-service'
+import {
+  extractDraftIdeaTextFromBuffer,
+  DraftIdeaFileIngestionError,
+  type DraftIdeaExtractedImage,
+  type DraftIdeaFileFormat,
+} from '@/lib/draft-idea-file-ingestion'
 
 type BatchCreateUser = {
   id: string
@@ -34,6 +49,17 @@ export type AutoPatentDraftIdeaInput = {
   claimsNotes?: string
   priorArtHandling?: PatentDraftingAutomationPayload['priorArtHandling']
   illustrativeData?: string
+  // Document-mode (one-patent-per-file) fields.
+  sourceFilename?: string
+  // Figure-handling choices (global default + per-file override). generateDiagrams
+  // is undefined for spreadsheet ideas (treated as true for back-compat).
+  useUploadedFigures?: boolean
+  generateDiagrams?: boolean
+  // Images extracted from the uploaded document. Held in-memory during batch
+  // creation only; persisted to disk and replaced by lightweight uploadedFigures
+  // references before the job payload is built (never stored as base64 in the DB).
+  extractedImages?: DraftIdeaExtractedImage[]
+  uploadedFigures?: UploadedFigureRef[]
 }
 
 export type AutoPatentDraftBatchDefaults = {
@@ -318,6 +344,15 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): PatentDra
     literatureReviewContent,
   ].filter(Boolean).join('\n\n')
 
+  // Figure handling: uploaded document images and/or AI-generated diagrams.
+  // generateDiagrams defaults to true (spreadsheet ideas and legacy callers keep
+  // the previous "always generate" behaviour). figureMode is only 'skip' when the
+  // caller wants neither uploaded images nor generated diagrams.
+  const uploadedFigures = Array.isArray(input.uploadedFigures) ? input.uploadedFigures : []
+  const useUploadedFigures = input.useUploadedFigures === true && uploadedFigures.length > 0
+  const generateDiagrams = input.generateDiagrams !== false
+  const figuresWanted = useUploadedFigures || generateDiagrams
+
   return {
     title,
     ideaDetails,
@@ -341,7 +376,10 @@ function buildPayload(input: AutoPatentDraftIdeaInput, index: number): PatentDra
       content: literatureReviewContent,
     },
     figureRemarks,
-    figureMode: 'generate',
+    figureMode: figuresWanted ? 'generate' : 'skip',
+    uploadedFigures,
+    useUploadedFigures,
+    generateDiagrams,
     illustrativeData,
     languageMode: 'common',
     commonLanguage: 'en',
@@ -392,6 +430,206 @@ export function parseAutoPatentDraftIdeasFromUpload(input: {
   throw new Error('Unsupported batch file type. Upload .json, .csv, .tsv, or .xlsx.')
 }
 
+const DOCUMENT_TITLE_MAX_LENGTH = 200
+
+function documentTitleFromFilename(filename: string) {
+  const base = (filename || '').split(/[\\/]/).pop() || filename || ''
+  const stem = base.replace(/\.[a-z0-9]+$/i, '')
+  return stem.replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, DOCUMENT_TITLE_MAX_LENGTH)
+}
+
+function firstNonEmptyLine(text: string) {
+  for (const line of (text || '').split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed) return trimmed.slice(0, DOCUMENT_TITLE_MAX_LENGTH)
+  }
+  return ''
+}
+
+export type AutoPatentDraftDocumentRow = {
+  rowNo: number
+  sourceFilename: string
+  detectedFormat?: DraftIdeaFileFormat
+  title: string
+  ideaDetails: string
+  imageCount: number
+  warning?: string
+  extractionError?: string
+  // Server-only: images extracted from the file, consumed during batch creation.
+  extractedImages: DraftIdeaExtractedImage[]
+}
+
+// Document mode: one uploaded disclosure file (Word/PDF/text) becomes one idea.
+// Each file is run through the shared "normal path" extractor. A failed file is
+// captured as extractionError so the rest of the batch can still proceed.
+export async function parseAutoPatentDraftDocuments(
+  files: { filename: string; mimeType?: string; buffer: Buffer }[]
+): Promise<AutoPatentDraftDocumentRow[]> {
+  const rows: AutoPatentDraftDocumentRow[] = []
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index]
+    const fallbackTitle = documentTitleFromFilename(file.filename) || `Patent Draft ${index + 1}`
+    try {
+      const extracted = await extractDraftIdeaTextFromBuffer({
+        fileName: file.filename,
+        mimeType: file.mimeType,
+        buffer: file.buffer,
+      })
+      rows.push({
+        rowNo: index + 1,
+        sourceFilename: file.filename,
+        detectedFormat: extracted.detectedFormat,
+        title: fallbackTitle || firstNonEmptyLine(extracted.textContent) || `Patent Draft ${index + 1}`,
+        ideaDetails: extracted.textContent,
+        imageCount: extracted.images.length,
+        ...(extracted.warning ? { warning: extracted.warning } : {}),
+        extractedImages: extracted.images,
+      })
+    } catch (error) {
+      const message = error instanceof DraftIdeaFileIngestionError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : 'Failed to extract content from this file.'
+      rows.push({
+        rowNo: index + 1,
+        sourceFilename: file.filename,
+        title: fallbackTitle,
+        ideaDetails: '',
+        imageCount: 0,
+        extractionError: message,
+        extractedImages: [],
+      })
+    }
+  }
+  return rows
+}
+
+export type DocumentIdeaEdit = {
+  title?: string
+  ideaDetails?: string
+  noveltyDetails?: string
+  literatureReviewInstructions?: string
+  literatureReviewContent?: string
+  figureRemarks?: string
+  jurisdictions?: string[] | string
+  filingType?: string
+  claimsText?: string
+  claimsHandling?: PatentDraftingAutomationPayload['claimsHandling']
+  claimsNotes?: string
+  priorArtHandling?: PatentDraftingAutomationPayload['priorArtHandling']
+  illustrativeData?: string
+  useUploadedFigures?: boolean
+  generateDiagrams?: boolean
+}
+
+// Merges extracted document rows with the user's per-file edits (matched by
+// position) and the global figure defaults into ideas ready for
+// createAutoPatentDraftBatch. Files with no usable idea text are reported in
+// `skipped` so the caller can block the batch with a clear message.
+export function buildDocumentIdeasFromRows(
+  rows: AutoPatentDraftDocumentRow[],
+  edits: DocumentIdeaEdit[],
+  globals: { useUploadedFigures: boolean; generateDiagrams: boolean }
+): {
+  ideas: AutoPatentDraftIdeaInput[]
+  skipped: { rowNo: number; sourceFilename: string; reason: string }[]
+} {
+  const ideas: AutoPatentDraftIdeaInput[] = []
+  const skipped: { rowNo: number; sourceFilename: string; reason: string }[] = []
+  rows.forEach((row, index) => {
+    const edit = edits[index] || {}
+    const ideaDetails = safeString(edit.ideaDetails) || row.ideaDetails
+    if (!ideaDetails) {
+      skipped.push({
+        rowNo: row.rowNo,
+        sourceFilename: row.sourceFilename,
+        reason: row.extractionError || 'No readable text was extracted from this file.',
+      })
+      return
+    }
+    const useUploadedFigures = typeof edit.useUploadedFigures === 'boolean' ? edit.useUploadedFigures : globals.useUploadedFigures
+    const generateDiagrams = typeof edit.generateDiagrams === 'boolean' ? edit.generateDiagrams : globals.generateDiagrams
+    ideas.push({
+      title: safeString(edit.title) || row.title,
+      ideaDetails,
+      noveltyDetails: safeString(edit.noveltyDetails),
+      literatureReviewInstructions: safeString(edit.literatureReviewInstructions),
+      literatureReviewContent: safeString(edit.literatureReviewContent),
+      figureRemarks: safeString(edit.figureRemarks),
+      jurisdictions: edit.jurisdictions,
+      filingType: safeString(edit.filingType) || undefined,
+      claimsText: safeString(edit.claimsText),
+      claimsHandling: edit.claimsHandling,
+      claimsNotes: safeString(edit.claimsNotes),
+      priorArtHandling: edit.priorArtHandling,
+      illustrativeData: safeString(edit.illustrativeData),
+      sourceFilename: row.sourceFilename,
+      useUploadedFigures,
+      generateDiagrams,
+      // Only carry image bytes forward when this item will actually use them.
+      extractedImages: useUploadedFigures ? row.extractedImages : [],
+    })
+  })
+  return { ideas, skipped }
+}
+
+export function assertDocumentBatchLimits(files: { filename: string; size: number }[]) {
+  if (!files.length) {
+    throw new Error(`Upload at least one document (${AUTO_DRAFTING_DOCUMENT_FILE_EXTENSIONS.join(', ')}).`)
+  }
+  if (files.length > AUTO_DRAFTING_MAX_UPLOAD_ROWS) {
+    throw new Error(`A batch can include at most ${AUTO_DRAFTING_MAX_UPLOAD_ROWS} documents.`)
+  }
+  let totalBytes = 0
+  for (const file of files) {
+    const lower = (file.filename || '').toLowerCase()
+    if (!AUTO_DRAFTING_DOCUMENT_FILE_EXTENSIONS.some(ext => lower.endsWith(ext))) {
+      throw new Error(`Unsupported file "${file.filename}". Upload ${AUTO_DRAFTING_DOCUMENT_FILE_EXTENSIONS.join(', ')} files.`)
+    }
+    if (file.size > MAX_DRAFTING_UPLOAD_BYTES) {
+      throw new Error(`"${file.filename}" exceeds the ${MAX_DRAFTING_UPLOAD_MB}MB per-file limit.`)
+    }
+    totalBytes += file.size
+  }
+  if (totalBytes > AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_BYTES) {
+    throw new Error(`Total upload size exceeds ${AUTO_DRAFTING_DOCUMENT_MAX_TOTAL_MB}MB. Upload fewer or smaller files.`)
+  }
+}
+
+function base64FromDataUrl(dataUrl: string) {
+  const comma = (dataUrl || '').indexOf(',')
+  return comma >= 0 ? dataUrl.slice(comma + 1) : (dataUrl || '')
+}
+
+// Writes each extracted image to the patent's figures directory (the same
+// location the interactive single-draft upload route uses) and returns
+// lightweight references for the job payload — no base64 is persisted.
+async function persistUploadedFiguresForPatent(
+  projectId: string,
+  patentId: string,
+  images: DraftIdeaExtractedImage[]
+): Promise<UploadedFigureRef[]> {
+  if (!images.length) return []
+  const baseDir = path.join(process.cwd(), 'uploads', 'projects', projectId, 'patents', patentId, 'figures')
+  await fs.mkdir(baseDir, { recursive: true })
+  const refs: UploadedFigureRef[] = []
+  for (const image of images) {
+    const buffer = Buffer.from(base64FromDataUrl(image.dataUrl), 'base64')
+    if (!buffer.byteLength) continue
+    const filePath = path.join(baseDir, image.fileName)
+    await fs.writeFile(filePath, buffer)
+    refs.push({
+      filename: image.fileName,
+      checksum: sha256(buffer),
+      imagePath: filePath,
+      mimeType: image.mimeType,
+      label: image.label || image.fileName,
+    })
+  }
+  return refs
+}
+
 async function getOrCreateAutoDraftingProject(userId: string, projectId?: string | null) {
   if (projectId) {
     const project = await prisma.project.findFirst({
@@ -427,17 +665,21 @@ export async function createAutoPatentDraftBatch(input: CreateBatchInput) {
   }
 
   const project = await getOrCreateAutoDraftingProject(input.user.id, input.projectId)
-  const payloads = input.ideas.map(idea => applyBatchDefaults(idea, input.defaults)).map(buildPayload)
+  const appliedIdeas = input.ideas.map(idea => applyBatchDefaults(idea, input.defaults))
+  // Validate every idea and derive titles/jurisdictions up front (fail fast before
+  // any patents/jobs are created). Uploaded figures are attached per item inside
+  // the loop, once each patent id exists.
+  const basePayloads = appliedIdeas.map(buildPayload)
   const batch = await (prisma as any).autoPatentDraftBatch.create({
     data: {
       tenantId: input.user.tenantId,
       userId: input.user.id,
       projectId: project.id,
-      name: input.name || (payloads.length === 1 ? payloads[0].title : `Patent draft batch - ${new Date().toISOString().slice(0, 10)}`),
+      name: input.name || (basePayloads.length === 1 ? basePayloads[0].title : `Patent draft batch - ${new Date().toISOString().slice(0, 10)}`),
       sourceFilename: input.sourceFilename,
-      totalItems: payloads.length,
+      totalItems: basePayloads.length,
       status: 'QUEUED',
-      itemSummaries: payloads.map((payload, index) => ({
+      itemSummaries: basePayloads.map((payload, index) => ({
         itemNo: index + 1,
         title: payload.title,
         jurisdictions: payload.jurisdictions?.length ? payload.jurisdictions : ['IN'],
@@ -447,15 +689,21 @@ export async function createAutoPatentDraftBatch(input: CreateBatchInput) {
   })
 
   const jobs: any[] = []
-  for (let index = 0; index < payloads.length; index += 1) {
-    const payload = payloads[index]
+  for (let index = 0; index < appliedIdeas.length; index += 1) {
+    const appliedIdea = appliedIdeas[index]
     const patent = await prisma.patent.create({
       data: {
         projectId: project.id,
         createdBy: input.user.id,
-        title: payload.title,
+        title: basePayloads[index].title,
       }
     })
+    // Persist uploaded document images as figure files for this patent, then build
+    // the final payload carrying only lightweight references (no base64 in the DB).
+    const uploadedFigures = appliedIdea.useUploadedFigures && Array.isArray(appliedIdea.extractedImages) && appliedIdea.extractedImages.length
+      ? await persistUploadedFiguresForPatent(project.id, patent.id, appliedIdea.extractedImages)
+      : []
+    const payload = buildPayload({ ...appliedIdea, uploadedFigures, extractedImages: undefined }, index)
     const item = await (prisma as any).autoPatentDraftBatchItem.create({
       data: {
         batchId: batch.id,
