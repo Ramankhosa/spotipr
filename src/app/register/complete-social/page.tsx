@@ -133,11 +133,11 @@ function CompleteSocialSignupContent() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950 relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center bg-paper-200 relative overflow-hidden">
       {/* Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-[50%] -left-[20%] w-[100%] h-[100%] rounded-full bg-ai-blue-900/10 blur-[150px]" />
-        <div className="absolute -bottom-[20%] -right-[20%] w-[80%] h-[80%] rounded-full bg-purple-900/10 blur-[150px]" />
+        <div className="absolute -top-[50%] -left-[20%] w-[100%] h-[100%] rounded-full bg-brass-600/5 blur-[150px]" />
+        <div className="absolute -bottom-[20%] -right-[20%] w-[80%] h-[80%] rounded-full bg-lamp-600/5 blur-[150px]" />
       </div>
 
       <motion.div
@@ -148,46 +148,46 @@ function CompleteSocialSignupContent() {
       >
         <div className="flex flex-col items-center">
           <div className="mb-6 relative">
-            <div className="absolute -inset-4 bg-ai-blue-500/20 blur-xl rounded-full" />
+            <div className="absolute -inset-4 bg-brass-600/10 blur-xl rounded-full" />
             <AnimatedLogo size="lg" />
           </div>
-          <h2 className="text-center text-3xl font-bold text-white tracking-tight">
+          <h2 className="text-center font-serif text-3xl font-medium text-ai-graphite-900 tracking-tight">
             Complete Your Registration
           </h2>
 
           {/* Provider info */}
           {pendingData && (
-            <div className="mt-4 flex items-center gap-3 px-4 py-3 bg-ai-graphite-900/50 rounded-lg border border-ai-graphite-700">
+            <div className="mt-4 flex items-center gap-3 px-4 py-3 bg-white rounded-lg border border-ai-graphite-900/15">
               <div className="flex-shrink-0">
                 {providerIcons[provider] || providerIcons.google}
               </div>
               <div className="text-left">
-                <p className="text-sm text-ai-graphite-400">
+                <p className="text-sm text-ai-graphite-500">
                   Signing up with {providerNames[provider] || 'Social'}
                 </p>
-                <p className="text-white font-medium truncate max-w-[200px]">
+                <p className="text-ai-graphite-900 font-medium truncate max-w-[200px]">
                   {pendingData.email}
                 </p>
                 {pendingData.name && (
-                  <p className="text-sm text-ai-graphite-400">{pendingData.name}</p>
+                  <p className="text-sm text-ai-graphite-500">{pendingData.name}</p>
                 )}
               </div>
             </div>
           )}
 
-          <p className="mt-4 text-center text-sm text-ai-graphite-400">
+          <p className="mt-4 text-center text-sm text-ai-graphite-500">
             Enter your organization&apos;s access code to complete registration.
           </p>
         </div>
 
         {isExpired ? (
           <div className="text-center space-y-4">
-            <div className="rounded-lg bg-red-900/20 border border-red-900/50 p-4">
-              <p className="text-red-400">Your registration session has expired.</p>
+            <div className="rounded-lg bg-wax-50 border border-wax-200 p-4">
+              <p className="text-wax-700">Your registration session has expired.</p>
             </div>
             <Link
               href="/login"
-              className="inline-flex items-center justify-center px-4 py-2 border border-ai-graphite-700 rounded-lg text-sm font-medium text-white hover:bg-ai-graphite-800 transition-colors"
+              className="inline-flex items-center justify-center px-4 py-2 border border-ai-graphite-900/15 rounded-lg text-sm font-medium text-ai-graphite-800 hover:bg-paper-100 transition-colors"
             >
               Return to Login
             </Link>
@@ -196,7 +196,7 @@ function CompleteSocialSignupContent() {
           <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
             <div className="space-y-4">
               <div>
-                <label htmlFor="atiToken" className="block text-sm font-medium text-ai-graphite-300 mb-2">
+                <label htmlFor="atiToken" className="block text-sm font-medium text-ai-graphite-600 mb-2">
                   Organization Access Code
                 </label>
                 <input
@@ -204,15 +204,15 @@ function CompleteSocialSignupContent() {
                   name="atiToken"
                   type="text"
                   required
-                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-700 bg-ai-graphite-900/50 placeholder-ai-graphite-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
+                  className="appearance-none block w-full px-4 py-3 border border-ai-graphite-900/15 bg-white placeholder-ai-graphite-400 text-ai-graphite-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent transition-colors sm:text-sm"
                   placeholder="Enter your organization's access code"
                   value={atiToken}
                   onChange={(e) => setAtiToken(e.target.value)}
                 />
                 {/* Helpful info box */}
                 <div className="mt-3 p-3 bg-ai-graphite-900/30 border border-ai-graphite-800 rounded-lg">
-                  <p className="text-xs text-ai-graphite-400 leading-relaxed">
-                    <span className="text-ai-graphite-300 font-medium">What&apos;s an access code?</span>
+                  <p className="text-xs text-ai-graphite-500 leading-relaxed">
+                    <span className="text-ai-graphite-600 font-medium">What&apos;s an access code?</span>
                     <br />
                     Your organization admin provides this code to control who can join. 
                     It ensures only authorized team members can access your workspace.
@@ -228,9 +228,9 @@ function CompleteSocialSignupContent() {
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
-                className="rounded-lg bg-red-900/20 border border-red-900/50 p-4"
+                className="rounded-lg bg-wax-50 border border-wax-200 p-4"
               >
-                <div className="text-sm text-red-400 text-center">{error}</div>
+                <div className="text-sm text-wax-700 text-center">{error}</div>
               </motion.div>
             )}
 
@@ -238,9 +238,9 @@ function CompleteSocialSignupContent() {
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
-                className="rounded-lg bg-green-900/20 border border-green-900/50 p-4"
+                className="rounded-lg bg-lamp-50 border border-lamp-200 p-4"
               >
-                <div className="text-sm text-green-400 text-center">{success}</div>
+                <div className="text-sm text-lamp-800 text-center">{success}</div>
               </motion.div>
             )}
 
@@ -258,14 +258,14 @@ function CompleteSocialSignupContent() {
             <div className="text-center space-y-2">
               <Link
                 href="/login"
-                className="text-sm text-ai-graphite-400 hover:text-white transition-colors"
+                className="text-sm text-ai-graphite-500 hover:text-ai-graphite-900 transition-colors"
               >
                 Cancel and return to login
               </Link>
               <span className="block text-sm text-ai-graphite-600">or</span>
               <Link
                 href="/institutional-access"
-                className="text-sm font-medium text-ai-blue-400 hover:text-ai-blue-300 transition-colors"
+                className="text-sm font-medium text-lamp-700 hover:text-lamp-600 transition-colors"
               >
                 Register with email instead
               </Link>
@@ -280,8 +280,8 @@ function CompleteSocialSignupContent() {
 export default function CompleteSocialSignupPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-ai-graphite-950">
-        <div className="text-white">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-paper-200">
+        <div className="font-mono text-[11px] uppercase tracking-[0.25em] text-ai-graphite-500">Loading...</div>
       </div>
     }>
       <CompleteSocialSignupContent />
