@@ -464,13 +464,13 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-              <div className="p-2 bg-indigo-100 rounded-lg">
-                <Lightbulb className="w-6 h-6 text-indigo-600" />
+            <h2 className="text-2xl font-bold text-ai-graphite-900 flex items-center gap-3">
+              <div className="p-2 bg-ai-blue-100 rounded-lg">
+                <Lightbulb className="w-6 h-6 text-ai-blue-600" />
               </div>
               Invention Structure
             </h2>
-            <p className="text-gray-500 mt-2">
+            <p className="text-ai-graphite-500 mt-2">
               Review and edit your invention structure before generating patent claims.
             </p>
           </div>
@@ -549,16 +549,16 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         {/* Invention Details */}
         <div className="space-y-4">
           {/* Collapsible Original Input */}
-          <div className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+          <div className="border border-paper-300 rounded-lg overflow-hidden bg-white shadow-sm">
             <button 
               onClick={() => setShowOriginal(!showOriginal)} 
-              className="w-full flex justify-between items-center px-5 py-3 bg-gray-50/50 hover:bg-gray-50 transition-colors text-left"
+              className="w-full flex justify-between items-center px-5 py-3 bg-paper-100/50 hover:bg-paper-100 transition-colors text-left"
             >
               <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-gray-400" />
-                <span className="text-sm font-medium text-gray-700">Original Input Reference</span>
+                <FileText className="w-4 h-4 text-ai-graphite-400" />
+                <span className="text-sm font-medium text-ai-graphite-700">Original Input Reference</span>
               </div>
-              {showOriginal ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+              {showOriginal ? <ChevronDown className="w-4 h-4 text-ai-graphite-400" /> : <ChevronRight className="w-4 h-4 text-ai-graphite-400" />}
             </button>
             <AnimatePresence>
               {showOriginal && (
@@ -569,14 +569,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                   transition={{ duration: 0.2 }}
                   className="overflow-hidden"
                 >
-                  <div className="p-5 border-t border-gray-100 bg-gray-50/30">
+                  <div className="p-5 border-t border-paper-200 bg-paper-100/30">
                     <div className="mb-4">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 block mb-1">Title</span>
-                      <p className="text-sm text-gray-900 font-medium">{title}</p>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-ai-graphite-400 block mb-1">Title</span>
+                      <p className="text-sm text-ai-graphite-900 font-medium">{title}</p>
                     </div>
                     <div>
-                      <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 block mb-1">Description</span>
-                      <div className="bg-white p-4 rounded border border-gray-200 text-sm text-gray-600 whitespace-pre-wrap font-mono leading-relaxed max-h-60 overflow-y-auto">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-ai-graphite-400 block mb-1">Description</span>
+                      <div className="bg-white p-4 rounded border border-paper-300 text-sm text-ai-graphite-600 whitespace-pre-wrap font-mono leading-relaxed max-h-60 overflow-y-auto">
                         {rawIdea}
                       </div>
                     </div>
@@ -588,16 +588,16 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
           {/* AI-Normalized Results (Collapsible) */}
           {showNormalized && normalizedData && (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="bg-white rounded-xl border border-paper-300 shadow-sm overflow-hidden">
               <button
                 onClick={() => setShowInventionDetails(!showInventionDetails)}
-                className="w-full flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-white to-indigo-50/30 hover:bg-indigo-50/30 transition-colors"
+                className="w-full flex items-center justify-between px-6 py-4 border-b border-paper-200 bg-gradient-to-r from-white to-ai-blue-50/30 hover:bg-ai-blue-50/30 transition-colors"
               >
                 <div className="flex items-center gap-2">
-                  <div className="h-6 w-6 rounded-full bg-indigo-100 flex items-center justify-center">
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  <div className="h-6 w-6 rounded-full bg-ai-blue-100 flex items-center justify-center">
+                    <Sparkles className="w-3.5 h-3.5 text-ai-blue-600" />
                   </div>
-                  <h3 className="text-sm font-semibold text-gray-900">
+                  <h3 className="text-sm font-semibold text-ai-graphite-900">
                     Invention Structure
                   </h3>
                   <Badge variant="secondary" className="text-xs">
@@ -606,9 +606,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                 </div>
                 <div className="flex items-center gap-2">
                   {!showInventionDetails && (
-                    <span className="text-xs text-gray-500">Click to expand</span>
+                    <span className="text-xs text-ai-graphite-500">Click to expand</span>
                   )}
-                  {showInventionDetails ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                  {showInventionDetails ? <ChevronDown className="w-4 h-4 text-ai-graphite-400" /> : <ChevronRight className="w-4 h-4 text-ai-graphite-400" />}
                 </div>
               </button>
 
@@ -622,17 +622,17 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                     className="overflow-hidden"
                   >
                     {/* Toolbar */}
-                    <div className="flex items-center justify-end px-6 py-2 border-b border-gray-100 bg-gray-50/50">
+                    <div className="flex items-center justify-end px-6 py-2 border-b border-paper-200 bg-paper-100/50">
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => setIsEditing((v) => !v)}
-                          className={`inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${isEditing ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100 bg-white border border-gray-200'}`}
+                          className={`inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${isEditing ? 'bg-ai-blue-600 text-white' : 'text-ai-graphite-600 hover:bg-paper-200 bg-white border border-paper-300'}`}
                         >
                           {isEditing ? <><Check className="w-3 h-3 mr-1" /> Done</> : <><Edit2 className="w-3 h-3 mr-1" /> Edit</>}
                         </button>
                         <button
                           onClick={regenerateStructure}
-                          className="inline-flex items-center px-2 py-1.5 text-xs font-medium rounded-md text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-60"
+                          className="inline-flex items-center px-2 py-1.5 text-xs font-medium rounded-md text-ai-graphite-600 bg-white border border-paper-300 hover:bg-paper-100 disabled:opacity-60"
                           disabled={isRegenerating}
                           title="Regenerate Structure"
                         >
@@ -642,7 +642,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                     </div>
 
                     {/* Tab Navigation */}
-                    <div className="flex border-b border-gray-200 px-4 bg-gray-50/30">
+                    <div className="flex border-b border-paper-300 px-4 bg-paper-100/30">
                       {([
                         { key: 'core' as const, label: 'Core Details', icon: Target },
                         { key: 'components' as const, label: `Components (${components?.length || 0})`, icon: Layers },
@@ -655,8 +655,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                           onClick={() => setActiveTab(tab.key)}
                           className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
                             activeTab === tab.key
-                              ? 'border-indigo-600 text-indigo-700'
-                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                              ? 'border-ai-blue-600 text-ai-blue-700'
+                              : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
                           }`}
                         >
                           <tab.icon className="w-3.5 h-3.5" />
@@ -669,7 +669,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                       {/* ═══ CORE TAB ═══ */}
                       {activeTab === 'core' && (
                         <>
-                          <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md text-xs text-blue-700">
+                          <div className="flex items-center gap-2 px-3 py-2 bg-ai-blue-50 border border-ai-blue-100 rounded-md text-xs text-ai-blue-700">
                             <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
@@ -679,81 +679,81 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                           </div>
 
                           <div>
-                            <h4 className="text-sm font-medium text-gray-900 mb-1.5">Problem Statement</h4>
+                            <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Problem Statement</h4>
                             {isEditing ? (
                               <textarea
-                                className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                 rows={3}
                                 value={problem}
                                 onChange={(e) => setProblem(e.target.value)}
                               />
                             ) : (
-                              <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-100">
-                                {problem || <span className="text-gray-400 italic">Not specified</span>}
+                              <div className="text-sm text-ai-graphite-700 leading-relaxed bg-paper-100 p-3 rounded border border-paper-200">
+                                {problem || <span className="text-ai-graphite-400 italic">Not specified</span>}
                               </div>
                             )}
                           </div>
 
                           <div>
-                            <h4 className="text-sm font-medium text-gray-900 mb-1.5">Objectives</h4>
+                            <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Objectives</h4>
                             {isEditing ? (
                               <textarea
-                                className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                 rows={2}
                                 value={objectives}
                                 onChange={(e) => setObjectives(e.target.value)}
                               />
                             ) : (
-                              <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-100">
-                                {objectives || <span className="text-gray-400 italic">Not specified</span>}
+                              <div className="text-sm text-ai-graphite-700 leading-relaxed bg-paper-100 p-3 rounded border border-paper-200">
+                                {objectives || <span className="text-ai-graphite-400 italic">Not specified</span>}
                               </div>
                             )}
                           </div>
 
                           <div>
-                            <h4 className="text-sm font-medium text-gray-900 mb-1.5">Technical Logic</h4>
+                            <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Technical Logic</h4>
                             {isEditing ? (
                               <textarea
-                                className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                 rows={3}
                                 value={logic}
                                 onChange={(e) => setLogic(e.target.value)}
                               />
                             ) : (
-                              <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-100">
-                                {logic || <span className="text-gray-400 italic">Not specified</span>}
+                              <div className="text-sm text-ai-graphite-700 leading-relaxed bg-paper-100 p-3 rounded border border-paper-200">
+                                {logic || <span className="text-ai-graphite-400 italic">Not specified</span>}
                               </div>
                             )}
                           </div>
 
                           <div>
-                            <h4 className="text-sm font-medium text-gray-900 mb-1.5">Best Method</h4>
+                            <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Best Method</h4>
                             {isEditing ? (
                               <textarea
-                                className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                 rows={2}
                                 value={bestMethod}
                                 onChange={(e) => setBestMethod(e.target.value)}
                               />
                             ) : (
-                              <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-100">
-                                {bestMethod || <span className="text-gray-400 italic">Not specified</span>}
+                              <div className="text-sm text-ai-graphite-700 leading-relaxed bg-paper-100 p-3 rounded border border-paper-200">
+                                {bestMethod || <span className="text-ai-graphite-400 italic">Not specified</span>}
                               </div>
                             )}
                           </div>
 
                           <div>
-                            <h4 className="text-sm font-medium text-gray-900 mb-1.5">Abstract</h4>
+                            <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Abstract</h4>
                             {isEditing ? (
                               <textarea
-                                className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                 rows={3}
                                 value={abstractText}
                                 onChange={(e) => setAbstractText(e.target.value)}
                               />
                             ) : (
-                              <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-100">
-                                {abstractText || <span className="text-gray-400 italic">Not specified</span>}
+                              <div className="text-sm text-ai-graphite-700 leading-relaxed bg-paper-100 p-3 rounded border border-paper-200">
+                                {abstractText || <span className="text-ai-graphite-400 italic">Not specified</span>}
                               </div>
                             )}
                           </div>
@@ -764,17 +764,17 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                       {activeTab === 'components' && (() => {
                         const COMP_TYPE_META: Record<string, { icon: React.ElementType; color: string; bg: string; label: string }> = {
                           MAIN_CONTROLLER: { icon: Cpu, color: 'text-violet-700', bg: 'bg-violet-50 border-violet-200', label: 'Main Controller' },
-                          SUBSYSTEM: { icon: Box, color: 'text-blue-700', bg: 'bg-blue-50 border-blue-200', label: 'Subsystem' },
+                          SUBSYSTEM: { icon: Box, color: 'text-ai-blue-700', bg: 'bg-ai-blue-50 border-ai-blue-200', label: 'Subsystem' },
                           MODULE: { icon: Puzzle, color: 'text-emerald-700', bg: 'bg-emerald-50 border-emerald-200', label: 'Module' },
-                          INTERFACE: { icon: Link2, color: 'text-cyan-700', bg: 'bg-cyan-50 border-cyan-200', label: 'Interface' },
+                          INTERFACE: { icon: Link2, color: 'text-ai-blue-700', bg: 'bg-ai-blue-50 border-ai-blue-200', label: 'Interface' },
                           SENSOR: { icon: Radio, color: 'text-amber-700', bg: 'bg-amber-50 border-amber-200', label: 'Sensor' },
                           ACTUATOR: { icon: Gauge, color: 'text-orange-700', bg: 'bg-orange-50 border-orange-200', label: 'Actuator' },
-                          PROCESSOR: { icon: Cog, color: 'text-indigo-700', bg: 'bg-indigo-50 border-indigo-200', label: 'Processor' },
+                          PROCESSOR: { icon: Cog, color: 'text-ai-blue-700', bg: 'bg-ai-blue-50 border-ai-blue-200', label: 'Processor' },
                           MEMORY: { icon: HardDrive, color: 'text-pink-700', bg: 'bg-pink-50 border-pink-200', label: 'Memory' },
-                          DISPLAY: { icon: Monitor, color: 'text-teal-700', bg: 'bg-teal-50 border-teal-200', label: 'Display' },
-                          COMMUNICATION: { icon: Wifi, color: 'text-sky-700', bg: 'bg-sky-50 border-sky-200', label: 'Communication' },
+                          DISPLAY: { icon: Monitor, color: 'text-ai-blue-700', bg: 'bg-ai-blue-50 border-ai-blue-200', label: 'Display' },
+                          COMMUNICATION: { icon: Wifi, color: 'text-ai-blue-700', bg: 'bg-ai-blue-50 border-ai-blue-200', label: 'Communication' },
                           POWER_SUPPLY: { icon: Zap, color: 'text-yellow-700', bg: 'bg-yellow-50 border-yellow-200', label: 'Power Supply' },
-                          OTHER: { icon: CircleDot, color: 'text-gray-600', bg: 'bg-gray-50 border-gray-200', label: 'Other' },
+                          OTHER: { icon: CircleDot, color: 'text-ai-graphite-600', bg: 'bg-paper-100 border-paper-300', label: 'Other' },
                         }
 
                         const toggleExpand = (idx: number) => {
@@ -832,30 +832,30 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         <div>
                           <div className="flex items-center justify-between mb-4">
                             <div>
-                              <h4 className="text-sm font-medium text-gray-900">
+                              <h4 className="text-sm font-medium text-ai-graphite-900">
                                 Key Components
-                                <span className="ml-1.5 text-xs font-normal text-gray-400">
+                                <span className="ml-1.5 text-xs font-normal text-ai-graphite-400">
                                   {components?.length || 0} total
-                                  {hasHierarchy && <span className="ml-1 text-indigo-500">&middot; hierarchical</span>}
+                                  {hasHierarchy && <span className="ml-1 text-ai-blue-500">&middot; hierarchical</span>}
                                 </span>
                               </h4>
-                              <p className="text-[11px] text-gray-500 mt-0.5">
+                              <p className="text-[11px] text-ai-graphite-500 mt-0.5">
                                 {isEditing ? 'Add, remove, or edit components that make up your invention.' : 'Components extracted from your invention disclosure.'}
                               </p>
                             </div>
                             <div className="flex items-center gap-2">
                               {components?.length > 1 && (
-                                <div className="flex items-center border border-gray-200 rounded-md overflow-hidden">
+                                <div className="flex items-center border border-paper-300 rounded-md overflow-hidden">
                                   <button
                                     onClick={expandAll}
-                                    className="px-2 py-1 text-[10px] text-gray-600 hover:bg-gray-50 transition-colors border-r border-gray-200"
+                                    className="px-2 py-1 text-[10px] text-ai-graphite-600 hover:bg-paper-100 transition-colors border-r border-paper-300"
                                     title="Expand all"
                                   >
                                     Expand all
                                   </button>
                                   <button
                                     onClick={collapseAll}
-                                    className="px-2 py-1 text-[10px] text-gray-600 hover:bg-gray-50 transition-colors"
+                                    className="px-2 py-1 text-[10px] text-ai-graphite-600 hover:bg-paper-100 transition-colors"
                                     title="Collapse all"
                                   >
                                     Collapse all
@@ -865,7 +865,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               {isEditing && (
                                 <button
                                   onClick={() => setComponents([...(components || []), { name: '', type: 'OTHER', description: '' }])}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-ai-blue-600 hover:bg-ai-blue-700 rounded-md transition-colors"
                                 >
                                   <Plus className="w-3.5 h-3.5" />
                                   Add
@@ -910,11 +910,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                     {/* Hierarchy connector line */}
                                     {depth > 0 && (
                                       <div className="flex items-center gap-1 -mb-1 ml-1" style={{ paddingLeft: '2px' }}>
-                                        <div className="w-3 border-l-2 border-b-2 border-gray-300 h-3 rounded-bl-sm" />
+                                        <div className="w-3 border-l-2 border-b-2 border-paper-400 h-3 rounded-bl-sm" />
                                       </div>
                                     )}
                                     <div className={`rounded-lg border transition-all ${
-                                      isExpanded ? 'bg-white border-indigo-200 shadow-sm ring-1 ring-indigo-100' : 'bg-gray-50/80 border-gray-200 hover:border-gray-300 hover:bg-white'
+                                      isExpanded ? 'bg-white border-ai-blue-200 shadow-sm ring-1 ring-ai-blue-100' : 'bg-paper-100/80 border-paper-300 hover:border-paper-400 hover:bg-white'
                                     }`}>
                                       {/* Collapsed header row */}
                                       <div
@@ -922,10 +922,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                         onClick={() => toggleExpand(idx)}
                                       >
                                         {/* Expand chevron */}
-                                        <button className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 transition-colors">
+                                        <button className="flex-shrink-0 p-0.5 rounded hover:bg-paper-200 transition-colors">
                                           {isExpanded
-                                            ? <ChevronDown className="w-3.5 h-3.5 text-indigo-500" />
-                                            : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+                                            ? <ChevronDown className="w-3.5 h-3.5 text-ai-blue-500" />
+                                            : <ChevronRight className="w-3.5 h-3.5 text-ai-graphite-400" />
                                           }
                                         </button>
 
@@ -943,27 +943,27 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                                 value={comp.name || ''}
                                                 onClick={(e) => e.stopPropagation()}
                                                 onChange={(e) => updateComp(idx, 'name', e.target.value)}
-                                                className={`flex-1 px-2 py-1 text-sm font-medium border rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white ${
-                                                  !(comp.name?.trim()) ? 'border-red-300 bg-red-50' : 'border-gray-300'
+                                                className={`flex-1 px-2 py-1 text-sm font-medium border rounded focus:ring-ai-blue-500 focus:border-ai-blue-500 bg-white ${
+                                                  !(comp.name?.trim()) ? 'border-red-300 bg-red-50' : 'border-paper-400'
                                                 }`}
                                                 placeholder="Component name"
                                               />
                                             ) : (
-                                              <span className="text-sm font-medium text-gray-900 truncate">
-                                                {comp.name || <span className="text-gray-400 italic">Unnamed</span>}
+                                              <span className="text-sm font-medium text-ai-graphite-900 truncate">
+                                                {comp.name || <span className="text-ai-graphite-400 italic">Unnamed</span>}
                                               </span>
                                             )}
                                             <span className={`flex-shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded border ${meta.bg} ${meta.color}`}>
                                               {meta.label}
                                             </span>
                                             {childCount > 0 && (
-                                              <span className="flex-shrink-0 text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                                              <span className="flex-shrink-0 text-[10px] text-ai-graphite-400 bg-paper-200 px-1.5 py-0.5 rounded">
                                                 {childCount} sub
                                               </span>
                                             )}
                                           </div>
                                           {!isExpanded && comp.description && (
-                                            <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                                            <p className="text-[11px] text-ai-graphite-500 mt-0.5 truncate">
                                               {comp.description}
                                             </p>
                                           )}
@@ -983,8 +983,8 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                               </span>
                                             )}
                                             {comp.figureHint && comp.figureHint !== 'Not stated by source' && (
-                                              <span className="w-5 h-5 rounded flex items-center justify-center bg-purple-50 border border-purple-200" title={`Figure: ${comp.figureHint}`}>
-                                                <Image className="w-3 h-3 text-purple-600" />
+                                              <span className="w-5 h-5 rounded flex items-center justify-center bg-ai-blue-50 border border-ai-blue-200" title={`Figure: ${comp.figureHint}`}>
+                                                <Image className="w-3 h-3 text-ai-blue-600" />
                                               </span>
                                             )}
                                           </div>
@@ -994,7 +994,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                         {isEditing && (
                                           <button
                                             onClick={(e) => { e.stopPropagation(); setComponents((components || []).filter((_: any, i: number) => i !== idx)) }}
-                                            className="flex-shrink-0 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors opacity-0 group-hover:opacity-100"
+                                            className="flex-shrink-0 p-1.5 text-ai-graphite-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors opacity-0 group-hover:opacity-100"
                                             title="Remove component"
                                           >
                                             <Trash2 className="w-3.5 h-3.5" />
@@ -1012,21 +1012,21 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                             transition={{ duration: 0.15 }}
                                             className="overflow-hidden"
                                           >
-                                            <div className="px-3 pb-3 pt-1 border-t border-gray-100">
+                                            <div className="px-3 pb-3 pt-1 border-t border-paper-200">
                                               {/* Description */}
                                               <div className="mb-3">
-                                                <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">Description</label>
+                                                <label className="block text-[10px] font-medium text-ai-graphite-500 uppercase tracking-wide mb-1">Description</label>
                                                 {isEditing ? (
                                                   <textarea
                                                     value={comp.description || ''}
                                                     onChange={(e) => updateComp(idx, 'description', e.target.value)}
                                                     rows={2}
-                                                    className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 resize-none bg-white"
+                                                    className="w-full px-2.5 py-1.5 text-xs border border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500 resize-none bg-white"
                                                     placeholder="Technical role / function of this component"
                                                   />
                                                 ) : (
-                                                  <p className="text-xs text-gray-700 leading-relaxed">
-                                                    {comp.description || <span className="text-gray-400 italic">No description</span>}
+                                                  <p className="text-xs text-ai-graphite-700 leading-relaxed">
+                                                    {comp.description || <span className="text-ai-graphite-400 italic">No description</span>}
                                                   </p>
                                                 )}
                                               </div>
@@ -1034,11 +1034,11 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                               {/* Type selector (edit mode) */}
                                               {isEditing && (
                                                 <div className="mb-3">
-                                                  <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">Type</label>
+                                                  <label className="block text-[10px] font-medium text-ai-graphite-500 uppercase tracking-wide mb-1">Type</label>
                                                   <select
                                                     value={comp.type || 'OTHER'}
                                                     onChange={(e) => updateComp(idx, 'type', e.target.value)}
-                                                    className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-md bg-white focus:ring-indigo-500 focus:border-indigo-500"
+                                                    className="w-full px-2.5 py-1.5 text-xs border border-paper-400 rounded-md bg-white focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                                   >
                                                     {Object.entries(COMP_TYPE_META).map(([val, m]) => (
                                                       <option key={val} value={val}>{m.label}</option>
@@ -1065,7 +1065,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                                         placeholder="Signals, data, triggers..."
                                                       />
                                                     ) : (
-                                                      <p className="text-xs text-gray-700">{comp.inputs}</p>
+                                                      <p className="text-xs text-ai-graphite-700">{comp.inputs}</p>
                                                     )}
                                                   </div>
                                                 )}
@@ -1086,49 +1086,49 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                                         placeholder="Actions, results, data..."
                                                       />
                                                     ) : (
-                                                      <p className="text-xs text-gray-700">{comp.outputs}</p>
+                                                      <p className="text-xs text-ai-graphite-700">{comp.outputs}</p>
                                                     )}
                                                   </div>
                                                 )}
 
                                                 {/* Dependencies */}
                                                 {(isEditing || (comp.dependencies && comp.dependencies !== 'Not stated by source')) && (
-                                                  <div className="rounded-md border border-blue-100 bg-blue-50/50 px-2.5 py-2">
+                                                  <div className="rounded-md border border-ai-blue-100 bg-ai-blue-50/50 px-2.5 py-2">
                                                     <div className="flex items-center gap-1.5 mb-1">
-                                                      <Link2 className="w-3 h-3 text-blue-600" />
-                                                      <span className="text-[10px] font-medium text-blue-700 uppercase tracking-wide">Dependencies</span>
+                                                      <Link2 className="w-3 h-3 text-ai-blue-600" />
+                                                      <span className="text-[10px] font-medium text-ai-blue-700 uppercase tracking-wide">Dependencies</span>
                                                     </div>
                                                     {isEditing ? (
                                                       <input
                                                         type="text"
                                                         value={comp.dependencies || ''}
                                                         onChange={(e) => updateComp(idx, 'dependencies', e.target.value)}
-                                                        className="w-full px-2 py-1 text-xs border border-blue-200 rounded bg-white focus:ring-blue-400 focus:border-blue-400"
+                                                        className="w-full px-2 py-1 text-xs border border-ai-blue-200 rounded bg-white focus:ring-ai-blue-400 focus:border-ai-blue-400"
                                                         placeholder="Other components this depends on..."
                                                       />
                                                     ) : (
-                                                      <p className="text-xs text-gray-700">{comp.dependencies}</p>
+                                                      <p className="text-xs text-ai-graphite-700">{comp.dependencies}</p>
                                                     )}
                                                   </div>
                                                 )}
 
                                                 {/* Figure hint */}
                                                 {(isEditing || (comp.figureHint && comp.figureHint !== 'Not stated by source')) && (
-                                                  <div className="rounded-md border border-purple-100 bg-purple-50/50 px-2.5 py-2">
+                                                  <div className="rounded-md border border-ai-blue-100 bg-ai-blue-50/50 px-2.5 py-2">
                                                     <div className="flex items-center gap-1.5 mb-1">
-                                                      <Image className="w-3 h-3 text-purple-600" />
-                                                      <span className="text-[10px] font-medium text-purple-700 uppercase tracking-wide">Figure Hint</span>
+                                                      <Image className="w-3 h-3 text-ai-blue-600" />
+                                                      <span className="text-[10px] font-medium text-ai-blue-700 uppercase tracking-wide">Figure Hint</span>
                                                     </div>
                                                     {isEditing ? (
                                                       <input
                                                         type="text"
                                                         value={comp.figureHint || ''}
                                                         onChange={(e) => updateComp(idx, 'figureHint', e.target.value)}
-                                                        className="w-full px-2 py-1 text-xs border border-purple-200 rounded bg-white focus:ring-purple-400 focus:border-purple-400"
+                                                        className="w-full px-2 py-1 text-xs border border-ai-blue-200 rounded bg-white focus:ring-ai-blue-400 focus:border-ai-blue-400"
                                                         placeholder="Drawing focus..."
                                                       />
                                                     ) : (
-                                                      <p className="text-xs text-gray-700">{comp.figureHint}</p>
+                                                      <p className="text-xs text-ai-graphite-700">{comp.figureHint}</p>
                                                     )}
                                                   </div>
                                                 )}
@@ -1149,28 +1149,28 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                                         placeholder="Operating conditions..."
                                                       />
                                                     ) : (
-                                                      <p className="text-xs text-gray-700">{comp.conditions}</p>
+                                                      <p className="text-xs text-ai-graphite-700">{comp.conditions}</p>
                                                     )}
                                                   </div>
                                                 )}
 
                                                 {/* Alternatives */}
                                                 {(isEditing || (comp.alternatives && comp.alternatives !== 'Not stated by source')) && (
-                                                  <div className="rounded-md border border-teal-100 bg-teal-50/50 px-2.5 py-2">
+                                                  <div className="rounded-md border border-ai-blue-100 bg-ai-blue-50/50 px-2.5 py-2">
                                                     <div className="flex items-center gap-1.5 mb-1">
-                                                      <RefreshCw className="w-3 h-3 text-teal-600" />
-                                                      <span className="text-[10px] font-medium text-teal-700 uppercase tracking-wide">Alternatives</span>
+                                                      <RefreshCw className="w-3 h-3 text-ai-blue-600" />
+                                                      <span className="text-[10px] font-medium text-ai-blue-700 uppercase tracking-wide">Alternatives</span>
                                                     </div>
                                                     {isEditing ? (
                                                       <input
                                                         type="text"
                                                         value={comp.alternatives || ''}
                                                         onChange={(e) => updateComp(idx, 'alternatives', e.target.value)}
-                                                        className="w-full px-2 py-1 text-xs border border-teal-200 rounded bg-white focus:ring-teal-400 focus:border-teal-400"
+                                                        className="w-full px-2 py-1 text-xs border border-ai-blue-200 rounded bg-white focus:ring-ai-blue-400 focus:border-ai-blue-400"
                                                         placeholder="Alternative implementations..."
                                                       />
                                                     ) : (
-                                                      <p className="text-xs text-gray-700">{comp.alternatives}</p>
+                                                      <p className="text-xs text-ai-graphite-700">{comp.alternatives}</p>
                                                     )}
                                                   </div>
                                                 )}
@@ -1178,21 +1178,21 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
                                               {/* Parent / hierarchy info */}
                                               {(comp.parent || (typeof comp.level === 'number' && comp.level > 0)) && !isEditing && (
-                                                <div className="mt-2 flex items-center gap-2 text-[11px] text-gray-500">
+                                                <div className="mt-2 flex items-center gap-2 text-[11px] text-ai-graphite-500">
                                                   <Layers className="w-3 h-3" />
-                                                  {comp.parent && <span>Parent: <span className="font-medium text-gray-700">{comp.parent}</span></span>}
-                                                  {typeof comp.level === 'number' && <span className="text-gray-400">&middot; Level {comp.level}</span>}
+                                                  {comp.parent && <span>Parent: <span className="font-medium text-ai-graphite-700">{comp.parent}</span></span>}
+                                                  {typeof comp.level === 'number' && <span className="text-ai-graphite-400">&middot; Level {comp.level}</span>}
                                                 </div>
                                               )}
 
                                               {/* Parent selector (edit mode) */}
                                               {isEditing && (
                                                 <div className="mt-2">
-                                                  <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wide mb-1">Parent Component</label>
+                                                  <label className="block text-[10px] font-medium text-ai-graphite-500 uppercase tracking-wide mb-1">Parent Component</label>
                                                   <select
                                                     value={comp.parent || ''}
                                                     onChange={(e) => updateComp(idx, 'parent', e.target.value)}
-                                                    className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-md bg-white focus:ring-indigo-500 focus:border-indigo-500"
+                                                    className="w-full px-2.5 py-1.5 text-xs border border-paper-400 rounded-md bg-white focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                                   >
                                                     <option value="">None (root level)</option>
                                                     {components?.filter((_: any, i: number) => i !== idx && _?.name?.trim()).map((c: any, i: number) => (
@@ -1210,10 +1210,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                 )
                               })
                             ) : (
-                              <div className="text-center py-10 text-sm text-gray-500 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                              <div className="text-center py-10 text-sm text-ai-graphite-500 bg-paper-100 rounded-lg border border-dashed border-paper-400">
                                 <Layers className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-                                <p className="font-medium text-gray-600">No components defined yet</p>
-                                <p className="text-xs text-gray-400 mt-1">
+                                <p className="font-medium text-ai-graphite-600">No components defined yet</p>
+                                <p className="text-xs text-ai-graphite-400 mt-1">
                                   {isEditing ? 'Click "Add" to define your invention\'s components.' : 'Components will appear here after normalization.'}
                                 </p>
                               </div>
@@ -1236,17 +1236,17 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         <div>
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <div>
-                              <h4 className="text-sm font-medium text-gray-900">
-                                Scope Recommendations <span className="text-gray-400 font-normal text-xs">({scopeRecommendations?.elements?.length || 0})</span>
+                              <h4 className="text-sm font-medium text-ai-graphite-900">
+                                Scope Recommendations <span className="text-ai-graphite-400 font-normal text-xs">({scopeRecommendations?.elements?.length || 0})</span>
                               </h4>
-                              <p className="text-[11px] text-gray-500 mt-0.5">
+                              <p className="text-[11px] text-ai-graphite-500 mt-0.5">
                                 Controls what the claims stage may claim, number, draw, or describe.
                               </p>
                             </div>
                             <button
                               type="button"
                               onClick={addScopeElement}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-ai-blue-600 hover:bg-ai-blue-700 rounded-md transition-colors"
                             >
                               <Plus className="w-3.5 h-3.5" />
                               Add Element
@@ -1255,13 +1255,13 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
                           {isEditing && scopeRecommendations?.elements?.length ? (
                             <div className="flex flex-wrap gap-2 mb-3">
-                              <button type="button" onClick={resetScopeOverrides} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                              <button type="button" onClick={resetScopeOverrides} className="px-2 py-1 text-[11px] border border-paper-400 rounded-md text-ai-graphite-700 hover:bg-paper-100">
                                 Reset to AI recommendations
                               </button>
-                              <button type="button" onClick={claimCoreOnly} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                              <button type="button" onClick={claimCoreOnly} className="px-2 py-1 text-[11px] border border-paper-400 rounded-md text-ai-graphite-700 hover:bg-paper-100">
                                 Claim core only
                               </button>
-                              <button type="button" onClick={excludeEnvironmentUseCases} className="px-2 py-1 text-[11px] border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">
+                              <button type="button" onClick={excludeEnvironmentUseCases} className="px-2 py-1 text-[11px] border border-paper-400 rounded-md text-ai-graphite-700 hover:bg-paper-100">
                                 Exclude environment/use-case
                               </button>
                             </div>
@@ -1272,7 +1272,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               {scopeRecommendations.elements.map((element) => {
                                 const effective = getEffectiveScopeUse(element)
                                 return (
-                                  <div key={element.id} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                  <div key={element.id} className="p-3 bg-paper-100 rounded-lg border border-paper-300">
                                     <div className="flex items-start justify-between gap-3">
                                       <div className="min-w-0 flex-1">
                                         {isEditing ? (
@@ -1281,12 +1281,12 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                               type="text"
                                               value={element.label}
                                               onChange={(e) => updateScopeElement(element.id, 'label', e.target.value)}
-                                              className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                              className="w-full px-2 py-1.5 text-xs border border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                             />
                                             <select
                                               value={element.sourceType}
                                               onChange={(e) => updateScopeElement(element.id, 'sourceType', e.target.value)}
-                                              className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white focus:ring-indigo-500 focus:border-indigo-500"
+                                              className="w-full px-2 py-1.5 text-xs border border-paper-400 rounded-md bg-white focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                             >
                                               {scopeSourceTypes.map((sourceType) => (
                                                 <option key={sourceType} value={sourceType}>{sourceType.replace(/_/g, ' ')}</option>
@@ -1295,14 +1295,14 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                           </div>
                                         ) : (
                                           <div className="flex flex-wrap items-center gap-2">
-                                            <span className="font-medium text-gray-900 text-sm">{element.label}</span>
-                                            <span className="text-[10px] uppercase tracking-wide text-gray-500 bg-white border border-gray-200 rounded px-1.5 py-0.5">
+                                            <span className="font-medium text-ai-graphite-900 text-sm">{element.label}</span>
+                                            <span className="text-[10px] uppercase tracking-wide text-ai-graphite-500 bg-white border border-paper-300 rounded px-1.5 py-0.5">
                                               {element.sourceType.replace(/_/g, ' ')}
                                             </span>
                                           </div>
                                         )}
                                         {element.reason && (
-                                          <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">{element.reason}</p>
+                                          <p className="text-[11px] text-ai-graphite-500 mt-1 line-clamp-2">{element.reason}</p>
                                         )}
                                       </div>
                                       {isEditing && (
@@ -1319,31 +1319,31 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                     {isEditing ? (
                                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
                                         <label className="block">
-                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Claim</span>
-                                          <select value={effective.claim} onChange={(e) => updateScopeElement(element.id, 'claim', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                          <span className="block text-[10px] font-medium text-ai-graphite-500 mb-0.5">Claim</span>
+                                          <select value={effective.claim} onChange={(e) => updateScopeElement(element.id, 'claim', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-paper-400 rounded-md bg-white">
                                             <option value="claim_1">Claim 1</option>
                                             <option value="dependent_claim">Dependent</option>
                                             <option value="none">No claim</option>
                                           </select>
                                         </label>
                                         <label className="block">
-                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Numbering</span>
-                                          <select value={effective.numbering} onChange={(e) => updateScopeElement(element.id, 'numbering', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                          <span className="block text-[10px] font-medium text-ai-graphite-500 mb-0.5">Numbering</span>
+                                          <select value={effective.numbering} onChange={(e) => updateScopeElement(element.id, 'numbering', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-paper-400 rounded-md bg-white">
                                             <option value="number">Number</option>
                                             <option value="do_not_number">No number</option>
                                           </select>
                                         </label>
                                         <label className="block">
-                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Figures</span>
-                                          <select value={effective.figures} onChange={(e) => updateScopeElement(element.id, 'figures', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                          <span className="block text-[10px] font-medium text-ai-graphite-500 mb-0.5">Figures</span>
+                                          <select value={effective.figures} onChange={(e) => updateScopeElement(element.id, 'figures', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-paper-400 rounded-md bg-white">
                                             <option value="include">Show</option>
                                             <option value="optional">Optional</option>
                                             <option value="do_not_show">Do not show</option>
                                           </select>
                                         </label>
                                         <label className="block">
-                                          <span className="block text-[10px] font-medium text-gray-500 mb-0.5">Description</span>
-                                          <select value={effective.description} onChange={(e) => updateScopeElement(element.id, 'description', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white">
+                                          <span className="block text-[10px] font-medium text-ai-graphite-500 mb-0.5">Description</span>
+                                          <select value={effective.description} onChange={(e) => updateScopeElement(element.id, 'description', e.target.value)} className="w-full px-2 py-1.5 text-xs border border-paper-400 rounded-md bg-white">
                                             <option value="include">Include</option>
                                             <option value="optional">Optional</option>
                                             <option value="exclude">Exclude</option>
@@ -1352,9 +1352,9 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                       </div>
                                     ) : (
                                       <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]">
-                                        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">Claim: {effective.claim === 'claim_1' ? 'Claim 1' : effective.claim === 'dependent_claim' ? 'Dependent' : 'No claim'}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-100">Claim: {effective.claim === 'claim_1' ? 'Claim 1' : effective.claim === 'dependent_claim' ? 'Dependent' : 'No claim'}</span>
                                         <span className="px-1.5 py-0.5 rounded bg-slate-50 text-slate-700 border border-slate-100">Numbering: {effective.numbering === 'number' ? 'Number' : 'No number'}</span>
-                                        <span className="px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-100">Figures: {effective.figures === 'include' ? 'Show' : effective.figures === 'optional' ? 'Optional' : 'Do not show'}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-100">Figures: {effective.figures === 'include' ? 'Show' : effective.figures === 'optional' ? 'Optional' : 'Do not show'}</span>
                                         <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-100">Description: {effective.description}</span>
                                       </div>
                                     )}
@@ -1363,10 +1363,10 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                               })}
                             </div>
                           ) : (
-                            <div className="text-center py-8 text-sm text-gray-500 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                            <div className="text-center py-8 text-sm text-ai-graphite-500 bg-paper-100 rounded-lg border border-dashed border-paper-400">
                               <Scale className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                               <p>No scope recommendations yet.</p>
-                              <p className="text-xs text-gray-400 mt-1">Click "Add Element" to create scope recommendations.</p>
+                              <p className="text-xs text-ai-graphite-400 mt-1">Click "Add Element" to create scope recommendations.</p>
                             </div>
                           )}
                         </div>
@@ -1377,114 +1377,114 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                         <>
                           <div className="grid grid-cols-2 gap-4">
                             <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">CPC Codes</label>
+                              <label className="block text-xs font-medium text-ai-graphite-500 mb-1">CPC Codes</label>
                               {isEditing ? (
                                 <input
-                                  className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   placeholder="e.g., H04L 29/08"
                                   value={cpcCodes.join(', ')}
                                   onChange={(e) => setCpcCodes(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
                                 />
                               ) : (
-                                <div className="text-sm font-mono bg-gray-50 px-3 py-1.5 rounded border border-gray-100 text-gray-700">
-                                  {cpcCodes?.length ? cpcCodes.join(', ') : <span className="text-gray-400">None</span>}
+                                <div className="text-sm font-mono bg-paper-100 px-3 py-1.5 rounded border border-paper-200 text-ai-graphite-700">
+                                  {cpcCodes?.length ? cpcCodes.join(', ') : <span className="text-ai-graphite-400">None</span>}
                                 </div>
                               )}
                             </div>
                             <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">IPC Codes</label>
+                              <label className="block text-xs font-medium text-ai-graphite-500 mb-1">IPC Codes</label>
                               {isEditing ? (
                                 <input
-                                  className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   placeholder="e.g., G06F 17/30"
                                   value={ipcCodes.join(', ')}
                                   onChange={(e) => setIpcCodes(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
                                 />
                               ) : (
-                                <div className="text-sm font-mono bg-gray-50 px-3 py-1.5 rounded border border-gray-100 text-gray-700">
-                                  {ipcCodes?.length ? ipcCodes.join(', ') : <span className="text-gray-400">None</span>}
+                                <div className="text-sm font-mono bg-paper-100 px-3 py-1.5 rounded border border-paper-200 text-ai-graphite-700">
+                                  {ipcCodes?.length ? ipcCodes.join(', ') : <span className="text-ai-graphite-400">None</span>}
                                 </div>
                               )}
                             </div>
                           </div>
 
                           <div>
-                            <h4 className="text-sm font-medium text-gray-900 mb-1.5">Search Query</h4>
+                            <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Search Query</h4>
                             {isEditing ? (
                               <input
-                                className="w-full text-sm font-mono bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                className="w-full text-sm font-mono bg-paper-100 border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                               />
                             ) : (
-                              <div className="text-sm font-mono text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
-                                {searchQuery || <span className="text-gray-400 italic">Not specified</span>}
+                              <div className="text-sm font-mono text-ai-graphite-600 bg-paper-100 p-3 rounded border border-paper-200">
+                                {searchQuery || <span className="text-ai-graphite-400 italic">Not specified</span>}
                               </div>
                             )}
                           </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">Google Patents Keywords</h4>
+                              <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">Google Patents Keywords</h4>
                               {isEditing ? (
                                 <textarea
                                   rows={3}
-                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="w-full text-sm bg-paper-100 border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   value={keywordListToText(googlePatentKeywords)}
                                   onChange={(e) => setGooglePatentKeywords(normalizeKeywordListForUi(e.target.value))}
                                   placeholder="One keyword phrase per line"
                                 />
                               ) : (
-                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
-                                  {googlePatentKeywords.length ? googlePatentKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                <div className="text-sm text-ai-graphite-600 bg-paper-100 p-3 rounded border border-paper-200">
+                                  {googlePatentKeywords.length ? googlePatentKeywords.join(', ') : <span className="text-ai-graphite-400 italic">Not specified</span>}
                                 </div>
                               )}
                             </div>
                             <div>
-                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">European Title Keywords</h4>
+                              <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">European Title Keywords</h4>
                               {isEditing ? (
                                 <textarea
                                   rows={3}
-                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="w-full text-sm bg-paper-100 border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   value={keywordListToText(epoTitleKeywords)}
                                   onChange={(e) => setEpoTitleKeywords(normalizeKeywordListForUi(e.target.value).slice(0, 6))}
                                   placeholder="One title phrase per line"
                                 />
                               ) : (
-                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
-                                  {epoTitleKeywords.length ? epoTitleKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                <div className="text-sm text-ai-graphite-600 bg-paper-100 p-3 rounded border border-paper-200">
+                                  {epoTitleKeywords.length ? epoTitleKeywords.join(', ') : <span className="text-ai-graphite-400 italic">Not specified</span>}
                                 </div>
                               )}
                             </div>
                             <div>
-                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">European Abstract Keywords</h4>
+                              <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">European Abstract Keywords</h4>
                               {isEditing ? (
                                 <textarea
                                   rows={3}
-                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="w-full text-sm bg-paper-100 border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   value={keywordListToText(epoAbstractKeywords)}
                                   onChange={(e) => setEpoAbstractKeywords(normalizeKeywordListForUi(e.target.value).slice(0, 8))}
                                   placeholder="One abstract phrase per line"
                                 />
                               ) : (
-                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
-                                  {epoAbstractKeywords.length ? epoAbstractKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                <div className="text-sm text-ai-graphite-600 bg-paper-100 p-3 rounded border border-paper-200">
+                                  {epoAbstractKeywords.length ? epoAbstractKeywords.join(', ') : <span className="text-ai-graphite-400 italic">Not specified</span>}
                                 </div>
                               )}
                             </div>
                             <div>
-                              <h4 className="text-sm font-medium text-gray-900 mb-1.5">European Fallback Keywords</h4>
+                              <h4 className="text-sm font-medium text-ai-graphite-900 mb-1.5">European Fallback Keywords</h4>
                               {isEditing ? (
                                 <textarea
                                   rows={3}
-                                  className="w-full text-sm bg-gray-50 border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="w-full text-sm bg-paper-100 border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   value={keywordListToText(epoCombinedKeywords)}
                                   onChange={(e) => setEpoCombinedKeywords(normalizeKeywordListForUi(e.target.value).slice(0, 8))}
                                   placeholder="One fallback phrase per line"
                                 />
                               ) : (
-                                <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-100">
-                                  {epoCombinedKeywords.length ? epoCombinedKeywords.join(', ') : <span className="text-gray-400 italic">Not specified</span>}
+                                <div className="text-sm text-ai-graphite-600 bg-paper-100 p-3 rounded border border-paper-200">
+                                  {epoCombinedKeywords.length ? epoCombinedKeywords.join(', ') : <span className="text-ai-graphite-400 italic">Not specified</span>}
                                 </div>
                               )}
                             </div>
@@ -1492,7 +1492,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
 
                           <div>
                             <div className="flex items-center justify-between mb-2">
-                              <h4 className="text-sm font-medium text-gray-900">Boolean Concept Groups</h4>
+                              <h4 className="text-sm font-medium text-ai-graphite-900">Boolean Concept Groups</h4>
                               {isEditing && (
                                 <button
                                   type="button"
@@ -1500,7 +1500,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                     ...current,
                                     { id: `concept_group_${current.length + 1}`, label: `Concept group ${current.length + 1}`, kind: 'core', terms: [], required: true, excluded: false }
                                   ].slice(0, 6))}
-                                  className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                                  className="text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700"
                                 >
                                   Add group
                                 </button>
@@ -1508,17 +1508,17 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                             </div>
                             <div className="space-y-3">
                               {patentSearchConceptGroups.length === 0 && (
-                                <div className="text-sm text-gray-400 italic bg-gray-50 p-3 rounded border border-gray-100">Not specified</div>
+                                <div className="text-sm text-ai-graphite-400 italic bg-paper-100 p-3 rounded border border-paper-200">Not specified</div>
                               )}
                               {patentSearchConceptGroups.map((group, index) => (
-                                <div key={group.id || index} className="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-2">
+                                <div key={group.id || index} className="rounded-md border border-paper-300 bg-paper-100 p-3 space-y-2">
                                   {isEditing ? (
                                     <>
                                       <div className="grid gap-2 md:grid-cols-3">
                                         <input
                                           value={group.label || ''}
                                           onChange={(e) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: e.target.value } : item))}
-                                          className="text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                          className="text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                           placeholder="Group label"
                                         />
                                         <select
@@ -1529,7 +1529,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                             excluded: e.target.value === 'excluded',
                                             kind: e.target.value === 'excluded' ? 'excluded' : item.kind
                                           } : item))}
-                                          className="text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                          className="text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                         >
                                           <option value="required">Required</option>
                                           <option value="optional">Optional</option>
@@ -1538,7 +1538,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                         <button
                                           type="button"
                                           onClick={() => setPatentSearchConceptGroups(current => current.filter((_, itemIndex) => itemIndex !== index))}
-                                          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-red-50 hover:text-red-600"
+                                          className="rounded-md border border-paper-400 px-3 py-2 text-sm text-ai-graphite-600 hover:bg-red-50 hover:text-red-600"
                                         >
                                           Remove
                                         </button>
@@ -1547,13 +1547,13 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                                         rows={2}
                                         value={keywordListToText(group.terms || [])}
                                         onChange={(e) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, terms: normalizeKeywordListForUi(e.target.value).slice(0, 8) } : item))}
-                                        className="w-full text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                        className="w-full text-sm border-paper-400 rounded-md focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                         placeholder="One phrase per line"
                                       />
                                     </>
                                   ) : (
-                                    <div className="text-sm text-gray-600">
-                                      <span className="font-medium text-gray-800">{group.label || `Group ${index + 1}`}:</span>{' '}
+                                    <div className="text-sm text-ai-graphite-600">
+                                      <span className="font-medium text-ai-graphite-800">{group.label || `Group ${index + 1}`}:</span>{' '}
                                       {(group.terms || []).join(', ')}
                                       {group.excluded ? ' (excluded)' : group.required === false ? ' (optional)' : ''}
                                     </div>
@@ -1568,7 +1568,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
                     
                     {/* Edit Actions Footer */}
                     {isEditing && (
-                      <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex justify-end">
+                      <div className="px-6 py-3 bg-paper-100 border-t border-paper-300 flex justify-end">
                         <Button
                           onClick={async () => {
                             try {
@@ -1627,7 +1627,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
         <Button
           onClick={proceedToClaims}
           disabled={!canProceed || isNavigating}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white"
+          className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
         >
           {isNavigating ? 'Proceeding...' : 'Next: Preliminary Claims'}
           <ChevronRight className="w-4 h-4 ml-2" />

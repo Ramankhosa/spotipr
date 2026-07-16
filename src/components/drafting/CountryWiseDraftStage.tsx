@@ -177,8 +177,8 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
   if (loading) {
     return (
       <div className="p-8 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
-        <span className="text-gray-600">Loading country profiles...</span>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ai-blue-600 mr-3"></div>
+        <span className="text-ai-graphite-600">Loading country profiles...</span>
       </div>
     )
   }
@@ -201,8 +201,8 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Jurisdiction & Language</h2>
-        <p className="text-gray-600">
+        <h2 className="text-2xl font-bold text-ai-graphite-900 mb-2">Jurisdiction & Language</h2>
+        <p className="text-ai-graphite-600">
           Choose the country/countries and preferred language before drafting so downstream prompts, figures, and exports follow the correct rules.
         </p>
       </div>
@@ -211,8 +211,8 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
         <div className="lg:col-span-2 space-y-6">
           <div className="border rounded-lg bg-white p-6 space-y-4">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Drafting mode</h3>
-              <div className="flex items-center gap-3 text-sm text-gray-700">
+              <h3 className="text-lg font-semibold text-ai-graphite-900 mb-2">Drafting mode</h3>
+              <div className="flex items-center gap-3 text-sm text-ai-graphite-700">
                 <label className="flex items-center gap-2">
                   <input type="radio" className="h-4 w-4" checked={mode === 'single'} onChange={() => {
                     setMode('single')
@@ -225,25 +225,25 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
                   Multiple jurisdictions
                 </label>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-ai-graphite-500 mt-1">
                 You can generate one country or iterate through several. Figures may be regenerated later if rules differ.
               </p>
             </div>
 
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            <h3 className="text-lg font-semibold text-ai-graphite-900 mb-2">
               Available Jurisdictions ({availableCountries.length})
             </h3>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-ai-graphite-600 mb-4">
               Pick the country/countries now. This choice controls figures, prompts, validation, and exports.
             </p>
 
             {availableCountries.length === 0 ? (
               <div className="text-center py-8">
-                <svg className="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-12 h-12 text-ai-graphite-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No country profiles available</h3>
-                <p className="text-gray-600">
+                <h3 className="text-lg font-medium text-ai-graphite-900 mb-2">No country profiles available</h3>
+                <p className="text-ai-graphite-600">
                   Please contact your super-admin to configure jurisdiction profiles for patent drafting.
                 </p>
               </div>
@@ -258,16 +258,16 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
                   }, {})
                 ).sort(([a], [b]) => a.localeCompare(b)).map(([continent, list]) => (
                   <div key={continent} className="space-y-2">
-                    <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">{continent}</div>
+                    <div className="text-xs font-semibold text-ai-graphite-700 uppercase tracking-wide">{continent}</div>
                     <div className="space-y-3">
                       {list.map(c => (
                         <label
                           key={c.code}
-                          className="flex items-start gap-3 rounded-md border border-gray-200 px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                          className="flex items-start gap-3 rounded-md border border-paper-300 px-3 py-2 hover:bg-paper-100 cursor-pointer"
                         >
                           <input
                             type="checkbox"
-                            className="mt-1 h-4 w-4 text-indigo-600 border-gray-300 rounded"
+                            className="mt-1 h-4 w-4 text-ai-blue-600 border-paper-400 rounded"
                             checked={selectedCodes.includes(c.code)}
                             onChange={() => {
                               if (mode === 'single') {
@@ -279,14 +279,14 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
                             disabled={false}
                           />
                           <div className="flex-1">
-                            <div className="text-sm font-medium text-gray-900">{c.label}</div>
-                            <div className="text-xs text-gray-600">{c.description}</div>
-                            <div className="text-xs text-gray-600 mt-1">
+                            <div className="text-sm font-medium text-ai-graphite-900">{c.label}</div>
+                            <div className="text-xs text-ai-graphite-600">{c.description}</div>
+                            <div className="text-xs text-ai-graphite-600 mt-1">
                               Languages: {c.languages?.length ? c.languages.join(', ') : 'N/A'}
                             </div>
                             {Array.isArray(c.languages) && c.languages.length > 1 && (
                               <div className="mt-2">
-                                <label className="text-xs text-gray-700 mr-2">Preferred language</label>
+                                <label className="text-xs text-ai-graphite-700 mr-2">Preferred language</label>
                                 <select
                                   value={languageByCode[c.code] || c.languages[0]}
                                   onChange={(e) => {
@@ -302,11 +302,11 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
                               </div>
                             )}
                             {Array.isArray(c.languages) && c.languages.length === 1 && (
-                              <div className="mt-2 text-xs text-gray-700">
+                              <div className="mt-2 text-xs text-ai-graphite-700">
                                 Preferred language: {c.languages[0]}
                               </div>
                             )}
-                            <div className="text-xs text-gray-500 mt-1">
+                            <div className="text-xs text-ai-graphite-500 mt-1">
                               {c.continent} • {c.office}
                             </div>
                           </div>
@@ -320,12 +320,12 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
           </div>
 
           <div className="border rounded-lg bg-white p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Context from feature analysis</h3>
-            <p className="text-sm text-gray-600 mb-3">
+            <h3 className="text-lg font-semibold text-ai-graphite-900 mb-2">Context from feature analysis</h3>
+            <p className="text-sm text-ai-graphite-600 mb-3">
               You have {relatedCount} prior-art references associated with this drafting session.
               These will continue to inform the background and comparative sections for each selected jurisdiction.
             </p>
-            <ul className="text-xs text-gray-500 list-disc list-inside space-y-1">
+            <ul className="text-xs text-ai-graphite-500 list-disc list-inside space-y-1">
               <li>Prior-art selections remain unchanged when you adjust country-wise drafting settings.</li>
               <li>Downstream stages (Annexure Draft, Review & Export) can adapt prompts per jurisdiction.</li>
               <li>You can return to the Related Art stage at any time to refine the prior-art pool.</li>
@@ -335,12 +335,12 @@ export default function CountryWiseDraftStage({ session, patent, onComplete, onR
 
         <div className="lg:col-span-1">
           <div className="border rounded-lg bg-white p-6 space-y-4">
-            <h3 className="text-sm font-semibold text-gray-900">Next steps</h3>
-            <p className="text-xs text-gray-600">
+            <h3 className="text-sm font-semibold text-ai-graphite-900">Next steps</h3>
+            <p className="text-xs text-ai-graphite-600">
               When you continue, the workflow will move to the Annexure Draft stage. Existing behaviour is preserved;
               this step simply captures your intent to draft for multiple countries.
             </p>
-            <div className="space-y-2 text-xs text-gray-600">
+            <div className="space-y-2 text-xs text-ai-graphite-600">
               <div><span className="font-medium">Patent:</span> {patent?.title || 'Untitled'}</div>
               <div><span className="font-medium">Session:</span> {session?.id || 'N/A'}</div>
               <div>

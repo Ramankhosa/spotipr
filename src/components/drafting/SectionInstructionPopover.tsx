@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -215,11 +215,11 @@ export default function SectionInstructionPopover({
 
       {/* Show existing instructions if different scope */}
       {hasExistingGlobal && scope === 'jurisdiction' && (
-        <div className="mb-3 p-2 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <p className="text-xs text-blue-400 font-medium mb-1">
+        <div className="mb-3 p-2 bg-ai-blue-500/10 border border-ai-blue-500/30 rounded-lg">
+          <p className="text-xs text-ai-blue-400 font-medium mb-1">
             🌐 Global instruction exists{globalInstruction.isPersistent ? ' (persistent)' : ''}:
           </p>
-          <p className="text-xs text-blue-300 line-clamp-2">{globalInstruction.instruction}</p>
+          <p className="text-xs text-ai-blue-300 line-clamp-2">{globalInstruction.instruction}</p>
         </div>
       )}
       

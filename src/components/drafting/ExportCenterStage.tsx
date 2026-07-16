@@ -163,16 +163,16 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
       {showExportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Export Options</h3>
+            <h3 className="text-lg font-semibold text-ai-graphite-900 mb-4">Export Options</h3>
 
             <div className="space-y-4">
               {/* Jurisdiction Selector */}
               {availableJurisdictions.length > 1 && (
                 <div className="flex items-center">
-                  <label htmlFor="jurisdiction" className="mr-3 text-sm text-gray-900 font-medium">Jurisdiction</label>
+                  <label htmlFor="jurisdiction" className="mr-3 text-sm text-ai-graphite-900 font-medium">Jurisdiction</label>
                   <select
                     id="jurisdiction"
-                    className="border rounded px-3 py-2 text-sm text-gray-900 bg-white"
+                    className="border rounded px-3 py-2 text-sm text-ai-graphite-900 bg-white"
                     value={selectedJurisdiction}
                     onChange={(e) => setSelectedJurisdiction(e.target.value.toUpperCase())}
                   >
@@ -192,11 +192,11 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                     ? exportOptions.autoNumberParagraphs 
                     : (countryExportConfig?.addParagraphNumbers ?? false)}
                   onChange={(e) => setExportOptions(prev => ({ ...prev, autoNumberParagraphs: e.target.checked }))}
-                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                  className="h-4 w-4 text-ai-blue-600 focus:ring-ai-blue-500 border-paper-400 rounded"
                 />
-                <label htmlFor="autoNumber" className="ml-2 text-sm text-gray-900">
+                <label htmlFor="autoNumber" className="ml-2 text-sm text-ai-graphite-900">
                   Auto-number paragraphs
-                  <span className="ml-1 text-gray-500 font-mono text-xs">
+                  <span className="ml-1 text-ai-graphite-500 font-mono text-xs">
                     ({getNumberingFormatLabel(selectedJurisdiction)} style)
                   </span>
                   {countryExportConfig?.addParagraphNumbers && exportOptions.autoNumberParagraphs === null && (
@@ -206,7 +206,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
               </div>
               {(exportOptions.autoNumberParagraphs === true || 
                 (exportOptions.autoNumberParagraphs === null && countryExportConfig?.addParagraphNumbers)) && (
-                <p className="text-xs text-gray-500 ml-6">
+                <p className="text-xs text-ai-graphite-500 ml-6">
                   {selectedJurisdiction === 'JP' 
                     ? 'Japan format: 【0001】, 【0002】, ...' 
                     : 'Standard format: [0001], [0002], ...'}
@@ -215,11 +215,11 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
 
               {/* Country Export Settings Info */}
               {countryExportConfig && (
-                <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mt-2">
-                  <p className="text-xs font-medium text-blue-800 mb-1">
+                <div className="bg-ai-blue-50 border border-ai-blue-200 rounded-md p-3 mt-2">
+                  <p className="text-xs font-medium text-ai-blue-800 mb-1">
                     {selectedJurisdiction} Export Settings {countryExportConfig.source === 'country' && '(from database)'}
                   </p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-blue-700">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-ai-blue-700">
                     <span>Font: {countryExportConfig.fontFamily}, {countryExportConfig.fontSizePt}pt</span>
                     <span>Line Spacing: {countryExportConfig.lineSpacing}</span>
                     <span>Page: {countryExportConfig.pageSize}</span>
@@ -255,14 +255,14 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
               <button
                 onClick={() => setShowExportModal(false)}
                 disabled={exporting}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-ai-graphite-700 bg-paper-200 hover:bg-paper-300 rounded-md disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={() => handleExport()}
                 disabled={exporting}
-                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-50 flex items-center"
+                className="px-4 py-2 text-sm font-medium text-white bg-ai-blue-600 hover:bg-ai-blue-700 rounded-md disabled:opacity-50 flex items-center"
               >
                 {exporting ? (
                   <>
@@ -283,11 +283,11 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
 
       <div className="mb-8">
         <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Export Center</h2>
+        <h2 className="text-2xl font-bold text-ai-graphite-900 mb-2">Export Center</h2>
           <div className="flex items-center gap-2">
             {availableJurisdictions.length > 1 && (
               <select
-                className="border rounded px-3 py-2 text-sm text-gray-900 bg-white"
+                className="border rounded px-3 py-2 text-sm text-ai-graphite-900 bg-white"
                 value={selectedJurisdiction}
                 onChange={(e) => setSelectedJurisdiction(e.target.value.toUpperCase())}
                 aria-label="Select jurisdiction to export"
@@ -297,26 +297,26 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                 ))}
               </select>
             )}
-            <button onClick={loadPreview} className="px-4 py-2 rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50">Refresh Preview</button>
-            <button onClick={() => handleExport()} className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700">Export Options</button>
+            <button onClick={loadPreview} className="px-4 py-2 rounded border border-paper-400 text-ai-graphite-700 bg-white hover:bg-paper-100">Refresh Preview</button>
+            <button onClick={() => handleExport()} className="px-4 py-2 rounded bg-ai-blue-600 text-white hover:bg-ai-blue-700">Export Options</button>
           </div>
         </div>
-        <p className="text-gray-600">
+        <p className="text-ai-graphite-600">
           Export your complete patent annexure in various formats.
         </p>
       </div>
 
       <div className="border rounded-lg p-6 bg-white">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Export Annexure</h3>
+          <h3 className="text-lg font-semibold text-ai-graphite-900">Export Annexure</h3>
           <button 
             onClick={() => handleExport()} 
-            className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+            className="px-4 py-2 rounded bg-ai-blue-600 text-white hover:bg-ai-blue-700"
           >
             Export DOCX
           </button>
         </div>
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-ai-graphite-600">
           Export includes all sections formatted per {selectedJurisdiction} jurisdiction requirements.
           {' '}Options include paragraph numbering ({getNumberingFormatLabel(selectedJurisdiction)} format for {selectedJurisdiction === 'JP' ? 'Japan' : 'standard'}).
         </p>
@@ -348,10 +348,10 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
         {/* Rich preview with images only */}
         <div className="border rounded-lg bg-white">
           <div className="flex items-center justify-between p-4 border-b">
-            <h4 className="font-semibold text-gray-900">Preview (rich layout with images)</h4>
+            <h4 className="font-semibold text-ai-graphite-900">Preview (rich layout with images)</h4>
             <div className="flex items-center gap-2">
-              <button onClick={loadPreview} className="px-3 py-1.5 rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50">Run Guards</button>
-              <button onClick={loadRich} className="px-3 py-1.5 rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50">Refresh</button>
+              <button onClick={loadPreview} className="px-3 py-1.5 rounded border border-paper-400 text-ai-graphite-700 bg-white hover:bg-paper-100">Run Guards</button>
+              <button onClick={loadRich} className="px-3 py-1.5 rounded border border-paper-400 text-ai-graphite-700 bg-white hover:bg-paper-100">Refresh</button>
             </div>
           </div>
           {issues.length>0 && (
@@ -380,7 +380,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                         if (!content || !String(content).trim()) return null
                         return (
                           <div key={sec.key}>
-                            <h3 className="font-semibold text-gray-900">{String(sec.label || sec.key).toUpperCase()}</h3>
+                            <h3 className="font-semibold text-ai-graphite-900">{String(sec.label || sec.key).toUpperCase()}</h3>
                             <p className="whitespace-pre-wrap">{content}</p>
                           </div>
                         )
@@ -389,7 +389,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                     {/* Figures section */}
                     {(rich.figures && rich.figures.length > 0) && (
                       <>
-                        <h3 className="font-semibold text-gray-900">DRAWINGS / FIGURES</h3>
+                        <h3 className="font-semibold text-ai-graphite-900">DRAWINGS / FIGURES</h3>
                         <div className="space-y-6">
                           {rich.figures.map((f:any)=>(
                             <div key={f.figureNo} className="border rounded p-3">
@@ -397,7 +397,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                               {f.imageUrl ? (
                                 <img src={`/api/patents/${patent.id}/drafting?image=figure&sessionId=${session?.id}&figureNo=${f.figureNo}`} alt={`Figure ${f.figureNo}`} className="max-w-full h-auto border" />
                               ) : (
-                                <div className="text-xs text-gray-500">No image available</div>
+                                <div className="text-xs text-ai-graphite-500">No image available</div>
                               )}
                             </div>
                           ))}
@@ -408,7 +408,7 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                     {/* Abstract - shown at end per patent document convention */}
                     {sections.find(s => s.key === 'abstract') && rich.abstract && (
                       <>
-                        <h3 className="font-semibold text-gray-900">
+                        <h3 className="font-semibold text-ai-graphite-900">
                           {String(sections.find(s => s.key === 'abstract')?.label || 'ABSTRACT').toUpperCase()}
                         </h3>
                         <p className="whitespace-pre-wrap">{rich.abstract}</p>
@@ -423,30 +423,30 @@ export default function ExportCenterStage({ session, patent, onComplete, onRefre
                 )}
               </div>
             ) : (
-              <div className="text-sm text-gray-500">No visual preview yet. Click Refresh.</div>
+              <div className="text-sm text-ai-graphite-500">No visual preview yet. Click Refresh.</div>
             )}
           </div>
         </div>
       </div>
 
-      <div className="mt-8 pt-6 border-t border-gray-200">
+      <div className="mt-8 pt-6 border-t border-paper-300">
         <div className="flex justify-center">
           <div className="text-center">
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Drafting Complete!</h3>
-            <p className="text-gray-600 mb-4">You can export your annexure now.</p>
+            <h3 className="text-lg font-medium text-ai-graphite-900 mb-2">Drafting Complete!</h3>
+            <p className="text-ai-graphite-600 mb-4">You can export your annexure now.</p>
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <button onClick={loadPreview} className="inline-flex items-center px-6 py-3 border border-gray-300 text-base font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50">
+              <button onClick={loadPreview} className="inline-flex items-center px-6 py-3 border border-paper-400 text-base font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100">
                 Refresh Preview
               </button>
               <button 
                 onClick={() => handleExport()} 
-                className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500"
               >
                 Export DOCX
               </button>
               <button
                 onClick={() => window.location.href = '/dashboard'}
-                className="inline-flex items-center px-6 py-3 border border-gray-300 text-base font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
+                className="inline-flex items-center px-6 py-3 border border-paper-400 text-base font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100"
               >
                 Return to Dashboard
               </button>

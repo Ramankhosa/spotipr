@@ -801,8 +801,8 @@ function NewPatentDraftPageContent() {
 
   if (authLoading || isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ai-blue-600"></div>
       </div>
     )
   }
@@ -814,11 +814,11 @@ function NewPatentDraftPageContent() {
   // A draft must live in a project — show a clear path instead of a disabled form.
   if (projects.length === 0) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-paper-100">
         <div className="max-w-3xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
           <Link
             href="/dashboard"
-            className="inline-flex items-center text-gray-600 hover:text-gray-900 mb-4"
+            className="inline-flex items-center text-ai-graphite-600 hover:text-ai-graphite-900 mb-4"
           >
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -826,13 +826,13 @@ function NewPatentDraftPageContent() {
             Back to Dashboard
           </Link>
           <div className="bg-white rounded-lg shadow-sm p-10 text-center">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Create a project first</h1>
-            <p className="text-gray-600 mb-6">
+            <h1 className="text-2xl font-bold text-ai-graphite-900 mb-2">Create a project first</h1>
+            <p className="text-ai-graphite-600 mb-6">
               Every patent draft is stored in a project. Create one and you&apos;ll come straight back here.
             </p>
             <Link
               href="/projects/new"
-              className="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
+              className="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-700"
             >
               Create a project
             </Link>
@@ -843,7 +843,7 @@ function NewPatentDraftPageContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-paper-100">
       <Stage0PatentIntelligenceOverlay
         open={stage0OverlayStatus !== null}
         mode={allowRefine ? 'enhance' : 'preserve'}
@@ -865,7 +865,7 @@ function NewPatentDraftPageContent() {
         <div className="mb-8">
           <Link
             href="/dashboard"
-            className="inline-flex items-center text-gray-600 hover:text-gray-900 mb-4"
+            className="inline-flex items-center text-ai-graphite-600 hover:text-ai-graphite-900 mb-4"
           >
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -873,13 +873,13 @@ function NewPatentDraftPageContent() {
             Back to Dashboard
           </Link>
           <div className="text-center">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Start a patent draft</h1>
-            <p className="text-lg text-gray-600">
+            <h1 className="text-3xl font-bold text-ai-graphite-900 mb-2">Start a patent draft</h1>
+            <p className="text-lg text-ai-graphite-600">
               Describe your invention — the AI drafts the application with you, stage by stage
             </p>
             <Link
               href="/patents/draft/batch"
-              className="mt-3 inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
+              className="mt-3 inline-flex items-center rounded-lg border border-ai-blue-200 bg-ai-blue-50 px-3 py-2 text-sm font-medium text-ai-blue-700 hover:bg-ai-blue-100"
             >
               Upload a batch instead
             </Link>
@@ -895,27 +895,27 @@ function NewPatentDraftPageContent() {
                 return (
                   <li key={label} className="flex items-center gap-2 sm:gap-3">
                     {index > 0 && (
-                      <span aria-hidden="true" className={`h-px w-6 sm:w-12 ${step > index ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+                      <span aria-hidden="true" className={`h-px w-6 sm:w-12 ${step > index ? 'bg-ai-blue-600' : 'bg-gray-300'}`} />
                     )}
                     <button
                       type="button"
                       onClick={() => { if (isDone) goToStep(stepNumber) }}
                       disabled={!isDone}
                       aria-current={isCurrent ? 'step' : undefined}
-                      className={`flex items-center gap-2 rounded-full py-1 pr-2 sm:pr-3 text-sm transition-colors ${isDone ? 'cursor-pointer hover:text-indigo-700' : 'cursor-default'}`}
+                      className={`flex items-center gap-2 rounded-full py-1 pr-2 sm:pr-3 text-sm transition-colors ${isDone ? 'cursor-pointer hover:text-ai-blue-700' : 'cursor-default'}`}
                     >
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                           isCurrent
-                            ? 'bg-indigo-600 text-white'
+                            ? 'bg-ai-blue-600 text-white'
                             : isDone
-                              ? 'bg-indigo-100 text-indigo-700'
-                              : 'bg-gray-200 text-gray-500'
+                              ? 'bg-ai-blue-100 text-ai-blue-700'
+                              : 'bg-paper-300 text-ai-graphite-500'
                         }`}
                       >
                         {isDone ? <Check className="h-3.5 w-3.5" /> : stepNumber}
                       </span>
-                      <span className={`hidden sm:inline font-medium ${isCurrent ? 'text-gray-900' : isDone ? 'text-indigo-700' : 'text-gray-400'}`}>
+                      <span className={`hidden sm:inline font-medium ${isCurrent ? 'text-ai-graphite-900' : isDone ? 'text-ai-blue-700' : 'text-ai-graphite-400'}`}>
                         {label}
                       </span>
                     </button>
@@ -945,21 +945,21 @@ function NewPatentDraftPageContent() {
 
           {/* Idea Bank Banner */}
           {ideaId && (
-            <div className="mb-6 bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+            <div className="mb-6 bg-ai-blue-50 border border-ai-blue-200 rounded-lg p-4">
               <div className="flex items-center">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-indigo-500" viewBox="0 0 20 20" fill="currentColor">
+                  <svg className="h-5 w-5 text-ai-blue-500" viewBox="0 0 20 20" fill="currentColor">
                     <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z" />
                   </svg>
                 </div>
                 <div className="ml-3 flex-1">
-                  <p className="text-sm text-indigo-800">
+                  <p className="text-sm text-ai-blue-800">
                     <span className="font-semibold">Loaded from Idea Bank</span> — The title and description have been pre-filled from your reserved idea. You can edit them before starting the draft.
                   </p>
                 </div>
                 <Link
                   href="/idea-bank"
-                  className="ml-4 text-xs font-medium text-indigo-600 hover:text-indigo-500"
+                  className="ml-4 text-xs font-medium text-ai-blue-600 hover:text-ai-blue-500"
                 >
                   Back to Idea Bank →
                 </Link>
@@ -971,13 +971,13 @@ function NewPatentDraftPageContent() {
             {step === 2 && (
             <>
             {/* Jurisdiction Selection */}
-            <div className={`border rounded-lg p-4 bg-gray-50 ${fieldErrors.jurisdictions ? 'border-red-300' : 'border-gray-200'}`}>
+            <div className={`border rounded-lg p-4 bg-paper-100 ${fieldErrors.jurisdictions ? 'border-red-300' : 'border-paper-300'}`}>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <div className="text-sm font-semibold text-gray-900">Jurisdiction & Mode</div>
-                  <p className="text-xs text-gray-600">Choose single or multiple jurisdictions; this controls downstream prompts, figures, and rules.</p>
+                  <div className="text-sm font-semibold text-ai-graphite-900">Jurisdiction & Mode</div>
+                  <p className="text-xs text-ai-graphite-600">Choose single or multiple jurisdictions; this controls downstream prompts, figures, and rules.</p>
                 </div>
-                <div className="flex items-center gap-3 text-sm text-gray-700">
+                <div className="flex items-center gap-3 text-sm text-ai-graphite-700">
                   <label className="flex items-center gap-1">
                     <input type="radio" className="h-4 w-4" checked={mode === 'single'} onChange={() => {
                       setMode('single')
@@ -992,16 +992,16 @@ function NewPatentDraftPageContent() {
                 </div>
               </div>
               {loadingCountries ? (
-                <div className="text-sm text-gray-500">Loading jurisdictions...</div>
+                <div className="text-sm text-ai-graphite-500">Loading jurisdictions...</div>
               ) : availableCountries.length === 0 ? (
                 <div className="text-sm text-red-600">No country profiles available. Please ask an admin to add them.</div>
               ) : (
                 <div className="grid sm:grid-cols-2 gap-2 max-h-56 overflow-auto">
                   {availableCountries.map(c => (
-                    <label key={c.code} className="flex items-start gap-2 p-2 border border-gray-200 rounded hover:bg-white cursor-pointer">
+                    <label key={c.code} className="flex items-start gap-2 p-2 border border-paper-300 rounded hover:bg-white cursor-pointer">
                       <input
                         type="checkbox"
-                        className="mt-1 h-4 w-4 text-indigo-600 border-gray-300 rounded"
+                        className="mt-1 h-4 w-4 text-ai-blue-600 border-paper-400 rounded"
                         checked={selectedCodes.includes(c.code)}
                         onChange={() => {
                           clearFieldError('jurisdictions')
@@ -1014,8 +1014,8 @@ function NewPatentDraftPageContent() {
                         disabled={false}
                       />
                       <div>
-                        <div className="text-sm font-medium text-gray-900">{c.label}</div>
-                        <div className="text-xs text-gray-600">{c.description}</div>
+                        <div className="text-sm font-medium text-ai-graphite-900">{c.label}</div>
+                        <div className="text-xs text-ai-graphite-600">{c.description}</div>
                       </div>
                     </label>
                   ))}
@@ -1024,7 +1024,7 @@ function NewPatentDraftPageContent() {
               {fieldErrors.jurisdictions && (
                 <p className="text-sm text-red-600 mt-2">{fieldErrors.jurisdictions}</p>
               )}
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-ai-graphite-500 mt-2">
                 Your chosen active jurisdiction will drive figures and validation; you can generate other jurisdictions later.
               </p>
 
@@ -1032,11 +1032,11 @@ function NewPatentDraftPageContent() {
                    LANGUAGE CONFIGURATION SECTION
                    ================================================================ */}
               {selectedCodes.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-gray-200">
+                <div className="mt-4 pt-4 border-t border-paper-300">
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <div className="text-sm font-semibold text-gray-900">Language Configuration</div>
-                      <p className="text-xs text-gray-600">Configure drafting language for content and figures</p>
+                      <div className="text-sm font-semibold text-ai-graphite-900">Language Configuration</div>
+                      <p className="text-xs text-ai-graphite-600">Configure drafting language for content and figures</p>
                     </div>
                     {!canUseCommonMode && isMultiJurisdiction && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800">
@@ -1056,11 +1056,11 @@ function NewPatentDraftPageContent() {
                         const langs = country?.languages || []
                         return (
                           <div>
-                            <label className="text-xs text-gray-600 block mb-1">
+                            <label className="text-xs text-ai-graphite-600 block mb-1">
                               Drafting language for {country?.label || selectedCodes[0]}:
                             </label>
                             <select
-                              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              className="w-full border border-paper-400 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ai-blue-500"
                               value={commonLanguage}
                               onChange={(e) => {
                                 setCommonLanguage(e.target.value)
@@ -1073,7 +1073,7 @@ function NewPatentDraftPageContent() {
                                 </option>
                               ))}
                             </select>
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs text-ai-graphite-500 mt-1">
                               Both content and figures will be generated in {LANGUAGE_LABELS[commonLanguage] || commonLanguage}.
                             </p>
                           </div>
@@ -1086,30 +1086,30 @@ function NewPatentDraftPageContent() {
                   {isMultiJurisdiction && (
                     <div className="space-y-4">
                       {/* Language Mode Selection */}
-                      <div className="bg-gray-100 rounded-lg p-3">
-                        <div className="text-xs font-medium text-gray-700 mb-2">Language Mode</div>
+                      <div className="bg-paper-200 rounded-lg p-3">
+                        <div className="text-xs font-medium text-ai-graphite-700 mb-2">Language Mode</div>
                         <div className="space-y-2">
                           {/* Common Language Mode */}
                           <label className={`flex items-start gap-3 p-2 rounded border cursor-pointer transition-colors ${
                             languageMode === 'common' 
-                              ? 'bg-indigo-50 border-indigo-300' 
-                              : canUseCommonMode ? 'bg-white border-gray-200 hover:bg-gray-50' : 'bg-gray-50 border-gray-200 opacity-50 cursor-not-allowed'
+                              ? 'bg-ai-blue-50 border-ai-blue-300' 
+                              : canUseCommonMode ? 'bg-white border-paper-300 hover:bg-paper-100' : 'bg-paper-100 border-paper-300 opacity-50 cursor-not-allowed'
                           }`}>
                             <input
                               type="radio"
-                              className="mt-1 h-4 w-4 text-indigo-600"
+                              className="mt-1 h-4 w-4 text-ai-blue-600"
                               checked={languageMode === 'common'}
                               onChange={() => setLanguageMode('common')}
                               disabled={!canUseCommonMode}
                             />
                             <div className="flex-1">
-                              <div className="text-sm font-medium text-gray-900">Common Language</div>
-                              <div className="text-xs text-gray-600">
+                              <div className="text-sm font-medium text-ai-graphite-900">Common Language</div>
+                              <div className="text-xs text-ai-graphite-600">
                                 All content and figures in one shared language
                                 {!canUseCommonMode && <span className="text-amber-600 ml-1">(No common language available)</span>}
                               </div>
                               {commonLanguages.length > 0 && (
-                                <div className="text-xs text-gray-500 mt-1">
+                                <div className="text-xs text-ai-graphite-500 mt-1">
                                   Available: {commonLanguages.map(l => LANGUAGE_LABELS[l] || l).join(', ')}
                                 </div>
                               )}
@@ -1119,21 +1119,21 @@ function NewPatentDraftPageContent() {
                           {/* Individual Languages Mode */}
                           <label className={`flex items-start gap-3 p-2 rounded border cursor-pointer transition-colors ${
                             languageMode === 'individual_english_figures' 
-                              ? 'bg-indigo-50 border-indigo-300' 
-                              : 'bg-white border-gray-200 hover:bg-gray-50'
+                              ? 'bg-ai-blue-50 border-ai-blue-300' 
+                              : 'bg-white border-paper-300 hover:bg-paper-100'
                           }`}>
                             <input
                               type="radio"
-                              className="mt-1 h-4 w-4 text-indigo-600"
+                              className="mt-1 h-4 w-4 text-ai-blue-600"
                               checked={languageMode === 'individual_english_figures'}
                               onChange={() => setLanguageMode('individual_english_figures')}
                             />
                             <div className="flex-1">
-                              <div className="text-sm font-medium text-gray-900">Individual Languages (English Figures)</div>
-                              <div className="text-xs text-gray-600">
+                              <div className="text-sm font-medium text-ai-graphite-900">Individual Languages (English Figures)</div>
+                              <div className="text-xs text-ai-graphite-600">
                                 Each jurisdiction in its own language; figures/sketches always in English
                               </div>
-                              <div className="text-xs text-indigo-600 mt-1">
+                              <div className="text-xs text-ai-blue-600 mt-1">
                                 ✓ Recommended for international filings with diverse language requirements
                               </div>
                             </div>
@@ -1168,12 +1168,12 @@ function NewPatentDraftPageContent() {
                       {languageMode === 'individual_english_figures' && (
                         <div className="space-y-3">
                           {/* Figures Language Notice */}
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                          <div className="bg-ai-blue-50 border border-ai-blue-200 rounded-lg p-3">
                             <div className="flex items-start gap-2">
-                              <svg className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <svg className="w-5 h-5 text-ai-blue-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                               </svg>
-                              <div className="text-sm text-blue-800">
+                              <div className="text-sm text-ai-blue-800">
                                 <p className="font-medium">Figures & Sketches: English Only</p>
                                 <p className="text-xs mt-1">
                                   All diagrams, flowcharts, and technical sketches will be generated in English for universal compatibility across jurisdictions.
@@ -1183,8 +1183,8 @@ function NewPatentDraftPageContent() {
                           </div>
 
                           {/* Per-Jurisdiction Content Language */}
-                          <div className="border border-gray-200 rounded-lg p-3 bg-white">
-                            <label className="text-xs font-medium text-gray-700 block mb-2">
+                          <div className="border border-paper-300 rounded-lg p-3 bg-white">
+                            <label className="text-xs font-medium text-ai-graphite-700 block mb-2">
                               Content language per jurisdiction:
                             </label>
                             <div className="space-y-2">
@@ -1195,10 +1195,10 @@ function NewPatentDraftPageContent() {
                                 const langs = rawLangs.length > 0 ? rawLangs : ['en']
                                 const hasNoDefinedLanguages = rawLangs.length === 0
                                 return (
-                                  <div key={code} className="flex items-center gap-3 p-2 bg-gray-50 rounded">
-                                    <span className="text-sm font-medium text-gray-800 w-20 flex-shrink-0">{code}</span>
+                                  <div key={code} className="flex items-center gap-3 p-2 bg-paper-100 rounded">
+                                    <span className="text-sm font-medium text-ai-graphite-800 w-20 flex-shrink-0">{code}</span>
                                     <select
-                                      className={`flex-1 border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${hasNoDefinedLanguages ? 'border-amber-300 bg-amber-50' : 'border-gray-300'}`}
+                                      className={`flex-1 border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ai-blue-500 ${hasNoDefinedLanguages ? 'border-amber-300 bg-amber-50' : 'border-paper-400'}`}
                                       value={languageByJurisdiction[code] || langs[0] || 'en'}
                                       onChange={(e) => setLanguageByJurisdiction(prev => ({ ...prev, [code]: e.target.value }))}
                                     >
@@ -1208,7 +1208,7 @@ function NewPatentDraftPageContent() {
                                         </option>
                                       ))}
                                     </select>
-                                    <span className={`text-xs w-28 flex-shrink-0 ${hasNoDefinedLanguages ? 'text-amber-600' : 'text-gray-500'}`}>
+                                    <span className={`text-xs w-28 flex-shrink-0 ${hasNoDefinedLanguages ? 'text-amber-600' : 'text-ai-graphite-500'}`}>
                                       {hasNoDefinedLanguages ? '⚠️ Default' : `${rawLangs.length} lang${rawLangs.length !== 1 ? 's' : ''}`}
                                     </span>
                                   </div>
@@ -1220,9 +1220,9 @@ function NewPatentDraftPageContent() {
                       )}
 
                       {/* Summary */}
-                      <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs">
-                        <div className="font-medium text-gray-700 mb-1">Configuration Summary</div>
-                        <div className="text-gray-600 space-y-1">
+                      <div className="bg-paper-100 border border-paper-300 rounded p-3 text-xs">
+                        <div className="font-medium text-ai-graphite-700 mb-1">Configuration Summary</div>
+                        <div className="text-ai-graphite-600 space-y-1">
                           <div>• <span className="font-medium">Mode:</span> {languageMode === 'common' ? 'Common Language' : 'Individual Languages'}</div>
                           <div>• <span className="font-medium">Figures/Sketches:</span> {LANGUAGE_LABELS[figuresLanguage] || figuresLanguage}</div>
                           {languageMode === 'individual_english_figures' && (
@@ -1242,31 +1242,31 @@ function NewPatentDraftPageContent() {
             <>
             {/* Project Display / Selector */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-ai-graphite-700 mb-2">
                 Project
               </label>
               {initialProjectId ? (
                 <>
-                  <div className="flex items-center space-x-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="flex items-center space-x-3 p-3 bg-ai-blue-50 border border-ai-blue-200 rounded-lg">
+                    <div className="w-8 h-8 bg-ai-blue-100 rounded-full flex items-center justify-center">
+                      <svg className="w-4 h-4 text-ai-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                       </svg>
                     </div>
                     <div className="flex-1">
-                      <div className="font-medium text-gray-900">{selectedProjectObj?.name || 'Project'}</div>
-                      <div className="text-xs text-gray-500">Linked from project context</div>
+                      <div className="font-medium text-ai-graphite-900">{selectedProjectObj?.name || 'Project'}</div>
+                      <div className="text-xs text-ai-graphite-500">Linked from project context</div>
                     </div>
                     <Badge variant="secondary" className="text-xs">Locked</Badge>
                   </div>
-                  <p className="mt-1 text-sm text-gray-500">
+                  <p className="mt-1 text-sm text-ai-graphite-500">
                     This draft will be saved to {selectedProjectObj?.name || 'the selected project'}.
                   </p>
                 </>
               ) : (
                 <div className="space-y-2">
                   <select
-                    className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${fieldErrors.project ? 'border-red-300' : 'border-gray-300'}`}
+                    className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent ${fieldErrors.project ? 'border-red-300' : 'border-paper-400'}`}
                     value={selectedProject}
                     onChange={(e) => {
                       clearFieldError('project')
@@ -1282,7 +1282,7 @@ function NewPatentDraftPageContent() {
                   {fieldErrors.project && (
                     <p className="text-sm text-red-600">{fieldErrors.project}</p>
                   )}
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-ai-graphite-500">
                     Choose a project to store this draft. Select “Default Project” for quick drafts.
                   </p>
                 </div>
@@ -1291,7 +1291,7 @@ function NewPatentDraftPageContent() {
 
             {/* Patent Title */}
             <div>
-              <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="title" className="block text-sm font-medium text-ai-graphite-700 mb-2">
                 Patent Title <span className="text-red-500">*</span>
               </label>
               <input
@@ -1303,20 +1303,20 @@ function NewPatentDraftPageContent() {
                   setPatentTitle(e.target.value)
                 }}
                 placeholder="Enter a descriptive title for your patent"
-                className={`w-full px-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${fieldErrors.title ? 'border-red-300' : 'border-gray-300'}`}
+                className={`w-full px-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent ${fieldErrors.title ? 'border-red-300' : 'border-paper-400'}`}
                 aria-invalid={fieldErrors.title ? true : undefined}
                 required
               />
               {fieldErrors.title && (
                 <p className="mt-1 text-sm text-red-600">{fieldErrors.title}</p>
               )}
-              <p className={`mt-1 text-sm ${titleWordCount > 15 ? 'text-red-600' : 'text-gray-500'}`}>
+              <p className={`mt-1 text-sm ${titleWordCount > 15 ? 'text-red-600' : 'text-ai-graphite-500'}`}>
                 {titleWordCount} of 15 words • This will be the title of your patent application
               </p>
             </div>
             {/* Invention Description */}
             <div>
-              <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="description" className="block text-sm font-medium text-ai-graphite-700 mb-2">
                 Invention Description <span className="text-red-500">*</span>
               </label>
               <textarea
@@ -1328,24 +1328,24 @@ function NewPatentDraftPageContent() {
                 }}
                 rows={8}
                 placeholder="Describe your invention in detail. Include the problem it solves, how it works, key components, advantages, and any specific embodiments..."
-                className={`w-full px-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-vertical ${fieldErrors.rawIdea ? 'border-red-300' : 'border-gray-300'}`}
+                className={`w-full px-3 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-transparent resize-vertical ${fieldErrors.rawIdea ? 'border-red-300' : 'border-paper-400'}`}
                 aria-invalid={fieldErrors.rawIdea ? true : undefined}
                 required
               />
               {fieldErrors.rawIdea && (
                 <p className="mt-1 text-sm text-red-600">{fieldErrors.rawIdea}</p>
               )}
-              <p className={`mt-1 text-sm ${rawIdea.length > MAX_DRAFTING_INPUT_CHARS ? 'text-red-600' : rawIdea.length > DRAFTING_INPUT_WARNING_CHARS ? 'text-orange-600' : 'text-gray-500'}`}>
+              <p className={`mt-1 text-sm ${rawIdea.length > MAX_DRAFTING_INPUT_CHARS ? 'text-red-600' : rawIdea.length > DRAFTING_INPUT_WARNING_CHARS ? 'text-orange-600' : 'text-ai-graphite-500'}`}>
                 {rawIdea.length.toLocaleString()} of {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters
                 {rawIdea.length > DRAFTING_INPUT_WARNING_CHARS && rawIdea.length <= MAX_DRAFTING_INPUT_CHARS && ' — approaching the limit'}
                 {rawIdea.length > MAX_DRAFTING_INPUT_CHARS && ' — over the limit'}
               </p>
               {/* Experimental Data Notice */}
-              <div className="mt-3 flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md">
-                <svg className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="mt-3 flex items-start gap-2 px-3 py-2 bg-ai-blue-50 border border-ai-blue-100 rounded-md">
+                <svg className="w-4 h-4 text-ai-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <p className="text-xs text-blue-700">
+                <p className="text-xs text-ai-blue-700">
                   <strong>Note:</strong> Include tables, equations, examples, test measurements, schemas, sequences, or exclusions here if they support the invention. Stage 0 will extract them into editable support data.
                 </p>
               </div>
@@ -1353,7 +1353,7 @@ function NewPatentDraftPageContent() {
 
             {/* File Upload */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-ai-graphite-700 mb-2">
                 Or upload an idea file
               </label>
               <input
@@ -1361,13 +1361,13 @@ function NewPatentDraftPageContent() {
                 accept=".txt,.md,.markdown,.csv,.tsv,.xlsx,.doc,.docx,.pdf"
                 onChange={handleFileUpload}
                 disabled={isFileProcessing}
-                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                className="block w-full text-sm text-ai-graphite-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-ai-blue-50 file:text-ai-blue-700 hover:file:bg-ai-blue-100"
               />
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-ai-graphite-500">
                 Supported formats: .txt, .md, .csv, .tsv, .xlsx, .doc, .docx, and text-based .pdf files (max {MAX_DRAFTING_UPLOAD_MB}MB, {MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters)
               </p>
               {isFileProcessing && (
-                <p className="mt-1 text-xs text-indigo-600">
+                <p className="mt-1 text-xs text-ai-blue-600">
                   Extracting readable text from the file...
                 </p>
               )}
@@ -1434,7 +1434,7 @@ function NewPatentDraftPageContent() {
                         <label className="flex min-w-0 items-start gap-2 text-sm text-slate-800">
                           <input
                             type="checkbox"
-                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-ai-blue-600"
                             checked={image.selected || image.status === 'saved'}
                             disabled={image.status === 'saved' || image.status === 'saving'}
                             onChange={(e) => toggleExtractedImage(image.id, e.target.checked)}
@@ -1470,41 +1470,41 @@ function NewPatentDraftPageContent() {
 
             {/* Idea handling — a prominent choice, no longer buried in the footer */}
             <div className="pt-2">
-              <div className="text-sm font-medium text-gray-900 mb-1">How should the AI treat your text?</div>
-              <p className="text-xs text-gray-500 mb-3">This controls how your idea is processed before drafting begins.</p>
+              <div className="text-sm font-medium text-ai-graphite-900 mb-1">How should the AI treat your text?</div>
+              <p className="text-xs text-ai-graphite-500 mb-3">This controls how your idea is processed before drafting begins.</p>
               <div className="grid sm:grid-cols-2 gap-3">
                 <label
                   className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                    allowRefine ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                    allowRefine ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 bg-white hover:bg-paper-100'
                   }`}
                 >
                   <input
                     type="radio"
-                    className="mt-1 h-4 w-4 text-indigo-600"
+                    className="mt-1 h-4 w-4 text-ai-blue-600"
                     checked={allowRefine === true}
                     onChange={() => setAllowRefine(true)}
                   />
                   <span>
-                    <span className="block text-sm font-medium text-gray-900">Structure and polish</span>
-                    <span className="block text-xs text-gray-600 mt-0.5">
+                    <span className="block text-sm font-medium text-ai-graphite-900">Structure and polish</span>
+                    <span className="block text-xs text-ai-graphite-600 mt-0.5">
                       Organize and refine your wording without adding technical facts. Recommended.
                     </span>
                   </span>
                 </label>
                 <label
                   className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                    !allowRefine ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                    !allowRefine ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 bg-white hover:bg-paper-100'
                   }`}
                 >
                   <input
                     type="radio"
-                    className="mt-1 h-4 w-4 text-indigo-600"
+                    className="mt-1 h-4 w-4 text-ai-blue-600"
                     checked={allowRefine === false}
                     onChange={() => setAllowRefine(false)}
                   />
                   <span>
-                    <span className="block text-sm font-medium text-gray-900">Keep exactly what I provided</span>
-                    <span className="block text-xs text-gray-600 mt-0.5">
+                    <span className="block text-sm font-medium text-ai-graphite-900">Keep exactly what I provided</span>
+                    <span className="block text-xs text-ai-graphite-600 mt-0.5">
                       Use your text as-is, word for word.
                     </span>
                   </span>
@@ -1517,97 +1517,97 @@ function NewPatentDraftPageContent() {
             {/* Review & create (step 3) */}
             {step === 3 && (
               <div className="space-y-4">
-                <div className="rounded-lg border border-gray-200 p-4">
+                <div className="rounded-lg border border-paper-300 p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-900">Your invention</h3>
+                    <h3 className="text-sm font-semibold text-ai-graphite-900">Your invention</h3>
                     <button
                       type="button"
                       onClick={() => goToStep(1)}
-                      className="text-xs font-medium text-indigo-600 hover:text-indigo-500"
+                      className="text-xs font-medium text-ai-blue-600 hover:text-ai-blue-500"
                     >
                       Edit
                     </button>
                   </div>
                   <dl className="space-y-2 text-sm">
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Project</dt>
-                      <dd className="text-gray-900">{selectedProjectObj?.name || '—'}</dd>
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Project</dt>
+                      <dd className="text-ai-graphite-900">{selectedProjectObj?.name || '—'}</dd>
                     </div>
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Title</dt>
-                      <dd className="text-gray-900">{patentTitle || '—'}</dd>
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Title</dt>
+                      <dd className="text-ai-graphite-900">{patentTitle || '—'}</dd>
                     </div>
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Description</dt>
-                      <dd className="text-gray-900">
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Description</dt>
+                      <dd className="text-ai-graphite-900">
                         {rawIdea.length.toLocaleString()} characters
                         {uploadedFileName ? ` · extracted from ${uploadedFileName}` : ''}
                       </dd>
                     </div>
                     {extractedImages.length > 0 && (
                       <div className="flex gap-3">
-                        <dt className="w-32 shrink-0 text-gray-500">Figures</dt>
-                        <dd className="text-gray-900">
+                        <dt className="w-32 shrink-0 text-ai-graphite-500">Figures</dt>
+                        <dd className="text-ai-graphite-900">
                           {selectedExtractedImages.length} extracted image{selectedExtractedImages.length === 1 ? '' : 's'} will be attached
                         </dd>
                       </div>
                     )}
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Idea handling</dt>
-                      <dd className="text-gray-900">
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Idea handling</dt>
+                      <dd className="text-ai-graphite-900">
                         {allowRefine ? 'Structure and polish (no new technical facts)' : 'Keep exactly as provided'}
                       </dd>
                     </div>
                   </dl>
                 </div>
 
-                <div className="rounded-lg border border-gray-200 p-4">
+                <div className="rounded-lg border border-paper-300 p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-900">Jurisdictions & languages</h3>
+                    <h3 className="text-sm font-semibold text-ai-graphite-900">Jurisdictions & languages</h3>
                     <button
                       type="button"
                       onClick={() => goToStep(2)}
-                      className="text-xs font-medium text-indigo-600 hover:text-indigo-500"
+                      className="text-xs font-medium text-ai-blue-600 hover:text-ai-blue-500"
                     >
                       Edit
                     </button>
                   </div>
                   <dl className="space-y-2 text-sm">
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Jurisdictions</dt>
-                      <dd className="text-gray-900">
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Jurisdictions</dt>
+                      <dd className="text-ai-graphite-900">
                         {(mode === 'single' ? selectedCodes.slice(0, 1) : selectedCodes)
                           .map(code => availableCountries.find(c => c.code === code)?.label || code)
                           .join(', ') || '—'}
                       </dd>
                     </div>
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Language</dt>
-                      <dd className="text-gray-900">
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Language</dt>
+                      <dd className="text-ai-graphite-900">
                         {languageMode === 'common'
                           ? `Common — ${LANGUAGE_LABELS[commonLanguage] || commonLanguage}`
                           : 'Per jurisdiction (figures in English)'}
                       </dd>
                     </div>
                     <div className="flex gap-3">
-                      <dt className="w-32 shrink-0 text-gray-500">Figures</dt>
-                      <dd className="text-gray-900">{LANGUAGE_LABELS[figuresLanguage] || figuresLanguage}</dd>
+                      <dt className="w-32 shrink-0 text-ai-graphite-500">Figures</dt>
+                      <dd className="text-ai-graphite-900">{LANGUAGE_LABELS[figuresLanguage] || figuresLanguage}</dd>
                     </div>
                   </dl>
                 </div>
 
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-ai-graphite-500">
                   Creating the draft runs Stage 0 analysis on your idea. You can review and edit everything in the later drafting stages.
                 </p>
               </div>
             )}
 
             {/* Footer navigation */}
-            <div className="flex items-center justify-between gap-4 pt-6 border-t border-gray-200">
+            <div className="flex items-center justify-between gap-4 pt-6 border-t border-paper-300">
               {step === 1 ? (
                 <Link
                   href="/dashboard"
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                  className="inline-flex items-center px-4 py-2 border border-paper-400 text-sm font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
                 >
                   Cancel
                 </Link>
@@ -1615,7 +1615,7 @@ function NewPatentDraftPageContent() {
                 <button
                   type="button"
                   onClick={() => goToStep((step - 1) as WizardStep)}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                  className="inline-flex items-center px-4 py-2 border border-paper-400 text-sm font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
                 >
                   Back
                 </button>
@@ -1626,7 +1626,7 @@ function NewPatentDraftPageContent() {
                   type="button"
                   onClick={handleContinue}
                   disabled={isFileProcessing}
-                  className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Continue
                   <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1637,7 +1637,7 @@ function NewPatentDraftPageContent() {
                 <button
                   onClick={handleCreateDraft}
                   disabled={isCreating || isFileProcessing}
-                  className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center px-6 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCreating ? (
                     <>
@@ -1666,8 +1666,8 @@ function NewPatentDraftPageContent() {
 export default function NewPatentDraftPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ai-blue-600"></div>
       </div>
     }>
       <NewPatentDraftPageContent />

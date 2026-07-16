@@ -1820,22 +1820,22 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const canAccessSelect = hasAIReview
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-ai-blue-50/30">
       {/* ============= HEADER WITH PROGRESS STEPS ============= */}
-      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-gray-200 shadow-sm">
+      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-paper-300 shadow-sm">
         <div className="max-w-6xl mx-auto px-6 py-4">
           {/* Title */}
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Prior Art Analysis</h2>
-              <p className="text-sm text-gray-500">Discover, analyze, and select relevant patents for your invention</p>
+              <h2 className="text-xl font-bold text-ai-graphite-900">Prior Art Analysis</h2>
+              <p className="text-sm text-ai-graphite-500">Discover, analyze, and select relevant patents for your invention</p>
             </div>
             {/* Quick Stats */}
             <div className="flex items-center gap-4 text-sm">
               {results.length > 0 && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 rounded-full">
-                  <span className="text-blue-600 font-medium">{results.length}</span>
-                  <span className="text-blue-500">patents found</span>
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-ai-blue-50 rounded-full">
+                  <span className="text-ai-blue-600 font-medium">{results.length}</span>
+                  <span className="text-ai-blue-500">patents found</span>
                 </div>
               )}
               {hasAIReview && (
@@ -1854,25 +1854,25 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               onClick={() => setMainTab('search')}
               className={`flex items-center gap-3 px-5 py-3 rounded-xl font-medium transition-all ${
                 mainTab === 'search'
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'
-                  : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+                  ? 'bg-ai-blue-600 text-white shadow-lg shadow-ai-blue-200'
+                  : 'bg-white text-ai-graphite-600 hover:bg-paper-100 border border-paper-300'
               }`}
             >
               <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${
-                mainTab === 'search' ? 'bg-white/20' : results.length > 0 ? 'bg-green-100 text-green-600' : 'bg-gray-100'
+                mainTab === 'search' ? 'bg-white/20' : results.length > 0 ? 'bg-green-100 text-green-600' : 'bg-paper-200'
               }`}>
                 {results.length > 0 ? '✓' : '1'}
               </div>
               <div className="text-left">
                 <div className="font-semibold">Search</div>
-                <div className={`text-xs ${mainTab === 'search' ? 'text-indigo-200' : 'text-gray-400'}`}>
+                <div className={`text-xs ${mainTab === 'search' ? 'text-ai-blue-200' : 'text-ai-graphite-400'}`}>
                   Find prior art
                 </div>
               </div>
             </button>
 
             {/* Arrow */}
-            <svg className={`w-5 h-5 ${canAccessAnalyze ? 'text-gray-400' : 'text-gray-200'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-5 h-5 ${canAccessAnalyze ? 'text-ai-graphite-400' : 'text-gray-200'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
 
@@ -1890,25 +1890,25 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 mainTab === 'analyze'
                   ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'
                   : canAccessAnalyze
-                    ? 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
-                    : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-gray-100'
+                    ? 'bg-white text-ai-graphite-600 hover:bg-paper-100 border border-paper-300'
+                    : 'bg-paper-100 text-gray-300 cursor-not-allowed border border-paper-200'
               }`}
             >
               <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${
-                mainTab === 'analyze' ? 'bg-white/20' : hasAIReview ? 'bg-green-100 text-green-600' : canAccessAnalyze ? 'bg-gray-100' : 'bg-gray-50 text-gray-300'
+                mainTab === 'analyze' ? 'bg-white/20' : hasAIReview ? 'bg-green-100 text-green-600' : canAccessAnalyze ? 'bg-paper-200' : 'bg-paper-100 text-gray-300'
               }`}>
                 {hasAIReview ? '✓' : '2'}
               </div>
               <div className="text-left">
                 <div className="font-semibold">{hasAIReview ? 'Re-Analyze' : 'Analyze'}</div>
-                <div className={`text-xs ${mainTab === 'analyze' ? 'text-emerald-200' : canAccessAnalyze ? 'text-gray-400' : 'text-gray-300'}`}>
+                <div className={`text-xs ${mainTab === 'analyze' ? 'text-emerald-200' : canAccessAnalyze ? 'text-ai-graphite-400' : 'text-gray-300'}`}>
                   {hasAIReview ? `${missingAnalysisPatentNumbers.length} missing` : 'AI review'}
                 </div>
               </div>
             </button>
 
             {/* Arrow */}
-            <svg className={`w-5 h-5 ${canAccessSelect ? 'text-gray-400' : 'text-gray-200'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-5 h-5 ${canAccessSelect ? 'text-ai-graphite-400' : 'text-gray-200'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
 
@@ -1918,20 +1918,20 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               disabled={!canAccessSelect}
               className={`flex items-center gap-3 px-5 py-3 rounded-xl font-medium transition-all ${
                 mainTab === 'select'
-                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-200'
+                  ? 'bg-ai-blue-600 text-white shadow-lg shadow-ai-blue-200'
                   : canAccessSelect
-                    ? 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
-                    : 'bg-gray-50 text-gray-300 cursor-not-allowed border border-gray-100'
+                    ? 'bg-white text-ai-graphite-600 hover:bg-paper-100 border border-paper-300'
+                    : 'bg-paper-100 text-gray-300 cursor-not-allowed border border-paper-200'
               }`}
             >
               <div className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${
-                mainTab === 'select' ? 'bg-white/20' : canAccessSelect ? 'bg-gray-100' : 'bg-gray-50 text-gray-300'
+                mainTab === 'select' ? 'bg-white/20' : canAccessSelect ? 'bg-paper-200' : 'bg-paper-100 text-gray-300'
               }`}>
                 3
               </div>
               <div className="text-left">
                 <div className="font-semibold">Select</div>
-                <div className={`text-xs ${mainTab === 'select' ? 'text-purple-200' : canAccessSelect ? 'text-gray-400' : 'text-gray-300'}`}>
+                <div className={`text-xs ${mainTab === 'select' ? 'text-ai-blue-200' : canAccessSelect ? 'text-ai-graphite-400' : 'text-gray-300'}`}>
                   Choose patents
                 </div>
               </div>
@@ -1961,26 +1961,26 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         {mainTab === 'search' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Your Invention Context Card */}
-            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl border border-indigo-100 p-6">
+            <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-2xl border border-ai-blue-100 p-6">
               <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-xl bg-indigo-100 flex items-center justify-center text-2xl">💡</div>
+                <div className="w-12 h-12 rounded-xl bg-ai-blue-100 flex items-center justify-center text-2xl">💡</div>
                 <div className="flex-1">
-                  <h3 className="font-semibold text-gray-900 mb-1">Your Invention</h3>
-                  <p className="text-lg text-indigo-900 font-medium">{idea?.title || 'Untitled'}</p>
+                  <h3 className="font-semibold text-ai-graphite-900 mb-1">Your Invention</h3>
+                  <p className="text-lg text-ai-blue-900 font-medium">{idea?.title || 'Untitled'}</p>
                   {idea?.abstract && (
-                    <p className="text-sm text-gray-600 mt-2 line-clamp-2">{idea.abstract}</p>
+                    <p className="text-sm text-ai-graphite-600 mt-2 line-clamp-2">{idea.abstract}</p>
                   )}
                 </div>
               </div>
             </div>
 
             {/* Search Configuration */}
-            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="p-6 border-b border-gray-100">
-                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+            <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-paper-200">
+                <h3 className="font-semibold text-ai-graphite-900 flex items-center gap-2">
                   <span className="text-xl">🔍</span> Global Patent Search
                 </h3>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="text-sm text-ai-graphite-500 mt-1">
                   Search through 12M+ patents worldwide using our AI-optimized query
                 </p>
               </div>
@@ -1988,91 +1988,91 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
               <div className="p-6 space-y-6">
                 {/* Search Query Display */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">AI-Optimized Search Query</label>
-                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                    <code className="text-sm text-gray-700 break-all">{searchQuery || 'No search query available'}</code>
+                  <label className="block text-sm font-medium text-ai-graphite-700 mb-2">AI-Optimized Search Query</label>
+                  <div className="bg-paper-100 rounded-xl p-4 border border-paper-300">
+                    <code className="text-sm text-ai-graphite-700 break-all">{searchQuery || 'No search query available'}</code>
                   </div>
                 </div>
 
-                <div className="border border-gray-200 rounded-xl p-4 bg-white">
-                  <label className="block text-sm font-medium text-gray-700 mb-3">Patent Sources</label>
+                <div className="border border-paper-300 rounded-xl p-4 bg-white">
+                  <label className="block text-sm font-medium text-ai-graphite-700 mb-3">Patent Sources</label>
                   <div className="grid gap-3 md:grid-cols-2">
                     <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                      includeIndianPatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                      includeIndianPatents ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-200'
                     }`}>
                       <input
                         type="checkbox"
                         checked={includeIndianPatents}
                         onChange={(event) => setIncludeIndianPatents(event.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 w-4 h-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">Indian Patents</span>
-                        <span className="block text-xs text-gray-500 mt-0.5">Search Indian patent records.</span>
+                        <span className="block text-sm font-medium text-ai-graphite-900">Indian Patents</span>
+                        <span className="block text-xs text-ai-graphite-500 mt-0.5">Search Indian patent records.</span>
                       </span>
                     </label>
                     <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                      includeInternationalPatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                      includeInternationalPatents ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-200'
                     }`}>
                       <input
                         type="checkbox"
                         checked={includeInternationalPatents}
                         onChange={(event) => setIncludeInternationalPatents(event.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 w-4 h-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">International Patents</span>
-                        <span className="block text-xs text-gray-500 mt-0.5">Search international patent records.</span>
+                        <span className="block text-sm font-medium text-ai-graphite-900">International Patents</span>
+                        <span className="block text-xs text-ai-graphite-500 mt-0.5">Search international patent records.</span>
                       </span>
                     </label>
                     <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                      includeGooglePatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                      includeGooglePatents ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-200'
                     }`}>
                       <input
                         type="checkbox"
                         checked={includeGooglePatents}
                         onChange={(event) => setIncludeGooglePatents(event.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 w-4 h-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">Google Patents</span>
-                        <span className="block text-xs text-gray-500 mt-0.5">Search Google Patents with editable keyword phrases.</span>
+                        <span className="block text-sm font-medium text-ai-graphite-900">Google Patents</span>
+                        <span className="block text-xs text-ai-graphite-500 mt-0.5">Search Google Patents with editable keyword phrases.</span>
                       </span>
                     </label>
                     <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                      includeEuropeanPatents ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                      includeEuropeanPatents ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-200'
                     }`}>
                       <input
                         type="checkbox"
                         checked={includeEuropeanPatents}
                         onChange={(event) => setIncludeEuropeanPatents(event.target.checked)}
-                        className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="mt-1 w-4 h-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">European Patents</span>
-                        <span className="block text-xs text-gray-500 mt-0.5">Search European patents with title and abstract phrases.</span>
+                        <span className="block text-sm font-medium text-ai-graphite-900">European Patents</span>
+                        <span className="block text-xs text-ai-graphite-500 mt-0.5">Search European patents with title and abstract phrases.</span>
                       </span>
                     </label>
                   </div>
                 </div>
 
-                <div className="border border-gray-200 rounded-xl p-4 bg-white">
-                  <label className="block text-sm font-medium text-gray-700 mb-3">Search Precision</label>
+                <div className="border border-paper-300 rounded-xl p-4 bg-white">
+                  <label className="block text-sm font-medium text-ai-graphite-700 mb-3">Search Precision</label>
                   <div className="grid gap-3 md:grid-cols-2">
                     {(['broad', 'refined'] as PatentSearchPrecision[]).map(mode => (
                       <label key={mode} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                        searchPrecision === mode ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200 hover:border-indigo-200'
+                        searchPrecision === mode ? 'border-ai-blue-300 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-200'
                       }`}>
                         <input
                           type="radio"
                           name="related-art-search-precision"
                           checked={searchPrecision === mode}
                           onChange={() => setSearchPrecision(mode)}
-                          className="mt-1 w-4 h-4 border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          className="mt-1 w-4 h-4 border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
                         />
                         <span>
-                          <span className="block text-sm font-medium text-gray-900">{mode === 'broad' ? 'Broad' : 'Refined'}</span>
-                          <span className="block text-xs text-gray-500 mt-0.5">
+                          <span className="block text-sm font-medium text-ai-graphite-900">{mode === 'broad' ? 'Broad' : 'Refined'}</span>
+                          <span className="block text-xs text-ai-graphite-500 mt-0.5">
                             {mode === 'broad' ? 'Use OR-heavy recall search.' : 'Use AND between concept groups and OR within each group.'}
                           </span>
                         </span>
@@ -2088,14 +2088,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       type="checkbox"
                       checked={showCustomQuery}
                       onChange={(e) => setShowCustomQuery(e.target.checked)}
-                      className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      className="w-4 h-4 rounded border-paper-400 text-ai-blue-600 focus:ring-ai-blue-500"
                     />
-                    <span className="text-sm text-gray-700">Use custom search query instead</span>
+                    <span className="text-sm text-ai-graphite-700">Use custom search query instead</span>
                   </label>
 
                   {showCustomQuery && (
                     <textarea
-                      className="w-full border border-gray-300 rounded-xl p-4 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      className="w-full border border-paper-400 rounded-xl p-4 text-sm focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
                       rows={3}
                       value={customQuery}
                       onChange={(e) => setCustomQuery(e.target.value)}
@@ -2105,22 +2105,22 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 </div>
 
                 {/* Advanced Settings */}
-                <div className="border-t border-gray-100 pt-4">
+                <div className="border-t border-paper-200 pt-4">
                   <button
                     onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-                    className="text-sm text-indigo-600 hover:text-indigo-700 font-medium flex items-center gap-1"
+                    className="text-sm text-ai-blue-600 hover:text-ai-blue-700 font-medium flex items-center gap-1"
                   >
                     {showAdvancedSettings ? '▼' : '▶'} Advanced Settings
                   </button>
                   
                   {showAdvancedSettings && (
-                    <div className="mt-4 grid md:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-xl">
+                    <div className="mt-4 grid md:grid-cols-2 gap-4 p-4 bg-paper-100 rounded-xl">
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Results Limit</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Results Limit</label>
                         <select
                           value={limit}
                           onChange={(e) => setLimit(parseInt(e.target.value))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                         >
                           <option value={10}>10 results</option>
                           <option value={25}>25 results</option>
@@ -2129,75 +2129,75 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         </select>
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Published After</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Published After</label>
                         <input
                           type="date"
                           value={afterDate}
                           onChange={(e) => setAfterDate(e.target.value)}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                         />
                       </div>
                       <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Google Patents keywords</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Google Patents keywords</label>
                         <textarea
                           rows={3}
                           value={keywordListToText(googlePatentKeywords)}
                           onChange={(event) => setGooglePatentKeywords(normalizeKeywordListForUi(event.target.value))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                           placeholder="One keyword phrase per line"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">European title keywords</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">European title keywords</label>
                         <textarea
                           rows={3}
                           value={keywordListToText(epoTitleKeywords)}
                           onChange={(event) => setEpoTitleKeywords(normalizeKeywordListForUi(event.target.value).slice(0, 6))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                           placeholder="One title phrase per line"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">European abstract keywords</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">European abstract keywords</label>
                         <textarea
                           rows={3}
                           value={keywordListToText(epoAbstractKeywords)}
                           onChange={(event) => setEpoAbstractKeywords(normalizeKeywordListForUi(event.target.value).slice(0, 8))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                           placeholder="One abstract phrase per line"
                         />
                       </div>
                       <div className="md:col-span-2">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">European fallback keywords</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">European fallback keywords</label>
                         <textarea
                           rows={2}
                           value={keywordListToText(epoCombinedKeywords)}
                           onChange={(event) => setEpoCombinedKeywords(normalizeKeywordListForUi(event.target.value).slice(0, 8))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                           placeholder="One fallback phrase per line"
                         />
                       </div>
                       <div className="md:col-span-2 space-y-3">
                         <div className="flex items-center justify-between">
-                          <label className="block text-sm font-medium text-gray-700">Boolean concept groups</label>
+                          <label className="block text-sm font-medium text-ai-graphite-700">Boolean concept groups</label>
                           <button
                             type="button"
                             onClick={() => setPatentSearchConceptGroups(current => [
                               ...current,
                               { id: `concept_group_${current.length + 1}`, label: `Concept group ${current.length + 1}`, kind: 'core', terms: [], required: true, excluded: false }
                             ].slice(0, 6))}
-                            className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                            className="text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700"
                           >
                             Add group
                           </button>
                         </div>
                         {patentSearchConceptGroups.map((group, index) => (
-                          <div key={group.id || index} className="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
+                          <div key={group.id || index} className="rounded-lg border border-paper-300 bg-white p-3 space-y-2">
                             <div className="grid gap-2 md:grid-cols-3">
                               <input
                                 value={group.label || ''}
                                 onChange={(event) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item))}
-                                className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                                className="border border-paper-400 rounded-lg px-3 py-2 text-sm"
                                 placeholder="Group label"
                               />
                               <select
@@ -2208,7 +2208,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                   excluded: event.target.value === 'excluded',
                                   kind: event.target.value === 'excluded' ? 'excluded' : item.kind
                                 } : item))}
-                                className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                                className="border border-paper-400 rounded-lg px-3 py-2 text-sm"
                               >
                                 <option value="required">Required</option>
                                 <option value="optional">Optional</option>
@@ -2217,7 +2217,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               <button
                                 type="button"
                                 onClick={() => setPatentSearchConceptGroups(current => current.filter((_, itemIndex) => itemIndex !== index))}
-                                className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-red-50 hover:text-red-600"
+                                className="rounded-lg border border-paper-400 px-3 py-2 text-sm text-ai-graphite-600 hover:bg-red-50 hover:text-red-600"
                               >
                                 Remove
                               </button>
@@ -2226,7 +2226,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               rows={2}
                               value={keywordListToText(group.terms || [])}
                               onChange={(event) => setPatentSearchConceptGroups(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, terms: normalizeKeywordListForUi(event.target.value).slice(0, 8) } : item))}
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                              className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
                               placeholder="One phrase per line"
                             />
                           </div>
@@ -2243,8 +2243,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     disabled={busy}
                     className={`flex-1 md:flex-none px-8 py-4 rounded-xl text-base font-semibold transition-all shadow-lg ${
                       searching
-                        ? 'bg-indigo-100 text-indigo-700 cursor-wait'
-                        : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200'
+                        ? 'bg-ai-blue-100 text-ai-blue-700 cursor-wait'
+                        : 'bg-ai-blue-600 text-white hover:bg-ai-blue-700 hover:shadow-ai-blue-200'
                     } disabled:opacity-50`}
                   >
                     {searching ? (
@@ -2280,10 +2280,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
                 {/* Search Progress */}
                 {searching && searchProgress && (
-                  <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
+                  <div className="bg-ai-blue-50 rounded-xl p-4 border border-ai-blue-100">
                     <div className="flex items-center gap-3">
-                      <div className="animate-pulse w-3 h-3 rounded-full bg-indigo-500"></div>
-                      <span className="text-sm text-indigo-700">{searchProgress}</span>
+                      <div className="animate-pulse w-3 h-3 rounded-full bg-ai-blue-500"></div>
+                      <span className="text-sm text-ai-blue-700">{searchProgress}</span>
                     </div>
                   </div>
                 )}
@@ -2292,13 +2292,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
             {/* Search Results (if any) */}
             {results.length > 0 && (
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+              <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-paper-200 flex items-center justify-between">
                   <div>
-                    <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <h3 className="font-semibold text-ai-graphite-900 flex items-center gap-2">
                       <span className="text-xl">📋</span> Search Results
                     </h3>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <p className="text-sm text-ai-graphite-500 mt-1">
                       Found {results.length} potentially relevant patents
                       {sourceFilteredResults.length !== results.length ? ` - showing ${sourceFilteredResults.length}` : ''}
                       {detailsLoading ? ' - loading Patent Search Service metadata' : ''}
@@ -2309,8 +2309,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   </span>
                 </div>
 
-                <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium text-gray-600 mr-1">Filter:</span>
+                <div className="px-6 py-3 border-b border-paper-200 bg-paper-100 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium text-ai-graphite-600 mr-1">Filter:</span>
                   {sourceFilterOptions.map(option => (
                     <button
                       key={option.key}
@@ -2318,21 +2318,21 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       onClick={() => setResultSourceFilter(option.key)}
                       className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
                         resultSourceFilter === option.key
-                          ? 'bg-indigo-600 border-indigo-600 text-white'
-                          : 'bg-white border-gray-200 text-gray-600 hover:border-indigo-300'
+                          ? 'bg-ai-blue-600 border-ai-blue-600 text-white'
+                          : 'bg-white border-paper-300 text-ai-graphite-600 hover:border-ai-blue-300'
                       }`}
                     >
                       {option.label}
-                      <span className={resultSourceFilter === option.key ? 'ml-1 text-indigo-100' : 'ml-1 text-gray-400'}>
+                      <span className={resultSourceFilter === option.key ? 'ml-1 text-ai-blue-100' : 'ml-1 text-ai-graphite-400'}>
                         {option.count}
                       </span>
                     </button>
                   ))}
                 </div>
 
-                <div className="divide-y divide-gray-100 max-h-[650px] overflow-y-auto">
+                <div className="divide-y divide-paper-200 max-h-[650px] overflow-y-auto">
                   {sourceFilteredResults.length === 0 && (
-                    <div className="p-6 text-sm text-gray-500">
+                    <div className="p-6 text-sm text-ai-graphite-500">
                       No patents match the selected source filter.
                     </div>
                   )}
@@ -2340,52 +2340,52 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     const details = getPatentDisplayData(r, i)
                     const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
                     return (
-                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-gray-50 transition-colors">
+                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-paper-100 transition-colors">
                         <div className="flex items-start gap-4">
-                          <div className="text-sm text-gray-400 w-6">{i + 1}</div>
+                          <div className="text-sm text-ai-graphite-400 w-6">{i + 1}</div>
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium text-gray-900">{details.title}</div>
-                            <div className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+                            <div className="font-medium text-ai-graphite-900">{details.title}</div>
+                            <div className="text-xs text-ai-graphite-500 mt-1 flex flex-wrap items-center gap-2">
                               <span>{details.pn}</span>
-                              <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{details.sourceLabel}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{details.sourceLabel}</span>
                             </div>
-                            <div className="mt-3 text-sm text-gray-700 leading-relaxed">
+                            <div className="mt-3 text-sm text-ai-graphite-700 leading-relaxed">
                               {details.abstract || 'No abstract or snippet was returned for this patent.'}
                             </div>
 
                             {isExpanded && (
-                              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                              <div className="mt-4 rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
                                 <div className="grid gap-3 md:grid-cols-2">
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Publication: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">Publication: </span>
                                     {details.publicationDate || 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Filing: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">Filing: </span>
                                     {details.filingDate || 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Priority: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">Priority: </span>
                                     {details.priorityDate || 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Application: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">Application: </span>
                                     {details.applicationNumber || 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Inventors: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">Inventors: </span>
                                     {details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">Assignees: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">Assignees: </span>
                                     {details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">CPC: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">CPC: </span>
                                     {details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}
                                   </div>
-                                  <div className="text-xs text-gray-600">
-                                    <span className="font-semibold text-gray-800">IPC: </span>
+                                  <div className="text-xs text-ai-graphite-600">
+                                    <span className="font-semibold text-ai-graphite-800">IPC: </span>
                                     {details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}
                                   </div>
                                 </div>
@@ -2394,7 +2394,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                     href={details.link}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                                    className="inline-flex items-center text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
                                   >
                                     View patent source
                                   </a>
@@ -2413,16 +2413,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                   return next
                                 })
                               }}
-                              className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                              className="mt-3 text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700"
                             >
                               {isExpanded ? 'Hide details' : 'Show details'}
                             </button>
                           </div>
                           {details.score !== null && (
                             <div className={`px-2 py-1 rounded text-xs font-medium ${
-                              details.score >= 80 ? 'bg-indigo-100 text-indigo-700' :
-                              details.score >= 60 ? 'bg-blue-100 text-blue-700' :
-                              'bg-gray-100 text-gray-600'
+                              details.score >= 80 ? 'bg-ai-blue-100 text-ai-blue-700' :
+                              details.score >= 60 ? 'bg-ai-blue-100 text-ai-blue-700' :
+                              'bg-paper-200 text-ai-graphite-600'
                             }`}>
                               {details.score.toFixed(0)}% match
                             </div>
@@ -2436,11 +2436,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             )}
 
             {false && results.length > 0 && (
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-gray-100 flex items-center justify-between gap-4">
+              <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
+                <div className="p-6 border-b border-paper-200 flex items-center justify-between gap-4">
                   <div>
-                    <h3 className="font-semibold text-gray-900">Patent Details From Patent Search Service</h3>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <h3 className="font-semibold text-ai-graphite-900">Patent Details From Patent Search Service</h3>
+                    <p className="text-sm text-ai-graphite-500 mt-1">
                       Full metadata and abstracts/snippets for all {results.length} search results.
                       {detailsLoading ? ' Loading stored patent metadata...' : ''}
                     </p>
@@ -2454,7 +2454,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   </button>
                 </div>
 
-                <div className="divide-y divide-gray-100 max-h-[650px] overflow-y-auto">
+                <div className="divide-y divide-paper-200 max-h-[650px] overflow-y-auto">
                   {results.map((r, i) => {
                     const details = getPatentDisplayData(r, i)
                     const isExpanded = expandedPatentDetails.has(`search-${details.pn}`)
@@ -2466,50 +2466,50 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     ].filter(Boolean) as Array<[string, string]>
 
                     return (
-                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-gray-50 transition-colors">
+                      <div key={`${details.pn}-${i}`} className="p-5 hover:bg-paper-100 transition-colors">
                         <div className="flex items-start gap-4">
-                          <div className="text-sm text-gray-400 w-6">{i + 1}</div>
+                          <div className="text-sm text-ai-graphite-400 w-6">{i + 1}</div>
                           <div className="flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <div className="font-semibold text-gray-900">{details.title}</div>
-                              <div className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">{details.pn}</div>
+                              <div className="font-semibold text-ai-graphite-900">{details.title}</div>
+                              <div className="text-xs px-2 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{details.pn}</div>
                             </div>
 
                             {metadataItems.length > 0 && (
                               <div className="mt-2 flex flex-wrap gap-2">
                                 {metadataItems.map(([label, value]) => (
-                                  <span key={label} className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
-                                    <span className="font-medium text-gray-700">{label}:</span> {value}
+                                  <span key={label} className="text-xs text-ai-graphite-600 bg-paper-100 border border-paper-300 rounded px-2 py-1">
+                                    <span className="font-medium text-ai-graphite-700">{label}:</span> {value}
                                   </span>
                                 ))}
                               </div>
                             )}
 
-                            <div className={`mt-3 text-sm text-gray-700 leading-relaxed ${isExpanded ? '' : 'line-clamp-3'}`}>
+                            <div className={`mt-3 text-sm text-ai-graphite-700 leading-relaxed ${isExpanded ? '' : 'line-clamp-3'}`}>
                               {details.abstract || 'No abstract or snippet was returned for this patent.'}
                             </div>
 
                             <div className="mt-3 grid gap-3 md:grid-cols-2">
-                              <div className="text-xs text-gray-600">
-                                <span className="font-semibold text-gray-800">Inventors: </span>
+                              <div className="text-xs text-ai-graphite-600">
+                                <span className="font-semibold text-ai-graphite-800">Inventors: </span>
                                 {details.inventors.length > 0 ? details.inventors.join(', ') : 'Not available'}
                               </div>
-                              <div className="text-xs text-gray-600">
-                                <span className="font-semibold text-gray-800">Assignees: </span>
+                              <div className="text-xs text-ai-graphite-600">
+                                <span className="font-semibold text-ai-graphite-800">Assignees: </span>
                                 {details.assignees.length > 0 ? details.assignees.join(', ') : 'Not available'}
                               </div>
                             </div>
 
                             {isExpanded && (
-                              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                              <div className="mt-4 rounded-xl border border-paper-300 bg-paper-100 p-4 space-y-3">
                                 <div className="grid gap-3 md:grid-cols-2">
                                   <div>
-                                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">CPC</div>
-                                    <div className="mt-1 text-sm text-gray-700">{details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}</div>
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-ai-graphite-500">CPC</div>
+                                    <div className="mt-1 text-sm text-ai-graphite-700">{details.cpcCodes.length > 0 ? details.cpcCodes.join(', ') : 'Not available'}</div>
                                   </div>
                                   <div>
-                                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">IPC</div>
-                                    <div className="mt-1 text-sm text-gray-700">{details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}</div>
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-ai-graphite-500">IPC</div>
+                                    <div className="mt-1 text-sm text-ai-graphite-700">{details.ipcCodes.length > 0 ? details.ipcCodes.join(', ') : 'Not available'}</div>
                                   </div>
                                 </div>
                                 {details.link && (
@@ -2517,7 +2517,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                     href={details.link}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                                    className="inline-flex items-center text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
                                   >
                                     View patent source
                                     <svg className="ml-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2539,16 +2539,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                   return next
                                 })
                               }}
-                              className="mt-3 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                              className="mt-3 text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700"
                             >
                               {isExpanded ? 'Show less' : 'Show full details'}
                             </button>
                           </div>
                           {details.score !== null && (
                             <div className={`px-2 py-1 rounded text-xs font-medium ${
-                              details.score >= 80 ? 'bg-indigo-100 text-indigo-700' :
-                              details.score >= 60 ? 'bg-blue-100 text-blue-700' :
-                              'bg-gray-100 text-gray-600'
+                              details.score >= 80 ? 'bg-ai-blue-100 text-ai-blue-700' :
+                              details.score >= 60 ? 'bg-ai-blue-100 text-ai-blue-700' :
+                              'bg-paper-200 text-ai-graphite-600'
                             }`}>
                               {details.score.toFixed(0)}% match
                             </div>
@@ -2568,7 +2568,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           <div className="space-y-6 animate-fadeIn">
             {/* AI Analysis CTA */}
             {!hasAIReview && (
-              <div className="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-2xl p-8 text-white shadow-xl">
+              <div className="bg-gradient-to-r from-emerald-500 to-ai-blue-600 rounded-2xl p-8 text-white shadow-xl">
                 <div className="flex items-start gap-6">
                   <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center text-4xl">🧠</div>
                   <div className="flex-1">
@@ -2634,10 +2634,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             {/* Analysis Complete - Summary */}
             {hasAIReview && (
               <>
-                <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+                <div className="bg-white rounded-2xl border border-paper-300 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <h3 className="font-semibold text-gray-900">Initial Potential Novelty Analysis</h3>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <h3 className="font-semibold text-ai-graphite-900">Initial Potential Novelty Analysis</h3>
+                    <p className="text-sm text-ai-graphite-500 mt-1">
                       {missingAnalysisPatentNumbers.length > 0
                         ? `${missingAnalysisPatentNumbers.length} current patent${missingAnalysisPatentNumbers.length !== 1 ? 's are' : ' is'} missing AI relevance analysis.`
                         : 'All current search results have AI relevance analysis.'}
@@ -2702,10 +2702,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     <div className="text-sm font-medium text-green-800 mt-1">✅ Adjacent</div>
                     <div className="text-xs text-green-600 mt-0.5">Low Risk</div>
                   </div>
-                  <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
-                    <div className="text-4xl font-bold text-gray-600">{analysisSummary.remote}</div>
-                    <div className="text-sm font-medium text-gray-800 mt-1">⚪ Remote</div>
-                    <div className="text-xs text-gray-500 mt-0.5">Safe</div>
+                  <div className="bg-paper-100 rounded-2xl p-6 border border-paper-200">
+                    <div className="text-4xl font-bold text-ai-graphite-600">{analysisSummary.remote}</div>
+                    <div className="text-sm font-medium text-ai-graphite-800 mt-1">⚪ Remote</div>
+                    <div className="text-xs text-ai-graphite-500 mt-0.5">Safe</div>
                   </div>
                   <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200">
                     <div className="text-4xl font-bold text-slate-600">{analysisSummary.unknown}</div>
@@ -2715,8 +2715,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 </div>
 
                 {/* Filter Bar */}
-                <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center gap-3">
-                  <span className="text-sm text-gray-500">Source:</span>
+                <div className="bg-white rounded-xl border border-paper-300 p-4 flex flex-wrap items-center gap-3">
+                  <span className="text-sm text-ai-graphite-500">Source:</span>
                   {sourceFilterOptions.map(option => (
                     <button
                       key={option.key}
@@ -2724,15 +2724,15 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       onClick={() => setResultSourceFilter(option.key)}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
                         resultSourceFilter === option.key
-                          ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
-                          : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                          ? 'bg-ai-blue-100 text-ai-blue-700 border-ai-blue-300'
+                          : 'bg-white border-paper-300 text-ai-graphite-500 hover:border-paper-400'
                       }`}
                     >
                       {option.label}
                       <span className="ml-1 opacity-70">({option.count})</span>
                     </button>
                   ))}
-                  <span className="text-sm text-gray-500">Filter by threat level:</span>
+                  <span className="text-sm text-ai-graphite-500">Filter by threat level:</span>
                   {['anticipates', 'obvious', 'adjacent', 'remote'].map(threat => (
                     <button
                       key={threat}
@@ -2742,8 +2742,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           ? threat === 'anticipates' ? 'bg-red-100 text-red-700 border border-red-300' :
                             threat === 'obvious' ? 'bg-amber-100 text-amber-700 border border-amber-300' :
                             threat === 'adjacent' ? 'bg-green-100 text-green-700 border border-green-300' :
-                            'bg-gray-200 text-gray-700 border border-gray-300'
-                          : 'bg-white border border-gray-200 text-gray-500 hover:border-gray-300'
+                            'bg-paper-300 text-ai-graphite-700 border border-paper-400'
+                          : 'bg-white border border-paper-300 text-ai-graphite-500 hover:border-paper-400'
                       }`}
                     >
                       {threat === 'anticipates' ? '🛑' : threat === 'obvious' ? '⚠️' : threat === 'adjacent' ? '✅' : '⚪'} {threat}
@@ -2753,7 +2753,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   {noveltyThreatFilters.length > 0 && (
                     <button
                       onClick={() => setNoveltyThreatFilters([])}
-                      className="text-xs text-gray-400 hover:text-gray-600"
+                      className="text-xs text-ai-graphite-400 hover:text-ai-graphite-600"
                     >
                       Clear
                     </button>
@@ -2761,17 +2761,17 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 </div>
 
                 {/* Patent Analysis Results */}
-                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-gray-100">
-                    <h3 className="font-semibold text-gray-900">Detailed Analysis Results</h3>
-                    <p className="text-sm text-gray-500 mt-1">
+                <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-paper-200">
+                    <h3 className="font-semibold text-ai-graphite-900">Detailed Analysis Results</h3>
+                    <p className="text-sm text-ai-graphite-500 mt-1">
                       Click on any patent to see the full analysis including abstract comparison
                     </p>
                   </div>
 
-                  <div className="divide-y divide-gray-100 max-h-[600px] overflow-y-auto">
+                  <div className="divide-y divide-paper-200 max-h-[600px] overflow-y-auto">
                     {filteredResults.length === 0 && (
-                      <div className="p-6 text-sm text-gray-500">
+                      <div className="p-6 text-sm text-ai-graphite-500">
                         No analyzed patents match the selected filters.
                       </div>
                     )}
@@ -2783,9 +2783,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                       const sourceLabel = getResultSourceLabel(r)
 
                       return (
-                        <div key={pn} className="border-b border-gray-100 last:border-b-0">
+                        <div key={pn} className="border-b border-paper-200 last:border-b-0">
                           <div 
-                            className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                            className="p-4 hover:bg-paper-100 cursor-pointer transition-colors"
                             onClick={() => {
                               setExpandedPatentDetails(prev => {
                                 const next = new Set(prev)
@@ -2801,18 +2801,18 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                 analysis?.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-700' :
                                 analysis?.noveltyThreat === 'obvious' ? 'bg-amber-100 text-amber-700' :
                                 analysis?.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-700' :
-                                'bg-gray-100 text-gray-600'
+                                'bg-paper-200 text-ai-graphite-600'
                               }`}>
                                 {analysis?.noveltyThreat || 'unknown'}
                               </span>
                               <div className="flex-1 min-w-0">
-                                <div className="font-medium text-gray-900 truncate">{r.title}</div>
-                                <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap items-center gap-2">
+                                <div className="font-medium text-ai-graphite-900 truncate">{r.title}</div>
+                                <div className="text-xs text-ai-graphite-500 mt-0.5 flex flex-wrap items-center gap-2">
                                   <span>{pn}</span>
-                                  <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{sourceLabel}</span>
+                                  <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{sourceLabel}</span>
                                 </div>
                               </div>
-                              <svg className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className={`w-5 h-5 text-ai-graphite-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                               </svg>
                             </div>
@@ -2821,27 +2821,27 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           {/* Expanded Analysis - Side by Side View */}
                           {isExpanded && (
                             <div className="px-4 pb-4">
-                              <div className="bg-gradient-to-r from-slate-50 to-indigo-50/50 rounded-xl border border-gray-200 p-5">
+                              <div className="bg-gradient-to-r from-slate-50 to-ai-blue-50/50 rounded-xl border border-paper-300 p-5">
                                 <div className="grid md:grid-cols-2 gap-6">
                                   {/* Left: Patent Abstract */}
                                   <div>
-                                    <h4 className="font-semibold text-gray-800 flex items-center gap-2 mb-3">
+                                    <h4 className="font-semibold text-ai-graphite-800 flex items-center gap-2 mb-3">
                                       <span>📄</span> Patent Abstract
                                     </h4>
-                                    <div className="bg-white rounded-lg p-4 border border-gray-200 text-sm text-gray-700 leading-relaxed">
+                                    <div className="bg-white rounded-lg p-4 border border-paper-300 text-sm text-ai-graphite-700 leading-relaxed">
                                       {patentAbstract || 'No abstract available'}
                                     </div>
                                   </div>
 
                                   {/* Right: AI Analysis */}
                                   <div>
-                                    <h4 className="font-semibold text-gray-800 flex items-center gap-2 mb-3">
+                                    <h4 className="font-semibold text-ai-graphite-800 flex items-center gap-2 mb-3">
                                       <span>🤖</span> AI Analysis
                                     </h4>
                                     {analysis ? (
                                       <div className="space-y-3">
                                         <div className="flex flex-wrap gap-2 text-xs">
-                                          <span className="rounded-full bg-indigo-100 px-2.5 py-1 text-indigo-700">Evidence: title + abstract</span>
+                                          <span className="rounded-full bg-ai-blue-100 px-2.5 py-1 text-ai-blue-700">Evidence: title + abstract</span>
                                           <span className={`rounded-full px-2.5 py-1 ${analysis.analysisStatus === 'unknown' ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-700'}`}>
                                             {analysis.analysisStatus === 'unknown' ? 'Unknown — retry available' : 'Initial potential assessment'}
                                           </span>
@@ -2850,9 +2850,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">{analysis.failureReason}</div>
                                         )}
                                         {analysis.aiSummary && (
-                                          <div className="bg-white rounded-lg p-4 border border-gray-200">
-                                            <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-1">Summary</div>
-                                            <div className="text-sm text-gray-700">{analysis.aiSummary}</div>
+                                          <div className="bg-white rounded-lg p-4 border border-paper-300">
+                                            <div className="text-xs font-semibold text-ai-blue-600 uppercase tracking-wide mb-1">Summary</div>
+                                            <div className="text-sm text-ai-graphite-700">{analysis.aiSummary}</div>
                                           </div>
                                         )}
                                         {analysis.relevantParts && analysis.relevantParts.length > 0 && (
@@ -2882,14 +2882,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                           </div>
                                         )}
                                         {analysis.noveltyComparison && (
-                                          <div className="bg-purple-50 rounded-lg p-4 border border-purple-100">
-                                            <div className="text-xs font-semibold text-purple-600 uppercase tracking-wide mb-1">⚖️ Novelty Assessment</div>
-                                            <div className="text-sm text-purple-800">{analysis.noveltyComparison}</div>
+                                          <div className="bg-ai-blue-50 rounded-lg p-4 border border-ai-blue-100">
+                                            <div className="text-xs font-semibold text-ai-blue-600 uppercase tracking-wide mb-1">⚖️ Novelty Assessment</div>
+                                            <div className="text-sm text-ai-blue-800">{analysis.noveltyComparison}</div>
                                           </div>
                                         )}
                                       </div>
                                     ) : (
-                                      <div className="bg-white rounded-lg p-4 border border-gray-200 text-sm text-gray-500">
+                                      <div className="bg-white rounded-lg p-4 border border-paper-300 text-sm text-ai-graphite-500">
                                         No AI analysis available for this patent
                                       </div>
                                     )}
@@ -2898,11 +2898,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
                                 {/* Threat Level Badge */}
                                 {analysis?.noveltyThreat && (
-                                  <div className={`mt-4 pt-4 border-t border-gray-200 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium ${
+                                  <div className={`mt-4 pt-4 border-t border-paper-300 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium ${
                                     analysis.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-800' :
                                     analysis.noveltyThreat === 'obvious' ? 'bg-amber-100 text-amber-800' :
                                     analysis.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-800' :
-                                    'bg-gray-100 text-gray-700'
+                                    'bg-paper-200 text-ai-graphite-700'
                                   }`}>
                                     {analysis.noveltyThreat === 'anticipates' ? '🛑 High Risk: May anticipate your invention' :
                                      analysis.noveltyThreat === 'obvious' ? '⚠️ Medium Risk: May raise obviousness concerns' :
@@ -2923,7 +2923,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 <div className="flex justify-end">
                   <button
                     onClick={() => setMainTab('select')}
-                    className="px-8 py-4 rounded-xl text-base font-semibold bg-purple-600 text-white hover:bg-purple-700 transition-all shadow-lg hover:shadow-purple-200 flex items-center gap-2"
+                    className="px-8 py-4 rounded-xl text-base font-semibold bg-ai-blue-600 text-white hover:bg-ai-blue-700 transition-all shadow-lg hover:shadow-ai-blue-200 flex items-center gap-2"
                   >
                     Continue to Selection
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2940,16 +2940,16 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         {mainTab === 'select' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Purpose Explanation */}
-            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-2xl p-6 border border-purple-100">
-              <h3 className="font-semibold text-gray-900 text-lg mb-2">Configure Prior Art Usage</h3>
-              <p className="text-gray-600">
+            <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-2xl p-6 border border-ai-blue-100">
+              <h3 className="font-semibold text-ai-graphite-900 text-lg mb-2">Configure Prior Art Usage</h3>
+              <p className="text-ai-graphite-600">
                 Select which patents to use for drafting your patent application and for refining your claims.
               </p>
             </div>
 
             {results.length > 0 && (
-              <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-gray-600 mr-1">Source:</span>
+              <div className="bg-white rounded-xl border border-paper-300 p-4 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-ai-graphite-600 mr-1">Source:</span>
                 {sourceFilterOptions.map(option => (
                   <button
                     key={option.key}
@@ -2957,12 +2957,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     onClick={() => setResultSourceFilter(option.key)}
                     className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
                       resultSourceFilter === option.key
-                        ? 'bg-purple-600 border-purple-600 text-white'
-                        : 'bg-white border-gray-200 text-gray-600 hover:border-purple-300'
+                        ? 'bg-ai-blue-600 border-ai-blue-600 text-white'
+                        : 'bg-white border-paper-300 text-ai-graphite-600 hover:border-ai-blue-300'
                     }`}
                   >
                     {option.label}
-                    <span className={resultSourceFilter === option.key ? 'ml-1 text-purple-100' : 'ml-1 text-gray-400'}>
+                    <span className={resultSourceFilter === option.key ? 'ml-1 text-ai-blue-100' : 'ml-1 text-ai-graphite-400'}>
                       {option.count}
                     </span>
                   </button>
@@ -2971,22 +2971,22 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             )}
 
             {/* Selection Workflow Tabs */}
-            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="bg-white rounded-2xl border border-paper-300 shadow-sm overflow-hidden">
               {/* Sub-Tab Navigation */}
-              <div className="border-b border-gray-200 px-6 pt-4">
+              <div className="border-b border-paper-300 px-6 pt-4">
                 <div className="flex gap-4">
                   <button
                     onClick={() => setActiveWorkflowTab('prior-art')}
                     className={`pb-3 px-1 border-b-2 transition-colors ${
                       activeWorkflowTab === 'prior-art'
-                        ? 'border-indigo-600 text-indigo-600 font-medium'
-                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                        ? 'border-ai-blue-600 text-ai-blue-600 font-medium'
+                        : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700'
                     }`}
                   >
                     <span className="flex items-center gap-2">
                       <span>📚</span> Prior Art for Drafting
                       {Object.keys(priorArtSelected).length > 0 && (
-                        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-xs">
+                        <span className="px-2 py-0.5 bg-ai-blue-100 text-ai-blue-700 rounded-full text-xs">
                           {Object.keys(priorArtSelected).length}
                         </span>
                       )}
@@ -2997,7 +2997,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     className={`pb-3 px-1 border-b-2 transition-colors ${
                       activeWorkflowTab === 'claim-refinement'
                         ? 'border-amber-600 text-amber-600 font-medium'
-                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                        : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700'
                     }`}
                   >
                     <span className="flex items-center gap-2">
@@ -3016,9 +3016,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 {/* Prior Art for Drafting Tab Content */}
                 {activeWorkflowTab === 'prior-art' && (
                   <div className="space-y-6">
-                    <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
-                      <h4 className="font-medium text-indigo-900 mb-1">📚 Purpose: Background Section</h4>
-                      <p className="text-sm text-indigo-700">
+                    <div className="bg-ai-blue-50 rounded-xl p-4 border border-ai-blue-100">
+                      <h4 className="font-medium text-ai-blue-900 mb-1">📚 Purpose: Background Section</h4>
+                      <p className="text-sm text-ai-blue-700">
                         These patents will be cited in your patent's background section to establish the prior art landscape.
                         Recommended: Select "adjacent" and "remote" patents that provide good context.
                       </p>
@@ -3027,7 +3027,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     {/* Threat Level Filter Badges */}
                     {hasAIReview && (
                       <div className="flex flex-wrap items-center gap-3">
-                        <span className="text-sm font-medium text-gray-600">Filter by threat:</span>
+                        <span className="text-sm font-medium text-ai-graphite-600">Filter by threat:</span>
                         {[
                           { level: null, label: 'All', icon: '📋' },
                           { level: 'anticipates', label: 'Anticipates', icon: '🛑' },
@@ -3049,13 +3049,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                   ? level === 'anticipates' ? 'bg-red-100 text-red-800 ring-2 ring-red-300' :
                                     level === 'obvious' ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-300' :
                                     level === 'adjacent' ? 'bg-green-100 text-green-800 ring-2 ring-green-300' :
-                                    level === 'remote' ? 'bg-gray-200 text-gray-800 ring-2 ring-gray-400' :
-                                    'bg-indigo-100 text-indigo-800 ring-2 ring-indigo-300'
+                                    level === 'remote' ? 'bg-paper-300 text-ai-graphite-800 ring-2 ring-gray-400' :
+                                    'bg-ai-blue-100 text-ai-blue-800 ring-2 ring-ai-blue-300'
                                   : level === 'anticipates' ? 'bg-red-50 text-red-700 hover:bg-red-100' :
                                     level === 'obvious' ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' :
                                     level === 'adjacent' ? 'bg-green-50 text-green-700 hover:bg-green-100' :
-                                    level === 'remote' ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' :
-                                    'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                                    level === 'remote' ? 'bg-paper-200 text-ai-graphite-600 hover:bg-paper-300' :
+                                    'bg-paper-100 text-ai-graphite-600 hover:bg-paper-200'
                               }`}
                             >
                               <span>{icon}</span>
@@ -3081,7 +3081,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         <label
                           key={mode}
                           className={`relative flex flex-col items-center p-4 border-2 rounded-xl cursor-pointer transition-all ${
-                            priorArtMode === mode ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300'
+                            priorArtMode === mode ? 'border-ai-blue-500 bg-ai-blue-50' : 'border-paper-300 hover:border-ai-blue-300'
                           }`}
                         >
                           <input
@@ -3094,9 +3094,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                           />
                           <span className="text-2xl mb-2">{icon}</span>
                           <span className="font-medium text-sm">{label}</span>
-                          <span className="text-xs text-gray-500 text-center mt-1">{desc}</span>
+                          <span className="text-xs text-ai-graphite-500 text-center mt-1">{desc}</span>
                           {priorArtMode === mode && (
-                            <CheckIcon className="absolute top-2 right-2 w-5 h-5 text-indigo-600" />
+                            <CheckIcon className="absolute top-2 right-2 w-5 h-5 text-ai-blue-600" />
                           )}
                         </label>
                       ))}
@@ -3105,9 +3105,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     {/* Manual Text Input */}
                     {(priorArtMode === 'manual' || priorArtMode === 'hybrid') && (
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Manual Prior Art Text</label>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-2">Manual Prior Art Text</label>
                         <textarea
-                          className="w-full border border-gray-300 rounded-xl p-4 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 min-h-[120px]"
+                          className="w-full border border-paper-400 rounded-xl p-4 text-sm focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500 min-h-[120px]"
                           placeholder="Enter prior art references or descriptions..."
                           value={priorArtManualText}
                           onChange={(e) => setPriorArtManualText(e.target.value)}
@@ -3119,17 +3119,17 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     {(priorArtMode === 'ai' || priorArtMode === 'hybrid') && (
                       <div>
                         <div className="flex items-center justify-between mb-3">
-                          <label className="text-sm font-medium text-gray-700">Select Patents for Background Section</label>
+                          <label className="text-sm font-medium text-ai-graphite-700">Select Patents for Background Section</label>
                           <div className="flex gap-2">
                             <button
                               onClick={handleAutoSelectAdjacent}
-                              className="text-xs text-indigo-600 hover:text-indigo-700 font-medium px-2 py-1 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+                              className="text-xs text-ai-blue-600 hover:text-ai-blue-700 font-medium px-2 py-1 bg-ai-blue-50 rounded-lg hover:bg-ai-blue-100 transition-colors"
                             >
                               ✨ Auto-select Adjacent
                             </button>
                             <button
                               onClick={() => setPriorArtSelected({})}
-                              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                              className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700 px-2 py-1 bg-paper-200 rounded-lg hover:bg-paper-300 transition-colors"
                             >
                               Clear All
                             </button>
@@ -3137,8 +3137,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         </div>
                         
                         {/* Patent list with expandable details */}
-                        <div className="border border-gray-200 rounded-xl overflow-hidden">
-                          <div className="max-h-[600px] overflow-y-auto divide-y divide-gray-100">
+                        <div className="border border-paper-300 rounded-xl overflow-hidden">
+                          <div className="max-h-[600px] overflow-y-auto divide-y divide-paper-200">
                             {sourceFilteredResults.filter(r => {
                               const pn = getPatentKey(r)
                               const threat = getAnalysisForPatentNumber(pn)?.noveltyThreat
@@ -3157,7 +3157,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               const sourceLabel = getResultSourceLabel(r)
                               
                               return (
-                                <div key={pn} className={`${isSelected ? 'bg-indigo-50/50' : ''}`}>
+                                <div key={pn} className={`${isSelected ? 'bg-ai-blue-50/50' : ''}`}>
                                   {/* Patent header row */}
                                   <div className="flex items-start gap-3 p-4">
                                     <input
@@ -3182,21 +3182,21 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                           }
                                         })
                                       }}
-                                      className="mt-1 w-4 h-4 rounded border-gray-300 text-indigo-600 cursor-pointer"
+                                      className="mt-1 w-4 h-4 rounded border-paper-400 text-ai-blue-600 cursor-pointer"
                                     />
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="font-medium text-sm text-gray-900">{r.title}</span>
+                                        <span className="font-medium text-sm text-ai-graphite-900">{r.title}</span>
                                         <span className={`px-1.5 py-0.5 text-xs rounded flex-shrink-0 ${
                                           analysis?.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-700' :
-                                          'bg-gray-100 text-gray-600'
+                                          'bg-paper-200 text-ai-graphite-600'
                                         }`}>
                                           {analysis?.noveltyThreat || 'unknown'}
                                         </span>
                                       </div>
-                                      <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+                                      <div className="text-xs text-ai-graphite-500 mt-0.5 flex items-center gap-2">
                                         <span className="font-mono">{pn}</span>
-                                        <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{sourceLabel}</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{sourceLabel}</span>
                                         <span>•</span>
                                         <button
                                           onClick={(e) => {
@@ -3210,7 +3210,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                               return next
                                             })
                                           }}
-                                          className="text-indigo-600 hover:text-indigo-700 font-medium"
+                                          className="text-ai-blue-600 hover:text-ai-blue-700 font-medium"
                                         >
                                           {isExpanded ? 'Hide Details' : 'View Details'}
                                         </button>
@@ -3221,14 +3221,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                   {/* Expandable details */}
                                   {isExpanded && (
                                     <div className="px-4 pb-4">
-                                      <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100 p-4 space-y-4">
+                                      <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-xl border border-ai-blue-100 p-4 space-y-4">
                                         {/* Patent Abstract */}
                                         {patentAbstract && (
                                           <div>
-                                            <h5 className="text-xs font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1">
+                                            <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                               📄 Patent Abstract
                                             </h5>
-                                            <div className="text-sm text-gray-700 bg-white/60 rounded-lg p-3 border border-indigo-100">
+                                            <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-ai-blue-100">
                                               {patentAbstract}
                                             </div>
                                           </div>
@@ -3237,10 +3237,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                         {/* AI Summary */}
                                         {analysis?.aiSummary && (
                                           <div>
-                                            <h5 className="text-xs font-semibold text-indigo-700 uppercase tracking-wide mb-2 flex items-center gap-1">
+                                            <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                               🤖 AI Summary
                                             </h5>
-                                            <div className="text-sm text-gray-700 bg-white/60 rounded-lg p-3 border border-indigo-100">
+                                            <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-ai-blue-100">
                                               {analysis.aiSummary}
                                             </div>
                                           </div>
@@ -3252,7 +3252,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                             <h5 className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                               ✅ Matching Parts (Relevant)
                                             </h5>
-                                            <ul className="text-sm text-gray-700 bg-green-50/50 rounded-lg p-3 border border-green-100 space-y-1">
+                                            <ul className="text-sm text-ai-graphite-700 bg-green-50/50 rounded-lg p-3 border border-green-100 space-y-1">
                                               {analysis.relevantParts.map((part, idx) => (
                                                 <li key={idx} className="flex items-start gap-2">
                                                   <span className="text-green-500 mt-0.5">•</span>
@@ -3266,13 +3266,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                         {/* Non-matching Parts */}
                                         {analysis?.irrelevantParts && analysis.irrelevantParts.length > 0 && (
                                           <div>
-                                            <h5 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2 flex items-center gap-1">
+                                            <h5 className="text-xs font-semibold text-ai-graphite-600 uppercase tracking-wide mb-2 flex items-center gap-1">
                                               ❌ Non-matching Parts (Differences)
                                             </h5>
-                                            <ul className="text-sm text-gray-600 bg-gray-50/50 rounded-lg p-3 border border-gray-200 space-y-1">
+                                            <ul className="text-sm text-ai-graphite-600 bg-paper-100/50 rounded-lg p-3 border border-paper-300 space-y-1">
                                               {analysis.irrelevantParts.map((part, idx) => (
                                                 <li key={idx} className="flex items-start gap-2">
-                                                  <span className="text-gray-400 mt-0.5">•</span>
+                                                  <span className="text-ai-graphite-400 mt-0.5">•</span>
                                                   <span>{part}</span>
                                                 </li>
                                               ))}
@@ -3283,10 +3283,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                         {/* Novelty Comparison */}
                                         {analysis?.noveltyComparison && (
                                           <div>
-                                            <h5 className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-2 flex items-center gap-1">
+                                            <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                               ⚖️ Novelty Assessment
                                             </h5>
-                                            <div className="text-sm text-gray-700 bg-purple-50/50 rounded-lg p-3 border border-purple-100">
+                                            <div className="text-sm text-ai-graphite-700 bg-ai-blue-50/50 rounded-lg p-3 border border-ai-blue-100">
                                               {analysis.noveltyComparison}
                                             </div>
                                           </div>
@@ -3295,8 +3295,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                         {/* Threat Level Badge */}
                                         <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
                                           analysis?.noveltyThreat === 'adjacent' ? 'bg-green-100 text-green-800' :
-                                          analysis?.noveltyThreat === 'remote' ? 'bg-gray-100 text-gray-700' :
-                                          'bg-gray-100 text-gray-600'
+                                          analysis?.noveltyThreat === 'remote' ? 'bg-paper-200 text-ai-graphite-700' :
+                                          'bg-paper-200 text-ai-graphite-600'
                                         }`}>
                                           {analysis?.noveltyThreat === 'adjacent' ? '✅ Low Risk: Related but differentiable' :
                                            analysis?.noveltyThreat === 'remote' ? '⚪ Safe: Remotely related' :
@@ -3314,8 +3314,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     )}
 
                     {/* Summary */}
-                    <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                      <div className="text-sm font-medium text-gray-700">
+                    <div className="bg-paper-100 rounded-xl p-4 border border-paper-300">
+                      <div className="text-sm font-medium text-ai-graphite-700">
                         {priorArtMode === 'ai' && `${Object.keys(priorArtSelected).length} patents selected for drafting`}
                         {priorArtMode === 'manual' && (priorArtManualText.trim() ? 'Manual prior art text provided' : 'No manual text entered')}
                         {priorArtMode === 'hybrid' && `${Object.keys(priorArtSelected).length} patents + ${priorArtManualText.trim() ? 'manual text' : 'no manual text'}`}
@@ -3333,7 +3333,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         These patents will be compared against your claims to ensure novelty and non-obviousness.
                         Recommended: Select high-risk patents (anticipates, obvious) for thorough claim refinement.
                       </p>
-                      <p className="text-xs text-purple-600 mt-2 italic">
+                      <p className="text-xs text-ai-blue-600 mt-2 italic">
                         Tip: Use the "Skip Refinement" button below if you're confident in your claims and want to proceed directly.
                       </p>
                     </div>
@@ -3341,7 +3341,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     {/* Threat Level Filter Badges */}
                     {hasAIReview && (
                           <div className="flex flex-wrap items-center gap-3">
-                            <span className="text-sm font-medium text-gray-600">Filter by threat:</span>
+                            <span className="text-sm font-medium text-ai-graphite-600">Filter by threat:</span>
                             {[
                               { level: null, label: 'All', icon: '📋' },
                               { level: 'anticipates', label: 'Anticipates', icon: '🛑' },
@@ -3363,13 +3363,13 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                       ? level === 'anticipates' ? 'bg-red-100 text-red-800 ring-2 ring-red-300' :
                                         level === 'obvious' ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-300' :
                                         level === 'adjacent' ? 'bg-green-100 text-green-800 ring-2 ring-green-300' :
-                                        level === 'remote' ? 'bg-gray-200 text-gray-800 ring-2 ring-gray-400' :
+                                        level === 'remote' ? 'bg-paper-300 text-ai-graphite-800 ring-2 ring-gray-400' :
                                         'bg-amber-100 text-amber-800 ring-2 ring-amber-300'
                                       : level === 'anticipates' ? 'bg-red-50 text-red-700 hover:bg-red-100' :
                                         level === 'obvious' ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' :
                                         level === 'adjacent' ? 'bg-green-50 text-green-700 hover:bg-green-100' :
-                                        level === 'remote' ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' :
-                                        'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                                        level === 'remote' ? 'bg-paper-200 text-ai-graphite-600 hover:bg-paper-300' :
+                                        'bg-paper-100 text-ai-graphite-600 hover:bg-paper-200'
                                   }`}
                                 >
                                   <span>{icon}</span>
@@ -3395,7 +3395,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                             <label
                               key={mode}
                               className={`relative flex flex-col items-center p-4 border-2 rounded-xl cursor-pointer transition-all ${
-                                claimRefMode === mode ? 'border-amber-500 bg-amber-50' : 'border-gray-200 hover:border-amber-300'
+                                claimRefMode === mode ? 'border-amber-500 bg-amber-50' : 'border-paper-300 hover:border-amber-300'
                               }`}
                             >
                               <input
@@ -3408,7 +3408,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                               />
                               <span className="text-2xl mb-2">{icon}</span>
                               <span className="font-medium text-sm">{label}</span>
-                              <span className="text-xs text-gray-500 text-center mt-1">{desc}</span>
+                              <span className="text-xs text-ai-graphite-500 text-center mt-1">{desc}</span>
                               {claimRefMode === mode && (
                                 <CheckIcon className="absolute top-2 right-2 w-5 h-5 text-amber-600" />
                               )}
@@ -3419,9 +3419,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         {/* Manual Text Input */}
                         {(claimRefMode === 'manual' || claimRefMode === 'hybrid') && (
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Prior Art for Claim Comparison</label>
+                            <label className="block text-sm font-medium text-ai-graphite-700 mb-2">Prior Art for Claim Comparison</label>
                             <textarea
-                              className="w-full border border-gray-300 rounded-xl p-4 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 min-h-[120px]"
+                              className="w-full border border-paper-400 rounded-xl p-4 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 min-h-[120px]"
                               placeholder="Describe prior art that your claims should be differentiated from..."
                               value={claimRefManualText}
                               onChange={(e) => setClaimRefManualText(e.target.value)}
@@ -3433,7 +3433,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         {(claimRefMode === 'ai' || claimRefMode === 'hybrid') && (
                           <div>
                             <div className="flex items-center justify-between mb-3">
-                              <label className="text-sm font-medium text-gray-700">Select High-Risk Patents for Claim Comparison</label>
+                              <label className="text-sm font-medium text-ai-graphite-700">Select High-Risk Patents for Claim Comparison</label>
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => {
@@ -3465,7 +3465,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                 </button>
                                 <button
                                   onClick={() => setClaimRefSelected({})}
-                                  className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                                  className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700 px-2 py-1 bg-paper-200 rounded-lg hover:bg-paper-300 transition-colors"
                                 >
                                   Clear All
                                 </button>
@@ -3473,8 +3473,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                             </div>
                             
                             {/* Patent list with expandable details */}
-                            <div className="border border-gray-200 rounded-xl overflow-hidden">
-                              <div className="max-h-[600px] overflow-y-auto divide-y divide-gray-100">
+                            <div className="border border-paper-300 rounded-xl overflow-hidden">
+                              <div className="max-h-[600px] overflow-y-auto divide-y divide-paper-200">
                                 {sourceFilteredResults.filter(r => {
                                   const pn = getPatentKey(r)
                                   const threat = getAnalysisForPatentNumber(pn)?.noveltyThreat
@@ -3518,11 +3518,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                               }
                                             })
                                           }}
-                                          className="mt-1 w-4 h-4 rounded border-gray-300 text-amber-600 cursor-pointer"
+                                          className="mt-1 w-4 h-4 rounded border-paper-400 text-amber-600 cursor-pointer"
                                         />
                                         <div className="flex-1 min-w-0">
                                           <div className="flex items-center gap-2 flex-wrap">
-                                            <span className="font-medium text-sm text-gray-900">{r.title}</span>
+                                            <span className="font-medium text-sm text-ai-graphite-900">{r.title}</span>
                                             <span className={`px-1.5 py-0.5 text-xs rounded flex-shrink-0 ${
                                               analysis?.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-700' :
                                               'bg-amber-100 text-amber-700'
@@ -3530,9 +3530,9 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                               {analysis?.noveltyThreat || 'unknown'}
                                             </span>
                                           </div>
-                                          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+                                          <div className="text-xs text-ai-graphite-500 mt-0.5 flex items-center gap-2">
                                             <span className="font-mono">{pn}</span>
-                                            <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{sourceLabel}</span>
+                                            <span className="px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">{sourceLabel}</span>
                                             <span>•</span>
                                             <button
                                               onClick={(e) => {
@@ -3564,7 +3564,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                                 <h5 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                                   📄 Patent Abstract
                                                 </h5>
-                                                <div className="text-sm text-gray-700 bg-white/60 rounded-lg p-3 border border-amber-100">
+                                                <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-amber-100">
                                                   {patentAbstract}
                                                 </div>
                                               </div>
@@ -3576,7 +3576,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                                 <h5 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                                   🤖 AI Summary
                                                 </h5>
-                                                <div className="text-sm text-gray-700 bg-white/60 rounded-lg p-3 border border-amber-100">
+                                                <div className="text-sm text-ai-graphite-700 bg-white/60 rounded-lg p-3 border border-amber-100">
                                                   {analysis.aiSummary}
                                                 </div>
                                               </div>
@@ -3588,7 +3588,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                                 <h5 className="text-xs font-semibold text-red-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                                   ⚠️ Overlapping Claims (Potential Conflicts)
                                                 </h5>
-                                                <ul className="text-sm text-gray-700 bg-red-50/50 rounded-lg p-3 border border-red-100 space-y-1">
+                                                <ul className="text-sm text-ai-graphite-700 bg-red-50/50 rounded-lg p-3 border border-red-100 space-y-1">
                                                   {analysis.relevantParts.map((part, idx) => (
                                                     <li key={idx} className="flex items-start gap-2">
                                                       <span className="text-red-500 mt-0.5">•</span>
@@ -3605,7 +3605,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                                 <h5 className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                                   ✅ Key Differences (Your Advantages)
                                                 </h5>
-                                                <ul className="text-sm text-gray-600 bg-green-50/50 rounded-lg p-3 border border-green-100 space-y-1">
+                                                <ul className="text-sm text-ai-graphite-600 bg-green-50/50 rounded-lg p-3 border border-green-100 space-y-1">
                                                   {analysis.irrelevantParts.map((part, idx) => (
                                                     <li key={idx} className="flex items-start gap-2">
                                                       <span className="text-green-500 mt-0.5">•</span>
@@ -3619,10 +3619,10 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                             {/* Novelty Comparison */}
                                             {analysis?.noveltyComparison && (
                                               <div>
-                                                <h5 className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-2 flex items-center gap-1">
+                                                <h5 className="text-xs font-semibold text-ai-blue-700 uppercase tracking-wide mb-2 flex items-center gap-1">
                                                   ⚖️ Novelty Assessment
                                                 </h5>
-                                                <div className="text-sm text-gray-700 bg-purple-50/50 rounded-lg p-3 border border-purple-100">
+                                                <div className="text-sm text-ai-graphite-700 bg-ai-blue-50/50 rounded-lg p-3 border border-ai-blue-100">
                                                   {analysis.noveltyComparison}
                                                 </div>
                                               </div>
@@ -3632,7 +3632,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                                             <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${
                                               analysis?.noveltyThreat === 'anticipates' ? 'bg-red-100 text-red-800' :
                                               analysis?.noveltyThreat === 'obvious' ? 'bg-amber-100 text-amber-800' :
-                                              'bg-gray-100 text-gray-600'
+                                              'bg-paper-200 text-ai-graphite-600'
                                             }`}>
                                               {analysis?.noveltyThreat === 'anticipates' ? '🛑 High Risk: May anticipate your claims - needs differentiation' :
                                                analysis?.noveltyThreat === 'obvious' ? '⚠️ Medium Risk: May raise obviousness concerns - strengthen claims' :
@@ -3650,8 +3650,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         )}
 
                     {/* Summary */}
-                    <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                      <div className="text-sm font-medium text-gray-700">
+                    <div className="bg-paper-100 rounded-xl p-4 border border-paper-300">
+                      <div className="text-sm font-medium text-ai-graphite-700">
                         {claimRefMode === 'ai' && `${Object.keys(claimRefSelected).length} patents selected for claim comparison`}
                         {claimRefMode === 'manual' && (claimRefManualText.trim() ? 'Manual prior art text provided' : 'No manual text entered')}
                         {claimRefMode === 'hybrid' && `${Object.keys(claimRefSelected).length} patents + ${claimRefManualText.trim() ? 'manual text' : 'no manual text'}`}
@@ -3674,7 +3674,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
             )}
 
             {/* Action Buttons */}
-            <div className="flex items-center justify-between pt-6 border-t border-gray-200">
+            <div className="flex items-center justify-between pt-6 border-t border-paper-300">
               <button
                 onClick={async () => {
                   // Build prior art data for drafting
@@ -3720,7 +3720,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   }
                 }}
                 disabled={savingPriorArt || !hasAIReview}
-                className="px-6 py-3 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl disabled:opacity-50 transition-colors"
+                className="px-6 py-3 text-sm font-medium text-ai-blue-700 bg-ai-blue-50 hover:bg-ai-blue-100 rounded-xl disabled:opacity-50 transition-colors"
               >
                 {savingPriorArt ? 'Saving...' : 'Save Selections'}
               </button>
@@ -3875,7 +3875,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   await onRefresh()
                 }}
                 disabled={!hasAIReview}
-                className="px-6 py-3 text-sm font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+                className="px-6 py-3 text-sm font-medium text-ai-blue-700 bg-ai-blue-50 hover:bg-ai-blue-100 border border-ai-blue-200 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
                 title="Skip claim refinement and use preliminary claims as final claims for drafting"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3890,7 +3890,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
       {/* Idea Bank Floating Panel */}
       {ideaBank.length > 0 && ideaBankOpen && (
-        <div className="fixed bottom-4 right-4 w-96 max-h-[500px] bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden z-50 animate-fadeIn">
+        <div className="fixed bottom-4 right-4 w-96 max-h-[500px] bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden z-50 animate-fadeIn">
           <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-4 py-3 flex items-center justify-between">
             <h4 className="font-semibold flex items-center gap-2">
               <span>💡</span> Idea Bank ({ideaBank.length})
@@ -3904,8 +3904,8 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
           <div className="max-h-[400px] overflow-y-auto p-4 space-y-3">
             {ideaBank.map((idea, i) => (
               <div key={i} className="bg-amber-50 rounded-lg p-3 border border-amber-100">
-                <div className="font-medium text-gray-900 text-sm">{idea.title}</div>
-                <div className="text-xs text-gray-600 mt-1">{idea.core_principle}</div>
+                <div className="font-medium text-ai-graphite-900 text-sm">{idea.title}</div>
+                <div className="text-xs text-ai-graphite-600 mt-1">{idea.core_principle}</div>
                 {idea.tags && idea.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-2">
                     {idea.tags.map((tag, j) => (

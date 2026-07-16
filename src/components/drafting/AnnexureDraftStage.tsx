@@ -194,14 +194,14 @@ function InlineDiffView({ original, revised }: { original: string; revised: stri
   }, [original, revised])
   
   if (computeDiff.length === 0) {
-    return <span className="text-gray-400 italic">No changes detected</span>
+    return <span className="text-ai-graphite-400 italic">No changes detected</span>
   }
   
   return (
     <div className="text-sm leading-relaxed">
       {computeDiff.map((segment, idx) => {
         if (segment.type === 'same') {
-          return <span key={idx} className="text-gray-700">{segment.text}</span>
+          return <span key={idx} className="text-ai-graphite-700">{segment.text}</span>
         } else if (segment.type === 'add') {
           return (
             <span 
@@ -731,13 +731,13 @@ function ValidationPanel({
   // Category icons and colors
   const getCategoryStyle = (category: string) => {
     switch (category) {
-      case 'consistency': return { icon: '🔗', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700' }
-      case 'diagram': return { icon: '📊', bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700' }
+      case 'consistency': return { icon: '🔗', bg: 'bg-ai-blue-50', border: 'border-ai-blue-200', text: 'text-ai-blue-700' }
+      case 'diagram': return { icon: '📊', bg: 'bg-ai-blue-50', border: 'border-ai-blue-200', text: 'text-ai-blue-700' }
       case 'completeness': return { icon: '📋', bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700' }
       case 'legal': return { icon: '⚖️', bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-700' }
       case 'clarity': return { icon: '💡', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700' }
-      case 'translation': return { icon: '🌐', bg: 'bg-cyan-50', border: 'border-cyan-200', text: 'text-cyan-700' }
-      default: return { icon: '📝', bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700' }
+      case 'translation': return { icon: '🌐', bg: 'bg-ai-blue-50', border: 'border-ai-blue-200', text: 'text-ai-blue-700' }
+      default: return { icon: '📝', bg: 'bg-paper-100', border: 'border-paper-300', text: 'text-ai-graphite-700' }
     }
   }
 
@@ -748,7 +748,7 @@ function ValidationPanel({
         {/* Top Bar - Title & Score */}
         <div className="px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-ai-blue-600 flex items-center justify-center shadow-lg">
               <span className="text-xl">🔬</span>
             </div>
             <div>
@@ -828,13 +828,13 @@ function ValidationPanel({
               onClick={() => setFilterType(filterType === 'suggestion' ? 'all' : 'suggestion')}
               className={`group relative rounded-xl p-3 text-center transition-all ${
                 filterType === 'suggestion' 
-                  ? 'bg-blue-500/20 ring-2 ring-blue-500/50' 
+                  ? 'bg-ai-blue-500/20 ring-2 ring-ai-blue-500/50' 
                   : 'bg-slate-800/50 hover:bg-slate-700/50'
               }`}
             >
-              <div className="text-2xl font-bold text-blue-400">{aiSuggestionCount}</div>
+              <div className="text-2xl font-bold text-ai-blue-400">{aiSuggestionCount}</div>
               <div className="text-[10px] text-slate-400 uppercase tracking-wider">Suggestions</div>
-              {filterType === 'suggestion' && <div className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse" />}
+              {filterType === 'suggestion' && <div className="absolute -top-1 -right-1 w-2 h-2 bg-ai-blue-500 rounded-full animate-pulse" />}
             </button>
             
             <div className="rounded-xl p-3 text-center bg-slate-800/50">
@@ -855,7 +855,7 @@ function ValidationPanel({
               <span className={`font-medium px-2 py-0.5 rounded ${
                 filterType === 'error' ? 'bg-red-500/20 text-red-400' :
                 filterType === 'warning' ? 'bg-amber-500/20 text-amber-400' :
-                'bg-blue-500/20 text-blue-400'
+                'bg-ai-blue-500/20 text-ai-blue-400'
               }`}>{activeAiIssues.length} {filterType}s</span>
               <button onClick={() => setFilterType('all')} className="text-slate-500 hover:text-white">✕</button>
             </div>
@@ -904,7 +904,7 @@ function ValidationPanel({
           <button
             onClick={runAIReview}
             disabled={aiLoading}
-            className="flex-1 px-3 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-lg font-medium hover:from-violet-500 hover:to-purple-500 disabled:opacity-50 flex items-center justify-center gap-2 text-sm shadow-lg transition-all"
+            className="flex-1 px-3 py-2.5 bg-gradient-to-r from-violet-600 to-ai-blue-600 text-white rounded-lg font-medium hover:from-violet-500 hover:to-ai-blue-500 disabled:opacity-50 flex items-center justify-center gap-2 text-sm shadow-lg transition-all"
           >
             {aiLoading ? (
               <><span className="animate-spin">⏳</span> Analyzing...</>
@@ -918,7 +918,7 @@ function ValidationPanel({
             className={`flex-1 px-3 py-2.5 rounded-lg font-medium flex items-center justify-center gap-2 text-sm transition-all ${
               totalErrors > 0 
                 ? 'bg-amber-600/80 hover:bg-amber-500 text-white' 
-                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg'
+                : 'bg-gradient-to-r from-emerald-600 to-ai-blue-600 hover:from-emerald-500 hover:to-ai-blue-500 text-white shadow-lg'
             }`}
           >
             <span>📄</span>
@@ -930,7 +930,7 @@ function ValidationPanel({
         {/* Status Footer */}
         <div className="px-4 pb-3 flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-700/30 pt-2">
           <div className="flex items-center gap-3">
-            {loadingExisting && <span className="text-cyan-400 animate-pulse">● Loading review...</span>}
+            {loadingExisting && <span className="text-ai-blue-400 animate-pulse">● Loading review...</span>}
             {lastNumericCheck && <span>📏 {lastNumericCheck}</span>}
             {lastAICheck && <span>🤖 {lastAICheck}</span>}
           </div>
@@ -940,32 +940,32 @@ function ValidationPanel({
 
       {/* Numeric Validation Results */}
       {numericIssues.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-            <h4 className="font-semibold text-gray-900 flex items-center gap-2">
+        <div className="bg-white rounded-xl border border-paper-300 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 bg-paper-100 border-b border-paper-300">
+            <h4 className="font-semibold text-ai-graphite-900 flex items-center gap-2">
               <span>📏</span> Numeric Validation
-              <span className="text-xs font-normal text-gray-500 ml-2">
+              <span className="text-xs font-normal text-ai-graphite-500 ml-2">
                 Word limits, character counts, claim numbers
               </span>
             </h4>
           </div>
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-paper-200">
             {numericIssues.map((issue, idx) => (
               <div 
                 key={idx} 
                 className={`px-6 py-4 flex items-start gap-4 ${
                   issue.type === 'error' ? 'bg-red-50/50' : 
-                  issue.type === 'warning' ? 'bg-amber-50/50' : 'bg-blue-50/50'
+                  issue.type === 'warning' ? 'bg-amber-50/50' : 'bg-ai-blue-50/50'
                 }`}
               >
                 <div className="mt-0.5">
                   {issue.type === 'error' ? '❌' : issue.type === 'warning' ? '⚠️' : 'ℹ️'}
                 </div>
                 <div className="flex-1">
-                  <div className="font-medium text-gray-900 capitalize">{issue.sectionKey}</div>
-                  <div className="text-sm text-gray-600">{issue.message}</div>
+                  <div className="font-medium text-ai-graphite-900 capitalize">{issue.sectionKey}</div>
+                  <div className="text-sm text-ai-graphite-600">{issue.message}</div>
                   {issue.actual !== undefined && issue.limit !== undefined && (
-                    <div className="text-xs text-gray-500 mt-1">
+                    <div className="text-xs text-ai-graphite-500 mt-1">
                       Current: <strong>{issue.actual}</strong> | Limit: <strong>{issue.limit}</strong>
                     </div>
                   )}
@@ -986,19 +986,19 @@ function ValidationPanel({
           tabIndex={-1}
           onKeyDown={(e) => { if (e.key === 'Escape') rejectFix() }}
         >
-          <div className="px-6 py-4 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-emerald-200">
+          <div className="px-6 py-4 bg-gradient-to-r from-emerald-50 to-ai-blue-50 border-b border-emerald-200">
             <div className="flex items-center justify-between">
               <div>
-                <h4 id="fix-preview-title" className="font-semibold text-gray-900 flex items-center gap-2">
+                <h4 id="fix-preview-title" className="font-semibold text-ai-graphite-900 flex items-center gap-2">
                   <span>🔍</span> Review Proposed Changes
                 </h4>
-                <p className="text-sm text-gray-600 mt-1">
+                <p className="text-sm text-ai-graphite-600 mt-1">
                   Section: <strong>{pendingFix.issue.sectionLabel}</strong> • Issue: {pendingFix.issue.title}
                 </p>
               </div>
               <button
                 onClick={rejectFix}
-                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+                className="p-2 text-ai-graphite-400 hover:text-ai-graphite-600 hover:bg-paper-200 rounded-lg"
                 title="Close preview (Esc)"
                 aria-label="Close preview"
               >
@@ -1020,9 +1020,9 @@ function ValidationPanel({
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-violet-600 px-2 py-0.5 bg-violet-100 rounded">CHANGES HIGHLIGHTED</span>
-                <span className="text-xs text-gray-500">Added text in green, removed in red • ~300 words visible</span>
+                <span className="text-xs text-ai-graphite-500">Added text in green, removed in red • ~300 words visible</span>
               </div>
-              <div className="bg-white border border-gray-200 rounded-lg p-5 min-h-[400px] max-h-[500px] overflow-y-auto shadow-inner">
+              <div className="bg-white border border-paper-300 rounded-lg p-5 min-h-[400px] max-h-[500px] overflow-y-auto shadow-inner">
                 <div className="text-sm leading-relaxed">
                   <InlineDiffView original={pendingFix.originalContent} revised={pendingFix.fixedContent} />
                 </div>
@@ -1031,7 +1031,7 @@ function ValidationPanel({
             
             {/* Side-by-side diff view - Collapsible */}
             <details className="group">
-              <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-700 flex items-center gap-2 py-2">
+              <summary className="cursor-pointer text-xs text-ai-graphite-500 hover:text-ai-graphite-700 flex items-center gap-2 py-2">
                 <svg className="w-4 h-4 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
@@ -1042,11 +1042,11 @@ function ValidationPanel({
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-red-600 px-2 py-0.5 bg-red-100 rounded">ORIGINAL</span>
-                    <span className="text-xs text-gray-500">Before fix</span>
+                    <span className="text-xs text-ai-graphite-500">Before fix</span>
                   </div>
                   <div className="bg-red-50 border border-red-200 rounded-lg p-4 min-h-[300px] max-h-[450px] overflow-y-auto">
-                    <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">
-                      {pendingFix.originalContent || <span className="text-gray-400 italic">No content</span>}
+                    <pre className="text-sm text-ai-graphite-700 whitespace-pre-wrap font-mono leading-relaxed">
+                      {pendingFix.originalContent || <span className="text-ai-graphite-400 italic">No content</span>}
                     </pre>
                   </div>
                 </div>
@@ -1055,11 +1055,11 @@ function ValidationPanel({
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-emerald-600 px-2 py-0.5 bg-emerald-100 rounded">REVISED</span>
-                    <span className="text-xs text-gray-500">After fix</span>
+                    <span className="text-xs text-ai-graphite-500">After fix</span>
                   </div>
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 min-h-[300px] max-h-[450px] overflow-y-auto">
-                    <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono leading-relaxed">
-                      {pendingFix.fixedContent || <span className="text-gray-400 italic">No content</span>}
+                    <pre className="text-sm text-ai-graphite-700 whitespace-pre-wrap font-mono leading-relaxed">
+                      {pendingFix.fixedContent || <span className="text-ai-graphite-400 italic">No content</span>}
                     </pre>
                   </div>
                 </div>
@@ -1068,14 +1068,14 @@ function ValidationPanel({
           </div>
           
           {/* Action buttons */}
-          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
-            <p className="text-xs text-gray-500">
+          <div className="px-6 py-4 bg-paper-100 border-t border-paper-300 flex items-center justify-between">
+            <p className="text-xs text-ai-graphite-500">
               Review the changes carefully before applying. This will update the draft section.
             </p>
             <div className="flex items-center gap-3">
               <button
                 onClick={rejectFix}
-                className="px-4 py-2 bg-white text-gray-700 text-sm font-medium rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center gap-2"
+                className="px-4 py-2 bg-white text-ai-graphite-700 text-sm font-medium rounded-lg border border-paper-400 hover:bg-paper-100 flex items-center gap-2"
               >
                 <span>✕</span> Reject
               </button>
@@ -1091,13 +1091,13 @@ function ValidationPanel({
       )}
 
       {figureIssueGuidance && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-blue-900 mb-4">
+        <div className="bg-ai-blue-50 border border-ai-blue-200 rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-ai-blue-900 mb-4">
           <span className="text-lg">🎨</span>
           <div className="space-y-1">
-            <div className="font-semibold text-blue-900">
+            <div className="font-semibold text-ai-blue-900">
               Figure flagged{figureIssueGuidance.figureLabel ? ` (${figureIssueGuidance.figureLabel})` : ''}
             </div>
-            <p className="text-blue-800">
+            <p className="text-ai-blue-800">
               Go to the Figures section and ask Kisho to update the diagram, using these review remarks as the input so the figure aligns with the draft.
             </p>
           </div>
@@ -1106,11 +1106,11 @@ function ValidationPanel({
 
       {/* AI Review Issues List */}
       {allActiveAiIssues.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-            <h4 className="font-medium text-gray-700 text-sm flex items-center gap-2">
+        <div className="bg-white rounded-xl border border-paper-300 shadow-sm overflow-hidden">
+          <div className="px-4 py-3 bg-paper-100 border-b border-paper-300 flex items-center justify-between">
+            <h4 className="font-medium text-ai-graphite-700 text-sm flex items-center gap-2">
               📋 Issues List
-              <span className="text-xs font-normal text-gray-400">
+              <span className="text-xs font-normal text-ai-graphite-400">
                 {activeAiIssues.length} of {allActiveAiIssues.length} shown
               </span>
             </h4>
@@ -1124,11 +1124,11 @@ function ValidationPanel({
             )}
           </div>
           
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-paper-200">
             {activeAiIssues.length === 0 ? (
               <div className="px-6 py-8 text-center">
                 <div className="text-4xl mb-2">🔍</div>
-                <div className="text-gray-600 font-medium">No {filterType !== 'all' ? filterType + 's' : 'issues'} to show</div>
+                <div className="text-ai-graphite-600 font-medium">No {filterType !== 'all' ? filterType + 's' : 'issues'} to show</div>
                 <button
                   onClick={() => { setFilterType('all'); setFilterCategory('all') }}
                   className="text-sm text-violet-600 hover:text-violet-700 mt-2"
@@ -1154,7 +1154,7 @@ function ValidationPanel({
                               n <= issue.severity 
                                 ? issue.type === 'error' ? 'bg-red-500' 
                                   : issue.type === 'warning' ? 'bg-amber-500' 
-                                  : 'bg-blue-500'
+                                  : 'bg-ai-blue-500'
                                 : 'bg-gray-300'
                             }`}
                           />
@@ -1171,25 +1171,25 @@ function ValidationPanel({
                         <span className={`text-xs font-medium px-2 py-0.5 rounded ${
                           issue.type === 'error' ? 'bg-red-100 text-red-700 border border-red-200' :
                           issue.type === 'warning' ? 'bg-amber-100 text-amber-700 border border-amber-200' :
-                          'bg-blue-100 text-blue-700 border border-blue-200'
+                          'bg-ai-blue-100 text-ai-blue-700 border border-ai-blue-200'
                         }`}>
                           {issue.type}
                         </span>
-                        <span className="text-xs text-gray-500">
+                        <span className="text-xs text-ai-graphite-500">
                           Section: <strong>{issue.sectionLabel}</strong>
                         </span>
                       </div>
                       
-                      <h5 className="font-semibold text-gray-900 mb-1">{issue.title}</h5>
-                      <p className="text-sm text-gray-700 mb-2">{issue.description}</p>
+                      <h5 className="font-semibold text-ai-graphite-900 mb-1">{issue.title}</h5>
+                      <p className="text-sm text-ai-graphite-700 mb-2">{issue.description}</p>
                       
-                      <div className="bg-white/80 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs font-medium text-gray-500 mb-1">💡 Suggestion</div>
-                        <p className="text-sm text-gray-700">{issue.suggestion}</p>
+                      <div className="bg-white/80 rounded-lg p-3 border border-paper-300">
+                        <div className="text-xs font-medium text-ai-graphite-500 mb-1">💡 Suggestion</div>
+                        <p className="text-sm text-ai-graphite-700">{issue.suggestion}</p>
                       </div>
 
                       {issue.relatedSections && issue.relatedSections.length > 0 && (
-                        <div className="text-xs text-gray-500 mt-2">
+                        <div className="text-xs text-ai-graphite-500 mt-2">
                           Related sections: {issue.relatedSections.join(', ')}
                         </div>
                       )}
@@ -1210,7 +1210,7 @@ function ValidationPanel({
                       </button>
                       <button
                         onClick={() => ignoreIssue(issue.id)}
-                        className="px-4 py-2 bg-gray-100 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-200 flex items-center gap-2 whitespace-nowrap"
+                        className="px-4 py-2 bg-paper-200 text-ai-graphite-600 text-sm font-medium rounded-lg hover:bg-paper-300 flex items-center gap-2 whitespace-nowrap"
                       >
                         <span>🚫</span> Ignore
                       </button>
@@ -1225,7 +1225,7 @@ function ValidationPanel({
 
       {/* All Clear State */}
       {numericIssues.length === 0 && activeAiIssues.length === 0 && (lastNumericCheck || lastAICheck) && (
-        <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl border border-emerald-200 p-8 text-center">
+        <div className="bg-gradient-to-r from-emerald-50 to-ai-blue-50 rounded-xl border border-emerald-200 p-8 text-center">
           <div className="text-5xl mb-4">✨</div>
           <h4 className="text-xl font-semibold text-emerald-800 mb-2">All Clear!</h4>
           <p className="text-emerald-700">
@@ -1242,17 +1242,17 @@ function ValidationPanel({
 
       {/* Initial State */}
       {numericIssues.length === 0 && activeAiIssues.length === 0 && !lastNumericCheck && !lastAICheck && (
-        <div className="bg-gray-50 rounded-xl border border-gray-200 p-8 text-center">
+        <div className="bg-paper-100 rounded-xl border border-paper-300 p-8 text-center">
           <div className="text-4xl mb-4">🔍</div>
-          <h4 className="text-lg font-semibold text-gray-700 mb-2">Ready to Review</h4>
-          <p className="text-gray-600 text-sm mb-4">
+          <h4 className="text-lg font-semibold text-ai-graphite-700 mb-2">Ready to Review</h4>
+          <p className="text-ai-graphite-600 text-sm mb-4">
             Run validation checks to ensure your draft meets all requirements.
           </p>
           <div className="flex justify-center gap-3">
             <button
               onClick={runNumericValidation}
               disabled={numericLoading}
-              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 text-sm"
+              className="px-4 py-2 bg-white border border-paper-400 text-ai-graphite-700 rounded-lg hover:bg-paper-100 flex items-center gap-2 text-sm"
             >
               📏 Numeric Checks
             </button>
@@ -1300,7 +1300,7 @@ function ValidationPanel({
 
           {/* Celebration Card */}
           <div 
-            className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 rounded-3xl shadow-2xl p-8 max-w-md mx-4 transform animate-celebrate-bounce pointer-events-auto"
+            className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-ai-blue-500 rounded-3xl shadow-2xl p-8 max-w-md mx-4 transform animate-celebrate-bounce pointer-events-auto"
             onClick={(event) => event.stopPropagation()}
           >
             <button
@@ -1444,13 +1444,13 @@ function ValidationReport({ sessionId, jurisdiction, patentId, draft }: Validati
   const warningCount = issues.filter(i => i.type === 'warning').length
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-6">
+    <div className="bg-white border border-paper-300 rounded-lg p-6">
       <div className="flex items-center justify-between mb-4">
-        <h4 className="font-semibold text-gray-900">Validation Report</h4>
+        <h4 className="font-semibold text-ai-graphite-900">Validation Report</h4>
         <button
           onClick={runValidation}
           disabled={loading}
-          className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+          className="text-sm text-ai-blue-600 hover:text-ai-blue-800 flex items-center gap-1"
         >
           {loading ? (
             <>
@@ -1465,15 +1465,15 @@ function ValidationReport({ sessionId, jurisdiction, patentId, draft }: Validati
       </div>
 
       {lastChecked && (
-        <div className="text-xs text-gray-500 mb-4">Last checked: {lastChecked}</div>
+        <div className="text-xs text-ai-graphite-500 mb-4">Last checked: {lastChecked}</div>
       )}
 
       {/* Summary */}
       <div className="flex gap-4 mb-4">
-        <div className={`px-3 py-2 rounded-lg text-sm ${errorCount > 0 ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-600'}`}>
+        <div className={`px-3 py-2 rounded-lg text-sm ${errorCount > 0 ? 'bg-red-50 text-red-700' : 'bg-paper-100 text-ai-graphite-600'}`}>
           {errorCount} Error{errorCount !== 1 ? 's' : ''}
         </div>
-        <div className={`px-3 py-2 rounded-lg text-sm ${warningCount > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-600'}`}>
+        <div className={`px-3 py-2 rounded-lg text-sm ${warningCount > 0 ? 'bg-amber-50 text-amber-700' : 'bg-paper-100 text-ai-graphite-600'}`}>
           {warningCount} Warning{warningCount !== 1 ? 's' : ''}
         </div>
         {errorCount === 0 && warningCount === 0 && issues.length === 0 && (
@@ -1494,7 +1494,7 @@ function ValidationReport({ sessionId, jurisdiction, patentId, draft }: Validati
                   ? 'bg-red-50 border border-red-100'
                   : issue.type === 'warning'
                     ? 'bg-amber-50 border border-amber-100'
-                    : 'bg-blue-50 border border-blue-100'
+                    : 'bg-ai-blue-50 border border-ai-blue-100'
               }`}
             >
               <div className="flex items-start gap-2">
@@ -1503,9 +1503,9 @@ function ValidationReport({ sessionId, jurisdiction, patentId, draft }: Validati
                 </span>
                 <div>
                   <div className="font-medium capitalize">{issue.sectionKey}</div>
-                  <div className="text-gray-700">{issue.message}</div>
+                  <div className="text-ai-graphite-700">{issue.message}</div>
                   {issue.actual !== undefined && issue.limit !== undefined && (
-                    <div className="text-xs text-gray-500 mt-1">
+                    <div className="text-xs text-ai-graphite-500 mt-1">
                       Current: {issue.actual} | Limit: {issue.limit}
                     </div>
                   )}
@@ -1613,7 +1613,7 @@ function ExportButton({ sessionId, jurisdiction, patentId, disabled }: ExportBut
       <select
         value={exportFormat}
         onChange={(e) => setExportFormat(e.target.value as 'docx' | 'pdf')}
-        className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+        className="px-3 py-2 border border-paper-400 rounded-lg text-sm bg-white"
       >
         <option value="docx">MS Word (.docx)</option>
         <option value="pdf">PDF (coming soon)</option>
@@ -3701,16 +3701,16 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
   if (availableJurisdictions.length === 0) {
     return (
       <div className="p-12 text-center">
-        <div className="text-gray-500 mb-4">
-          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="text-ai-graphite-500 mb-4">
+          <svg className="mx-auto h-12 w-12 text-ai-graphite-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
         </div>
-        <h3 className="text-lg font-medium text-gray-900 mb-2">No Jurisdictions Available</h3>
-        <p className="text-gray-500 mb-4">All patent jurisdictions have been removed from this drafting session.</p>
+        <h3 className="text-lg font-medium text-ai-graphite-900 mb-2">No Jurisdictions Available</h3>
+        <p className="text-ai-graphite-500 mb-4">All patent jurisdictions have been removed from this drafting session.</p>
         <button
           onClick={() => window.history.back()}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-ai-blue-600 hover:bg-ai-blue-700"
         >
           Go Back
         </button>
@@ -3770,10 +3770,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 )}
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">
+                <h3 className="text-lg font-semibold text-ai-graphite-900">
                   {confirmationModal.type === 'delete' ? 'Delete Jurisdiction Draft' : 'Clear Draft Content'}
                 </h3>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-ai-graphite-500">
                   {confirmationModal.type === 'delete' 
                     ? `This will permanently remove ${confirmationModal.jurisdiction} from your drafting session.`
                     : `This will clear all generated content for ${confirmationModal.jurisdiction}.`
@@ -3783,14 +3783,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             </div>
             
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Type <span className="font-bold text-gray-900">"{confirmationModal.type === 'delete' ? 'DELETE' : 'CLEAR'}"</span> to confirm:
+              <label className="block text-sm font-medium text-ai-graphite-700 mb-2">
+                Type <span className="font-bold text-ai-graphite-900">"{confirmationModal.type === 'delete' ? 'DELETE' : 'CLEAR'}"</span> to confirm:
               </label>
               <input
                 type="text"
                 value={confirmationModal.inputValue}
                 onChange={(e) => setConfirmationModal(prev => ({ ...prev, inputValue: e.target.value.toUpperCase() }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 text-sm"
+                className="w-full px-3 py-2 border border-paper-400 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 text-sm"
                 placeholder={confirmationModal.type === 'delete' ? 'Type DELETE' : 'Type CLEAR'}
                 autoFocus
               />
@@ -3799,7 +3799,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setConfirmationModal({ isOpen: false, type: 'clear', jurisdiction: '', inputValue: '' })}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                className="px-4 py-2 text-sm font-medium text-ai-graphite-700 bg-paper-200 rounded-lg hover:bg-paper-300 transition-colors"
               >
                 Cancel
               </button>
@@ -3832,8 +3832,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
       {/* Help Panel - Fixed position in corner */}
       {showHelpPanel && (
-        <div className="fixed bottom-4 right-4 z-40 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
-          <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-3 flex items-center justify-between">
+        <div className="fixed bottom-4 right-4 z-40 w-80 bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
+          <div className="bg-gradient-to-r from-ai-blue-600 to-ai-blue-600 px-4 py-3 flex items-center justify-between">
             <h3 className="text-white font-semibold flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -3848,31 +3848,31 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
           </div>
           <div className="p-4 max-h-96 overflow-y-auto text-sm space-y-4">
             <div>
-              <h4 className="font-semibold text-gray-900 mb-1">📝 Writing Style</h4>
-              <p className="text-gray-600 text-xs">Control how AI generates content. Enable "Style" to match your selected persona's writing patterns.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">📝 Writing Style</h4>
+              <p className="text-ai-graphite-600 text-xs">Control how AI generates content. Enable "Style" to match your selected persona's writing patterns.</p>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-1">👤 Persona</h4>
-              <p className="text-gray-600 text-xs">Select a writing persona (CSE, Bio, Chemistry) to guide the technical language and style.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">👤 Persona</h4>
+              <p className="text-ai-graphite-600 text-xs">Select a writing persona (CSE, Bio, Chemistry) to guide the technical language and style.</p>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-1">✍️ Samples</h4>
-              <p className="text-gray-600 text-xs">Upload your own writing samples to train the AI on your preferred style.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">✍️ Samples</h4>
+              <p className="text-ai-graphite-600 text-xs">Upload your own writing samples to train the AI on your preferred style.</p>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-1">🚀 Auto Mode</h4>
-              <p className="text-gray-600 text-xs">Automatically generate all sections sequentially. Great for initial drafts.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">🚀 Auto Mode</h4>
+              <p className="text-ai-graphite-600 text-xs">Automatically generate all sections sequentially. Great for initial drafts.</p>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-1">🌍 Multi-Jurisdiction</h4>
-              <p className="text-gray-600 text-xs">Draft for multiple countries. The Reference Draft is your master template that gets translated to country-specific versions.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">🌍 Multi-Jurisdiction</h4>
+              <p className="text-ai-graphite-600 text-xs">Draft for multiple countries. The Reference Draft is your master template that gets translated to country-specific versions.</p>
             </div>
             <div>
-              <h4 className="font-semibold text-gray-900 mb-1">🔬 AI Review</h4>
-              <p className="text-gray-600 text-xs">After generating, run AI Review to check for consistency, completeness, and patent-specific issues.</p>
+              <h4 className="font-semibold text-ai-graphite-900 mb-1">🔬 AI Review</h4>
+              <p className="text-ai-graphite-600 text-xs">After generating, run AI Review to check for consistency, completeness, and patent-specific issues.</p>
             </div>
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-gray-400 text-xs">Hover over any control for more details.</p>
+            <div className="pt-2 border-t border-paper-200">
+              <p className="text-ai-graphite-400 text-xs">Hover over any control for more details.</p>
             </div>
           </div>
         </div>
@@ -3883,8 +3883,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         {/* Header Row */}
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Annexure Draft</h2>
-            <p className="text-sm text-gray-500">Review and edit your patent application.</p>
+            <h2 className="text-xl font-semibold text-ai-graphite-900">Annexure Draft</h2>
+            <p className="text-sm text-ai-graphite-500">Review and edit your patent application.</p>
           </div>
           
           {/* Help Button */}
@@ -3893,8 +3893,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
               onClick={() => setShowHelpPanel(!showHelpPanel)}
               className={`p-2.5 rounded-full transition-all duration-200 ${
                 showHelpPanel 
-                  ? 'bg-indigo-100 text-indigo-700 ring-2 ring-indigo-300' 
-                  : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-indigo-600 shadow-sm'
+                  ? 'bg-ai-blue-100 text-ai-blue-700 ring-2 ring-ai-blue-300' 
+                  : 'bg-white border border-paper-300 text-ai-graphite-500 hover:bg-paper-100 hover:text-ai-blue-600 shadow-sm'
               }`}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3905,14 +3905,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         </div>
 
         {/* Controls Row - Organized into logical groups */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
+        <div className="bg-white rounded-xl border border-paper-300 shadow-sm p-3">
           <div className="flex flex-wrap items-center gap-3">
             
             {/* Group 1: Writing Style Controls */}
-            <div className="flex items-center gap-2 pr-3 border-r border-gray-200">
+            <div className="flex items-center gap-2 pr-3 border-r border-paper-300">
               <Tooltip content="When enabled, AI will mimic the writing style of your selected persona, adapting tone, terminology, and structure to match." position="bottom">
                 <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors ${
-                  usePersonaStyle ? 'bg-emerald-50' : 'bg-gray-50'
+                  usePersonaStyle ? 'bg-emerald-50' : 'bg-paper-100'
                 }`}>
                   <button
                     onClick={() => { void handleStyleToggle() }}
@@ -3924,7 +3924,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                       usePersonaStyle ? 'left-4' : 'left-0.5'
                     }`} />
                   </button>
-                  <span className={`text-xs font-medium ${usePersonaStyle ? 'text-emerald-700' : 'text-gray-500'}`}>
+                  <span className={`text-xs font-medium ${usePersonaStyle ? 'text-emerald-700' : 'text-ai-graphite-500'}`}>
                     Style
                   </span>
                 </div>
@@ -3935,8 +3935,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   onClick={() => setShowPersonaManager(true)}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
                     personaSelection?.primaryPersonaName
-                      ? 'bg-blue-50 border-blue-200 text-blue-700'
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      ? 'bg-ai-blue-50 border-ai-blue-200 text-ai-blue-700'
+                      : 'bg-white border-paper-300 text-ai-graphite-600 hover:bg-paper-100'
                   }`}
                 >
                   <span>👤</span>
@@ -3944,7 +3944,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                     {personaSelection?.primaryPersonaName || 'Persona'}
                   </span>
                   {personaSelection?.secondaryPersonaNames?.length ? (
-                    <span className="text-[10px] bg-blue-200 text-blue-700 px-1 rounded">+{personaSelection.secondaryPersonaNames.length}</span>
+                    <span className="text-[10px] bg-ai-blue-200 text-ai-blue-700 px-1 rounded">+{personaSelection.secondaryPersonaNames.length}</span>
                   ) : null}
                 </button>
               </Tooltip>
@@ -3952,7 +3952,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
               <Tooltip content="Upload and manage your own writing samples to train the AI on your unique drafting style." position="bottom">
                 <button
                   onClick={() => setShowWritingSamplesModal(true)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-white border border-paper-300 text-ai-graphite-600 hover:bg-paper-100 transition-colors"
                 >
                   <span>✍️</span>
                   <span className="font-medium">Samples</span>
@@ -3961,10 +3961,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             </div>
 
             {/* Group 2: Generation Controls */}
-            <div className="flex items-center gap-2 pr-3 border-r border-gray-200">
+            <div className="flex items-center gap-2 pr-3 border-r border-paper-300">
               <Tooltip content="Enable Auto Mode to generate all draft sections automatically in sequence. Perfect for creating a complete first draft quickly." position="bottom">
                 <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors ${
-                  autoModeRunning ? 'bg-amber-50' : autoMode ? 'bg-emerald-50' : 'bg-gray-50'
+                  autoModeRunning ? 'bg-amber-50' : autoMode ? 'bg-emerald-50' : 'bg-paper-100'
                 }`}>
                   <button
                     onClick={() => setAutoMode(!autoMode)}
@@ -3977,7 +3977,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                       autoMode ? 'left-4' : 'left-0.5'
                     }`} />
                   </button>
-                  <span className={`text-xs font-medium ${autoMode ? 'text-emerald-700' : 'text-gray-500'}`}>
+                  <span className={`text-xs font-medium ${autoMode ? 'text-emerald-700' : 'text-ai-graphite-500'}`}>
                     {autoModeRunning ? '⏳ Running...' : 'Auto'}
                   </span>
                 </div>
@@ -3998,12 +3998,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
               {autoModeRunning && (
                 <>
                   {autoModeProgress && (
-                    <div className="flex items-center gap-2 px-2 py-1 rounded bg-blue-50 border border-blue-100">
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                      <span className="text-xs font-medium text-blue-700">
+                    <div className="flex items-center gap-2 px-2 py-1 rounded bg-ai-blue-50 border border-ai-blue-100">
+                      <div className="w-2 h-2 rounded-full bg-ai-blue-500 animate-pulse" />
+                      <span className="text-xs font-medium text-ai-blue-700">
                         {autoModeProgress.current}/{autoModeProgress.total}
                       </span>
-                      <span className="text-xs text-blue-600 max-w-[100px] truncate">
+                      <span className="text-xs text-ai-blue-600 max-w-[100px] truncate">
                         {autoModeProgress.currentSection}
                       </span>
                     </div>
@@ -4019,13 +4019,13 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             </div>
 
             {/* Group 3: Draft Management */}
-            <div className="flex items-center gap-2 pr-3 border-r border-gray-200">
+            <div className="flex items-center gap-2 pr-3 border-r border-paper-300">
               <Tooltip content="Clear all generated content for the current jurisdiction while keeping it in your drafting list." position="bottom">
                 <button
                   type="button"
                   onClick={() => setConfirmationModal({ isOpen: true, type: 'clear', jurisdiction: activeJurisdiction, inputValue: '' })}
                   disabled={loading || deletingJurisdiction === activeJurisdiction || autoModeRunning}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-paper-300 bg-white text-ai-graphite-600 hover:bg-paper-100 disabled:opacity-50 transition-colors"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -4045,7 +4045,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors disabled:opacity-50 ${
                     canDeleteJurisdiction
                       ? 'border-red-200 bg-white text-red-600 hover:bg-red-50'
-                      : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
+                      : 'border-paper-300 bg-paper-100 text-ai-graphite-400 cursor-not-allowed'
                   }`}
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4064,7 +4064,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                   className={`p-2 rounded-lg border transition-colors relative ${
                     Object.keys(userInstructions).length > 0
                       ? 'bg-violet-50 border-violet-200 text-violet-700'
-                      : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                      : 'bg-white border-paper-300 text-ai-graphite-500 hover:bg-paper-100'
                   }`}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4084,8 +4084,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                     onClick={() => setShowFormatting(!showFormatting)}
                     className={`p-2 rounded-lg border transition-colors ${
                       showFormatting
-                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                        : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                        ? 'bg-ai-blue-50 border-ai-blue-200 text-ai-blue-700'
+                        : 'bg-white border-paper-300 text-ai-graphite-500 hover:bg-paper-100'
                     }`}
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -4095,14 +4095,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
                   {/* Formatting Panel */}
                   {showFormatting && (
-                    <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-4">
+                    <div className="absolute right-0 mt-2 w-64 bg-white border border-paper-300 rounded-xl shadow-xl z-50 p-4">
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-2">Font Family</label>
+                          <label className="block text-xs font-medium text-ai-graphite-700 mb-2">Font Family</label>
                           <select
                             value={fontFamily}
                             onChange={(e) => setFontFamily(e.target.value)}
-                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                            className="w-full px-3 py-2 text-sm border border-paper-300 rounded-lg focus:ring-ai-blue-500 focus:border-ai-blue-500"
                           >
                             <option value="serif">Serif (Times New Roman)</option>
                             <option value="sans-serif">Sans Serif (Arial)</option>
@@ -4113,11 +4113,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         </div>
 
                         <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-2">Font Size</label>
+                          <label className="block text-xs font-medium text-ai-graphite-700 mb-2">Font Size</label>
                           <select
                             value={fontSize}
                             onChange={(e) => setFontSize(e.target.value)}
-                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                            className="w-full px-3 py-2 text-sm border border-paper-300 rounded-lg focus:ring-ai-blue-500 focus:border-ai-blue-500"
                           >
                             <option value="12px">Small (12px)</option>
                             <option value="14px">Medium (14px)</option>
@@ -4128,11 +4128,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         </div>
 
                         <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-2">Line Spacing</label>
+                          <label className="block text-xs font-medium text-ai-graphite-700 mb-2">Line Spacing</label>
                           <select
                             value={lineHeight}
                             onChange={(e) => setLineHeight(e.target.value)}
-                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                            className="w-full px-3 py-2 text-sm border border-paper-300 rounded-lg focus:ring-ai-blue-500 focus:border-ai-blue-500"
                           >
                             <option value="1.3">Compact (1.3)</option>
                             <option value="1.5">Normal (1.5)</option>
@@ -4142,10 +4142,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           </select>
                         </div>
 
-                        <div className="flex justify-end pt-2 border-t border-gray-100">
+                        <div className="flex justify-end pt-2 border-t border-paper-200">
                           <button
                             onClick={() => setShowFormatting(false)}
-                            className="px-3 py-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+                            className="px-3 py-1.5 text-xs font-medium text-ai-blue-600 hover:text-ai-blue-800 transition-colors"
                           >
                             Done
                           </button>
@@ -4172,8 +4172,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
       {isMultiJurisdiction && (
         <div className="max-w-[850px] mx-auto mb-8 px-8">
-          <div className="border border-gray-200 rounded-lg bg-white shadow-sm p-4">
-            <div className="text-xs font-semibold text-gray-500 uppercase mb-2">
+          <div className="border border-paper-300 rounded-lg bg-white shadow-sm p-4">
+            <div className="text-xs font-semibold text-ai-graphite-500 uppercase mb-2">
               Multi-Jurisdiction Filing
               {!session?.referenceDraftComplete && (
                 <span className="ml-2 text-amber-600 font-normal normal-case">
@@ -4187,8 +4187,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 onClick={() => handleJurisdictionChange('REFERENCE')}
                 className={`px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
                   activeJurisdiction === 'REFERENCE'
-                    ? 'bg-purple-50 border-purple-200 text-purple-700'
-                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                    ? 'bg-ai-blue-50 border-ai-blue-200 text-ai-blue-700'
+                    : 'bg-white border-paper-300 text-ai-graphite-600 hover:bg-paper-100'
                 }`}
               >
                 📝 Reference Draft
@@ -4211,16 +4211,16 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                     disabled={isLocked}
                   className={`px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
                       isLocked
-                        ? 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed'
+                        ? 'bg-paper-200 border-paper-300 text-ai-graphite-400 cursor-not-allowed'
                         : code === activeJurisdiction
-                      ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      ? 'bg-ai-blue-50 border-ai-blue-200 text-ai-blue-700'
+                      : 'bg-white border-paper-300 text-ai-graphite-600 hover:bg-paper-100'
                   }`}
                     title={isLocked ? 'Complete Reference Draft first' : `Draft for ${code}`}
                   >
                     {isLocked && '🔒 '}{code}
                     {hasTranslation && !isLocked && (
-                      <span className="ml-1.5 text-[10px] bg-blue-100 text-blue-700 px-1 rounded">v{latestDrafts[code]?.version}</span>
+                      <span className="ml-1.5 text-[10px] bg-ai-blue-100 text-ai-blue-700 px-1 rounded">v{latestDrafts[code]?.version}</span>
                     )}
                 </button>
                 )
@@ -4229,7 +4229,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             
             {/* Translation hint */}
             {session?.referenceDraftComplete && activeJurisdiction !== 'REFERENCE' && (
-              <div className="mt-3 text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded p-2">
+              <div className="mt-3 text-xs text-ai-graphite-500 bg-ai-blue-50 border border-ai-blue-100 rounded p-2">
                 💡 <strong>Translation Mode:</strong> Content will be translated from Reference Draft with temp=0 for consistency.
               </div>
             )}
@@ -4248,7 +4248,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 <button
                   onClick={() => handleTranslateToJurisdiction(activeJurisdiction)}
                   disabled={!!translating}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2"
+                  className="px-4 py-2 bg-ai-blue-600 text-white rounded-lg font-medium hover:bg-ai-blue-700 disabled:opacity-60 flex items-center gap-2"
                 >
                   {translating === activeJurisdiction ? (
                     <>
@@ -4275,7 +4275,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                     }
                   }}
                   disabled={!!translating}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2"
+                  className="px-4 py-2 bg-ai-blue-600 text-white rounded-lg font-medium hover:bg-ai-blue-700 disabled:opacity-60 flex items-center gap-2"
                 >
                   {translating ? (
                     <>
@@ -4296,12 +4296,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       )}
 
       {/* The "Paper" Document */}
-      <div className="max-w-[850px] mx-auto bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] min-h-[1100px] px-[60px] py-[60px] relative border border-gray-100">
+      <div className="max-w-[850px] mx-auto bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] min-h-[1100px] px-[60px] py-[60px] relative border border-paper-200">
 
         {profileLoading && (
           <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
-            <div className="flex items-center gap-2 text-gray-500">
-               <span className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full"></span>
+            <div className="flex items-center gap-2 text-ai-graphite-500">
+               <span className="animate-spin h-4 w-4 border-2 border-ai-blue-500 border-t-transparent rounded-full"></span>
                Loading template...
             </div>
           </div>
@@ -4327,15 +4327,15 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
               const hasContent = section.keys.some(k => generated?.[k])
 
               return (
-              <div key={section.keys.join('|') || idx} className="group relative hover:bg-gray-50/30 transition-colors -mx-4 px-4 py-2 rounded-lg">
+              <div key={section.keys.join('|') || idx} className="group relative hover:bg-paper-100/30 transition-colors -mx-4 px-4 py-2 rounded-lg">
                 {/* Hover Actions (Floating) */}
                 <div className={`absolute -right-4 top-0 transform translate-x-full opacity-0 group-hover:opacity-100 transition-opacity pl-2 ${isWorking ? 'opacity-100' : ''}`}>
-                   <div className="flex flex-col gap-1 bg-white border border-gray-200 shadow-sm rounded-md p-1">
+                   <div className="flex flex-col gap-1 bg-white border border-paper-300 shadow-sm rounded-md p-1">
                       {!hasContent ? (
                          <button
                            disabled={loading || autoModeRunning}
                            onClick={() => autoMode && !autoModeRunning ? handleAutoGenerateAll() : handleGenerate(section.keys)}
-                           className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-md"
+                           className="p-2 text-ai-blue-600 hover:bg-ai-blue-50 rounded-md"
                            title={autoMode ? "Generate all pending sections" : "Generate"}
                          >
                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
@@ -4355,7 +4355,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                setEditingKey(editingKey === key ? null : key)
                                setEditDrafts(prev => ({ ...prev, [key]: generated?.[key] || '' }))
                              }}
-                             className="p-2 text-gray-500 hover:bg-gray-100 rounded-md"
+                             className="p-2 text-ai-graphite-500 hover:bg-paper-200 rounded-md"
                              title="Edit"
                           >
                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
@@ -4368,7 +4368,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 {/* Section Header */}
                 <div className="flex items-baseline justify-between mb-4">
                   <div className="flex items-center gap-2">
-                  <h3 className="text-lg font-bold text-gray-900 uppercase tracking-wide">
+                  <h3 className="text-lg font-bold text-ai-graphite-900 uppercase tracking-wide">
                     {section.label || section.keys.map(k => displayName[k] || k).join(' / ')}
                   </h3>
                     {/* Per-section instruction controls */}
@@ -4436,7 +4436,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               className={`p-1 rounded transition-colors ${
                                 isActive 
                                   ? 'text-emerald-600 hover:bg-emerald-50' 
-                                  : 'text-gray-400 hover:bg-gray-100'
+                                  : 'text-ai-graphite-400 hover:bg-paper-200'
                               }`}
                               title={isActive ? 'Click to disable instruction' : 'Click to enable instruction'}
                             >
@@ -4459,8 +4459,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               hasInstruction
                                 ? isActive
                                   ? 'text-violet-600 bg-violet-50 hover:bg-violet-100'
-                                  : 'text-gray-400 bg-gray-100 hover:bg-gray-200 line-through'
-                                : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                  : 'text-ai-graphite-400 bg-paper-200 hover:bg-paper-300 line-through'
+                                : 'text-ai-graphite-400 hover:text-ai-graphite-600 hover:bg-paper-200'
                             }`}
                             title={
                               hasInstruction 
@@ -4541,8 +4541,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         {ddEvidencePreview?.selectedSources?.length ? (
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
                             ddAutoIncludedCount > 0
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'bg-gray-100 text-gray-500'
+                              ? 'bg-ai-blue-100 text-ai-blue-700'
+                              : 'bg-paper-200 text-ai-graphite-500'
                           }`}>
                             Auto sources: {ddAutoIncludedCount}/{ddEvidencePreview.selectedSources.length}
                           </span>
@@ -4551,7 +4551,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
                             ddGuardrailIncludedCount > 0
                               ? 'bg-slate-100 text-slate-700'
-                              : 'bg-gray-100 text-gray-500'
+                              : 'bg-paper-200 text-ai-graphite-500'
                           }`}>
                             Guardrails: {ddGuardrailIncludedCount}/{ddEvidencePreview.guardrailSources.length}
                           </span>
@@ -4559,7 +4559,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         <span className={`text-xs px-2 py-0.5 rounded-full ${
                           ddManualInjectionEnabled
                             ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-gray-100 text-gray-500'
+                            : 'bg-paper-200 text-ai-graphite-500'
                         }`}>
                           Additional: {ddManualInjectionEnabled ? ddManualInjectedTargets.join(', ') : 'Off'}
                         </span>
@@ -4568,7 +4568,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                     
                     {ddUserDataExpanded && (
                       <div className="px-4 pb-4 border-t border-amber-200">
-                        <div className="mt-3 rounded-md border border-blue-200 bg-white p-3">
+                        <div className="mt-3 rounded-md border border-ai-blue-200 bg-white p-3">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-medium text-slate-800">Auto-selected source support</div>
@@ -4599,7 +4599,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                     ? 'bg-emerald-100 text-emerald-700'
                                     : ddEvidencePreview.status === 'failed'
                                       ? 'bg-amber-100 text-amber-700'
-                                      : 'bg-gray-100 text-gray-600'
+                                      : 'bg-paper-200 text-ai-graphite-600'
                                 }`}>
                                   {ddEvidencePreview.status}
                                 </span>
@@ -4638,7 +4638,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                   <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                                     ddCoveragePreset === 'custom'
                                       ? 'bg-violet-100 text-violet-700'
-                                      : 'bg-blue-100 text-blue-700'
+                                      : 'bg-ai-blue-100 text-ai-blue-700'
                                   }`}>
                                     {DD_EVIDENCE_COVERAGE_STAGES.find(stage => stage.value === ddCoveragePreset)?.label || 'Full'}
                                   </span>
@@ -4646,7 +4646,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                 <div className="relative mt-4" role="group" aria-label="Detailed Description data amount">
                                   <div className="absolute left-3 right-3 top-3 h-1 rounded-full bg-slate-200">
                                     <div
-                                      className="h-1 rounded-full bg-blue-500 transition-all"
+                                      className="h-1 rounded-full bg-ai-blue-500 transition-all"
                                       style={{ width: `${ddCoverageFillPercent}%` }}
                                     />
                                   </div>
@@ -4675,9 +4675,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                         >
                                           <span className={`z-10 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors ${
                                             active
-                                              ? 'border-blue-600 bg-blue-600 text-white'
+                                              ? 'border-ai-blue-600 bg-ai-blue-600 text-white'
                                               : reached
-                                                ? 'border-blue-500 bg-white text-blue-700'
+                                                ? 'border-ai-blue-500 bg-white text-ai-blue-700'
                                                 : 'border-slate-300 bg-white text-slate-500'
                                           }`}>
                                             {index + 1}
@@ -4812,7 +4812,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                     <div className="flex items-start gap-2">
                                       <input
                                         type="checkbox"
-                                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-ai-blue-600"
                                         checked={item.included}
                                         disabled={ddEvidenceSaving}
                                         onChange={(e) => handleToggleDDEvidenceSource(item.sourceId, e.target.checked)}
@@ -4821,9 +4821,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                         <div className="flex flex-wrap items-center gap-2">
                                           <span className="font-mono text-[11px] text-slate-500">{item.sourceId}</span>
                                           <span className="text-xs font-medium text-slate-800">{item.label}</span>
-                                          {item.role && <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">{item.role.replace(/_/g, ' ')}</span>}
+                                          {item.role && <span className="text-[11px] px-1.5 py-0.5 rounded bg-ai-blue-100 text-ai-blue-700">{item.role.replace(/_/g, ' ')}</span>}
                                           {item.confidence && <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{item.confidence}</span>}
-                                          {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">excluded</span>}
+                                          {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">excluded</span>}
                                           {item.edited && <span className="text-[11px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">edited</span>}
                                           {item.controlsStale && <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">stale</span>}
                                         </div>
@@ -4833,7 +4833,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <button
                                             type="button"
                                             onClick={() => setDdEvidenceExpandedSources(prev => ({ ...prev, [item.sourceId]: !prev[item.sourceId] }))}
-                                            className="text-xs font-medium text-blue-700 hover:text-blue-900"
+                                            className="text-xs font-medium text-ai-blue-700 hover:text-ai-blue-900"
                                           >
                                             {ddEvidenceExpandedSources[item.sourceId] ? 'Hide injected data' : 'View injected data'}
                                           </button>
@@ -4905,7 +4905,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                       <label className="flex items-start gap-2">
                                         <input
                                           type="checkbox"
-                                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-ai-blue-600"
                                           checked={item.included}
                                           disabled={ddEvidenceSaving}
                                           onChange={(e) => handleToggleDDGuardrailSource(item.sourceId, e.target.checked)}
@@ -4914,7 +4914,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                           <span className="flex flex-wrap items-center gap-2">
                                             <span className="font-mono text-[11px] text-slate-500">{item.sourceId}</span>
                                             <span className="text-xs font-medium text-slate-700">{item.label}</span>
-                                            {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">excluded</span>}
+                                            {!item.included && <span className="text-[11px] px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">excluded</span>}
                                           </span>
                                           {item.reason && <span className="mt-1 block text-[11px] text-slate-500">{item.reason}</span>}
                                         </span>
@@ -4922,11 +4922,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                     </div>
                                   ))}
                                   {(ddEvidencePreview.excludedSources || []).slice(0, 8).map(item => (
-                                    <div key={`${item.sourceId}-excluded`} className="rounded border border-slate-200 bg-gray-50 p-2">
+                                    <div key={`${item.sourceId}-excluded`} className="rounded border border-slate-200 bg-paper-100 p-2">
                                       <div className="flex items-center gap-2">
                                         <span className="font-mono text-[11px] text-slate-500">{item.sourceId}</span>
                                         <span className="text-xs font-medium text-slate-700">{item.label}</span>
-                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">not eligible</span>
+                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-paper-200 text-ai-graphite-600">not eligible</span>
                                       </div>
                                       {item.reason && <div className="mt-1 text-[11px] text-slate-500">{item.reason}</div>}
                                     </div>
@@ -4950,7 +4950,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
                             ddManualInjectionEnabled
                               ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-gray-100 text-gray-500'
+                              : 'bg-paper-200 text-ai-graphite-500'
                           }`}>
                             {ddManualInjectionEnabled
                               ? `Additional data included for ${ddManualInjectedTargets.join(', ')}`
@@ -4967,11 +4967,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                         />
                         
                         {/* Additional user data include toggle */}
-                        <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="mt-4 p-3 bg-paper-100 rounded-lg border border-paper-300">
                           <div className="flex items-center justify-between">
                             <div>
-                              <div className="text-sm font-medium text-gray-700">Include additional user data</div>
-                              <div className="text-xs text-gray-500">Only controls the pasted text below. Auto-selected source support is controlled above.</div>
+                              <div className="text-sm font-medium text-ai-graphite-700">Include additional user data</div>
+                              <div className="text-xs text-ai-graphite-500">Only controls the pasted text below. Auto-selected source support is controlled above.</div>
                             </div>
                             {/* Slider Toggle */}
                             <button
@@ -5026,8 +5026,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           
                           {/* Jurisdiction Selection - Only show when enabled */}
                           {Object.values(ddUserDataToggles).some(v => v === true) && (
-                            <div className="mt-3 pt-3 border-t border-gray-200">
-                              <span className="text-xs text-gray-600 block mb-2">Select jurisdictions for additional data:</span>
+                            <div className="mt-3 pt-3 border-t border-paper-300">
+                              <span className="text-xs text-ai-graphite-600 block mb-2">Select jurisdictions for additional data:</span>
                               <div className="flex flex-wrap gap-2">
                                 {isMultiJurisdiction ? (
                                   // Multi-jurisdiction mode: Show REFERENCE first, then individual jurisdictions
@@ -5038,8 +5038,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                         ddUserDataToggles[code]
                                           ? code === 'REFERENCE' 
                                             ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                            : 'bg-blue-100 text-blue-800 border border-blue-300'
-                                          : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200'
+                                            : 'bg-ai-blue-100 text-ai-blue-800 border border-ai-blue-300'
+                                          : 'bg-paper-200 text-ai-graphite-600 border border-paper-300 hover:bg-paper-300'
                                       }`}
                                     >
                                       <input
@@ -5064,7 +5064,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                       className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer transition-all ${
                                         ddUserDataToggles[code]
                                           ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                          : 'bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200'
+                                          : 'bg-paper-200 text-ai-graphite-600 border border-paper-300 hover:bg-paper-300'
                                       }`}
                                     >
                                       <input
@@ -5126,7 +5126,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 )}
 
                 {/* Content Area */}
-                <div className="text-gray-800 text-justify">
+                <div className="text-ai-graphite-800 text-justify">
                   {!hasContent && !isWorking ? (
                     <div 
                       onClick={() => {
@@ -5138,12 +5138,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           handleGenerate(section.keys)
                         }
                       }}
-                      className={`border-2 border-dashed border-gray-100 rounded-lg p-8 text-center hover:border-indigo-100 hover:bg-indigo-50/30 transition-all cursor-pointer group/empty ${autoModeRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`border-2 border-dashed border-paper-200 rounded-lg p-8 text-center hover:border-ai-blue-100 hover:bg-ai-blue-50/30 transition-all cursor-pointer group/empty ${autoModeRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                       <div className="text-gray-400 group-hover/empty:text-indigo-400 font-medium mb-1">
+                       <div className="text-ai-graphite-400 group-hover/empty:text-ai-blue-400 font-medium mb-1">
                          {autoMode ? 'Auto-generate pending sections' : 'Section not generated'}
                        </div>
-                       <div className="text-xs text-gray-300 group-hover/empty:text-indigo-300">
+                       <div className="text-xs text-gray-300 group-hover/empty:text-ai-blue-300">
                          {autoMode ? 'Click to start from first pending section' : 'Click to draft with AI'}
                        </div>
                     </div>
@@ -5152,7 +5152,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                       {section.keys.map(keyName => (
                         <div key={keyName} className="mb-6 last:mb-0">
                           {section.keys.length > 1 && (
-                             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 mt-4">{displayName[keyName] || keyName}</h4>
+                             <h4 className="text-xs font-bold text-ai-graphite-400 uppercase tracking-wider mb-2 mt-4">{displayName[keyName] || keyName}</h4>
                           )}
                           
                           {/* Toolbar for each section text */}
@@ -5160,7 +5160,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                              <div className="flex items-center justify-end gap-1 mb-2">
                                <button
                                  onClick={() => copySection(keyName)}
-                                 className="p-1.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                                 className="p-1.5 rounded text-ai-graphite-400 hover:text-ai-graphite-700 hover:bg-paper-200 transition-colors"
                                  title={copiedKey === keyName ? "Copied" : "Copy to clipboard"}
                                >
                                   {copiedKey === keyName ? (
@@ -5179,8 +5179,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                    onClick={() => !sectionLoading[keyName] && setRegenOpen(prev => ({ ...prev, [keyName]: !prev[keyName] }))}
                                    className={`p-1.5 rounded transition-colors ${
                                      regenOpen[keyName] 
-                                       ? 'text-indigo-600 bg-indigo-100' 
-                                       : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'
+                                       ? 'text-ai-blue-600 bg-ai-blue-100' 
+                                       : 'text-ai-graphite-400 hover:text-ai-blue-600 hover:bg-ai-blue-50'
                                    }`}
                                    title="Regenerate / Refine"
                                    disabled={sectionLoading[keyName]}
@@ -5193,11 +5193,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                  {regenOpen[keyName] && (
                                    <div className="absolute right-0 top-full mt-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
                                      {/* Speech bubble pointer */}
-                                     <div className="absolute -top-2 right-3 w-4 h-4 bg-white border-l border-t border-gray-200 transform rotate-45"></div>
+                                     <div className="absolute -top-2 right-3 w-4 h-4 bg-white border-l border-t border-paper-300 transform rotate-45"></div>
                                      
-                                     <div className="w-80 bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+                                     <div className="w-80 bg-white rounded-2xl shadow-xl border border-paper-300 overflow-hidden">
                                        {/* Header */}
-                                       <div className="bg-gradient-to-r from-indigo-500 to-purple-600 px-4 py-3 flex items-center gap-2">
+                                       <div className="bg-gradient-to-r from-ai-blue-500 to-ai-blue-600 px-4 py-3 flex items-center gap-2">
                                          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
                                            <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -5217,7 +5217,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                        {/* Body */}
                                       <div className="p-4">
                                         <textarea
-                                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400 bg-gray-50 resize-none placeholder-gray-400"
+                                          className="w-full border border-paper-300 rounded-xl px-3 py-2.5 text-sm focus:border-ai-blue-400 focus:ring-1 focus:ring-ai-blue-400 bg-paper-100 resize-none placeholder-gray-400"
                                           value={regenRemarks[keyName] || ''}
                                           onChange={(e) => setRegenRemarks(prev => ({ ...prev, [keyName]: e.target.value }))}
                                           placeholder="How should I improve this section? (optional)"
@@ -5244,7 +5244,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                               handleRegenerateSection(keyName)
                                               setRegenOpen(prev => ({ ...prev, [keyName]: false }))
                                             }}
-                                            className="text-[11px] px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors font-medium flex items-center gap-1"
+                                            className="text-[11px] px-2.5 py-1 rounded-full bg-ai-blue-100 text-ai-blue-700 hover:bg-ai-blue-200 transition-colors font-medium flex items-center gap-1"
                                           >
                                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -5255,7 +5255,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             <button
                                               key={suggestion}
                                               onClick={() => setRegenRemarks(prev => ({ ...prev, [keyName]: suggestion }))}
-                                              className="text-[11px] px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
+                                              className="text-[11px] px-2.5 py-1 rounded-full bg-paper-200 text-ai-graphite-600 hover:bg-ai-blue-100 hover:text-ai-blue-700 transition-colors"
                                             >
                                               {suggestion}
                                             </button>
@@ -5272,8 +5272,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                             disabled={sectionLoading[keyName]}
                                             className={`px-4 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${
                                               !sectionLoading[keyName]
-                                                ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
-                                                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                                ? 'bg-ai-blue-600 text-white hover:bg-ai-blue-700 shadow-sm'
+                                                : 'bg-paper-200 text-ai-graphite-400 cursor-not-allowed'
                                             }`}
                                           >
                                             {sectionLoading[keyName] ? (
@@ -5298,7 +5298,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                </div>
                                <button
                                  onClick={() => { setEditingKey(editingKey === keyName ? null : keyName); setEditDrafts(prev => ({ ...prev, [keyName]: generated?.[keyName] || '' })) }}
-                                 className={`p-1.5 rounded transition-colors ${editingKey === keyName ? 'text-indigo-600 bg-indigo-50' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'}`}
+                                 className={`p-1.5 rounded transition-colors ${editingKey === keyName ? 'text-ai-blue-600 bg-ai-blue-50' : 'text-ai-graphite-400 hover:text-ai-graphite-700 hover:bg-paper-200'}`}
                                  title="Edit"
                                >
                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
@@ -5306,7 +5306,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                 {/* Delete section button */}
                                 <button
                                   onClick={() => handleDeleteSectionContent(keyName)}
-                                  className="p-1.5 rounded text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                  className="p-1.5 rounded text-ai-graphite-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                                   title="Delete section"
                                 >
                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -5321,7 +5321,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                               2. Claims have actual content (not just empty string)
                               3. Components are available from Component Planner stage */}
                             {keyName === 'claims' && generated?.claims?.trim() && extractComponentsFromReferenceMap((session as any)?.referenceMap).length > 0 && (
-                            <div className="mb-4 p-3 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg">
+                            <div className="mb-4 p-3 bg-gradient-to-r from-violet-50 to-ai-blue-50 border border-violet-200 rounded-lg">
                               <div className="flex items-center justify-between gap-4">
                                 <div className="flex items-center gap-2">
                                   <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center flex-shrink-0">
@@ -5378,7 +5378,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           {editingKey === keyName ? (
                             <div className="relative">
                               <textarea
-                                className="w-full border-0 bg-gray-50 p-4 rounded-md text-gray-800 focus:ring-1 focus:ring-indigo-200 resize-none text-justify"
+                                className="w-full border-0 bg-paper-100 p-4 rounded-md text-ai-graphite-800 focus:ring-1 focus:ring-ai-blue-200 resize-none text-justify"
                                 style={{
                                   fontFamily,
                                   fontSize,
@@ -5390,8 +5390,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                 autoFocus
                               />
                               <div className="flex justify-end gap-2 mt-2">
-                                <button onClick={() => setEditingKey(null)} className="text-xs text-gray-500 hover:text-gray-700 px-3 py-1">Cancel</button>
-                                <button onClick={() => handleAutosaveSection(keyName)} className="text-xs bg-indigo-600 text-white px-3 py-1 rounded shadow-sm hover:bg-indigo-700">Save</button>
+                                <button onClick={() => setEditingKey(null)} className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700 px-3 py-1">Cancel</button>
+                                <button onClick={() => handleAutosaveSection(keyName)} className="text-xs bg-ai-blue-600 text-white px-3 py-1 rounded shadow-sm hover:bg-ai-blue-700">Save</button>
                               </div>
                             </div>
                           ) : (
@@ -5420,9 +5420,9 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
             {/* Drawings Section */}
             {!figuresSkipped && (
-            <div className="group relative hover:bg-gray-50/30 transition-colors -mx-4 px-4 py-2 rounded-lg mt-16 break-before-page">
+            <div className="group relative hover:bg-paper-100/30 transition-colors -mx-4 px-4 py-2 rounded-lg mt-16 break-before-page">
                <div className="flex items-baseline justify-between mb-8">
-                  <h3 className="text-lg font-bold text-gray-900 uppercase tracking-wide">
+                  <h3 className="text-lg font-bold text-ai-graphite-900 uppercase tracking-wide">
                     Drawings
                   </h3>
                </div>
@@ -5442,14 +5442,14 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
                <div className="space-y-16">
                  {unifiedFigures.length === 0 ? (
-                    <div className="text-center py-12 border-2 border-dashed border-gray-100 rounded-lg">
-                      <div className="text-gray-400 font-medium mb-1">No figures defined</div>
+                    <div className="text-center py-12 border-2 border-dashed border-paper-200 rounded-lg">
+                      <div className="text-ai-graphite-400 font-medium mb-1">No figures defined</div>
                       <div className="text-xs text-gray-300">Define figures in the Planner stage to see them here.</div>
                     </div>
                  ) : (
                    unifiedFigures.map((figure) => (
                      <div key={`${figure.type}-${figure.sourceId}`} className="flex flex-col items-center break-inside-avoid">
-                       <div className="w-full max-w-3xl bg-white border border-gray-200 shadow-sm rounded-lg overflow-hidden min-h-[400px] flex items-center justify-center bg-gray-50/50 p-4">
+                       <div className="w-full max-w-3xl bg-white border border-paper-300 shadow-sm rounded-lg overflow-hidden min-h-[400px] flex items-center justify-center bg-paper-100/50 p-4">
                           {figure.imageUrl ? (
                             <img 
                               src={figure.imageUrl} 
@@ -5466,7 +5466,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                             />
                           ) : null}
                           <div 
-                            className="text-center p-8 text-gray-400 flex-col items-center"
+                            className="text-center p-8 text-ai-graphite-400 flex-col items-center"
                             style={{ display: figure.imageUrl ? 'none' : 'flex' }}
                           >
                             <svg className="w-12 h-12 mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -5477,25 +5477,25 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           </div>
                        </div>
                        <div className="mt-4 text-center max-w-xl">
-                         <div className="font-bold text-gray-900 uppercase tracking-widest text-sm flex items-center justify-center gap-2 flex-wrap">
+                         <div className="font-bold text-ai-graphite-900 uppercase tracking-widest text-sm flex items-center justify-center gap-2 flex-wrap">
                            FIG. {figure.figureNo}
                            {figure.type === 'sketch' && (
                              <span className="text-xs font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">Sketch</span>
                            )}
-                           {figure.isNew && <span className="text-xs font-normal text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">New</span>}
+                           {figure.isNew && <span className="text-xs font-normal text-ai-blue-600 bg-ai-blue-50 px-1.5 py-0.5 rounded">New</span>}
                            {/* Show fallback indicator if using English when a different language is preferred */}
                            {figure.type === 'diagram' && 
                             figure.displayLanguage === 'en' && 
                             preferredFigureLanguage !== 'en' && (
                              <span 
-                               className="text-xs font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded"
+                               className="text-xs font-normal text-ai-graphite-500 bg-paper-200 px-1.5 py-0.5 rounded"
                                title={`No translation available for ${preferredFigureLanguage}. Using English version.`}
                              >
                                EN (no {preferredFigureLanguage.toUpperCase()} translation)
                              </span>
                            )}
                          </div>
-                         {figure.title && <div className="text-sm text-gray-600 mt-1">{figure.title}</div>}
+                         {figure.title && <div className="text-sm text-ai-graphite-600 mt-1">{figure.title}</div>}
                        </div>
                      </div>
                    ))
@@ -5532,8 +5532,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 />
                 
                 {/* Export Section */}
-                <div id="export-section" className="mt-8 bg-white rounded-xl border border-gray-200 p-6">
-                  <h4 className="font-semibold text-gray-900 mb-4">Export Options</h4>
+                <div id="export-section" className="mt-8 bg-white rounded-xl border border-paper-300 p-6">
+                  <h4 className="font-semibold text-ai-graphite-900 mb-4">Export Options</h4>
                   <ExportButton
                     sessionId={session?.id || ''}
                     jurisdiction={activeJurisdiction}
@@ -5566,8 +5566,8 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 />
                 
                 {/* Export Section */}
-                <div id="export-section-single" className="mt-8 bg-white rounded-xl border border-gray-200 p-6">
-                  <h4 className="font-semibold text-gray-900 mb-4">Export Options</h4>
+                <div id="export-section-single" className="mt-8 bg-white rounded-xl border border-paper-300 p-6">
+                  <h4 className="font-semibold text-ai-graphite-900 mb-4">Export Options</h4>
                   <ExportButton
                     sessionId={session?.id || ''}
                     jurisdiction={activeJurisdiction}
@@ -5640,19 +5640,19 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[85vh] flex flex-col animate-in zoom-in-95 duration-200">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-paper-200">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-xl">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-ai-blue-500 to-violet-600 flex items-center justify-center text-white text-xl">
                   🚀
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">Auto-Generate Mode</h3>
-                  <p className="text-sm text-gray-500">{autoModeWarningModal.pendingSections.length} section(s) to generate</p>
+                  <h3 className="text-lg font-semibold text-ai-graphite-900">Auto-Generate Mode</h3>
+                  <p className="text-sm text-ai-graphite-500">{autoModeWarningModal.pendingSections.length} section(s) to generate</p>
                 </div>
               </div>
               <button 
                 onClick={() => setAutoModeWarningModal({ show: false, warnings: [], pendingSections: [] })}
-                className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600"
+                className="p-2 rounded-lg hover:bg-paper-200 transition-colors text-ai-graphite-400 hover:text-ai-graphite-600"
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -5664,10 +5664,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             <div className="px-6 py-4 overflow-y-auto flex-1">
               {/* Sections List */}
               <div className="mb-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Sections to generate:</h4>
+                <h4 className="text-sm font-medium text-ai-graphite-700 mb-2">Sections to generate:</h4>
                 <div className="flex flex-wrap gap-2">
                   {autoModeWarningModal.pendingSections.map(key => (
-                    <span key={key} className="px-2.5 py-1 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium">
+                    <span key={key} className="px-2.5 py-1 bg-paper-200 text-ai-graphite-700 rounded-lg text-xs font-medium">
                       {displayName[key] || key}
                     </span>
                   ))}
@@ -5693,12 +5693,12 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                           </span>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-medium text-sm text-gray-800">{displayName[w.section] || w.section}</span>
+                              <span className="font-medium text-sm text-ai-graphite-800">{displayName[w.section] || w.section}</span>
                               <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 rounded uppercase">
                                 {w.type === 'priorArt' ? 'Prior Art' : w.type === 'figures' ? 'Figures' : 'Components'}
                               </span>
                             </div>
-                            <p className="text-xs text-gray-600 mt-1">{w.message}</p>
+                            <p className="text-xs text-ai-graphite-600 mt-1">{w.message}</p>
                             <p className="text-xs text-amber-700 mt-1.5 italic">Impact: {w.impact}</p>
                           </div>
                         </div>
@@ -5725,7 +5725,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
               )}
 
               {/* Info */}
-              <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs text-gray-600">
+              <div className="mt-4 p-3 bg-paper-100 rounded-lg text-xs text-ai-graphite-600">
                 <p>• Sections will be generated one by one in sequence</p>
                 <p>• You can cancel at any time using the Stop button</p>
                 <p>• Failed sections will be retried once automatically</p>
@@ -5733,10 +5733,10 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
+            <div className="px-6 py-4 border-t border-paper-200 flex items-center justify-end gap-3">
               <button
                 onClick={() => setAutoModeWarningModal({ show: false, warnings: [], pendingSections: [] })}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-ai-graphite-700 bg-paper-200 hover:bg-paper-300 rounded-lg transition-colors"
               >
                 Cancel
               </button>
@@ -5745,7 +5745,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                 className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors flex items-center gap-2 ${
                   autoModeWarningModal.warnings.length > 0
                     ? 'bg-amber-500 hover:bg-amber-600'
-                    : 'bg-indigo-600 hover:bg-indigo-700'
+                    : 'bg-ai-blue-600 hover:bg-ai-blue-700'
                 }`}
               >
                 {autoModeWarningModal.warnings.length > 0 ? (

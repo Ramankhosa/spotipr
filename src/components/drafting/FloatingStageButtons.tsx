@@ -77,11 +77,11 @@ export default function FloatingStageButtons({
                 relative flex items-center gap-2 py-3 pl-2 pr-3
                 rounded-r-2xl
                 backdrop-blur-md
-                border border-l-0 border-gray-200/50
+                border border-l-0 border-paper-300/50
                 shadow-lg
                 transition-all duration-300
                 ${hoveredButton === 'prev' 
-                  ? 'bg-white/95 shadow-xl border-blue-200' 
+                  ? 'bg-white/95 shadow-xl border-ai-blue-200' 
                   : 'bg-white/40 hover:bg-white/70'
                 }
               `}>
@@ -91,8 +91,8 @@ export default function FloatingStageButtons({
                   w-10 h-10 rounded-xl
                   transition-all duration-300
                   ${hoveredButton === 'prev'
-                    ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-md'
-                    : 'bg-gray-100/80 text-gray-400 group-hover:text-gray-600'
+                    ? 'bg-gradient-to-br from-ai-blue-500 to-ai-blue-600 text-white shadow-md'
+                    : 'bg-paper-200/80 text-ai-graphite-400 group-hover:text-ai-graphite-600'
                   }
                 `}>
                   {isNavigating && hoveredButton === 'prev' ? (
@@ -113,7 +113,7 @@ export default function FloatingStageButtons({
                     width: hoveredButton === 'prev' ? 'auto' : 0,
                     opacity: hoveredButton === 'prev' ? 1 : 0
                   }}
-                  className="overflow-hidden whitespace-nowrap text-sm font-medium text-gray-700"
+                  className="overflow-hidden whitespace-nowrap text-sm font-medium text-ai-graphite-700"
                 >
                   {previousLabel}
                 </motion.span>
@@ -122,7 +122,7 @@ export default function FloatingStageButtons({
               {/* Pulse indicator when idle */}
               {hoveredButton !== 'prev' && (
                 <motion.div
-                  className="absolute inset-0 rounded-r-2xl bg-blue-400/20"
+                  className="absolute inset-0 rounded-r-2xl bg-ai-blue-400/20"
                   animate={{
                     opacity: [0, 0.5, 0],
                     scale: [1, 1.05, 1]
@@ -166,7 +166,7 @@ export default function FloatingStageButtons({
                 relative flex items-center gap-2 py-3 pl-3 pr-2
                 rounded-l-2xl
                 backdrop-blur-md
-                border border-r-0 border-gray-200/50
+                border border-r-0 border-paper-300/50
                 shadow-lg
                 transition-all duration-300
                 ${hoveredButton === 'next' 
@@ -181,7 +181,7 @@ export default function FloatingStageButtons({
                     width: hoveredButton === 'next' ? 'auto' : 0,
                     opacity: hoveredButton === 'next' ? 1 : 0
                   }}
-                  className="overflow-hidden whitespace-nowrap text-sm font-medium text-gray-700"
+                  className="overflow-hidden whitespace-nowrap text-sm font-medium text-ai-graphite-700"
                 >
                   {nextLabel}
                 </motion.span>
@@ -193,7 +193,7 @@ export default function FloatingStageButtons({
                   transition-all duration-300
                   ${hoveredButton === 'next'
                     ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-md'
-                    : 'bg-gray-100/80 text-gray-400 group-hover:text-gray-600'
+                    : 'bg-paper-200/80 text-ai-graphite-400 group-hover:text-ai-graphite-600'
                   }
                 `}>
                   {isNavigating && hoveredButton === 'next' ? (

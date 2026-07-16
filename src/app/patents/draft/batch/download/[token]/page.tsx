@@ -47,7 +47,7 @@ export default function PatentBatchDownloadPage({ params }: { params: { token: s
     <div className="min-h-screen bg-slate-50">
       <main className="mx-auto max-w-4xl px-6 py-12">
         <div className="mb-8">
-          <Link href="/patents/draft/batch" className="text-sm font-medium text-blue-700 hover:underline">
+          <Link href="/patents/draft/batch" className="text-sm font-medium text-ai-blue-700 hover:underline">
             Back to batch drafting
           </Link>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">Patent Batch Download</h1>
@@ -69,7 +69,7 @@ export default function PatentBatchDownloadPage({ params }: { params: { token: s
           ) : (
             <div className="space-y-5">
               <div className="flex items-center gap-3">
-                <div className="rounded-lg bg-blue-50 p-3 text-blue-700">
+                <div className="rounded-lg bg-ai-blue-50 p-3 text-ai-blue-700">
                   <FileArchive className="h-6 w-6" />
                 </div>
                 <div>
@@ -87,13 +87,13 @@ export default function PatentBatchDownloadPage({ params }: { params: { token: s
                   <a
                     key={document.id}
                     href={document.downloadUrl}
-                    className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm hover:border-blue-300 hover:bg-blue-50"
+                    className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm hover:border-ai-blue-300 hover:bg-ai-blue-50"
                   >
                     <div className="min-w-0">
                       <div className="truncate font-medium text-slate-950">{document.filename}</div>
                       <div className="text-xs text-slate-500">{document.mimeType || 'Archive'} - {formatSize(document.sizeBytes)}</div>
                     </div>
-                    <span className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white">
+                    <span className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-ai-blue-600 px-3 py-2 text-xs font-semibold text-white">
                       <Download className="h-4 w-4" />
                       Download
                     </span>

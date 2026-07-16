@@ -877,8 +877,8 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
     return (
     <tr
       key={node.id}
-      className={`group transition-colors border-b border-gray-100 last:border-0 ${
-        issues.length > 0 ? 'bg-red-50/40 hover:bg-red-50/60' : 'hover:bg-gray-50/80'
+      className={`group transition-colors border-b border-paper-200 last:border-0 ${
+        issues.length > 0 ? 'bg-red-50/40 hover:bg-red-50/60' : 'hover:bg-paper-100/80'
       }`}
     >
       <td className="px-4 py-3 align-top">
@@ -895,10 +895,10 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               onChange={(e) => updateComponent(node.id, { name: e.target.value })}
               placeholder="Component name"
               aria-invalid={issues.length > 0 ? true : undefined}
-              className={`block w-full min-w-0 truncate px-2 py-1.5 bg-transparent border rounded text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all ${
+              className={`block w-full min-w-0 truncate px-2 py-1.5 bg-transparent border rounded text-sm font-medium text-ai-graphite-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-ai-blue-500/20 transition-all ${
                 issues.length > 0
                   ? 'border-red-300 focus:bg-white focus:border-red-400'
-                  : 'border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300'
+                  : 'border-transparent hover:border-paper-300 focus:bg-white focus:border-ai-blue-300'
               }`}
             />
             {issues.length > 0 && (
@@ -911,11 +911,11 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             {(node.parentId || node.claimSupport?.source === 'frozen_claims') && (
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 px-2">
                 {node.parentId && (
-                  <span className="text-[10px] text-gray-400 uppercase tracking-wider">Sub-part</span>
+                  <span className="text-[10px] text-ai-graphite-400 uppercase tracking-wider">Sub-part</span>
                 )}
                 {node.claimSupport?.source === 'frozen_claims' && (
                   <span
-                    className="inline-flex max-w-full items-center rounded border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                    className="inline-flex max-w-full items-center rounded border border-ai-blue-100 bg-ai-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-ai-blue-700"
                     title={node.claimSupport.reason || 'Recited in your frozen claims — deleting or renaming it will put the claims out of sync.'}
                   >
                     Claim-linked
@@ -930,7 +930,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         <select
           value={node.type}
           onChange={(e) => updateComponent(node.id, { type: e.target.value })}
-          className="w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
+          className="w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-paper-300 focus:bg-white focus:border-ai-blue-300 rounded text-sm text-ai-graphite-600 focus:outline-none focus:ring-2 focus:ring-ai-blue-500/20 transition-all cursor-pointer"
         >
           {COMPONENT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -945,7 +945,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           value={node.description}
           onChange={(e) => updateComponent(node.id, { description: e.target.value })}
           placeholder="Brief description"
-          className="w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm text-gray-600 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+          className="w-full min-w-0 truncate px-2 py-1.5 bg-transparent border border-transparent hover:border-paper-300 focus:bg-white focus:border-ai-blue-300 rounded text-sm text-ai-graphite-600 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-ai-blue-500/20 transition-all"
         />
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
@@ -966,7 +966,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                   })
                 }}
                 placeholder={previewLabel || 'e.g., 101'}
-                className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-paper-300 focus:bg-white focus:border-ai-blue-300 rounded text-sm font-mono text-ai-graphite-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-ai-blue-500/20 transition-all"
               />
               {hasManualLabel ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700 border border-green-100">
@@ -974,7 +974,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                 </span>
               ) : previewLabel ? (
                 <span
-                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono text-gray-400 border border-dashed border-gray-200"
+                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono text-ai-graphite-400 border border-dashed border-paper-300"
                   title="Assigned automatically on save, based on row order"
                 >
                   → {previewLabel}
@@ -983,10 +983,10 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             </>
           ) : effectiveNumberingStyle === 'STEP_LABEL' ? (
             <>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono bg-purple-50 text-purple-700 border border-purple-100">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono bg-ai-blue-50 text-ai-blue-700 border border-ai-blue-100">
                 {previewLabel}
               </span>
-              <span className="text-[10px] text-gray-400" title="Step labels follow row order — use the arrows to reorder steps">
+              <span className="text-[10px] text-ai-graphite-400" title="Step labels follow row order — use the arrows to reorder steps">
                 auto
               </span>
             </>
@@ -1004,7 +1004,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                   })
                 }}
                 placeholder={previewLabel || 'e.g., (a)'}
-                className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-gray-200 focus:bg-white focus:border-indigo-300 rounded text-sm font-mono text-amber-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 transition-all"
+                className="w-20 px-2 py-1.5 bg-transparent border border-transparent hover:border-paper-300 focus:bg-white focus:border-ai-blue-300 rounded text-sm font-mono text-amber-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 transition-all"
               />
               {hasManualLabel ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-100">
@@ -1012,7 +1012,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                 </span>
               ) : previewLabel ? (
                 <span
-                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono text-gray-400 border border-dashed border-gray-200"
+                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono text-ai-graphite-400 border border-dashed border-paper-300"
                   title="Assigned automatically on save, based on row order"
                 >
                   → {previewLabel}
@@ -1027,7 +1027,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           <button
             onClick={() => moveComponent(node.id, 'up')}
             disabled={siblingIndex === 0}
-            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="p-1 text-ai-graphite-400 hover:text-ai-blue-600 hover:bg-ai-blue-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Move up (changes numbering order)"
           >
             <ChevronUp className="w-4 h-4" />
@@ -1035,7 +1035,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           <button
             onClick={() => moveComponent(node.id, 'down')}
             disabled={siblingIndex >= siblingCount - 1}
-            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="p-1 text-ai-graphite-400 hover:text-ai-blue-600 hover:bg-ai-blue-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Move down (changes numbering order)"
           >
             <ChevronDown className="w-4 h-4" />
@@ -1043,7 +1043,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           <button
             onClick={() => promoteComponent(node.id)}
             disabled={level === 0}
-            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="p-1 text-ai-graphite-400 hover:text-ai-blue-600 hover:bg-ai-blue-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Promote one level"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -1051,14 +1051,14 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           <button
             onClick={() => demoteComponent(node.id)}
             disabled={siblingIndex === 0}
-            className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="p-1 text-ai-graphite-400 hover:text-ai-blue-600 hover:bg-ai-blue-50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Nest under the row above"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
           <button
             onClick={() => addSubmodule(node.id)}
-            className="p-1 text-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
+            className="p-1 text-ai-blue-400 hover:text-ai-blue-600 hover:bg-ai-blue-50 rounded transition-colors"
             title="Add a sub-part under this component"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1067,7 +1067,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           </button>
           <button
             onClick={() => removeComponent(node.id)}
-            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+            className="p-1 text-ai-graphite-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
             title="Delete"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1085,7 +1085,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       <div className="mb-8 flex flex-col md:flex-row md:items-start justify-between gap-4">
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+            <h2 className="text-xl font-semibold text-ai-graphite-900 flex items-center gap-2">
               Component Planning
               <Hint
                 title="What happens here"
@@ -1097,7 +1097,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                 aria-label="Reference label style"
                 value={numberingStyleOverride || deriveDefaultNumberingStyle()}
                 onChange={(e) => setNumberingStyleOverride(e.target.value as NumberingStyle)}
-                className="w-full sm:w-auto px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300"
+                className="w-full sm:w-auto px-3 py-1.5 border border-paper-400 rounded-md text-sm bg-white text-ai-graphite-900 focus:outline-none focus:ring-2 focus:ring-ai-blue-500/20 focus:border-ai-blue-300"
               >
                 {NUMBERING_STYLES.map((style) => (
                   <option key={style.value} value={style.value}>
@@ -1111,24 +1111,24 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               />
             </div>
           </div>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-ai-graphite-500 mt-1">
             Define invention components and assign reference labels.
           </p>
           {/* Patent Type + Archetype Badges */}
           <div className="flex items-center gap-2 mt-2">
             {patentTypePrimary && (
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                patentTypePrimary === 'SYSTEM' ? 'bg-blue-100 text-blue-800' :
+                patentTypePrimary === 'SYSTEM' ? 'bg-ai-blue-100 text-ai-blue-800' :
                 patentTypePrimary === 'PRODUCT' ? 'bg-green-100 text-green-800' :
-                patentTypePrimary === 'PROCESS' ? 'bg-purple-100 text-purple-800' :
+                patentTypePrimary === 'PROCESS' ? 'bg-ai-blue-100 text-ai-blue-800' :
                 patentTypePrimary === 'COMPOSITION' ? 'bg-amber-100 text-amber-800' :
-                'bg-gray-100 text-gray-800'
+                'bg-paper-200 text-ai-graphite-800'
               }`}>
                 Patent Type: {patentTypePrimary}
               </span>
             )}
             {(patentTypePrimary === 'SYSTEM' || patentTypePrimary === 'PRODUCT') && archetype !== 'GENERAL' && (
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-ai-blue-100 text-ai-blue-800">
                 Archetype: {archetype}
               </span>
             )}
@@ -1137,7 +1137,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         <div className="flex items-center space-x-3">
           <button
             onClick={() => setShowRanges(!showRanges)}
-            className={`text-sm font-medium px-3 py-1.5 rounded-md border transition-colors ${showRanges ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+            className={`text-sm font-medium px-3 py-1.5 rounded-md border transition-colors ${showRanges ? 'bg-ai-blue-50 text-ai-blue-700 border-ai-blue-100' : 'bg-white text-ai-graphite-600 border-paper-300 hover:bg-paper-100'}`}
           >
             How numbering works
           </button>
@@ -1146,45 +1146,45 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
 
       {/* Collapsible, style-aware numbering guide */}
       {showRanges && (
-        <div className="mb-6 bg-white border border-gray-200 rounded-lg shadow-sm p-4 animate-in fade-in slide-in-from-top-2 duration-200">
+        <div className="mb-6 bg-white border border-paper-300 rounded-lg shadow-sm p-4 animate-in fade-in slide-in-from-top-2 duration-200">
           {effectiveNumberingStyle === 'NUMERIC_BUCKET' && (
             <>
-              <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-2">Numeric labels</h3>
-              <p className="text-sm text-gray-600 mb-3">
+              <h3 className="text-xs font-semibold text-ai-graphite-900 uppercase tracking-wider mb-2">Numeric labels</h3>
+              <p className="text-sm text-ai-graphite-600 mb-3">
                 Numerals follow the order of your tree: the first top-level part gets <span className="font-mono">100</span> and
                 its sub-parts <span className="font-mono">101, 102…</span>; the second top-level part gets <span className="font-mono">200</span>,
                 and so on. Reorder rows with the arrows to change numbering, or type a specific numeral — it is kept as long as it is unique.
               </p>
-              <div className="rounded-md bg-gray-50 border border-gray-100 p-3 text-sm font-mono text-gray-600 space-y-0.5">
-                <div>Motor assembly <span className="text-indigo-600">100</span></div>
-                <div className="pl-4">Rotor <span className="text-indigo-600">101</span></div>
-                <div className="pl-4">Stator <span className="text-indigo-600">102</span></div>
-                <div>Flight controller <span className="text-indigo-600">200</span></div>
+              <div className="rounded-md bg-paper-100 border border-paper-200 p-3 text-sm font-mono text-ai-graphite-600 space-y-0.5">
+                <div>Motor assembly <span className="text-ai-blue-600">100</span></div>
+                <div className="pl-4">Rotor <span className="text-ai-blue-600">101</span></div>
+                <div className="pl-4">Stator <span className="text-ai-blue-600">102</span></div>
+                <div>Flight controller <span className="text-ai-blue-600">200</span></div>
               </div>
             </>
           )}
           {effectiveNumberingStyle === 'STEP_LABEL' && (
             <>
-              <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-2">Step labels</h3>
-              <p className="text-sm text-gray-600 mb-3">
+              <h3 className="text-xs font-semibold text-ai-graphite-900 uppercase tracking-wider mb-2">Step labels</h3>
+              <p className="text-sm text-ai-graphite-600 mb-3">
                 Steps are labelled <span className="font-mono">S100, S200…</span> in row order. Use the ↑↓ arrows to reorder steps —
                 labels update automatically and can&apos;t be typed manually.
               </p>
-              <div className="rounded-md bg-gray-50 border border-gray-100 p-3 text-sm font-mono text-gray-600 space-y-0.5">
-                <div>Receive input <span className="text-purple-600">S100</span></div>
-                <div>Process data <span className="text-purple-600">S200</span></div>
-                <div>Output result <span className="text-purple-600">S300</span></div>
+              <div className="rounded-md bg-paper-100 border border-paper-200 p-3 text-sm font-mono text-ai-graphite-600 space-y-0.5">
+                <div>Receive input <span className="text-ai-blue-600">S100</span></div>
+                <div>Process data <span className="text-ai-blue-600">S200</span></div>
+                <div>Output result <span className="text-ai-blue-600">S300</span></div>
               </div>
             </>
           )}
           {effectiveNumberingStyle === 'CONSTITUENT_LABEL' && (
             <>
-              <h3 className="text-xs font-semibold text-gray-900 uppercase tracking-wider mb-2">Constituent labels</h3>
-              <p className="text-sm text-gray-600 mb-3">
+              <h3 className="text-xs font-semibold text-ai-graphite-900 uppercase tracking-wider mb-2">Constituent labels</h3>
+              <p className="text-sm text-ai-graphite-600 mb-3">
                 Constituents are labelled <span className="font-mono">(a), (b), (c)…</span> in row order. You can type a
                 specific letter label — it is kept as long as it is unique.
               </p>
-              <div className="rounded-md bg-gray-50 border border-gray-100 p-3 text-sm font-mono text-gray-600 space-y-0.5">
+              <div className="rounded-md bg-paper-100 border border-paper-200 p-3 text-sm font-mono text-ai-graphite-600 space-y-0.5">
                 <div>Active agent <span className="text-amber-600">(a)</span></div>
                 <div>Carrier <span className="text-amber-600">(b)</span></div>
                 <div>Stabilizer <span className="text-amber-600">(c)</span></div>
@@ -1228,17 +1228,17 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       )}
 
       {componentReview && (
-        <div className="mb-6 bg-indigo-50 border border-indigo-100 rounded-lg p-4">
+        <div className="mb-6 bg-ai-blue-50 border border-ai-blue-100 rounded-lg p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-sm font-medium text-indigo-900">AI Component Validation</h3>
+              <h3 className="text-sm font-medium text-ai-blue-900">AI Component Validation</h3>
               {componentReview.summary && (
-                <p className="mt-1 text-sm text-indigo-800">{componentReview.summary}</p>
+                <p className="mt-1 text-sm text-ai-blue-800">{componentReview.summary}</p>
               )}
             </div>
             <button
               onClick={() => setComponentReview(null)}
-              className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+              className="text-xs font-medium text-ai-blue-600 hover:text-ai-blue-800"
             >
               Dismiss
             </button>
@@ -1247,28 +1247,28 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           {Array.isArray(componentReview.suggestedComponents) && componentReview.suggestedComponents.length > 0 ? (
             <div className="mt-3 space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium uppercase tracking-wider text-indigo-700">Suggested Stage 0 Components</p>
+                <p className="text-xs font-medium uppercase tracking-wider text-ai-blue-700">Suggested Stage 0 Components</p>
                 <button
                   onClick={() => addSuggestedComponents(componentReview.suggestedComponents)}
-                  className="text-xs font-medium text-indigo-700 hover:text-indigo-900"
+                  className="text-xs font-medium text-ai-blue-700 hover:text-ai-blue-900"
                 >
                   Add All
                 </button>
               </div>
               {componentReview.suggestedComponents.map((suggestion: any, index: number) => (
-                <div key={`${suggestion.name || suggestion.title || 'suggestion'}-${index}`} className="flex items-start justify-between gap-3 rounded-md border border-indigo-100 bg-white p-3">
+                <div key={`${suggestion.name || suggestion.title || 'suggestion'}-${index}`} className="flex items-start justify-between gap-3 rounded-md border border-ai-blue-100 bg-white p-3">
                   <div>
-                    <p className="text-sm font-medium text-gray-900">{suggestion.name || suggestion.title || suggestion.label}</p>
+                    <p className="text-sm font-medium text-ai-graphite-900">{suggestion.name || suggestion.title || suggestion.label}</p>
                     {suggestion.description && (
-                      <p className="mt-0.5 text-xs text-gray-600">{suggestion.description}</p>
+                      <p className="mt-0.5 text-xs text-ai-graphite-600">{suggestion.description}</p>
                     )}
                     {suggestion.claimSupport?.reason && (
-                      <p className="mt-1 text-xs text-indigo-700">{suggestion.claimSupport.reason}</p>
+                      <p className="mt-1 text-xs text-ai-blue-700">{suggestion.claimSupport.reason}</p>
                     )}
                   </div>
                   <button
                     onClick={() => addSuggestedComponents([suggestion])}
-                    className="shrink-0 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                    className="shrink-0 rounded-md border border-ai-blue-200 bg-ai-blue-50 px-2.5 py-1 text-xs font-medium text-ai-blue-700 hover:bg-ai-blue-100"
                   >
                     Add
                   </button>
@@ -1276,7 +1276,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               ))}
             </div>
           ) : (
-            <p className="mt-3 text-sm text-indigo-800">No missing Stage 0 components were suggested.</p>
+            <p className="mt-3 text-sm text-ai-blue-800">No missing Stage 0 components were suggested.</p>
           )}
 
           {Array.isArray(componentReview.missingClaimTerms) && componentReview.missingClaimTerms.length > 0 && (
@@ -1294,7 +1294,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           )}
 
           {Array.isArray(componentReview.warnings) && componentReview.warnings.length > 0 && (
-            <ul className="mt-3 space-y-1 text-xs text-indigo-700">
+            <ul className="mt-3 space-y-1 text-xs text-ai-blue-700">
               {componentReview.warnings.map((warning: string, index: number) => (
                 <li key={index}>{warning}</li>
               ))}
@@ -1304,23 +1304,23 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       )}
 
       {/* Components Table Card */}
-      <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden mb-8">
-        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50/50">
-          <h3 className="text-sm font-medium text-gray-900">Component Structure</h3>
+      <div className="bg-white border border-paper-300 rounded-lg shadow-sm overflow-hidden mb-8">
+        <div className="flex justify-between items-center px-6 py-4 border-b border-paper-200 bg-paper-100/50">
+          <h3 className="text-sm font-medium text-ai-graphite-900">Component Structure</h3>
           <div className="flex items-center gap-2">
             <button
               onClick={handleValidateComponentPlan}
               disabled={isValidatingComponents}
               title="Ask AI to compare frozen claims, Stage 0 components, and this planner list, then suggest missing components or claim terms needing manual review."
-              className="inline-flex items-center px-3 py-1.5 border border-indigo-200 shadow-sm text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="inline-flex items-center px-3 py-1.5 border border-ai-blue-200 shadow-sm text-xs font-medium rounded-md text-ai-blue-700 bg-ai-blue-50 hover:bg-ai-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isValidatingComponents ? (
-                <svg className="animate-spin w-3.5 h-3.5 mr-1.5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <svg className="animate-spin w-3.5 h-3.5 mr-1.5 text-ai-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
                 </svg>
               ) : (
-                <svg className="w-3.5 h-3.5 mr-1.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5 mr-1.5 text-ai-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5 2a8 8 0 11-16 0 8 8 0 0116 0z" />
                 </svg>
               )}
@@ -1328,9 +1328,9 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
             </button>
             <button
               onClick={addComponent}
-              className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
+              className="inline-flex items-center px-3 py-1.5 border border-paper-400 shadow-sm text-xs font-medium rounded-md text-ai-graphite-700 bg-white hover:bg-paper-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 transition-colors"
             >
-              <svg className="w-3.5 h-3.5 mr-1.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3.5 h-3.5 mr-1.5 text-ai-graphite-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               Add Component
@@ -1339,7 +1339,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
         </div>
 
         <div className={`overflow-x-auto ${isProcessing ? 'pointer-events-none opacity-60' : ''}`} aria-busy={isProcessing || undefined}>
-          <table className="min-w-full table-fixed divide-y divide-gray-100">
+          <table className="min-w-full table-fixed divide-y divide-paper-200">
             <colgroup>
               <col className="w-[28%]" />
               <col className="w-[16%]" />
@@ -1347,18 +1347,18 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               <col className="w-[16%]" />
               <col className="w-[10%]" />
             </colgroup>
-            <thead className="bg-gray-50/50">
+            <thead className="bg-paper-100/50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-ai-graphite-400 uppercase tracking-wider">
                   Name
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-ai-graphite-400 uppercase tracking-wider">
                   Type
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-ai-graphite-400 uppercase tracking-wider">
                   Description
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-ai-graphite-400 uppercase tracking-wider">
                   <div className="flex items-center gap-1">
                     <span>Reference</span>
                     <Hint
@@ -1367,12 +1367,12 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                     />
                   </div>
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-right text-xs font-medium text-ai-graphite-400 uppercase tracking-wider">
 
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-100">
+            <tbody className="bg-white divide-y divide-paper-200">
               {flatRows.map(({ node, level, siblingIndex, siblingCount }) =>
                 renderRow(node, level, siblingIndex, siblingCount)
               )}
@@ -1380,13 +1380,13 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center">
-                       <div className="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center mb-3">
-                         <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                       <div className="h-10 w-10 rounded-full bg-paper-200 flex items-center justify-center mb-3">
+                         <svg className="w-5 h-5 text-ai-graphite-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                          </svg>
                        </div>
-                       <p className="text-sm text-gray-500 mb-1">No components defined yet</p>
-                       <button onClick={addComponent} className="text-sm text-indigo-600 hover:text-indigo-700 font-medium">
+                       <p className="text-sm text-ai-graphite-500 mb-1">No components defined yet</p>
+                       <button onClick={addComponent} className="text-sm text-ai-blue-600 hover:text-ai-blue-700 font-medium">
                          Add your first component
                        </button>
                     </div>
@@ -1399,12 +1399,12 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
       </div>
 
       {/* Actions Footer */}
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-gray-200">
-        <div className="flex items-center gap-3 text-sm text-gray-500">
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-paper-300">
+        <div className="flex items-center gap-3 text-sm text-ai-graphite-500">
           <span>
-            <span className="font-medium text-gray-900">{components.length}</span> components defined
+            <span className="font-medium text-ai-graphite-900">{components.length}</span> components defined
             {components.filter(hasAssignedReference).length > 0 && (
-              <span className="ml-1 text-gray-400">
+              <span className="ml-1 text-ai-graphite-400">
                 ({components.filter(hasAssignedReference).length} with labels)
               </span>
             )}
@@ -1425,11 +1425,11 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           <button
             onClick={handleAutoAssignNumerals}
             disabled={isProcessing || components.length === 0}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="inline-flex items-center px-4 py-2 border border-paper-400 shadow-sm text-sm font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             {isProcessing ? (
               <span className="flex items-center">
-                 <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                 <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-ai-graphite-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
                  </svg>
@@ -1437,7 +1437,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               </span>
             ) : (
               <>
-                <svg className="w-4 h-4 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 mr-2 text-ai-graphite-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
                 </svg>
                 Auto Assign
@@ -1449,7 +1449,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               await handleSaveComponents()
             }}
             disabled={isProcessing || components.length === 0}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="inline-flex items-center px-4 py-2 border border-paper-400 shadow-sm text-sm font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             Save Draft
           </button>
@@ -1460,7 +1460,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
               await onComplete({ action: 'set_stage', sessionId: session?.id, stage: 'FIGURE_PLANNER' })
             }}
             disabled={!canProceed}
-            className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-ai-blue-600 hover:bg-ai-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ai-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             Continue
             <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1479,12 +1479,12 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
           aria-labelledby="cp-confirm-title"
         >
           <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-            <h3 id="cp-confirm-title" className="text-base font-semibold text-gray-900">{confirmState.title}</h3>
-            <p className="mt-2 text-sm text-gray-600">{confirmState.message}</p>
+            <h3 id="cp-confirm-title" className="text-base font-semibold text-ai-graphite-900">{confirmState.title}</h3>
+            <p className="mt-2 text-sm text-ai-graphite-600">{confirmState.message}</p>
             <div className="mt-5 flex justify-end gap-3">
               <button
                 onClick={() => setConfirmState(null)}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+                className="inline-flex items-center px-4 py-2 border border-paper-400 text-sm font-medium rounded-lg text-ai-graphite-700 bg-white hover:bg-paper-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
               >
                 Cancel
               </button>
@@ -1497,7 +1497,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
                 className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-offset-2 ${
                   confirmState.tone === 'danger'
                     ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
-                    : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'
+                    : 'bg-ai-blue-600 hover:bg-ai-blue-700 focus:ring-ai-blue-500'
                 }`}
               >
                 {confirmState.confirmLabel}

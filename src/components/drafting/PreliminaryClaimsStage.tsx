@@ -248,12 +248,12 @@ function ClaimGenerationProgress({
   ].filter((input): input is string => Boolean(input))
 
   return (
-    <div className="rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-indigo-50 p-4 shadow-sm sm:p-5">
+    <div className="rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-ai-blue-50 p-4 shadow-sm sm:p-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Claim Drafting Workbench</p>
-          <h4 className="mt-1 text-base font-semibold text-gray-900">Drafting preliminary claims</h4>
-          <p className="mt-1 text-sm text-gray-600">
+          <h4 className="mt-1 text-base font-semibold text-ai-graphite-900">Drafting preliminary claims</h4>
+          <p className="mt-1 text-sm text-ai-graphite-600">
             Estimated progress is shown while the model prepares the claim set.
           </p>
         </div>
@@ -265,7 +265,7 @@ function ClaimGenerationProgress({
 
       <div className="mt-4">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-sm font-medium text-gray-800" aria-live="polite">{currentPhase}</span>
+          <span className="text-sm font-medium text-ai-graphite-800" aria-live="polite">{currentPhase}</span>
           <span className="text-xs font-semibold text-amber-700">{readiness}%</span>
         </div>
         <div
@@ -276,7 +276,7 @@ function ClaimGenerationProgress({
           className="h-2 overflow-hidden rounded-full bg-amber-100"
         >
           <motion.div
-            className="h-full rounded-full bg-gradient-to-r from-amber-500 via-orange-400 to-indigo-500"
+            className="h-full rounded-full bg-gradient-to-r from-amber-500 via-orange-400 to-ai-blue-500"
             initial={false}
             animate={{ width: `${readiness}%` }}
             transition={{ duration: 0.45, ease: 'easeOut' }}
@@ -293,7 +293,7 @@ function ClaimGenerationProgress({
         {inputs.map((input) => (
           <span
             key={input}
-            className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-600"
+            className="rounded-full border border-paper-300 bg-white px-2.5 py-1 text-xs font-medium text-ai-graphite-600"
           >
             {input}
           </span>
@@ -314,12 +314,12 @@ function ClaimGenerationProgress({
                   ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
                   : active
                     ? 'border-amber-300 bg-amber-100/70 text-amber-950'
-                    : 'border-gray-200 bg-white/80 text-gray-500',
+                    : 'border-paper-300 bg-white/80 text-ai-graphite-500',
               ].join(' ')}
             >
               <div className={[
                 'mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full',
-                complete ? 'bg-emerald-600 text-white' : active ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-400',
+                complete ? 'bg-emerald-600 text-white' : active ? 'bg-amber-500 text-white' : 'bg-paper-200 text-ai-graphite-400',
               ].join(' ')}>
                 {complete ? <CheckCircle2 className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
               </div>
@@ -332,7 +332,7 @@ function ClaimGenerationProgress({
         })}
       </div>
 
-      <div className="mt-4 min-h-[36px] rounded-lg border border-indigo-100 bg-white/80 px-3 py-2 text-sm text-gray-700" aria-live="polite">
+      <div className="mt-4 min-h-[36px] rounded-lg border border-ai-blue-100 bg-white/80 px-3 py-2 text-sm text-ai-graphite-700" aria-live="polite">
         <AnimatePresence mode="wait">
           <motion.p
             key={CLAIM_GENERATION_NOTES[noteIndex]}
@@ -940,13 +940,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-              <div className="p-2 bg-indigo-100 rounded-lg">
-                <Scale className="w-6 h-6 text-indigo-600" />
+            <h2 className="text-2xl font-bold text-ai-graphite-900 flex items-center gap-3">
+              <div className="p-2 bg-ai-blue-100 rounded-lg">
+                <Scale className="w-6 h-6 text-ai-blue-600" />
               </div>
               Preliminary Claims
             </h2>
-            <p className="text-gray-500 mt-2">
+            <p className="text-ai-graphite-500 mt-2">
               Generate and refine jurisdiction-aware patent claims based on your invention disclosure.
             </p>
           </div>
@@ -972,17 +972,17 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
       <div className="grid grid-cols-1 gap-6">
         {/* ========== Claims Panel ========== */}
         <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+          <div className="bg-white rounded-xl border border-paper-300 shadow-sm">
             {/* Claims Header */}
             <button
               onClick={() => setShowClaimsDetails(!showClaimsDetails)}
-              className="w-full flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-white to-indigo-50/30 hover:bg-indigo-50/30 transition-colors"
+              className="w-full flex items-center justify-between px-6 py-4 border-b border-paper-200 bg-gradient-to-r from-white to-ai-blue-50/30 hover:bg-ai-blue-50/30 transition-colors"
             >
               <div className="flex items-center gap-2">
-                <div className="h-6 w-6 rounded-full bg-indigo-100 flex items-center justify-center">
-                  <Scale className="w-3.5 h-3.5 text-indigo-600" />
+                <div className="h-6 w-6 rounded-full bg-ai-blue-100 flex items-center justify-center">
+                  <Scale className="w-3.5 h-3.5 text-ai-blue-600" />
                 </div>
-                <h3 className="text-sm font-semibold text-gray-900">
+                <h3 className="text-sm font-semibold text-ai-graphite-900">
                   Initial Patent Claims
                 </h3>
                 <Badge variant="secondary" className="text-xs">
@@ -991,19 +991,19 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
               </div>
               <div className="flex items-center gap-2">
                 {!showClaimsDetails && (
-                  <span className="text-xs text-gray-500">Click to expand</span>
+                  <span className="text-xs text-ai-graphite-500">Click to expand</span>
                 )}
-                {showClaimsDetails ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                {showClaimsDetails ? <ChevronDown className="w-4 h-4 text-ai-graphite-400" /> : <ChevronRight className="w-4 h-4 text-ai-graphite-400" />}
               </div>
             </button>
 
             {/* Compact metadata, status, and style controls */}
             {showClaimsDetails && (
-              <div className="px-5 py-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 border-b border-indigo-100">
+              <div className="px-5 py-3 bg-gradient-to-r from-ai-blue-50/50 to-violet-50/50 border-b border-ai-blue-100">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-gray-600">Invention Type</span>
+                      <span className="text-xs font-medium text-ai-graphite-600">Invention Type</span>
                     <div className="relative" data-patent-type-dropdown>
                       <Tooltip content="Click to change the invention type if the AI classification is incorrect" position="bottom">
                         <button
@@ -1012,13 +1012,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                           className={`text-xs font-bold px-2.5 py-1 rounded-md flex items-center gap-1.5 transition-all ${
                             isUpdatingPatentType ? 'opacity-50 cursor-wait' :
                             claimsFrozen ? 'cursor-not-allowed opacity-70' :
-                            'cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-indigo-300'
+                            'cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-ai-blue-300'
                           } ${
-                            patentType === 'PRODUCT' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
-                            patentType === 'SYSTEM' ? 'bg-purple-100 text-purple-800 border border-purple-200' :
+                            patentType === 'PRODUCT' ? 'bg-ai-blue-100 text-ai-blue-800 border border-ai-blue-200' :
+                            patentType === 'SYSTEM' ? 'bg-ai-blue-100 text-ai-blue-800 border border-ai-blue-200' :
                             patentType === 'PROCESS' ? 'bg-green-100 text-green-800 border border-green-200' :
                             patentType === 'COMPOSITION' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
-                            'bg-gray-100 text-gray-600 border border-gray-200'
+                            'bg-paper-200 text-ai-graphite-600 border border-paper-300'
                           }`}
                         >
                           {isUpdatingPatentType ? (
@@ -1040,7 +1040,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -4 }}
                             transition={{ duration: 0.15 }}
-                            className="absolute left-0 top-full mt-1 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[160px]"
+                            className="absolute left-0 top-full mt-1 z-50 bg-white rounded-lg shadow-lg border border-paper-300 py-1 min-w-[160px]"
                           >
                             {(['PRODUCT', 'SYSTEM', 'PROCESS', 'COMPOSITION'] as const).map((type) => (
                               <button
@@ -1049,24 +1049,24 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                 disabled={isUpdatingPatentType}
                                 className={`w-full px-3 py-2 text-left text-xs font-medium flex items-center gap-2 transition-colors ${
                                   patentType === type
-                                    ? 'bg-indigo-50 text-indigo-700'
-                                    : 'hover:bg-gray-50 text-gray-700'
+                                    ? 'bg-ai-blue-50 text-ai-blue-700'
+                                    : 'hover:bg-paper-100 text-ai-graphite-700'
                                 }`}
                               >
                                 <span className={`w-2 h-2 rounded-full ${
-                                  type === 'PRODUCT' ? 'bg-blue-500' :
-                                  type === 'SYSTEM' ? 'bg-purple-500' :
+                                  type === 'PRODUCT' ? 'bg-ai-blue-500' :
+                                  type === 'SYSTEM' ? 'bg-ai-blue-500' :
                                   type === 'PROCESS' ? 'bg-green-500' :
                                   'bg-amber-500'
                                 }`} />
                                 <span>{type}</span>
                                 {patentType === type && (
-                                  <Check className="w-3 h-3 ml-auto text-indigo-600" />
+                                  <Check className="w-3 h-3 ml-auto text-ai-blue-600" />
                                 )}
                               </button>
                             ))}
-                            <div className="border-t border-gray-100 mt-1 pt-1 px-3 py-2">
-                              <p className="text-[10px] text-gray-500 leading-relaxed">
+                            <div className="border-t border-paper-200 mt-1 pt-1 px-3 py-2">
+                              <p className="text-[10px] text-ai-graphite-500 leading-relaxed">
                                 <strong>PRODUCT:</strong> Single device/article<br/>
                                 <strong>SYSTEM:</strong> Multi-component setup<br/>
                                 <strong>PROCESS:</strong> Method/steps<br/>
@@ -1078,13 +1078,13 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                       </AnimatePresence>
                     </div>
                     {!patentType && (
-                      <span className="text-[10px] text-gray-400">(Classifying...)</span>
+                      <span className="text-[10px] text-ai-graphite-400">(Classifying...)</span>
                     )}
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs text-gray-600">
+                    <div className="flex items-center gap-2 text-xs text-ai-graphite-600">
                       <span className="font-medium">Writing Style</span>
-                      <span className="text-gray-500">
+                      <span className="text-ai-graphite-500">
                         {usePersonaStyle
                           ? (personaSelection?.primaryPersonaName || 'Enabled')
                           : 'Off'}
@@ -1128,7 +1128,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                         } ${
                           usePersonaStyle
                             ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                            : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                            : 'bg-white border-paper-300 text-ai-graphite-500 hover:bg-paper-100'
                         }`}
                       >
                         <span className="text-sm">{checkingPersonas ? '...' : usePersonaStyle ? '✓' : '○'}</span>
@@ -1144,8 +1144,8 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                           checkingPersonas ? 'opacity-50 cursor-wait' : ''
                         } ${
                           personaSelection?.primaryPersonaName
-                            ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                            ? 'bg-ai-blue-50 border-ai-blue-200 text-ai-blue-700'
+                            : 'bg-white border-paper-300 text-ai-graphite-600 hover:bg-paper-100'
                         }`}
                       >
                         <span>👤</span>
@@ -1153,7 +1153,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                           {checkingPersonas ? 'Checking...' : personaSelection?.primaryPersonaName || 'Persona'}
                         </span>
                         {personaSelection?.secondaryPersonaNames?.length ? (
-                          <span className="text-[10px] bg-indigo-200 text-indigo-700 px-1 rounded">
+                          <span className="text-[10px] bg-ai-blue-200 text-ai-blue-700 px-1 rounded">
                             +{personaSelection.secondaryPersonaNames.length}
                           </span>
                         ) : null}
@@ -1162,12 +1162,12 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                   </div>
                 </div>
 
-                <div className="mt-3 rounded-md border border-indigo-100 bg-white/80 p-3">
+                <div className="mt-3 rounded-md border border-ai-blue-100 bg-white/80 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs font-medium text-gray-700">Claim Scope</div>
+                    <div className="text-xs font-medium text-ai-graphite-700">Claim Scope</div>
                     <div className="flex items-center gap-2">
-                      {isSavingClaimScopeStyle && <RefreshCw className="h-3 w-3 animate-spin text-indigo-500" />}
-                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                      {isSavingClaimScopeStyle && <RefreshCw className="h-3 w-3 animate-spin text-ai-blue-500" />}
+                      <span className="rounded-full bg-ai-blue-100 px-2 py-0.5 text-[11px] font-medium text-ai-blue-700">
                         {activeClaimScopeStage.label}
                       </span>
                     </div>
@@ -1175,7 +1175,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                   <div className="relative mt-4" role="group" aria-label="Claim scope style">
                     <div className="absolute left-4 right-4 top-3 h-1 rounded-full bg-slate-200">
                       <div
-                        className="h-1 rounded-full bg-indigo-500 transition-all"
+                        className="h-1 rounded-full bg-ai-blue-500 transition-all"
                         style={{ width: `${claimScopeFillPercent}%` }}
                       />
                     </div>
@@ -1203,14 +1203,14 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                           >
                             <span className={`z-10 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors ${
                               active
-                                ? 'border-indigo-600 bg-indigo-600 text-white'
+                                ? 'border-ai-blue-600 bg-ai-blue-600 text-white'
                                 : reached
-                                  ? 'border-indigo-500 bg-white text-indigo-700'
+                                  ? 'border-ai-blue-500 bg-white text-ai-blue-700'
                                   : 'border-slate-300 bg-white text-slate-500'
                             }`}>
                               {index + 1}
                             </span>
-                            <span className={`text-[11px] font-medium sm:text-xs ${active ? 'text-gray-900' : 'text-gray-600'}`}>
+                            <span className={`text-[11px] font-medium sm:text-xs ${active ? 'text-ai-graphite-900' : 'text-ai-graphite-600'}`}>
                               {stage.label}
                             </span>
                             <span
@@ -1241,8 +1241,8 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                 >
                   {/* Multi-Jurisdiction Notice */}
                   {allJurisdictions.length > 1 && (
-                    <div className="px-5 py-2 bg-blue-50 border-b border-blue-100">
-                      <div className="flex items-start gap-2 text-sm text-blue-800">
+                    <div className="px-5 py-2 bg-ai-blue-50 border-b border-ai-blue-100">
+                      <div className="flex items-start gap-2 text-sm text-ai-blue-800">
                         <Globe className="w-4 h-4 mt-0.5 flex-shrink-0" />
                         <div>
                           <span className="font-medium">Multi-Jurisdiction Filing:</span>{' '}
@@ -1258,14 +1258,14 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                       <div className="py-6">
                         <div className="text-center mb-6">
                           <Scale className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                          <p className="text-gray-600">No claims generated yet.</p>
+                          <p className="text-ai-graphite-600">No claims generated yet.</p>
                         </div>
 
                         {/* User Remarks Textarea */}
                         <div className="max-w-lg mx-auto mb-6">
                           <div className="flex items-center gap-2 mb-2">
                             <Lightbulb className="w-4 h-4 text-amber-500" />
-                            <span className="text-sm text-gray-600">
+                            <span className="text-sm text-ai-graphite-600">
                               Add remarks to guide claim drafting (optional)
                             </span>
                           </div>
@@ -1273,10 +1273,10 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                             value={userClaimRemarks}
                             onChange={(e) => setUserClaimRemarks(e.target.value)}
                             placeholder="Any specific emphasis, exclusions, embodiments, or scope preferences for claim drafting?"
-                            className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 resize-none"
+                            className="w-full px-4 py-3 text-sm border border-paper-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 resize-none"
                             rows={3}
                           />
-                          <p className="text-[11px] text-gray-400 mt-1">
+                          <p className="text-[11px] text-ai-graphite-400 mt-1">
                             These remarks influence scope and emphasis, not the patent type.
                           </p>
                         </div>
@@ -1289,7 +1289,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                             <Sparkles className="w-4 h-4 mr-2" />
                             Generate Claims for {activeJurisdiction}
                           </Button>
-                          <p className="text-xs text-gray-500 mt-3">
+                          <p className="text-xs text-ai-graphite-500 mt-3">
                             Claims will be generated using {activeJurisdiction} patent office rules
                           </p>
                         </div>
@@ -1313,11 +1313,11 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                             {/* Edit Mode Header */}
                             <div className="flex items-center justify-between mb-3">
                               <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-gray-700">
+                                <span className="text-sm font-medium text-ai-graphite-700">
                                   {isEditingClaims ? 'Editing Claims' : 'Generated Claims'}
                                 </span>
                                 {isEditingClaims && (
-                                  <Badge variant="secondary" className="bg-blue-100 text-blue-700 text-xs">
+                                  <Badge variant="secondary" className="bg-ai-blue-100 text-ai-blue-700 text-xs">
                                     <Edit2 className="w-3 h-3 mr-1" />
                                     Edit Mode
                                   </Badge>
@@ -1337,7 +1337,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                     size="sm"
                                     onClick={() => setIsEditingClaims(true)}
                                     disabled={isResettingClaims}
-                                    className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                                    className="text-ai-blue-600 border-ai-blue-200 hover:bg-ai-blue-50"
                                   >
                                     <Edit2 className="w-3.5 h-3.5 mr-1.5" />
                                     Edit Claims
@@ -1417,8 +1417,8 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
                             {/* Claims Display / Editor */}
                             {isEditingClaims ? (
-                              <div className="border-2 border-indigo-200 rounded-lg bg-indigo-50/30">
-                                <div className="px-3 py-2 bg-indigo-100 border-b border-indigo-200 text-xs text-indigo-700 flex items-center gap-2">
+                              <div className="border-2 border-ai-blue-200 rounded-lg bg-ai-blue-50/30">
+                                <div className="px-3 py-2 bg-ai-blue-100 border-b border-ai-blue-200 text-xs text-ai-blue-700 flex items-center gap-2">
                                   <Edit2 className="w-3 h-3" />
                                   <span>Make your changes below. Click &quot;Done Editing&quot; when finished to save your changes.</span>
                                 </div>
@@ -1434,16 +1434,16 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                               </div>
                             ) : (
                               <div
-                                className="border border-gray-200 rounded-lg bg-gray-50/50 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/20 transition-colors group"
+                                className="border border-paper-300 rounded-lg bg-paper-100/50 cursor-pointer hover:border-ai-blue-300 hover:bg-ai-blue-50/20 transition-colors group"
                                 onClick={() => !claimsFrozen && setIsEditingClaims(true)}
                               >
-                                <div className="px-4 py-3 prose prose-sm max-w-none text-gray-700 leading-relaxed [&>p]:mb-3 [&>p:last-child]:mb-0">
+                                <div className="px-4 py-3 prose prose-sm max-w-none text-ai-graphite-700 leading-relaxed [&>p]:mb-3 [&>p:last-child]:mb-0">
                                   <div
                                     dangerouslySetInnerHTML={{ __html: claimsText }}
                                   />
                                 </div>
                                 {!claimsFrozen && (
-                                  <div className="px-4 py-2 border-t border-gray-100 bg-gray-50 text-xs text-gray-500 flex items-center gap-1 group-hover:text-indigo-600 group-hover:bg-indigo-50 transition-colors">
+                                  <div className="px-4 py-2 border-t border-paper-200 bg-paper-100 text-xs text-ai-graphite-500 flex items-center gap-1 group-hover:text-ai-blue-600 group-hover:bg-ai-blue-50 transition-colors">
                                     <Edit2 className="w-3 h-3" />
                                     Click to edit claims
                                   </div>
@@ -1452,14 +1452,14 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                             )}
 
                             {/* Regeneration instructions + action buttons */}
-                            <div className="flex flex-col gap-3 pt-4 border-t border-gray-100">
+                            <div className="flex flex-col gap-3 pt-4 border-t border-paper-200">
                               <div className="flex items-center gap-2">
                                 <input
                                   type="text"
                                   value={regenerateInstructions}
                                   onChange={(e) => setRegenerateInstructions(e.target.value)}
                                   placeholder="Enter instructions for claim regeneration (optional)"
-                                  className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                  className="flex-1 px-3 py-2 text-sm border border-paper-400 rounded-md focus:outline-none focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
                                   disabled={claimsFrozen || isGeneratingClaims || isResettingClaims}
                                 />
                                 <Button
@@ -1514,16 +1514,16 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                       <button
                                         type="button"
                                         onClick={() => setShowFreezeHelp(!showFreezeHelp)}
-                                        className="flex h-8 w-8 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-blue-700 transition-colors hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                                        className="flex h-8 w-8 items-center justify-center rounded-full border border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700 transition-colors hover:bg-ai-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500"
                                         aria-label="Why freeze claims?"
                                         aria-expanded={showFreezeHelp}
                                       >
                                         <Info className="h-4 w-4" />
                                       </button>
                                       {showFreezeHelp && (
-                                        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-80 -translate-x-1/2 rounded-lg border border-blue-200 bg-blue-50 p-4 text-left shadow-lg">
-                                          <h4 className="mb-2 text-sm font-semibold text-blue-900">Why freeze claims?</h4>
-                                          <ul className="list-disc space-y-1 pl-4 text-xs text-blue-800">
+                                        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-80 -translate-x-1/2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-4 text-left shadow-lg">
+                                          <h4 className="mb-2 text-sm font-semibold text-ai-blue-900">Why freeze claims?</h4>
+                                          <ul className="list-disc space-y-1 pl-4 text-xs text-ai-blue-800">
                                             <li>Claims define the legal scope of your patent protection</li>
                                             <li>Frozen claims will be used in Figure Planner for relevant diagrams</li>
                                             <li>Prior Art analysis will compare patents against your specific claims</li>
@@ -1564,19 +1564,19 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
           <div className="flex items-center gap-3 flex-wrap justify-end">
             {skipPriorArtClicked ? (
               <>
-                <label className="flex items-center gap-2 text-sm text-gray-700">
+                <label className="flex items-center gap-2 text-sm text-ai-graphite-700">
                   <input
                     type="checkbox"
                     checked={useInitialClaimsForDraft}
                     onChange={(e) => setUseInitialClaimsForDraft(e.target.checked)}
-                    className="rounded border-gray-300"
+                    className="rounded border-paper-400"
                   />
                   Use Initial Claims for drafting
                 </label>
                 <Button
                   onClick={skipPriorArtAndFreeze}
                   disabled={!canProceed || isNavigating || isResettingClaims}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                  className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
                 >
                   Next
                   <ChevronRight className="w-4 h-4 ml-2" />
@@ -1587,7 +1587,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                 <Button
                   onClick={handleSkipClick}
                   disabled={!canProceed || isNavigating || isResettingClaims}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                  className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
                 >
                   Skip Prior Art Stage
                   <ChevronRight className="w-4 h-4 ml-2" />
@@ -1636,38 +1636,38 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
             {/* Header */}
-            <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-violet-50">
+            <div className="p-6 border-b border-paper-200 bg-gradient-to-r from-ai-blue-50 to-violet-50">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 bg-amber-100 rounded-xl">
                   <AlertCircle className="w-6 h-6 text-amber-600" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">No Writing Personas Available</h3>
-                  <p className="text-sm text-gray-500 mt-0.5">Create a persona to use your own writing style</p>
+                  <h3 className="text-lg font-semibold text-ai-graphite-900">No Writing Personas Available</h3>
+                  <p className="text-sm text-ai-graphite-500 mt-0.5">Create a persona to use your own writing style</p>
                 </div>
               </div>
             </div>
 
             {/* Content */}
             <div className="p-6 space-y-4">
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-ai-graphite-600">
                 Writing personas allow the AI to mimic your preferred drafting style, terminology, and structure
                 when generating claims and other patent sections.
               </p>
 
               <div className="space-y-3">
                 {/* Option 1 */}
-                <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-100">
+                <div className="p-4 bg-ai-blue-50 rounded-lg border border-ai-blue-100">
                   <div className="flex items-start gap-3">
                     <span className="text-lg">✍️</span>
                     <div>
-                      <h4 className="font-medium text-indigo-900">Create Your Own Persona</h4>
-                      <p className="text-sm text-indigo-700 mt-1">
+                      <h4 className="font-medium text-ai-blue-900">Create Your Own Persona</h4>
+                      <p className="text-sm text-ai-blue-700 mt-1">
                         Go to <strong>Personas</strong> page from the main navigation to create your personal writing style.
                       </p>
                       <a
                         href="/personas"
-                        className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                        className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-ai-blue-600 hover:text-ai-blue-800"
                       >
                         Open Personas Page
                         <ChevronRight className="w-4 h-4" />
@@ -1678,12 +1678,12 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
 
                 {/* Option 2: Org personas (non-admin) */}
                 {!isAdmin && (
-                  <div className="p-4 bg-purple-50 rounded-lg border border-purple-100">
+                  <div className="p-4 bg-ai-blue-50 rounded-lg border border-ai-blue-100">
                     <div className="flex items-start gap-3">
                       <span className="text-lg">🏢</span>
                       <div>
-                        <h4 className="font-medium text-purple-900">Use Organization Personas</h4>
-                        <p className="text-sm text-purple-700 mt-1">
+                        <h4 className="font-medium text-ai-blue-900">Use Organization Personas</h4>
+                        <p className="text-sm text-ai-blue-700 mt-1">
                           Contact your Administrator (OWNER or ADMIN) to create shared organization personas
                           that all team members can use.
                         </p>
@@ -1718,7 +1718,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+            <div className="px-6 py-4 bg-paper-100 border-t border-paper-200 flex justify-end gap-3">
               <Button
                 variant="outline"
                 onClick={() => setShowNoPersonasModal(false)}
@@ -1730,7 +1730,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                   setShowNoPersonasModal(false)
                   window.location.href = '/personas'
                 }}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
               >
                 Go to Personas Page
               </Button>

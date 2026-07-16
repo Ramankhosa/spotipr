@@ -168,13 +168,13 @@ function StatusIcon({ status, size = 'md' }: StatusIconProps) {
   
   switch (status) {
     case 'completed':
-      return <Check className={`${sizeClass} text-emerald-400`} />
+      return <Check className={`${sizeClass} text-[#4e9d6e]`} />
     case 'in_progress':
-      return <Loader2 className={`${sizeClass} text-amber-400 animate-spin`} />
+      return <Loader2 className={`${sizeClass} text-[#c98f2a] animate-spin`} />
     case 'skipped':
-      return <SkipForward className={`${sizeClass} text-slate-500`} />
+      return <SkipForward className={`${sizeClass} text-ai-graphite-400`} />
     default:
-      return <Circle className={`${sizeClass} text-slate-600`} />
+      return <Circle className={`${sizeClass} text-ai-graphite-400/70`} />
   }
 }
 
@@ -487,29 +487,27 @@ export default function VerticalStageNav({
   // Theme Classes
   // ============================================================================
 
+  // "Banker's green" document system: light = page-white on the greige desk
+  // with lamp-green accents; dark = green-black study with brightened lamp.
   const themeClasses = useMemo(() => ({
     container: theme === 'dark'
-      ? 'bg-gradient-to-b from-slate-900/95 via-slate-800/95 to-slate-900/95 border-white/10'
-      : 'bg-white/95 border-slate-200 shadow-xl',
-    text: theme === 'dark' ? 'text-white' : 'text-slate-900',
-    textMuted: theme === 'dark' ? 'text-slate-400' : 'text-slate-600',
-    textSubtle: theme === 'dark' ? 'text-slate-500' : 'text-slate-400',
-    border: theme === 'dark' ? 'border-white/10' : 'border-slate-200',
-    hover: theme === 'dark' ? 'hover:bg-white/5' : 'hover:bg-slate-50',
+      ? 'bg-[#161b17]/95 border-white/10'
+      : 'bg-paper-50/95 border-paper-300 shadow-xl',
+    text: theme === 'dark' ? 'text-[#e6eadf]' : 'text-ai-graphite-900',
+    textMuted: theme === 'dark' ? 'text-[#a8ad9e]' : 'text-ai-graphite-600',
+    textSubtle: theme === 'dark' ? 'text-[#6a7064]' : 'text-ai-graphite-400',
+    border: theme === 'dark' ? 'border-white/10' : 'border-ai-graphite-900/10',
+    hover: theme === 'dark' ? 'hover:bg-white/5' : 'hover:bg-paper-100',
     activeStage: theme === 'dark'
-      ? 'bg-teal-500/20 border-teal-400/30'
-      : 'bg-indigo-50 border-indigo-200',
-    activeText: theme === 'dark' ? 'text-teal-400' : 'text-indigo-600',
-    completedText: theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600',
-    progressBg: theme === 'dark' ? 'bg-slate-700/50' : 'bg-slate-200',
-    progressFill: theme === 'dark'
-      ? 'bg-gradient-to-r from-teal-500 to-cyan-400'
-      : 'bg-gradient-to-r from-indigo-500 to-blue-400',
-    subStageBorder: theme === 'dark' ? 'border-slate-700/50' : 'border-slate-200',
-    iconBg: theme === 'dark' ? 'bg-slate-700/50' : 'bg-slate-100',
-    currentIconBg: theme === 'dark'
-      ? 'bg-gradient-to-br from-teal-400 to-cyan-500'
-      : 'bg-gradient-to-br from-indigo-500 to-blue-500'
+      ? 'bg-[#7fb597]/15 border-[#7fb597]/30'
+      : 'bg-lamp-100 border-lamp-200',
+    activeText: theme === 'dark' ? 'text-[#7fb597]' : 'text-lamp-600',
+    completedText: theme === 'dark' ? 'text-[#8fc9a5]' : 'text-[#1a7f4e]',
+    progressBg: theme === 'dark' ? 'bg-white/10' : 'bg-paper-300',
+    progressFill: theme === 'dark' ? 'bg-[#7fb597]' : 'bg-lamp-600',
+    subStageBorder: theme === 'dark' ? 'border-white/10' : 'border-paper-300',
+    iconBg: theme === 'dark' ? 'bg-white/10' : 'bg-paper-200',
+    currentIconBg: theme === 'dark' ? 'bg-lamp-600' : 'bg-lamp-600'
   }), [theme])
 
   // ============================================================================
@@ -531,17 +529,11 @@ export default function VerticalStageNav({
           {!isCollapsed ? (
             <>
               <div className="flex items-center gap-3">
-                <div className={`
-                  w-9 h-9 rounded-xl flex items-center justify-center
-                  ${theme === 'dark' 
-                    ? 'bg-gradient-to-br from-teal-400 to-cyan-500' 
-                    : 'bg-gradient-to-br from-indigo-500 to-blue-500'
-                  }
-                `}>
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-lamp-600">
                   <FileText className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <div className={`text-sm font-semibold ${themeClasses.text}`}>
+                  <div className={`font-serif text-sm font-semibold ${themeClasses.text}`}>
                     Patent Draft
                   </div>
                   <div className={`text-xs ${themeClasses.textMuted}`}>
@@ -589,13 +581,7 @@ export default function VerticalStageNav({
               >
                 <PanelLeft className={`w-5 h-5 ${themeClasses.textMuted}`} />
               </button>
-              <div className={`
-                w-8 h-8 rounded-lg flex items-center justify-center
-                ${theme === 'dark' 
-                  ? 'bg-gradient-to-br from-teal-400 to-cyan-500' 
-                  : 'bg-gradient-to-br from-indigo-500 to-blue-500'
-                }
-              `}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-lamp-600">
                 <FileText className="w-4 h-4 text-white" />
               </div>
             </div>
@@ -921,9 +907,9 @@ export default function VerticalStageNav({
             onClick={() => handleStageClick(currentStage)}
             className={`
               text-xs px-2 py-1 rounded
-              ${theme === 'dark' 
-                ? 'bg-teal-500/20 text-teal-400 hover:bg-teal-500/30' 
-                : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+              ${theme === 'dark'
+                ? 'bg-[#7fb597]/15 text-[#7fb597] hover:bg-[#7fb597]/25'
+                : 'bg-lamp-100 text-lamp-700 hover:bg-lamp-200'
               }
               transition-colors
             `}

@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -63,7 +63,7 @@ function statusClasses(status: string) {
   if (status === 'COMPLETED_WITH_ERRORS') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'FAILED' || status === 'CANCELLED') return 'border-rose-200 bg-rose-50 text-rose-700'
   if (status === 'PAUSED') return 'border-violet-200 bg-violet-50 text-violet-700'
-  if (status === 'PROCESSING') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (status === 'PROCESSING') return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
   return 'border-slate-200 bg-slate-50 text-slate-700'
 }
 
@@ -227,7 +227,7 @@ export default function BatchHistoryPage() {
             <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Batch History</h1>
             <p className="mt-2 text-sm text-slate-600">Browse, filter, and manage automated drafting batches.</p>
           </div>
-          <Link href="/patents/draft/batch" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+          <Link href="/patents/draft/batch" className="inline-flex items-center gap-2 rounded-lg bg-ai-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-ai-blue-700">
             <Upload className="h-4 w-4" />
             New batch
           </Link>
@@ -243,7 +243,7 @@ export default function BatchHistoryPage() {
                 key={option}
                 type="button"
                 onClick={() => setStatus(option)}
-                className={`rounded-full border px-3 py-1 text-xs font-semibold ${status === option ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold ${status === option ? 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
               >
                 {option === 'ALL' ? `All (${totalCount})` : `${option.replace(/_/g, ' ')} (${statusCounts[option] || 0})`}
               </button>
@@ -256,7 +256,7 @@ export default function BatchHistoryPage() {
                 value={query}
                 onChange={event => setQuery(event.target.value)}
                 placeholder="Search batch name or source file"
-                className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
               />
             </label>
             <select value={dateRange} onChange={event => setDateRange(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
@@ -307,7 +307,7 @@ export default function BatchHistoryPage() {
                         {batch.warningItems ? `, ${batch.warningItems} warnings` : ''}
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-blue-600" style={{ width: `${progressPct(batch)}%` }} />
+                        <div className="h-full rounded-full bg-ai-blue-600" style={{ width: `${progressPct(batch)}%` }} />
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-600">{new Date(batch.createdAt).toLocaleString()}</td>
@@ -326,7 +326,7 @@ export default function BatchHistoryPage() {
                           </button>
                         ) : null}
                         {batch.status === 'PAUSED' ? (
-                          <button type="button" onClick={() => runBatchAction(batch, 'resume')} disabled={action === `${batch.id}:resume`} className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+                          <button type="button" onClick={() => runBatchAction(batch, 'resume')} disabled={action === `${batch.id}:resume`} className="inline-flex items-center gap-1 rounded border border-ai-blue-200 bg-ai-blue-50 px-2 py-1 text-xs font-medium text-ai-blue-700 hover:bg-ai-blue-100 disabled:opacity-50">
                             {action === `${batch.id}:resume` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Resume
                           </button>
                         ) : null}

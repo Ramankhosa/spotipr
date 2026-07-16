@@ -174,17 +174,17 @@ export default function ReviewFixStage({ session, patent, onComplete, onRefresh 
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Review & Fix</h2>
-        <p className="text-gray-600">Review consistency and fix any validation issues.</p>
+        <h2 className="text-2xl font-bold text-ai-graphite-900 mb-2">Review & Fix</h2>
+        <p className="text-ai-graphite-600">Review consistency and fix any validation issues.</p>
       </div>
 
       <div className="border rounded-lg p-6 bg-white">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Consistency & Validation</h3>
+          <h3 className="text-lg font-semibold text-ai-graphite-900">Consistency & Validation</h3>
           <div className="flex items-center gap-2">
             {availableJurisdictions.length > 1 && (
               <select
-                className="border rounded px-3 py-2 text-sm text-gray-900 bg-white"
+                className="border rounded px-3 py-2 text-sm text-ai-graphite-900 bg-white"
                 value={effectiveJurisdiction}
                 onChange={(e) => setSelectedJurisdiction(e.target.value.toUpperCase())}
                 aria-label="Select jurisdiction for review"
@@ -192,26 +192,26 @@ export default function ReviewFixStage({ session, patent, onComplete, onRefresh 
                 {availableJurisdictions.map(code => <option key={code} value={code}>{code}</option>)}
               </select>
             )}
-            <button onClick={runChecks} className="px-3 py-2 text-sm rounded bg-indigo-600 text-white">
+            <button onClick={runChecks} className="px-3 py-2 text-sm rounded bg-ai-blue-600 text-white">
               Run Checks
             </button>
-            <button onClick={handleAutoFix} className="px-3 py-2 text-sm rounded border border-gray-200 text-gray-700">
+            <button onClick={handleAutoFix} className="px-3 py-2 text-sm rounded border border-paper-300 text-ai-graphite-700">
               Apply Quick Fixes
             </button>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-3 rounded bg-gray-50">
-            <div className="text-xs text-gray-500">Numeral Consistency</div>
+          <div className="p-3 rounded bg-paper-100">
+            <div className="text-xs text-ai-graphite-500">Numeral Consistency</div>
             <div className="text-sm">{report?.numeralConsistency ? 'OK' : 'Needs Attention'}</div>
           </div>
-          <div className="p-3 rounded bg-gray-50">
-            <div className="text-xs text-gray-500">Figure References</div>
+          <div className="p-3 rounded bg-paper-100">
+            <div className="text-xs text-ai-graphite-500">Figure References</div>
             <div className="text-sm">{report?.figureReferences ? 'OK' : 'Invalid refs present'}</div>
           </div>
-          <div className="p-3 rounded bg-gray-50">
-            <div className="text-xs text-gray-500">Issues</div>
+          <div className="p-3 rounded bg-paper-100">
+            <div className="text-xs text-ai-graphite-500">Issues</div>
             <div className="text-sm">
               Missing: {(report?.missingNumerals || []).join(', ') || '—'} | Unused:{' '}
               {(report?.unusedNumerals || []).join(', ') || '—'}
@@ -221,13 +221,13 @@ export default function ReviewFixStage({ session, patent, onComplete, onRefresh 
 
         {checkList.length > 0 && (
           <div className="mt-6">
-            <div className="font-medium text-gray-900 mb-2">Checklist (profile-aware)</div>
+            <div className="font-medium text-ai-graphite-900 mb-2">Checklist (profile-aware)</div>
             <ul className="space-y-1">
               {checkList.map((c, i) => (
                 <li key={i} className="flex items-center justify-between p-2 rounded border bg-white">
-                  <div className="text-sm text-gray-800">{c.label}</div>
+                  <div className="text-sm text-ai-graphite-800">{c.label}</div>
                   <div className="flex items-center gap-3">
-                    {c.status === 'pending' && <span className="text-xs text-gray-500">…</span>}
+                    {c.status === 'pending' && <span className="text-xs text-ai-graphite-500">…</span>}
                     {c.status === 'pass' && <span className="text-green-600">✔</span>}
                     {c.status === 'fail' && <span className="text-red-600">✖</span>}
                   </div>
@@ -238,9 +238,9 @@ export default function ReviewFixStage({ session, patent, onComplete, onRefresh 
         )}
 
         {extReport?.extendedReport && (
-          <div className="mt-6 p-4 rounded bg-gray-50">
-            <div className="font-medium text-gray-900 mb-2">Recommendations</div>
-            <ul className="list-disc ml-6 text-sm text-gray-700 space-y-1">
+          <div className="mt-6 p-4 rounded bg-paper-100">
+            <div className="font-medium text-ai-graphite-900 mb-2">Recommendations</div>
+            <ul className="list-disc ml-6 text-sm text-ai-graphite-700 space-y-1">
               {(() => {
                 const er = extReport.extendedReport || {}
                 const items: string[] = []
@@ -267,7 +267,7 @@ export default function ReviewFixStage({ session, patent, onComplete, onRefresh 
         )}
       </div>
 
-      <div className="mt-8 pt-6 border-t border-gray-200">
+      <div className="mt-8 pt-6 border-t border-paper-300">
         <div className="flex justify-end">
           <button
             onClick={() => onRefresh()}

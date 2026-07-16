@@ -77,7 +77,7 @@ function statusClasses(status: string) {
   if (status === 'COMPLETED_WITH_ERRORS' || status === 'REVIEWED') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'FAILED' || status === 'CANCELLED' || status === 'REJECTED') return 'border-rose-200 bg-rose-50 text-rose-700'
   if (status === 'PAUSED') return 'border-violet-200 bg-violet-50 text-violet-700'
-  if (status === 'PROCESSING') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (status === 'PROCESSING') return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
   return 'border-slate-200 bg-slate-50 text-slate-700'
 }
 
@@ -327,7 +327,7 @@ export default function PatentDraftBatchDetailPage() {
               </button>
             ) : null}
             {batch.status === 'PAUSED' ? (
-              <button onClick={() => runBatchAction('resume')} disabled={action === 'resume'} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60">
+              <button onClick={() => runBatchAction('resume')} disabled={action === 'resume'} className="inline-flex items-center gap-2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 px-3 py-2 text-sm font-semibold text-ai-blue-700 hover:bg-ai-blue-100 disabled:opacity-60">
                 {action === 'resume' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Resume
               </button>
             ) : null}
@@ -357,14 +357,14 @@ export default function PatentDraftBatchDetailPage() {
             <div className="text-sm text-slate-600">{batch.completedItems}/{batch.totalItems} completed, {batch.failedItems} failed, {batch.warningItems} warnings</div>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-blue-600" style={{ width: `${progressPct}%` }} />
+            <div className="h-full rounded-full bg-ai-blue-600" style={{ width: `${progressPct}%` }} />
           </div>
         </section>
 
         <section className="mb-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_160px]">
           <label className="relative block">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search title or jurisdiction" className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" />
+            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search title or jurisdiction" className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100" />
           </label>
           <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
             <option value="ALL">All statuses</option>
@@ -397,7 +397,7 @@ export default function PatentDraftBatchDetailPage() {
                     <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
                       {item.currentStep ? <span>{item.currentStep.replace(/_/g, ' ')}</span> : null}
                       {item.jurisdictions?.length ? <span>{item.jurisdictions.join(', ')}</span> : null}
-                      {item.patentId ? <Link href={`/patents/${item.patentId}/draft`} className="font-medium text-blue-700 hover:underline">Patent</Link> : null}
+                      {item.patentId ? <Link href={`/patents/${item.patentId}/draft`} className="font-medium text-ai-blue-700 hover:underline">Patent</Link> : null}
                     </div>
                     {item.warnings?.length ? <p className="mt-2 text-xs text-amber-700">{item.warnings.join('; ')}</p> : null}
                     {item.error ? <p className="mt-2 text-xs text-rose-700">{item.error}</p> : null}
@@ -413,7 +413,7 @@ export default function PatentDraftBatchDetailPage() {
                         {action === `retry:${item.itemId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Retry
                       </button>
                     ) : null}
-                    <button onClick={() => saveReview(item)} disabled={action === `save:${item.itemId}`} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60">
+                    <button onClick={() => saveReview(item)} disabled={action === `save:${item.itemId}`} className="inline-flex items-center gap-2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 px-3 py-2 text-sm font-semibold text-ai-blue-700 hover:bg-ai-blue-100 disabled:opacity-60">
                       {action === `save:${item.itemId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save
                     </button>
                   </div>

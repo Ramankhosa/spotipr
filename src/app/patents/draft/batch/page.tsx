@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -105,7 +105,7 @@ function statusClasses(status: string) {
   if (status === 'COMPLETED_WITH_ERRORS' || status === 'DELIVERED_WITH_WARNINGS') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'FAILED' || status === 'REJECTED' || status === 'CANCELED' || status === 'CANCELLED') return 'border-rose-200 bg-rose-50 text-rose-700'
   if (status === 'PAUSED') return 'border-violet-200 bg-violet-50 text-violet-700'
-  if (status === 'PROCESSING') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (status === 'PROCESSING') return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
   return 'border-slate-200 bg-slate-50 text-slate-700'
 }
 
@@ -512,12 +512,12 @@ export default function PatentDraftBatchPage() {
         ) : null}
 
         {createdBatchId ? (
-          <div className="mb-4 flex flex-wrap gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-            <Link href={`/patents/draft/batch/${createdBatchId}`} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+          <div className="mb-4 flex flex-wrap gap-2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 px-4 py-3">
+            <Link href={`/patents/draft/batch/${createdBatchId}`} className="inline-flex items-center gap-2 rounded-lg bg-ai-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-ai-blue-700">
               <History className="h-4 w-4" />
               Open batch workspace
             </Link>
-            <Link href="/patents/draft/batch/history" className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
+            <Link href="/patents/draft/batch/history" className="inline-flex items-center gap-2 rounded-lg border border-ai-blue-200 bg-white px-3 py-2 text-sm font-semibold text-ai-blue-700 hover:bg-ai-blue-100">
               <History className="h-4 w-4" />
               View all batches
             </Link>
@@ -544,10 +544,10 @@ export default function PatentDraftBatchPage() {
                 <button
                   type="button"
                   onClick={() => setBatchMode('spreadsheet')}
-                  className={`rounded-lg border p-4 text-left transition ${batchMode === 'spreadsheet' ? 'border-blue-400 bg-blue-50/60 ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-300'}`}
+                  className={`rounded-lg border p-4 text-left transition ${batchMode === 'spreadsheet' ? 'border-ai-blue-400 bg-ai-blue-50/60 ring-2 ring-ai-blue-100' : 'border-slate-200 hover:border-ai-blue-300'}`}
                 >
                   <div className="flex items-center gap-2 font-semibold text-slate-900">
-                    <FileSpreadsheet className="h-4 w-4 text-blue-600" />
+                    <FileSpreadsheet className="h-4 w-4 text-ai-blue-600" />
                     Spreadsheet of ideas
                   </div>
                   <p className="mt-1 text-xs text-slate-600">Upload one .xlsx/.csv/.tsv/.json file; each row becomes a patent draft.</p>
@@ -555,10 +555,10 @@ export default function PatentDraftBatchPage() {
                 <button
                   type="button"
                   onClick={() => setBatchMode('documents')}
-                  className={`rounded-lg border p-4 text-left transition ${batchMode === 'documents' ? 'border-blue-400 bg-blue-50/60 ring-2 ring-blue-100' : 'border-slate-200 hover:border-blue-300'}`}
+                  className={`rounded-lg border p-4 text-left transition ${batchMode === 'documents' ? 'border-ai-blue-400 bg-ai-blue-50/60 ring-2 ring-ai-blue-100' : 'border-slate-200 hover:border-ai-blue-300'}`}
                 >
                   <div className="flex items-center gap-2 font-semibold text-slate-900">
-                    <Upload className="h-4 w-4 text-blue-600" />
+                    <Upload className="h-4 w-4 text-ai-blue-600" />
                     Documents — one patent per file
                   </div>
                   <p className="mt-1 text-xs text-slate-600">Upload Word/PDF/text disclosures; each file becomes its own patent draft.</p>
@@ -568,7 +568,7 @@ export default function PatentDraftBatchPage() {
 
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
-                <FileSpreadsheet className="h-5 w-5 text-blue-600" />
+                <FileSpreadsheet className="h-5 w-5 text-ai-blue-600" />
                 <h2 className="text-lg font-semibold text-slate-950">Batch Settings</h2>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
@@ -578,7 +578,7 @@ export default function PatentDraftBatchPage() {
                     value={batchName}
                     onChange={(event) => setBatchName(event.target.value)}
                     placeholder="June disclosure batch"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
                   />
                 </label>
                 <label className="block">
@@ -586,7 +586,7 @@ export default function PatentDraftBatchPage() {
                   <select
                     value={projectId}
                     onChange={(event) => setProjectId(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
                   >
                     <option value="">No project</option>
                     {projects.map(project => (
@@ -600,7 +600,7 @@ export default function PatentDraftBatchPage() {
                     value={defaultJurisdictions}
                     onChange={(event) => setDefaultJurisdictions(event.target.value)}
                     placeholder="IN,US,EP"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
                   />
                 </label>
                 <label className="block">
@@ -608,7 +608,7 @@ export default function PatentDraftBatchPage() {
                   <select
                     value={defaultFilingType}
                     onChange={(event) => setDefaultFilingType(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
                   >
                     <option value="utility">Utility</option>
                     <option value="provisional">Provisional</option>
@@ -620,7 +620,7 @@ export default function PatentDraftBatchPage() {
                   <select
                     value={defaultClaimsHandling}
                     onChange={(event) => setDefaultClaimsHandling(event.target.value as ClaimsHandling)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
                   >
                     <option value="draft from brief">Draft from brief</option>
                     <option value="use as is">Use as is</option>
@@ -633,7 +633,7 @@ export default function PatentDraftBatchPage() {
                   <select
                     value={defaultPriorArtHandling}
                     onChange={(event) => setDefaultPriorArtHandling(event.target.value as PriorArtHandling)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-ai-blue-500 focus:outline-none focus:ring-2 focus:ring-ai-blue-100"
                   >
                     <option value="auto">Auto</option>
                     <option value="use only">Use only</option>
@@ -652,7 +652,7 @@ export default function PatentDraftBatchPage() {
                         type="checkbox"
                         checked={useDocumentImages}
                         onChange={(event) => applyGlobalUseImages(event.target.checked)}
-                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        className="h-4 w-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
                       />
                       Use images from the document as figures
                     </label>
@@ -661,7 +661,7 @@ export default function PatentDraftBatchPage() {
                         type="checkbox"
                         checked={generateAiDiagrams}
                         onChange={(event) => applyGlobalGenerateDiagrams(event.target.checked)}
-                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        className="h-4 w-4 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
                       />
                       Generate AI diagrams
                     </label>
@@ -677,14 +677,14 @@ export default function PatentDraftBatchPage() {
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
-                  <Upload className="h-5 w-5 text-blue-600" />
+                  <Upload className="h-5 w-5 text-ai-blue-600" />
                   <h2 className="text-lg font-semibold text-slate-950">Upload and Preview</h2>
                 </div>
                 {selectedFile ? <span className="text-xs text-slate-500">{selectedFile.name}</span> : null}
               </div>
 
               <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center hover:bg-slate-100">
-                {isPreviewing ? <Loader2 className="mb-3 h-6 w-6 animate-spin text-blue-600" /> : <Upload className="mb-3 h-6 w-6 text-slate-500" />}
+                {isPreviewing ? <Loader2 className="mb-3 h-6 w-6 animate-spin text-ai-blue-600" /> : <Upload className="mb-3 h-6 w-6 text-slate-500" />}
                 <span className="text-sm font-medium text-slate-900">Upload a completed batch file</span>
                 <span className="mt-1 text-xs text-slate-500">Supported: {FILE_TYPES}. Upload previews rows but does not start drafting.</span>
                 <input
@@ -706,7 +706,7 @@ export default function PatentDraftBatchPage() {
                       type="button"
                       onClick={createBatch}
                       disabled={hasBlockingErrors || isCreating}
-                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      className="inline-flex items-center gap-2 rounded-lg bg-ai-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-ai-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
                       Create batch
@@ -835,14 +835,14 @@ export default function PatentDraftBatchPage() {
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
-                  <Upload className="h-5 w-5 text-blue-600" />
+                  <Upload className="h-5 w-5 text-ai-blue-600" />
                   <h2 className="text-lg font-semibold text-slate-950">Upload and Preview</h2>
                 </div>
                 {documentFiles.length ? <span className="text-xs text-slate-500">{documentFiles.length} file{documentFiles.length === 1 ? '' : 's'}</span> : null}
               </div>
 
               <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center hover:bg-slate-100">
-                {isPreviewing ? <Loader2 className="mb-3 h-6 w-6 animate-spin text-blue-600" /> : <Upload className="mb-3 h-6 w-6 text-slate-500" />}
+                {isPreviewing ? <Loader2 className="mb-3 h-6 w-6 animate-spin text-ai-blue-600" /> : <Upload className="mb-3 h-6 w-6 text-slate-500" />}
                 <span className="text-sm font-medium text-slate-900">Upload disclosure documents</span>
                 <span className="mt-1 text-xs text-slate-500">Supported: {DOCUMENT_FILE_TYPES}. Each file becomes one patent draft. Uploading previews the files but does not start drafting.</span>
                 <input
@@ -865,7 +865,7 @@ export default function PatentDraftBatchPage() {
                       type="button"
                       onClick={createDocumentBatch}
                       disabled={hasDocumentBlockingErrors || isCreating}
-                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      className="inline-flex items-center gap-2 rounded-lg bg-ai-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-ai-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
                       {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
                       Create batch
@@ -916,7 +916,7 @@ export default function PatentDraftBatchPage() {
                                     checked={row.useUploadedFigures}
                                     onChange={(event) => updateDocumentRow(index, { useUploadedFigures: event.target.checked })}
                                     disabled={row.imageCount === 0}
-                                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40"
+                                    className="h-3.5 w-3.5 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500 disabled:opacity-40"
                                   />
                                   Use images{row.imageCount === 0 ? ' (none)' : ''}
                                 </label>
@@ -925,7 +925,7 @@ export default function PatentDraftBatchPage() {
                                     type="checkbox"
                                     checked={row.generateDiagrams}
                                     onChange={(event) => updateDocumentRow(index, { generateDiagrams: event.target.checked })}
-                                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    className="h-3.5 w-3.5 rounded border-slate-300 text-ai-blue-600 focus:ring-ai-blue-500"
                                   />
                                   AI diagrams
                                 </label>
@@ -955,7 +955,7 @@ export default function PatentDraftBatchPage() {
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <History className="h-5 w-5 text-blue-600" />
+                  <History className="h-5 w-5 text-ai-blue-600" />
                   <h2 className="text-lg font-semibold text-slate-950">Latest Batches</h2>
                 </div>
                 <div className="flex gap-2">
@@ -981,7 +981,7 @@ export default function PatentDraftBatchPage() {
                     key={batch.id}
                     type="button"
                     onClick={() => setSelectedBatch(batch)}
-                    className={`w-full rounded-lg border p-3 text-left transition hover:border-blue-300 ${selectedBatch?.id === batch.id ? 'border-blue-300 bg-blue-50/50' : 'border-slate-200 bg-white'}`}
+                    className={`w-full rounded-lg border p-3 text-left transition hover:border-ai-blue-300 ${selectedBatch?.id === batch.id ? 'border-ai-blue-300 bg-ai-blue-50/50' : 'border-slate-200 bg-white'}`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -994,7 +994,7 @@ export default function PatentDraftBatchPage() {
                     </div>
                     <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
                       <div
-                        className="h-full rounded-full bg-blue-600"
+                        className="h-full rounded-full bg-ai-blue-600"
                         style={{ width: `${batch.totalItems ? Math.round(((batch.completedItems + batch.failedItems) / batch.totalItems) * 100) : 0}%` }}
                       />
                     </div>
@@ -1003,7 +1003,7 @@ export default function PatentDraftBatchPage() {
                       {batch.failedItems ? `, ${batch.failedItems} failed` : ''}
                       {batch.warningItems ? `, ${batch.warningItems} warnings` : ''}
                     </div>
-                    <div className="mt-2 text-xs font-medium text-blue-700">
+                    <div className="mt-2 text-xs font-medium text-ai-blue-700">
                       View summary
                     </div>
                   </button>
@@ -1054,7 +1054,7 @@ export default function PatentDraftBatchPage() {
 
                 <Link
                   href={`/patents/draft/batch/${selectedBatch.id}`}
-                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 px-4 py-2 text-sm font-semibold text-ai-blue-700 hover:bg-ai-blue-100"
                 >
                   <History className="h-4 w-4" />
                   Open batch workspace

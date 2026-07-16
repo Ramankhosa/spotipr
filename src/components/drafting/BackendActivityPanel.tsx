@@ -74,8 +74,8 @@ function StateIcon({ state }: { state?: StepState }) {
   // running or undefined
   return (
     <div className="relative w-3 h-3 flex-shrink-0">
-      <div className="absolute inset-0 rounded-full border-2 border-indigo-500/30" />
-      <div className="absolute inset-0 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+      <div className="absolute inset-0 rounded-full border-2 border-ai-blue-500/30" />
+      <div className="absolute inset-0 rounded-full border-2 border-ai-blue-600 border-t-transparent animate-spin" />
     </div>
   )
 }
@@ -101,11 +101,11 @@ export default function BackendActivityPanel({
   if (!isVisible) return null
 
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-full bg-white/80 backdrop-blur border border-indigo-100 shadow-sm max-w-xl animate-fade-in">
-      <div className="flex items-center gap-2 text-xs font-medium text-indigo-600 whitespace-nowrap border-r border-indigo-100 pr-3">
+    <div className="flex items-center gap-3 px-3 py-2 rounded-full bg-white/80 backdrop-blur border border-ai-blue-100 shadow-sm max-w-xl animate-fade-in">
+      <div className="flex items-center gap-2 text-xs font-medium text-ai-blue-600 whitespace-nowrap border-r border-ai-blue-100 pr-3">
         <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ai-blue-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-ai-blue-500"></span>
         </span>
         AI Drafting
       </div>
@@ -116,12 +116,12 @@ export default function BackendActivityPanel({
         style={{ scrollBehavior: 'smooth' }}
       >
         {steps.length === 0 && (
-          <span className="text-xs text-gray-400 italic">Initializing...</span>
+          <span className="text-xs text-ai-graphite-400 italic">Initializing...</span>
         )}
         {steps.map((s) => (
           <div key={s.id} className={`flex items-center gap-1.5 whitespace-nowrap transition-opacity duration-300 ${s.state === 'queued' ? 'opacity-40' : 'opacity-100'}`}>
             <StateIcon state={s.state} />
-            <span className={`text-xs ${s.state === 'ok' ? 'text-gray-500' : 'text-gray-800 font-medium'}`}>
+            <span className={`text-xs ${s.state === 'ok' ? 'text-ai-graphite-500' : 'text-ai-graphite-800 font-medium'}`}>
               {humanizeStep(s.id)}
             </span>
           </div>
@@ -131,7 +131,7 @@ export default function BackendActivityPanel({
       {onClose && (
         <button 
           onClick={onClose}
-          className="ml-auto p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors"
+          className="ml-auto p-1 text-ai-graphite-400 hover:text-ai-graphite-600 rounded-full hover:bg-paper-200 transition-colors"
           title="Hide activity"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

@@ -218,10 +218,10 @@ export default function SupportDataSourcesEditor({
     <div className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h4 className="text-sm font-medium text-gray-900">
-            Support Data Sources <span className="text-xs font-normal text-gray-400">({activeCount})</span>
+          <h4 className="text-sm font-medium text-ai-graphite-900">
+            Support Data Sources <span className="text-xs font-normal text-ai-graphite-400">({activeCount})</span>
           </h4>
-          <p className="mt-0.5 text-[11px] text-gray-500">
+          <p className="mt-0.5 text-[11px] text-ai-graphite-500">
             Attorney-source facts for claims, description, drawings, background, abstract, and guardrails.
           </p>
         </div>
@@ -229,7 +229,7 @@ export default function SupportDataSourcesEditor({
           <button
             type="button"
             onClick={openNew}
-            className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+            className="inline-flex items-center gap-1.5 rounded-md bg-ai-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-ai-blue-700"
           >
             <Plus className="h-3.5 w-3.5" />
             Add Source
@@ -239,19 +239,19 @@ export default function SupportDataSourcesEditor({
 
       <div className="grid grid-cols-1 gap-2 lg:grid-cols-[1fr_180px_180px]">
         <label className="relative block">
-          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-gray-400" />
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-ai-graphite-400" />
           <input
             type="text"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search ID, kind, label, value, targets..."
-            className="w-full rounded-md border border-gray-300 py-2 pl-8 pr-3 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-md border border-paper-400 py-2 pl-8 pr-3 text-xs focus:border-ai-blue-500 focus:outline-none focus:ring-1 focus:ring-ai-blue-500"
           />
         </label>
         <select
           value={kindFilter}
           onChange={(event) => setKindFilter(event.target.value as any)}
-          className="rounded-md border border-gray-300 bg-white px-2 py-2 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="rounded-md border border-paper-400 bg-white px-2 py-2 text-xs focus:border-ai-blue-500 focus:outline-none focus:ring-1 focus:ring-ai-blue-500"
         >
           <option value="all">All kinds</option>
           {SUPPORT_DATA_SOURCE_KINDS.map(kind => (
@@ -261,7 +261,7 @@ export default function SupportDataSourcesEditor({
         <select
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value as any)}
-          className="rounded-md border border-gray-300 bg-white px-2 py-2 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="rounded-md border border-paper-400 bg-white px-2 py-2 text-xs focus:border-ai-blue-500 focus:outline-none focus:ring-1 focus:ring-ai-blue-500"
         >
           <option value="active">Active only</option>
           <option value="all">All statuses</option>
@@ -271,9 +271,9 @@ export default function SupportDataSourcesEditor({
         </select>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-xs">
-          <thead className="bg-gray-50 text-left text-[10px] uppercase tracking-wide text-gray-500">
+      <div className="overflow-x-auto rounded-lg border border-paper-300 bg-white">
+        <table className="min-w-full divide-y divide-paper-300 text-xs">
+          <thead className="bg-paper-100 text-left text-[10px] uppercase tracking-wide text-ai-graphite-500">
             <tr>
               <th className="px-3 py-2 font-semibold">ID</th>
               <th className="px-3 py-2 font-semibold">Kind</th>
@@ -286,12 +286,12 @@ export default function SupportDataSourcesEditor({
               <th className="px-3 py-2 text-right font-semibold">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-paper-200">
             {filteredSources.length ? filteredSources.map(source => (
-              <tr key={source.id} className={source.status === 'deleted' ? 'bg-gray-50 text-gray-400' : 'bg-white text-gray-700'}>
+              <tr key={source.id} className={source.status === 'deleted' ? 'bg-paper-100 text-ai-graphite-400' : 'bg-white text-ai-graphite-700'}>
                 <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px]">{source.id}</td>
                 <td className="whitespace-nowrap px-3 py-2">{optionLabel(source.kind)}</td>
-                <td className="max-w-[180px] px-3 py-2 font-medium text-gray-900">
+                <td className="max-w-[180px] px-3 py-2 font-medium text-ai-graphite-900">
                   <span className="line-clamp-2">{source.label}</span>
                 </td>
                 <td className="max-w-[280px] px-3 py-2">
@@ -305,24 +305,24 @@ export default function SupportDataSourcesEditor({
                 <td className="whitespace-nowrap px-3 py-2">{optionLabel(source.status)}</td>
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-1">
-                    <button type="button" onClick={() => openEdit(source)} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-indigo-600" title="Edit">
+                    <button type="button" onClick={() => openEdit(source)} className="rounded p-1 text-ai-graphite-500 hover:bg-paper-200 hover:text-ai-blue-600" title="Edit">
                       <Edit2 className="h-3.5 w-3.5" />
                     </button>
                     {isEditing && (
                       <>
-                        <button type="button" onClick={() => duplicateSource(source)} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-indigo-600" title="Duplicate">
+                        <button type="button" onClick={() => duplicateSource(source)} className="rounded p-1 text-ai-graphite-500 hover:bg-paper-200 hover:text-ai-blue-600" title="Duplicate">
                           <Copy className="h-3.5 w-3.5" />
                         </button>
                         {source.status === 'deleted' ? (
-                          <button type="button" onClick={() => restoreSource(source)} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-emerald-600" title="Restore">
+                          <button type="button" onClick={() => restoreSource(source)} className="rounded p-1 text-ai-graphite-500 hover:bg-paper-200 hover:text-emerald-600" title="Restore">
                             <RotateCcw className="h-3.5 w-3.5" />
                           </button>
                         ) : (
-                          <button type="button" onClick={() => softDelete(source)} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-amber-600" title="Soft delete">
+                          <button type="button" onClick={() => softDelete(source)} className="rounded p-1 text-ai-graphite-500 hover:bg-paper-200 hover:text-amber-600" title="Soft delete">
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         )}
-                        <button type="button" onClick={() => hardDelete(source)} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-red-600" title="Hard delete">
+                        <button type="button" onClick={() => hardDelete(source)} className="rounded p-1 text-ai-graphite-500 hover:bg-paper-200 hover:text-red-600" title="Hard delete">
                           <X className="h-3.5 w-3.5" />
                         </button>
                       </>
@@ -332,7 +332,7 @@ export default function SupportDataSourcesEditor({
               </tr>
             )) : (
               <tr>
-                <td colSpan={9} className="px-3 py-10 text-center text-sm text-gray-500">
+                <td colSpan={9} className="px-3 py-10 text-center text-sm text-ai-graphite-500">
                   No support data sources match the current filters.
                 </td>
               </tr>
@@ -344,12 +344,12 @@ export default function SupportDataSourcesEditor({
       {draft && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+            <div className="flex items-center justify-between border-b border-paper-300 px-5 py-3">
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">{editingId ? `Edit ${draft.id}` : 'Add support data source'}</h3>
-                <p className="text-xs text-gray-500">Keep this tied to source-stated or attorney-added facts.</p>
+                <h3 className="text-sm font-semibold text-ai-graphite-900">{editingId ? `Edit ${draft.id}` : 'Add support data source'}</h3>
+                <p className="text-xs text-ai-graphite-500">Keep this tied to source-stated or attorney-added facts.</p>
               </div>
-              <button type="button" onClick={() => setDraft(null)} className="rounded p-1 text-gray-500 hover:bg-gray-100">
+              <button type="button" onClick={() => setDraft(null)} className="rounded p-1 text-ai-graphite-500 hover:bg-paper-200">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -357,50 +357,50 @@ export default function SupportDataSourcesEditor({
             <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Kind</span>
-                  <select value={draft.kind} onChange={(event) => updateDraft('kind', event.target.value as SupportDataSourceKind)} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs">
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Kind</span>
+                  <select value={draft.kind} onChange={(event) => updateDraft('kind', event.target.value as SupportDataSourceKind)} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs">
                     {SUPPORT_DATA_SOURCE_KINDS.map(kind => <option key={kind} value={kind}>{optionLabel(kind)}</option>)}
                   </select>
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Label</span>
-                  <input value={draft.label} onChange={(event) => updateDraft('label', event.target.value)} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs" />
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Label</span>
+                  <input value={draft.label} onChange={(event) => updateDraft('label', event.target.value)} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs" />
                 </label>
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Value</span>
-                  <textarea value={draft.value} onChange={(event) => updateDraft('value', event.target.value)} rows={3} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs" />
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Value</span>
+                  <textarea value={draft.value} onChange={(event) => updateDraft('value', event.target.value)} rows={3} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs" />
                 </label>
                 <label className="block md:col-span-2">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Source Text</span>
-                  <textarea value={draft.sourceText || ''} onChange={(event) => updateDraft('sourceText', event.target.value)} rows={2} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs" />
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Source Text</span>
+                  <textarea value={draft.sourceText || ''} onChange={(event) => updateDraft('sourceText', event.target.value)} rows={2} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs" />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Claim Use</span>
-                  <select value={draft.claimUse} onChange={(event) => updateDraft('claimUse', event.target.value as SupportClaimUse)} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs">
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Claim Use</span>
+                  <select value={draft.claimUse} onChange={(event) => updateDraft('claimUse', event.target.value as SupportClaimUse)} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs">
                     {SUPPORT_CLAIM_USE_VALUES.map(value => <option key={value} value={value}>{optionLabel(value)}</option>)}
                   </select>
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Figure Use</span>
-                  <select value={draft.figureUse} onChange={(event) => updateDraft('figureUse', event.target.value as SupportFigureUse)} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs">
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Figure Use</span>
+                  <select value={draft.figureUse} onChange={(event) => updateDraft('figureUse', event.target.value as SupportFigureUse)} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs">
                     {SUPPORT_FIGURE_USE_VALUES.map(value => <option key={value} value={value}>{optionLabel(value)}</option>)}
                   </select>
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Status</span>
-                  <select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as SupportStatus)} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs">
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Status</span>
+                  <select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as SupportStatus)} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs">
                     {SUPPORT_STATUS_VALUES.map(value => <option key={value} value={value}>{optionLabel(value)}</option>)}
                   </select>
                 </label>
               </div>
 
               <div className="mt-4">
-                <span className="mb-2 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Section Targets</span>
+                <span className="mb-2 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Section Targets</span>
                 <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
                   {SUPPORT_SECTION_TARGETS.map(target => {
                     const checked = draft.sectionTargets.includes(target)
                     return (
-                      <label key={target} className="flex items-center gap-2 rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-700">
+                      <label key={target} className="flex items-center gap-2 rounded-md border border-paper-300 px-2 py-1.5 text-xs text-ai-graphite-700">
                         <input
                           type="checkbox"
                           checked={checked}
@@ -410,7 +410,7 @@ export default function SupportDataSourcesEditor({
                               : draft.sectionTargets.filter(item => item !== target)
                             updateDraft('sectionTargets', nextTargets.length ? nextTargets : ['detailedDescription'])
                           }}
-                          className="rounded border-gray-300"
+                          className="rounded border-paper-400"
                         />
                         {target}
                       </label>
@@ -422,11 +422,11 @@ export default function SupportDataSourcesEditor({
               <KindSpecificEditor draft={draft} updateDetails={updateDetails} updateValue={(value) => updateDraft('value', value)} />
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-gray-200 bg-gray-50 px-5 py-3">
+            <div className="flex justify-end gap-2 border-t border-paper-300 bg-paper-100 px-5 py-3">
               <Button type="button" variant="outline" size="sm" onClick={() => setDraft(null)}>
                 Cancel
               </Button>
-              <Button type="button" size="sm" onClick={saveDraft} className="bg-indigo-600 text-white hover:bg-indigo-700">
+              <Button type="button" size="sm" onClick={saveDraft} className="bg-ai-blue-600 text-white hover:bg-ai-blue-700">
                 <Save className="mr-1.5 h-3.5 w-3.5" />
                 Save Source
               </Button>
@@ -451,20 +451,20 @@ function KindSpecificEditor({
 
   if (draft.kind === 'table') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Table Details</h5>
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Table Details</h5>
         <div className="grid gap-3">
           <label className="block">
-            <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Headers, comma separated</span>
-            <input value={Array.isArray(details.headers) ? details.headers.join(', ') : ''} onChange={(event) => updateDetails({ headers: event.target.value.split(',').map(item => item.trim()).filter(Boolean) })} className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs" />
+            <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Headers, comma separated</span>
+            <input value={Array.isArray(details.headers) ? details.headers.join(', ') : ''} onChange={(event) => updateDetails({ headers: event.target.value.split(',').map(item => item.trim()).filter(Boolean) })} className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs" />
           </label>
           <label className="block">
-            <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-gray-500">Rows, tab separated</span>
-            <textarea value={tableRowsText(details.rows)} onChange={(event) => updateDetails({ rows: parseTableRows(event.target.value) })} rows={6} className="w-full rounded-md border border-gray-300 px-2 py-2 font-mono text-xs" />
+            <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ai-graphite-500">Rows, tab separated</span>
+            <textarea value={tableRowsText(details.rows)} onChange={(event) => updateDetails({ rows: parseTableRows(event.target.value) })} rows={6} className="w-full rounded-md border border-paper-400 px-2 py-2 font-mono text-xs" />
           </label>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <input placeholder="Units or column unit notes" value={details.units || ''} onChange={(event) => updateDetails({ units: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
-            <input placeholder="Notes" value={details.notes || ''} onChange={(event) => updateDetails({ notes: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
+            <input placeholder="Units or column unit notes" value={details.units || ''} onChange={(event) => updateDetails({ units: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
+            <input placeholder="Notes" value={details.notes || ''} onChange={(event) => updateDetails({ notes: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
           </div>
         </div>
       </div>
@@ -473,12 +473,12 @@ function KindSpecificEditor({
 
   if (draft.kind === 'equation') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Equation Details</h5>
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Equation Details</h5>
         <div className="grid gap-3">
-          <input value={details.expression || draft.value} onChange={(event) => { updateDetails({ expression: event.target.value }); updateValue(event.target.value) }} placeholder="Expression or formula" className="rounded-md border border-gray-300 px-2 py-2 font-mono text-xs" />
-          <textarea value={variableText(details.variables)} onChange={(event) => updateDetails({ variables: parseVariables(event.target.value) })} rows={4} placeholder="x: sensor reading" className="rounded-md border border-gray-300 px-2 py-2 font-mono text-xs" />
-          <textarea value={lineList(details.constraints)} onChange={(event) => updateDetails({ constraints: parseLineList(event.target.value) })} rows={3} placeholder="Constraints, one per line" className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
+          <input value={details.expression || draft.value} onChange={(event) => { updateDetails({ expression: event.target.value }); updateValue(event.target.value) }} placeholder="Expression or formula" className="rounded-md border border-paper-400 px-2 py-2 font-mono text-xs" />
+          <textarea value={variableText(details.variables)} onChange={(event) => updateDetails({ variables: parseVariables(event.target.value) })} rows={4} placeholder="x: sensor reading" className="rounded-md border border-paper-400 px-2 py-2 font-mono text-xs" />
+          <textarea value={lineList(details.constraints)} onChange={(event) => updateDetails({ constraints: parseLineList(event.target.value) })} rows={3} placeholder="Constraints, one per line" className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
         </div>
       </div>
     )
@@ -486,42 +486,42 @@ function KindSpecificEditor({
 
   if (draft.kind === 'data_schema') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Schema Details</h5>
-        <textarea value={fieldText(details.fields)} onChange={(event) => updateDetails({ fields: parseFields(event.target.value) })} rows={7} placeholder="name | type | required | description" className="w-full rounded-md border border-gray-300 px-2 py-2 font-mono text-xs" />
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Schema Details</h5>
+        <textarea value={fieldText(details.fields)} onChange={(event) => updateDetails({ fields: parseFields(event.target.value) })} rows={7} placeholder="name | type | required | description" className="w-full rounded-md border border-paper-400 px-2 py-2 font-mono text-xs" />
       </div>
     )
   }
 
   if (draft.kind === 'algorithm') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Algorithm Steps</h5>
-        <textarea value={lineList(details.steps)} onChange={(event) => updateDetails({ steps: parseLineList(event.target.value) })} rows={7} placeholder="One ordered step per line" className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs" />
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Algorithm Steps</h5>
+        <textarea value={lineList(details.steps)} onChange={(event) => updateDetails({ steps: parseLineList(event.target.value) })} rows={7} placeholder="One ordered step per line" className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs" />
       </div>
     )
   }
 
   if (draft.kind === 'composition') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Composition Details</h5>
-        <textarea value={constituentText(details.constituents)} onChange={(event) => updateDetails({ constituents: parseConstituents(event.target.value) })} rows={7} placeholder="constituent | amount/range | role" className="w-full rounded-md border border-gray-300 px-2 py-2 font-mono text-xs" />
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Composition Details</h5>
+        <textarea value={constituentText(details.constituents)} onChange={(event) => updateDetails({ constituents: parseConstituents(event.target.value) })} rows={7} placeholder="constituent | amount/range | role" className="w-full rounded-md border border-paper-400 px-2 py-2 font-mono text-xs" />
       </div>
     )
   }
 
   if (draft.kind === 'bio_sequence') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Sequence Details</h5>
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Sequence Details</h5>
         <div className="grid gap-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <input placeholder="Sequence ID" value={details.sequenceId || ''} onChange={(event) => updateDetails({ sequenceId: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
-            <input placeholder="Organism/source" value={details.organism || ''} onChange={(event) => updateDetails({ organism: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
+            <input placeholder="Sequence ID" value={details.sequenceId || ''} onChange={(event) => updateDetails({ sequenceId: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
+            <input placeholder="Organism/source" value={details.organism || ''} onChange={(event) => updateDetails({ organism: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
           </div>
-          <textarea value={details.sequence || ''} onChange={(event) => updateDetails({ sequence: event.target.value.replace(/\s+/g, '') })} rows={6} placeholder="Sequence" className="w-full rounded-md border border-gray-300 px-2 py-2 font-mono text-xs" />
-          <input placeholder="Deposit or accession information" value={details.depositInfo || ''} onChange={(event) => updateDetails({ depositInfo: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
+          <textarea value={details.sequence || ''} onChange={(event) => updateDetails({ sequence: event.target.value.replace(/\s+/g, '') })} rows={6} placeholder="Sequence" className="w-full rounded-md border border-paper-400 px-2 py-2 font-mono text-xs" />
+          <input placeholder="Deposit or accession information" value={details.depositInfo || ''} onChange={(event) => updateDetails({ depositInfo: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
         </div>
       </div>
     )
@@ -529,21 +529,21 @@ function KindSpecificEditor({
 
   if (draft.kind === 'figure') {
     return (
-      <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <h5 className="mb-3 text-xs font-semibold text-gray-800">Figure Details</h5>
+      <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+        <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Figure Details</h5>
         <div className="grid gap-3 md:grid-cols-3">
-          <input placeholder="Figure number" value={details.figureNo || ''} onChange={(event) => updateDetails({ figureNo: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
-          <input placeholder="View" value={details.view || ''} onChange={(event) => updateDetails({ view: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
-          <input placeholder="Caption" value={details.caption || ''} onChange={(event) => updateDetails({ caption: event.target.value })} className="rounded-md border border-gray-300 px-2 py-2 text-xs" />
+          <input placeholder="Figure number" value={details.figureNo || ''} onChange={(event) => updateDetails({ figureNo: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
+          <input placeholder="View" value={details.view || ''} onChange={(event) => updateDetails({ view: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
+          <input placeholder="Caption" value={details.caption || ''} onChange={(event) => updateDetails({ caption: event.target.value })} className="rounded-md border border-paper-400 px-2 py-2 text-xs" />
         </div>
       </div>
     )
   }
 
   return (
-    <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-      <h5 className="mb-3 text-xs font-semibold text-gray-800">Simple Fact Details</h5>
-      <textarea value={details.notes || ''} onChange={(event) => updateDetails({ notes: event.target.value })} rows={4} placeholder="Optional notes, units, ranges, source caveats, or attorney comments" className="w-full rounded-md border border-gray-300 px-2 py-2 text-xs" />
+    <div className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3">
+      <h5 className="mb-3 text-xs font-semibold text-ai-graphite-800">Simple Fact Details</h5>
+      <textarea value={details.notes || ''} onChange={(event) => updateDetails({ notes: event.target.value })} rows={4} placeholder="Optional notes, units, ranges, source caveats, or attorney comments" className="w-full rounded-md border border-paper-400 px-2 py-2 text-xs" />
     </div>
   )
 }

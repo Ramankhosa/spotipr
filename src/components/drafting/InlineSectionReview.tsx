@@ -115,7 +115,7 @@ function ReviewItemCard({
               <span className={`
                 text-xs px-1.5 py-0.5 rounded
                 ${item.status === 'fixed' ? 'bg-emerald-100 text-emerald-700' : ''}
-                ${item.status === 'ignored' ? 'bg-gray-100 text-gray-600' : ''}
+                ${item.status === 'ignored' ? 'bg-paper-200 text-ai-graphite-600' : ''}
                 ${item.status === 'reverted' ? 'bg-amber-100 text-amber-700' : ''}
               `}>
                 {item.status}
@@ -131,7 +131,7 @@ function ReviewItemCard({
         {item.suggestedFix && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-gray-400 hover:text-gray-600 p-1"
+            className="text-ai-graphite-400 hover:text-ai-graphite-600 p-1"
           >
             <svg className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -142,13 +142,13 @@ function ReviewItemCard({
       
       {/* Expanded Content */}
       {expanded && (
-        <div className="px-3 pb-3 border-t border-gray-100 mt-2 pt-2">
+        <div className="px-3 pb-3 border-t border-paper-200 mt-2 pt-2">
           {/* Suggested Fix */}
           <div className="mb-3">
-            <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+            <p className="text-xs text-ai-graphite-500 mb-1 flex items-center gap-1">
               <span>💡</span> Suggested fix:
             </p>
-            <p className="text-sm text-gray-700 bg-white/50 rounded px-2 py-1.5 border border-gray-100">
+            <p className="text-sm text-ai-graphite-700 bg-white/50 rounded px-2 py-1.5 border border-paper-200">
               {item.suggestedFix}
             </p>
           </div>
@@ -181,7 +181,7 @@ function ReviewItemCard({
               <button
                 onClick={onIgnore}
                 disabled={isApplying}
-                className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+                className="px-3 py-1.5 rounded-md text-sm font-medium text-ai-graphite-600 hover:bg-paper-200 transition-colors"
               >
                 Ignore
               </button>
@@ -190,8 +190,8 @@ function ReviewItemCard({
           
           {/* Fix History for this item */}
           {showFixHistory && relatedFix && (
-            <div className="mt-3 pt-3 border-t border-gray-100">
-              <p className="text-xs text-gray-500 mb-2">Fix applied: {relatedFix.changeSummary}</p>
+            <div className="mt-3 pt-3 border-t border-paper-200">
+              <p className="text-xs text-ai-graphite-500 mb-2">Fix applied: {relatedFix.changeSummary}</p>
             </div>
           )}
         </div>
@@ -210,9 +210,9 @@ function DiffViewer({ diffData, onClose }: { diffData: DiffData; onClose: () => 
   // Handle empty or no-change diffs
   if (!diffData.segments || diffData.segments.length === 0) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
-        <span className="text-sm text-gray-500">No visible changes</span>
-        <button onClick={onClose} className="ml-2 text-gray-400 hover:text-gray-600">×</button>
+      <div className="bg-paper-100 border border-paper-300 rounded-lg p-3 text-center">
+        <span className="text-sm text-ai-graphite-500">No visible changes</span>
+        <button onClick={onClose} className="ml-2 text-ai-graphite-400 hover:text-ai-graphite-600">×</button>
       </div>
     )
   }
@@ -220,26 +220,26 @@ function DiffViewer({ diffData, onClose }: { diffData: DiffData; onClose: () => 
   const hasChanges = diffData.segments.some(s => s.type !== 'unchanged')
   if (!hasChanges) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
-        <span className="text-sm text-gray-500">Content unchanged</span>
-        <button onClick={onClose} className="ml-2 text-gray-400 hover:text-gray-600">×</button>
+      <div className="bg-paper-100 border border-paper-300 rounded-lg p-3 text-center">
+        <span className="text-sm text-ai-graphite-500">Content unchanged</span>
+        <button onClick={onClose} className="ml-2 text-ai-graphite-400 hover:text-ai-graphite-600">×</button>
       </div>
     )
   }
   
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-      <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700">Changes Made</span>
+    <div className="bg-white border border-paper-300 rounded-lg shadow-sm overflow-hidden">
+      <div className="px-3 py-2 bg-paper-100 border-b border-paper-300 flex items-center justify-between">
+        <span className="text-sm font-medium text-ai-graphite-700">Changes Made</span>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500">{diffData.summary}</span>
+          <span className="text-xs text-ai-graphite-500">{diffData.summary}</span>
           <button 
             onClick={() => setIsExpanded(!isExpanded)} 
-            className="text-xs text-blue-600 hover:text-blue-700"
+            className="text-xs text-ai-blue-600 hover:text-ai-blue-700"
           >
             {isExpanded ? 'Collapse' : 'Expand'}
           </button>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="text-ai-graphite-400 hover:text-ai-graphite-600">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -266,7 +266,7 @@ function DiffViewer({ diffData, onClose }: { diffData: DiffData; onClose: () => 
       </div>
       
       {/* Legend */}
-      <div className="px-3 py-2 bg-gray-50 border-t border-gray-200 flex items-center gap-4 text-xs">
+      <div className="px-3 py-2 bg-paper-100 border-t border-paper-300 flex items-center gap-4 text-xs">
         <span className="flex items-center gap-1">
           <span className="w-3 h-3 rounded bg-emerald-100 border border-emerald-300"></span>
           Added
@@ -302,24 +302,24 @@ function FixHistoryPanel({
   if (fixHistory.length === 0) return null
   
   return (
-    <div className="mt-3 pt-3 border-t border-gray-100">
-      <p className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-1">
+    <div className="mt-3 pt-3 border-t border-paper-200">
+      <p className="text-xs font-medium text-ai-graphite-500 mb-2 flex items-center gap-1">
         <span>📋</span> Fix History ({fixHistory.length})
       </p>
       <div className="space-y-2">
         {fixHistory.map((entry) => (
-          <div key={entry.id} className="bg-white border border-gray-100 rounded-lg">
+          <div key={entry.id} className="bg-white border border-paper-200 rounded-lg">
             <div className="px-3 py-2 flex items-center justify-between">
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-700">{entry.changeSummary}</p>
-                <p className="text-xs text-gray-400">
+                <p className="text-sm text-ai-graphite-700">{entry.changeSummary}</p>
+                <p className="text-xs text-ai-graphite-400">
                   {new Date(entry.timestamp).toLocaleString()}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-                  className="text-xs text-blue-600 hover:text-blue-700"
+                  className="text-xs text-ai-blue-600 hover:text-ai-blue-700"
                 >
                   {expandedId === entry.id ? 'Hide diff' : 'View diff'}
                 </button>
@@ -413,14 +413,14 @@ export default function InlineSectionReview({
         />
         
         {!isExpanded && pendingItems.length > 0 && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-ai-graphite-500">
             {pendingItems.filter(i => i.severity === 'error').length} errors,{' '}
             {pendingItems.filter(i => i.severity === 'warning').length} warnings
           </span>
         )}
         
         {isLoading && (
-          <span className="text-xs text-gray-400 animate-pulse">Analyzing...</span>
+          <span className="text-xs text-ai-graphite-400 animate-pulse">Analyzing...</span>
         )}
       </div>
       
@@ -454,8 +454,8 @@ export default function InlineSectionReview({
             
             {/* Fixed/Ignored items collapsed */}
             {fixedItems.length > 0 && (
-              <div className="pt-2 border-t border-gray-100">
-                <p className="text-xs text-gray-500 mb-2">
+              <div className="pt-2 border-t border-paper-200">
+                <p className="text-xs text-ai-graphite-500 mb-2">
                   {fixedItems.length} issue{fixedItems.length > 1 ? 's' : ''} resolved
                 </p>
                 {fixedItems.map(item => (

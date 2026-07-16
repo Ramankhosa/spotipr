@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useCallback } from 'react'
 
@@ -373,7 +373,7 @@ export default function AllInstructionsModal({
             <p className="text-sm text-slate-400">
               {instructions.length} instruction{instructions.length !== 1 ? 's' : ''} 
               {persistentCount > 0 && <span className="text-violet-400"> • {persistentCount} persistent</span>}
-              {sessionCount > 0 && <span className="text-blue-400"> • {sessionCount} session-only</span>}
+              {sessionCount > 0 && <span className="text-ai-blue-400"> • {sessionCount} session-only</span>}
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-2">

@@ -51,8 +51,8 @@ export default function DiagramGeneratorStage({ session, patent, onComplete, onR
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Diagram Generator</h2>
-        <p className="text-gray-600">Review saved PlantUML, copy the code, and upload rendered images.</p>
+        <h2 className="text-2xl font-bold text-ai-graphite-900 mb-2">Diagram Generator</h2>
+        <p className="text-ai-graphite-600">Review saved PlantUML, copy the code, and upload rendered images.</p>
       </div>
 
       {error && (
@@ -69,10 +69,10 @@ export default function DiagramGeneratorStage({ session, patent, onComplete, onR
             <div key={d.figureNo} className="bg-white rounded-lg border p-4">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h3 className="font-medium text-gray-900 flex items-center">
+                  <h3 className="font-medium text-ai-graphite-900 flex items-center">
                     {titleFor(d.figureNo)} (Fig.{d.figureNo})
                     {(uploaded[d.figureNo] || d.imageUploadedAt) && (
-                      <span className="ml-2 inline-flex items-center text-blue-600 text-xs">
+                      <span className="ml-2 inline-flex items-center text-ai-blue-600 text-xs">
                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.707a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/>
                         </svg>
@@ -80,15 +80,15 @@ export default function DiagramGeneratorStage({ session, patent, onComplete, onR
                       </span>
                     )}
                   </h3>
-                  <p className="text-xs text-gray-500">Checksum: {d.checksum?.slice(0, 12) || 'n/a'}</p>
+                  <p className="text-xs text-ai-graphite-500">Checksum: {d.checksum?.slice(0, 12) || 'n/a'}</p>
                 </div>
               </div>
               <div className="relative">
-                <textarea className="w-full text-xs font-mono border rounded p-3 bg-gray-50" rows={8} readOnly value={d.plantuml} />
-                <button onClick={() => navigator.clipboard.writeText(d.plantuml)} className="absolute top-2 right-2 inline-flex items-center px-2 py-1 text-xs border border-gray-300 rounded bg-white hover:bg-gray-50">Copy</button>
+                <textarea className="w-full text-xs font-mono border rounded p-3 bg-paper-100" rows={8} readOnly value={d.plantuml} />
+                <button onClick={() => navigator.clipboard.writeText(d.plantuml)} className="absolute top-2 right-2 inline-flex items-center px-2 py-1 text-xs border border-paper-400 rounded bg-white hover:bg-paper-100">Copy</button>
               </div>
               <div className="mt-3">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Upload rendered image (PNG/SVG)</label>
+                <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Upload rendered image (PNG/SVG)</label>
                 <input type="file" accept=".png,.svg" onChange={(e) => e.target.files && handleUpload(d.figureNo, e.target.files[0])} disabled={isUploading} />
               </div>
             </div>

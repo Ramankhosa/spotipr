@@ -166,7 +166,7 @@ function diagramImageAnalysisBadgeClass(status: DiagramImageAnalysisStatus) {
     case 'QUEUED':
       return 'border-slate-200 bg-slate-50 text-slate-600'
     case 'PROCESSING':
-      return 'border-indigo-200 bg-indigo-50 text-indigo-700'
+      return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700'
     case 'COMPLETED':
       return 'border-emerald-200 bg-emerald-50 text-emerald-700'
     case 'FAILED':
@@ -2289,9 +2289,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     >
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
-            <div className="p-2 bg-indigo-100 rounded-lg">
-              <LayoutGrid className="w-6 h-6 text-indigo-600" />
+          <h2 className="text-3xl font-bold text-ai-graphite-900 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-ai-blue-100 rounded-lg">
+              <LayoutGrid className="w-6 h-6 text-ai-blue-600" />
             </div>
             Figure Planner
             <Hint
@@ -2299,7 +2299,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               text="This is where your patent's drawings are created — block diagrams, flowcharts, and sketches. They're generated from your specification and reuse its reference numerals, so figures and text stay consistent."
             />
           </h2>
-          <p className="text-gray-500 mt-2 text-lg">Create the drawings your application will file with.</p>
+          <p className="text-ai-graphite-500 mt-2 text-lg">Create the drawings your application will file with.</p>
         </div>
 
         {!figuresSkipped && (
@@ -2337,14 +2337,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       )}
 
       {/* Main Tab Bar: Diagrams vs Sketches */}
-      <div className="border-b border-gray-200 flex items-center justify-between">
+      <div className="border-b border-paper-300 flex items-center justify-between">
         <nav className="flex space-x-8" aria-label="Figure Planner Tabs">
           <button
             onClick={() => setActiveTab('diagrams')}
             className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
               activeTab === 'diagrams'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-ai-blue-600 text-ai-blue-600'
+                : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
             }`}
           >
             <Code className="w-4 h-4" />
@@ -2357,8 +2357,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             onClick={() => setActiveTab('sketches')}
             className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
               activeTab === 'sketches'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-ai-blue-600 text-ai-blue-600'
+                : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
             }`}
           >
             <Pencil className="w-4 h-4" />
@@ -2371,8 +2371,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             onClick={() => setActiveTab('arrange')}
             className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
               activeTab === 'arrange'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-ai-blue-600 text-ai-blue-600'
+                : 'border-transparent text-ai-graphite-500 hover:text-ai-graphite-700 hover:border-paper-400'
             }`}
           >
             <Layers className="w-4 h-4" />
@@ -2407,13 +2407,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       {activeTab === 'diagrams' && (
         <>
           {/* Diagrams Mode Selector */}
-          <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg w-fit">
+          <div className="flex items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit">
             <button
               onClick={() => setMode('ai')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
                 mode === 'ai' 
-                  ? 'bg-white text-indigo-600 shadow-sm' 
-                  : 'text-gray-600 hover:text-gray-900'
+                  ? 'bg-white text-ai-blue-600 shadow-sm' 
+                  : 'text-ai-graphite-600 hover:text-ai-graphite-900'
               }`}
             >
               <Bot className="w-4 h-4" />
@@ -2423,8 +2423,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               onClick={() => setMode('manual')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
                 mode === 'manual' 
-                  ? 'bg-white text-indigo-600 shadow-sm' 
-                  : 'text-gray-600 hover:text-gray-900'
+                  ? 'bg-white text-ai-blue-600 shadow-sm' 
+                  : 'text-ai-graphite-600 hover:text-ai-graphite-900'
               }`}
             >
               <User className="w-4 h-4" />
@@ -2445,11 +2445,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             onClick={() => setMode('ai')}
           >
             <Card
-              className={`cursor-pointer transition-all hover:shadow-md ${mode === 'ai' ? 'ring-2 ring-indigo-600 border-indigo-100 bg-indigo-50/30' : ''}`}
+              className={`cursor-pointer transition-all hover:shadow-md ${mode === 'ai' ? 'ring-2 ring-ai-blue-600 border-ai-blue-100 bg-ai-blue-50/30' : ''}`}
             >
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <Sparkles className="w-5 h-5 text-ai-blue-600" />
                 AI-Driven Generation
               </CardTitle>
               <CardDescription>
@@ -2457,7 +2457,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="space-y-2 text-sm text-gray-600">
+              <ul className="space-y-2 text-sm text-ai-graphite-600">
                 <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> AI determines optimal figure count (or override)</li>
                 <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Claim-aware diagram planning</li>
                 <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Distinct perspectives per figure</li>
@@ -2471,11 +2471,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             onClick={() => setMode('manual')}
           >
             <Card
-              className={`cursor-pointer transition-all hover:shadow-md ${mode === 'manual' ? 'ring-2 ring-indigo-600 border-indigo-100 bg-indigo-50/30' : ''}`}
+              className={`cursor-pointer transition-all hover:shadow-md ${mode === 'manual' ? 'ring-2 ring-ai-blue-600 border-ai-blue-100 bg-ai-blue-50/30' : ''}`}
             >
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <User className="w-5 h-5 text-indigo-600" />
+                <User className="w-5 h-5 text-ai-blue-600" />
                 Manual Specification
               </CardTitle>
               <CardDescription>
@@ -2483,7 +2483,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="space-y-2 text-sm text-gray-600">
+              <ul className="space-y-2 text-sm text-ai-graphite-600">
                 <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Custom figure counts</li>
                 <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Specific descriptions for each view</li>
                 <li className="flex items-center gap-2"><Check className="w-4 h-4 text-green-500" /> Full control over the output</li>
@@ -2505,7 +2505,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           >
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <Label htmlFor="diagram-count" className="text-sm font-medium text-gray-700">
+                <Label htmlFor="diagram-count" className="text-sm font-medium text-ai-graphite-700">
                   Number of Figures:
                 </Label>
                 <div className="relative">
@@ -2531,7 +2531,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     disabled={isGenerating}
                   />
                 </div>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-ai-graphite-500">
                   {diagramCount === null ? '(AI will decide)' : '(1-10)'}
                 </span>
                 <Hint
@@ -2549,10 +2549,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   disabled={isGenerating}
                 />
                 <div className="space-y-1">
-                  <Label htmlFor="replace-existing-diagrams" className="text-sm text-gray-700">
+                  <Label htmlFor="replace-existing-diagrams" className="text-sm text-ai-graphite-700">
                     Replace existing diagrams
                   </Label>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-ai-graphite-500">
                     If unchecked, new diagrams will be appended after existing figures.
                   </p>
                 </div>
@@ -2563,7 +2563,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 size="lg"
                 onClick={handleGenerateFromLLM}
                 disabled={isGenerating}
-                className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white gap-2 h-12 px-8 text-lg shadow-lg shadow-indigo-200"
+                className="w-full md:w-auto bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2 h-12 px-8 text-lg shadow-lg shadow-ai-blue-200"
               >
                 {isGenerating ? (
                   <>
@@ -2579,7 +2579,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </Button>
             </div>
             {isGenerating && (
-              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-5 border border-indigo-100 shadow-sm">
+              <div className="bg-gradient-to-r from-ai-blue-50 to-ai-blue-50 rounded-xl p-5 border border-ai-blue-100 shadow-sm">
                 {/* Progress steps indicator */}
                 <div className="flex items-center gap-1.5 mb-4">
                   {FIGURE_GENERATION_MESSAGES.map((_, idx) => (
@@ -2587,10 +2587,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       key={idx}
                       className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
                         idx < generationMessageIndex 
-                          ? 'bg-indigo-500' 
+                          ? 'bg-ai-blue-500' 
                           : idx === generationMessageIndex 
-                            ? 'bg-indigo-400 animate-pulse' 
-                            : 'bg-gray-200'
+                            ? 'bg-ai-blue-400 animate-pulse' 
+                            : 'bg-paper-300'
                       }`}
                     />
                   ))}
@@ -2598,18 +2598,18 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 
                 {/* Current status message */}
                 <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                    <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
+                  <div className="w-10 h-10 rounded-full bg-ai-blue-100 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-5 h-5 text-ai-blue-600 animate-pulse" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-indigo-900 mb-1">
+                    <p className="text-sm font-medium text-ai-blue-900 mb-1">
                       Working for {generationElapsedLabel}
                     </p>
-                    <p className="text-sm text-indigo-700 leading-relaxed">
+                    <p className="text-sm text-ai-blue-700 leading-relaxed">
                       {FIGURE_GENERATION_MESSAGES[generationMessageIndex]}
                     </p>
                     {diagramCount && (
-                      <p className="text-xs text-indigo-500 mt-2">
+                      <p className="text-xs text-ai-blue-500 mt-2">
                         Generating {diagramCount} figure{diagramCount > 1 ? 's' : ''} as requested
                       </p>
                     )}
@@ -2617,8 +2617,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 </div>
 
                 {/* Helpful tip */}
-                <div className="mt-4 pt-3 border-t border-indigo-100">
-                  <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                <div className="mt-4 pt-3 border-t border-ai-blue-100">
+                  <p className="text-xs text-ai-graphite-500 flex items-center gap-1.5">
                     <Info className="w-3.5 h-3.5" />
                     Figures reuse the reference numerals from your specification, so drawings and text stay consistent.
                   </p>
@@ -2631,7 +2631,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="space-y-4 bg-gray-50 p-6 rounded-xl border border-gray-200"
+            className="space-y-4 bg-paper-100 p-6 rounded-xl border border-paper-300"
           >
             <div className="flex items-center gap-4 mb-4">
               <Label className="whitespace-nowrap">Number of Figures:</Label>
@@ -2655,7 +2655,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 checked={includeExistingFigures}
                 onCheckedChange={setIncludeExistingFigures}
               />
-              <Label htmlFor="include-existing" className="text-sm text-gray-700">
+              <Label htmlFor="include-existing" className="text-sm text-ai-graphite-700">
                 Tell AI about existing figures to avoid duplicates
               </Label>
             </div>
@@ -2668,7 +2668,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   animate={{ opacity: 1, x: 0 }}
                   className="bg-white p-4 rounded-lg border shadow-sm"
                 >
-                  <Label className="mb-2 block text-xs uppercase text-gray-500 font-semibold">Figure {i + 1} Description</Label>
+                  <Label className="mb-2 block text-xs uppercase text-ai-graphite-500 font-semibold">Figure {i + 1} Description</Label>
                   <Textarea 
                     placeholder="Describe what this figure should show..."
                     className="resize-none"
@@ -2687,7 +2687,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               <Button 
                 onClick={handleGenerateFromLLM}
                 disabled={isGenerating}
-                className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700"
+                className="w-full md:w-auto bg-ai-blue-600 hover:bg-ai-blue-700"
               >
                 {isGenerating ? <>Generating<AnimatedDots /></> : `Generate ${overrideCount} Custom Figures`}
               </Button>
@@ -2700,8 +2700,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       {/* Saved Diagrams Grid */}
       <div className="mt-12">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <ImageIcon className="w-5 h-5 text-gray-600" />
+          <h3 className="text-xl font-bold text-ai-graphite-900 flex items-center gap-2">
+            <ImageIcon className="w-5 h-5 text-ai-graphite-600" />
             Project Diagrams
           </h3>
           <div className="flex items-center gap-2">
@@ -2714,7 +2714,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   setTranslateFigureNo(null) // null = translate all
                   setShowTranslateModal(true)
                 }}
-                className="text-purple-600 border-purple-200 hover:bg-purple-50 hover:border-purple-300"
+                className="text-ai-blue-600 border-ai-blue-200 hover:bg-ai-blue-50 hover:border-ai-blue-300"
               >
                 <Languages className="w-4 h-4 mr-2" />
                 Translate All
@@ -2734,7 +2734,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 variant="outline"
                 size="sm"
                 onClick={handleUploadToggle}
-                className={showManual ? 'border-indigo-400 text-indigo-700' : ''}
+                className={showManual ? 'border-ai-blue-400 text-ai-blue-700' : ''}
               >
                 {showManual ? 'Hide External Uploads' : 'Upload External Images'}
               </Button>
@@ -2744,9 +2744,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
         
 {diagramSources.length === 0 ? (
-          <div className="text-center py-12 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+          <div className="text-center py-12 bg-paper-100 rounded-xl border border-dashed border-paper-300">
             <ImageIcon className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500">No diagrams created yet.</p>
+            <p className="text-ai-graphite-500">No diagrams created yet.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2803,12 +2803,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         </Badge>
                       )}
                     </div>
-                    <Badge variant="outline" className="text-xs text-gray-500">
+                    <Badge variant="outline" className="text-xs text-ai-graphite-500">
                       {selectedSource.imageUploadedAt ? 'Rendered' : selectedSource.plantumlCode ? 'Code Ready' : 'Pending'}
                     </Badge>
                   </div>
                   {/* Caption (Title) - shown prominently */}
-                  <CardTitle className="text-base font-semibold text-gray-900 mt-2 line-clamp-2">
+                  <CardTitle className="text-base font-semibold text-ai-graphite-900 mt-2 line-clamp-2">
                     {(() => {
                       const caption = plan?.title || `Figure ${figNo}`
                       // Remove redundant "Fig. X" prefix from caption if present
@@ -2825,7 +2825,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       className={`px-3 py-1 rounded-md text-sm border transition ${
                         lang === selectedLang
                           ? 'bg-green-50 border-green-500 text-green-700 font-semibold'
-                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                          : 'bg-white border-paper-300 text-ai-graphite-600 hover:bg-paper-100'
                       }`}
                     >
                       {LANGUAGE_LABELS[lang]?.split(' ')[0] || lang.toUpperCase()}
@@ -2833,7 +2833,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   ))}
                 </div>
                 
-                <CardContent className="p-0 relative bg-gray-100 min-h-[200px] flex items-center justify-center group">
+                <CardContent className="p-0 relative bg-paper-200 min-h-[200px] flex items-center justify-center group">
                   {/* Preview Image */}
                   {(renderPreview[diagramKey] || (selectedSource.imageFilename && !processingStatus[diagramKey])) ? (
                     <>
@@ -2853,11 +2853,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     {processingStatus[diagramKey] ? (
                       <div className="space-y-3">
                         <div className="relative w-16 h-16 mx-auto">
-                          <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
-                          <div className="absolute inset-0 border-4 border-indigo-500 rounded-full border-t-transparent animate-spin"></div>
-                          <Sparkles className="absolute inset-0 m-auto w-6 h-6 text-indigo-500 animate-pulse" />
+                          <div className="absolute inset-0 border-4 border-ai-blue-100 rounded-full"></div>
+                          <div className="absolute inset-0 border-4 border-ai-blue-500 rounded-full border-t-transparent animate-spin"></div>
+                          <Sparkles className="absolute inset-0 m-auto w-6 h-6 text-ai-blue-500 animate-pulse" />
                         </div>
-                        <p className="text-sm font-medium text-indigo-600 animate-pulse">
+                        <p className="text-sm font-medium text-ai-blue-600 animate-pulse">
                           {processingStatus[diagramKey]}
                         </p>
                         {processingStep[diagramKey] === -1 && selectedSource.plantumlCode && (
@@ -2883,7 +2883,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     ) : selectedSource.plantumlCode ? (
                       <div className="text-center">
                         <Code className="w-12 h-12 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500 mb-4">Code ready for processing</p>
+                        <p className="text-sm text-ai-graphite-500 mb-4">Code ready for processing</p>
                         <Button size="sm" onClick={() => {
                           const opEpoch = getDiagramOpEpoch(diagramKey)
                           queuedForRenderRef.current.delete(diagramKey) // Ensure it can be queued
@@ -2895,7 +2895,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         </Button>
                       </div>
                     ) : (
-                      <p className="text-sm text-gray-400">No image data</p>
+                      <p className="text-sm text-ai-graphite-400">No image data</p>
                     )}
                   </div>
                 )}
@@ -2912,17 +2912,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   if (!cleanCaption && !description) return null
                   
                   return (
-                    <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 space-y-2">
+                    <div className="px-4 py-3 bg-paper-100 border-t border-paper-300 space-y-2">
                       {/* Caption Line - for draft export (one line max) */}
                       {cleanCaption && (
-                        <p className="text-sm font-medium text-gray-800 truncate" title={cleanCaption}>
-                          <span className="text-indigo-600">Fig. {figNo}:</span> {cleanCaption}
+                        <p className="text-sm font-medium text-ai-graphite-800 truncate" title={cleanCaption}>
+                          <span className="text-ai-blue-600">Fig. {figNo}:</span> {cleanCaption}
                         </p>
                       )}
                       {/* Description - detailed explanation */}
                       {description && (
-                        <p className="text-xs text-gray-600 leading-relaxed text-justify">
-                          <span className="font-medium text-gray-700">Description:</span> {description}
+                        <p className="text-xs text-ai-graphite-600 leading-relaxed text-justify">
+                          <span className="font-medium text-ai-graphite-700">Description:</span> {description}
                         </p>
                       )}
                     </div>
@@ -2964,7 +2964,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   <Button 
                     variant="ghost" 
                     size="sm" 
-                    className="w-full text-purple-600 hover:text-purple-700 hover:bg-purple-50"
+                    className="w-full text-ai-blue-600 hover:text-ai-blue-700 hover:bg-ai-blue-50"
                     onClick={() => {
                       setTranslateFigureNo(figNo)
                       setShowTranslateModal(true)
@@ -3010,7 +3010,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         <Button 
                           variant="ghost" 
                           size="sm" 
-                          className="w-full text-xs text-gray-500"
+                          className="w-full text-xs text-ai-graphite-500"
                           onClick={() => setShowPlantUML(prev => ({ ...prev, [figNo]: !prev[figNo] }))}
                         >
                           {showPlantUML[figNo] ? 'Hide diagram source' : 'View diagram source'}
@@ -3020,7 +3020,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                              <Textarea 
                         readOnly
                         value={selectedSource.plantumlCode}
-                               className="font-mono text-xs h-32 bg-gray-50"
+                               className="font-mono text-xs h-32 bg-paper-100"
                       />
                              <Button 
                                size="sm" 
@@ -3091,7 +3091,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           <Button size="sm" variant="outline" onClick={() => setModifyFigNo(null)}>Cancel</Button>
                       </div>
                       {regeneratingFigure[figNo] && (
-                        <div className="mt-2 flex items-center text-xs text-indigo-600">
+                        <div className="mt-2 flex items-center text-xs text-ai-blue-600">
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                           Regenerating diagram with AI...
                         </div>
@@ -3126,25 +3126,25 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   duration: 0.2
                 }
               }}
-              className={`bg-white border border-gray-200 rounded-xl p-6 shadow-sm mt-6 ${highlightUpload ? 'ring-2 ring-indigo-400 ring-opacity-50' : ''}`}
+              className={`bg-white border border-paper-300 rounded-xl p-6 shadow-sm mt-6 ${highlightUpload ? 'ring-2 ring-ai-blue-400 ring-opacity-50' : ''}`}
             >
             <div className="flex flex-col gap-4 mb-6 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <h4 className="font-semibold flex items-center gap-2 mb-2">
-                  <Upload className="w-5 h-5 text-indigo-600" />
+                  <Upload className="w-5 h-5 text-ai-blue-600" />
                   Upload External Images
                   {highlightUpload && (
                     <motion.span
                       initial={{ scale: 0 }}
                       animate={{ scale: 1 }}
-                      className="inline-flex items-center px-2 py-1 text-xs font-medium text-indigo-700 bg-indigo-100 rounded-full"
+                      className="inline-flex items-center px-2 py-1 text-xs font-medium text-ai-blue-700 bg-ai-blue-100 rounded-full"
                     >
                       <Sparkles className="w-3 h-3 mr-1" />
                       Ready to upload!
                     </motion.span>
                   )}
                 </h4>
-                <p className="text-sm text-gray-600 max-w-3xl">
+                <p className="text-sm text-ai-graphite-600 max-w-3xl">
                   Upload patent diagrams or images one at a time. Use AI detection to draft the required description; images sent to AI are limited to Full HD resolution.
                 </p>
               </div>
@@ -3174,7 +3174,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             </div>
 
             {manualDetectionProgress && (
-              <div className="mb-4 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-700 flex items-center gap-2">
+              <div className="mb-4 rounded-md border border-ai-blue-100 bg-ai-blue-50 px-3 py-2 text-sm text-ai-blue-700 flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Detecting image {manualDetectionProgress.current} of {manualDetectionProgress.total}
               </div>
@@ -3185,11 +3185,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 const wordCount = countWords(slot.description)
                 const ready = !!slot.file && wordCount >= 20 && slot.status !== 'saved'
                 return (
-                  <div key={slot.id} className="border rounded-lg p-4 bg-gray-50">
+                  <div key={slot.id} className="border rounded-lg p-4 bg-paper-100">
                     <div className="flex flex-col gap-4 lg:flex-row">
                       <div className="lg:w-64 space-y-3">
                         <div className="flex items-center justify-between">
-                          <div className="text-sm font-medium text-gray-700">Image {i + 1}</div>
+                          <div className="text-sm font-medium text-ai-graphite-700">Image {i + 1}</div>
                           <div className="flex items-center gap-2">
                             {slot.status === 'saved' ? (
                               <Badge variant="default" className="bg-green-600">Saved</Badge>
@@ -3207,7 +3207,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               size="sm"
                               onClick={() => removeManualUploadSlot(slot.id)}
                               disabled={slot.status === 'detecting' || slot.status === 'saving'}
-                              className="h-8 w-8 p-0 text-gray-500 hover:text-red-600"
+                              className="h-8 w-8 p-0 text-ai-graphite-500 hover:text-red-600"
                               title="Remove image"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -3219,7 +3219,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           {slot.previewUrl ? (
                             <img src={slot.previewUrl} alt={`External upload ${i + 1}`} className="h-full w-full object-contain" />
                           ) : (
-                            <div className="text-center text-gray-400">
+                            <div className="text-center text-ai-graphite-400">
                               <UploadCloud className="w-8 h-8 mx-auto mb-2" />
                               <p className="text-xs">Choose image</p>
                             </div>
@@ -3233,7 +3233,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           disabled={slot.status === 'detecting' || slot.status === 'saving' || slot.status === 'saved'}
                           onChange={(e) => handleManualFileChange(slot.id, e.target.files?.[0])}
                         />
-                        <p className="text-xs text-gray-500">PNG, JPEG, WebP, or SVG. AI detection analyzes a Full HD copy.</p>
+                        <p className="text-xs text-ai-graphite-500">PNG, JPEG, WebP, or SVG. AI detection analyzes a Full HD copy.</p>
                       </div>
 
                       <div className="flex-1 grid gap-4">
@@ -3245,11 +3245,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         />
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <Label className="text-xs text-gray-500 flex items-center gap-1">
+                            <Label className="text-xs text-ai-graphite-500 flex items-center gap-1">
                               Description (min 20 words)
                               <Hint text="The description becomes this figure's caption in your specification, so it needs enough detail to stand on its own. Use 'Describe images with AI' to write it for you." />
                             </Label>
-                            <span className={wordCount >= 20 ? 'text-xs text-green-600' : 'text-xs text-gray-500'}>
+                            <span className={wordCount >= 20 ? 'text-xs text-green-600' : 'text-xs text-ai-graphite-500'}>
                               {wordCount} / 20 words
                             </span>
                           </div>
@@ -3284,7 +3284,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               Add to figures
                             </Button>
                             {slot.aiGenerated && (
-                              <Badge variant="outline" className="text-indigo-700 border-indigo-200 bg-indigo-50">AI drafted</Badge>
+                              <Badge variant="outline" className="text-ai-blue-700 border-ai-blue-200 bg-ai-blue-50">AI drafted</Badge>
                             )}
                             {slot.scaledForDetection && slot.imageWidth && slot.imageHeight && (
                               <Badge variant="outline" className="text-slate-600">
@@ -3356,13 +3356,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between p-4 border-b">
-                <h4 className="text-lg font-semibold text-gray-900">Figure {expandedFigNo} Preview</h4>
+                <h4 className="text-lg font-semibold text-ai-graphite-900">Figure {expandedFigNo} Preview</h4>
                 <Button variant="ghost" size="icon" onClick={() => setExpandedFigNo(null)}>
                   <span className="sr-only">Close</span>
                   <span className="text-2xl">&times;</span>
                 </Button>
               </div>
-              <div className="flex-1 overflow-auto p-4 bg-gray-100 flex items-center justify-center">
+              <div className="flex-1 overflow-auto p-4 bg-paper-200 flex items-center justify-center">
                 <motion.img
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -3401,14 +3401,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-purple-100 rounded-lg">
-                  <Languages className="w-6 h-6 text-purple-600" />
+                <div className="p-2 bg-ai-blue-100 rounded-lg">
+                  <Languages className="w-6 h-6 text-ai-blue-600" />
                 </div>
                 <div>
-                  <h4 className="text-lg font-semibold text-gray-900">
+                  <h4 className="text-lg font-semibold text-ai-graphite-900">
                     {translateFigureNo !== null ? `Translate Figure ${translateFigureNo}` : 'Translate All Diagrams'}
                   </h4>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-ai-graphite-500">
                     {translateFigureNo !== null 
                       ? 'Convert diagram labels to another language' 
                       : `Translate all ${diagramSources.filter((d: any) => !d.language || d.language === 'en').length} English diagrams`}
@@ -3418,11 +3418,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
               <div className="space-y-4">
                 <div>
-                  <Label className="text-sm font-medium text-gray-700">Target Language</Label>
+                  <Label className="text-sm font-medium text-ai-graphite-700">Target Language</Label>
                   <select
                     value={translateTargetLang}
                     onChange={(e) => setTranslateTargetLang(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                    className="mt-1 w-full px-3 py-2 border border-paper-400 rounded-lg focus:ring-2 focus:ring-ai-blue-500 focus:border-ai-blue-500"
                     disabled={translating}
                   >
                     <option value="">Select language...</option>
@@ -3445,20 +3445,20 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                 {translateProgress && (
                   <div className="space-y-2">
-                    <div className="flex justify-between text-sm text-gray-600">
+                    <div className="flex justify-between text-sm text-ai-graphite-600">
                       <span>Translating...</span>
                       <span>{translateProgress.current} / {translateProgress.total}</span>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="w-full bg-paper-300 rounded-full h-2">
                       <div 
-                        className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                        className="bg-ai-blue-600 h-2 rounded-full transition-all duration-300"
                         style={{ width: `${(translateProgress.current / translateProgress.total) * 100}%` }}
                       />
                     </div>
                   </div>
                 )}
 
-                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 space-y-1">
+                <div className="bg-paper-100 rounded-lg p-3 text-xs text-ai-graphite-600 space-y-1">
                   <p>• Original English diagrams are preserved</p>
                   <p>• Translated diagrams are stored separately</p>
                   <p>• Assigned reference numerals remain unchanged</p>
@@ -3482,7 +3482,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 <Button
                   onClick={handleTranslateDiagrams}
                   disabled={!translateTargetLang || translating}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="flex-1 bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
                 >
                   {translating ? (
                     <>
@@ -3519,7 +3519,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Wand2 className="w-5 h-5 text-indigo-600" />
+                <Wand2 className="w-5 h-5 text-ai-blue-600" />
                 Generate Patent Sketch
               </CardTitle>
               <CardDescription>
@@ -3568,19 +3568,19 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 {showReferenceSelector && (
                   <div className="p-3 border rounded-lg bg-slate-50 space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label className="text-xs font-medium text-gray-600">
+                      <Label className="text-xs font-medium text-ai-graphite-600">
                         Context for Suggestions (optional)
                       </Label>
                       {selectedReferenceFigures.length > 0 && (
                         <button 
                           onClick={() => setSelectedReferenceFigures([])}
-                          className="text-xs text-gray-500 hover:text-gray-700"
+                          className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700"
                         >
                           Clear all
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-ai-graphite-500">
                       Select existing figures to help AI understand what views already exist. This helps generate complementary sketch <em>ideas</em>.
                     </p>
                     <div className="max-h-40 overflow-y-auto space-y-1">
@@ -3598,7 +3598,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           <label 
                             key={figId} 
                             className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
-                              isSelected ? 'bg-indigo-100 border-indigo-200' : 'hover:bg-gray-100'
+                              isSelected ? 'bg-ai-blue-100 border-ai-blue-200' : 'hover:bg-paper-200'
                             }`}
                           >
                             <input
@@ -3611,7 +3611,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                   setSelectedReferenceFigures(selectedReferenceFigures.filter(id => id !== figId))
                                 }
                               }}
-                              className="rounded border-gray-300"
+                              className="rounded border-paper-400"
                             />
                             <span className="text-xs">
                               <span className="font-medium">Fig {figNo}:</span> {title}
@@ -3629,7 +3629,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           <label 
                             key={sketchId} 
                             className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
-                              isSelected ? 'bg-amber-100 border-amber-200' : 'hover:bg-gray-100'
+                              isSelected ? 'bg-amber-100 border-amber-200' : 'hover:bg-paper-200'
                             }`}
                           >
                             <input
@@ -3642,7 +3642,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                   setSelectedReferenceFigures(selectedReferenceFigures.filter(id => id !== sketchId))
                                 }
                               }}
-                              className="rounded border-gray-300"
+                              className="rounded border-paper-400"
                             />
                             <span className="text-xs">
                               <span className="font-medium">{sketch.title}</span>
@@ -3652,7 +3652,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         )
                       })}
                       {Object.keys(diagramsByFigure).length === 0 && sketches.filter(s => s.status === 'SUCCESS').length === 0 && (
-                        <p className="text-xs text-gray-400 italic p-2">No existing figures to reference</p>
+                        <p className="text-xs text-ai-graphite-400 italic p-2">No existing figures to reference</p>
                       )}
                     </div>
                   </div>
@@ -3660,13 +3660,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               </div>
 
               {/* Mode Selector */}
-              <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg w-fit">
+              <div className="flex items-center gap-2 bg-paper-200 p-1 rounded-lg w-fit">
                 <button
                   onClick={() => setSketchMode('auto')}
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
                     sketchMode === 'auto'
-                      ? 'bg-white text-indigo-600 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      ? 'bg-white text-ai-blue-600 shadow-sm'
+                      : 'text-ai-graphite-600 hover:text-ai-graphite-900'
                   }`}
                 >
                   <Sparkles className="w-4 h-4" />
@@ -3676,8 +3676,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   onClick={() => setSketchMode('guided')}
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
                     sketchMode === 'guided'
-                      ? 'bg-white text-indigo-600 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      ? 'bg-white text-ai-blue-600 shadow-sm'
+                      : 'text-ai-graphite-600 hover:text-ai-graphite-900'
                   }`}
                 >
                   <Edit2 className="w-4 h-4" />
@@ -3687,8 +3687,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   onClick={() => setSketchMode('refine')}
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${
                     sketchMode === 'refine'
-                      ? 'bg-white text-indigo-600 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      ? 'bg-white text-ai-blue-600 shadow-sm'
+                      : 'text-ai-graphite-600 hover:text-ai-graphite-900'
                   }`}
                 >
                   <Upload className="w-4 h-4" />
@@ -3710,17 +3710,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Lightbulb className="w-4 h-4 text-amber-600" />
-                      <Label className="text-sm font-medium text-gray-700">Sketch Suggestions</Label>
+                      <Label className="text-sm font-medium text-ai-graphite-700">Sketch Suggestions</Label>
                       <Badge variant="secondary" className="text-xs">{sketchSuggestions.length}</Badge>
                     </div>
                     <button
                       onClick={() => setSketchSuggestions([])}
-                      className="text-xs text-gray-500 hover:text-gray-700"
+                      className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700"
                     >
                       Clear all
                     </button>
                   </div>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-ai-graphite-500">
                     Click &quot;Generate Image&quot; to create an actual sketch from each suggestion.
                   </p>
                   <div className="grid gap-3">
@@ -3732,8 +3732,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               <span className="text-xs font-semibold text-amber-700">{index + 1}</span>
                             </div>
                             <div className="flex-1">
-                              <h4 className="font-medium text-gray-900 mb-1">{suggestion.title}</h4>
-                              <p className="text-sm text-gray-600 leading-relaxed mb-3">{suggestion.description}</p>
+                              <h4 className="font-medium text-ai-graphite-900 mb-1">{suggestion.title}</h4>
+                              <p className="text-sm text-ai-graphite-600 leading-relaxed mb-3">{suggestion.description}</p>
                               <div className="flex items-center gap-2">
                                 <Button
                                   size="sm"
@@ -3756,7 +3756,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                 <Button
                                   size="sm"
                                   variant="ghost"
-                                  className="text-gray-500 hover:text-gray-700"
+                                  className="text-ai-graphite-500 hover:text-ai-graphite-700"
                                   onClick={() => {
                                     // Pre-fill the form with suggestion data for customization
                                     setSketchTitle(suggestion.title)
@@ -3773,7 +3773,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                 <Button
                                   size="sm"
                                   variant="ghost"
-                                  className="text-gray-400 hover:text-red-500"
+                                  className="text-ai-graphite-400 hover:text-red-500"
                                   onClick={() => setSketchSuggestions(prev => prev.filter((_, i) => i !== index))}
                                   disabled={generatingManualSuggestionIdx !== null}
                                 >
@@ -3837,7 +3837,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
                         sketchUploadPreview
                           ? 'border-green-300 bg-green-50'
-                          : 'border-gray-300 hover:border-indigo-400 hover:bg-indigo-50'
+                          : 'border-paper-400 hover:border-ai-blue-400 hover:bg-ai-blue-50'
                       }`}
                     >
                       {sketchUploadPreview ? (
@@ -3862,9 +3862,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <Upload className="w-8 h-8 mx-auto text-gray-400" />
-                          <p className="text-sm text-gray-500">Click to upload a sketch</p>
-                          <p className="text-xs text-gray-400">PNG, JPEG, WebP up to 10MB</p>
+                          <Upload className="w-8 h-8 mx-auto text-ai-graphite-400" />
+                          <p className="text-sm text-ai-graphite-500">Click to upload a sketch</p>
+                          <p className="text-xs text-ai-graphite-400">PNG, JPEG, WebP up to 10MB</p>
                         </div>
                       )}
                     </div>
@@ -3877,7 +3877,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Link2 className="w-4 h-4 text-amber-600" />
-                        <Label className="text-sm font-medium text-gray-700">
+                        <Label className="text-sm font-medium text-ai-graphite-700">
                           Style Reference (Optional)
                         </Label>
                         {selectedReferenceSketchIds.length > 0 && (
@@ -3889,13 +3889,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       {selectedReferenceSketchIds.length > 0 && (
                         <button 
                           onClick={() => setSelectedReferenceSketchIds([])}
-                          className="text-xs text-gray-500 hover:text-gray-700"
+                          className="text-xs text-ai-graphite-500 hover:text-ai-graphite-700"
                         >
                           Clear
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-gray-600">
+                    <p className="text-xs text-ai-graphite-600">
                       Select existing sketches to maintain <strong>visual consistency</strong> (line style, shading, layout). 
                       Selected images are passed to the AI to match the same drawing style.
                     </p>
@@ -3915,11 +3915,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             className={`relative cursor-pointer rounded-lg border-2 overflow-hidden transition-all ${
                               isSelected 
                                 ? 'border-amber-500 ring-2 ring-amber-200 scale-105' 
-                                : 'border-gray-200 hover:border-amber-300'
+                                : 'border-paper-300 hover:border-amber-300'
                             }`}
                             title={sketch.title || 'Untitled Sketch'}
                           >
-                            <div className="w-16 h-16 bg-gray-100 flex items-center justify-center">
+                            <div className="w-16 h-16 bg-paper-200 flex items-center justify-center">
                               {sketch.imagePath ? (
                                 <img
                                   src={sketch.imagePath}
@@ -3927,7 +3927,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                   className="w-full h-full object-cover"
                                 />
                               ) : (
-                                <Wand2 className="w-6 h-6 text-gray-400" />
+                                <Wand2 className="w-6 h-6 text-ai-graphite-400" />
                               )}
                             </div>
                             {isSelected && (
@@ -3953,7 +3953,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               <Button
                 onClick={handleGenerateSketch}
                 disabled={sketchGenerating || (sketchMode === 'refine' && !sketchUploadFile)}
-                className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white gap-2"
+                className="w-full md:w-auto bg-ai-blue-600 hover:bg-ai-blue-700 text-white gap-2"
               >
                 {sketchGenerating ? (
                   <>
@@ -3980,13 +3980,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
             return (
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <h3 className="text-lg font-semibold text-ai-graphite-900 flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-amber-500" />
                     AI-Suggested Sketches
                     <Badge variant="secondary" className="ml-2">{suggestions.length}</Badge>
                   </h3>
                 </div>
-                <p className="text-sm text-gray-600 mb-4">
+                <p className="text-sm text-ai-graphite-600 mb-4">
                   These sketch ideas were generated alongside your diagrams. Click &quot;Generate Image&quot; to create the actual sketch.
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -4012,9 +4012,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           )}
                         </div>
                         <CardContent className="p-4">
-                          <h4 className="font-semibold text-gray-900 text-sm mb-2">{suggestion.title}</h4>
+                          <h4 className="font-semibold text-ai-graphite-900 text-sm mb-2">{suggestion.title}</h4>
                           {suggestion.description && (
-                            <p className="text-xs text-gray-600 mb-3 line-clamp-3">
+                            <p className="text-xs text-ai-graphite-600 mb-3 line-clamp-3">
                               {suggestion.description}
                             </p>
                           )}
@@ -4044,7 +4044,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               onClick={() => handleDeleteSketch(suggestion.id)}
                               disabled={generatingSuggestionId !== null}
                             >
-                              <Trash2 className="w-4 h-4 text-gray-400" />
+                              <Trash2 className="w-4 h-4 text-ai-graphite-400" />
                             </Button>
                           </div>
                         </CardContent>
@@ -4059,7 +4059,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           {/* Generated Sketches Grid */}
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-ai-graphite-900 flex items-center gap-2">
                 <Grid3X3 className="w-5 h-5" />
                 Generated Sketches
               </h3>
@@ -4071,14 +4071,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
             {sketchesLoading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                <Loader2 className="w-8 h-8 animate-spin text-ai-blue-600" />
               </div>
             ) : sketches.filter(s => s.status !== 'SUGGESTED').length === 0 ? (
               <Card className="border-dashed">
                 <CardContent className="py-12 text-center">
                   <Pencil className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-                  <h4 className="text-lg font-medium text-gray-900 mb-2">No generated sketches yet</h4>
-                  <p className="text-gray-500 mb-4">
+                  <h4 className="text-lg font-medium text-ai-graphite-900 mb-2">No generated sketches yet</h4>
+                  <p className="text-ai-graphite-500 mb-4">
                     {sketches.some(s => s.status === 'SUGGESTED') 
                       ? 'Generate sketches from the suggestions above, or create a new one using the controls.'
                       : 'Generate your first patent-style sketch using the controls above.'}
@@ -4104,12 +4104,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     }`}>
                       {/* Image Preview */}
                       <div
-                        className="relative aspect-square bg-gray-100 cursor-pointer"
+                        className="relative aspect-square bg-paper-200 cursor-pointer"
                         onClick={() => sketchImageUrl && setExpandedSketchId(sketch.id)}
                       >
                         {sketch.status === 'PENDING' ? (
                           <div className="absolute inset-0 flex items-center justify-center">
-                            <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                            <Loader2 className="w-8 h-8 animate-spin text-ai-blue-600" />
                           </div>
                         ) : sketch.status === 'FAILED' ? (
                           <div className="absolute inset-0 flex flex-col items-center justify-center p-4">
@@ -4179,13 +4179,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                       {/* Card Footer */}
                       <CardContent className="p-3">
-                        <h4 className="font-medium text-gray-900 truncate text-sm">{sketch.title}</h4>
+                        <h4 className="font-medium text-ai-graphite-900 truncate text-sm">{sketch.title}</h4>
                         {sketch.description && (
-                          <p className="text-xs text-gray-600 mt-1 line-clamp-2" title={sketch.description}>
+                          <p className="text-xs text-ai-graphite-600 mt-1 line-clamp-2" title={sketch.description}>
                             {sketch.description}
                           </p>
                         )}
-                        <p className="text-xs text-gray-400 mt-1">
+                        <p className="text-xs text-ai-graphite-400 mt-1">
                           {new Date(sketch.createdAt).toLocaleDateString()}
                         </p>
 
@@ -4201,7 +4201,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             {sketch.isFavorite ? (
                               <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
                             ) : (
-                              <StarOff className="w-5 h-5 text-gray-400" />
+                              <StarOff className="w-5 h-5 text-ai-graphite-400" />
                             )}
                           </Button>
                           {/* Edit Image button */}
@@ -4217,7 +4217,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             disabled={!sketchImageUrl || sketch.status !== 'SUCCESS'}
                             title="Edit image in miniPaint"
                           >
-                            <Paintbrush className={`w-5 h-5 ${sketchImageUrl && sketch.status === 'SUCCESS' ? 'text-indigo-500' : 'text-gray-300'}`} />
+                            <Paintbrush className={`w-5 h-5 ${sketchImageUrl && sketch.status === 'SUCCESS' ? 'text-ai-blue-500' : 'text-gray-300'}`} />
                           </Button>
                           <Button
                             size="sm"
@@ -4230,7 +4230,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             disabled={sketch.status !== 'SUCCESS'}
                             title="Modify with AI"
                           >
-                            <Edit2 className="w-5 h-5 text-gray-400" />
+                            <Edit2 className="w-5 h-5 text-ai-graphite-400" />
                           </Button>
                           <Button
                             size="sm"
@@ -4239,7 +4239,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             onClick={() => handleDeleteSketch(sketch.id)}
                             title="Delete sketch"
                           >
-                            <Trash2 className="w-5 h-5 text-gray-400" />
+                            <Trash2 className="w-5 h-5 text-ai-graphite-400" />
                           </Button>
                         </div>
                       </CardContent>
@@ -4278,16 +4278,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   >
                     <div className="flex items-center justify-between p-4 border-b">
                       <div>
-                        <h4 className="text-lg font-semibold text-gray-900">{sketch.title}</h4>
+                        <h4 className="text-lg font-semibold text-ai-graphite-900">{sketch.title}</h4>
                         {sketch.description && (
-                          <p className="text-sm text-gray-600 mt-1 max-w-xl">{sketch.description}</p>
+                          <p className="text-sm text-ai-graphite-600 mt-1 max-w-xl">{sketch.description}</p>
                         )}
                       </div>
                       <Button variant="ghost" size="icon" onClick={() => setExpandedSketchId(null)}>
                         <span className="text-2xl">&times;</span>
                       </Button>
                     </div>
-                    <div className="flex-1 overflow-auto p-4 bg-gray-100 flex items-center justify-center">
+                    <div className="flex-1 overflow-auto p-4 bg-paper-200 flex items-center justify-center">
                       <img
                         src={modalSketchImageUrl}
                         alt={sketch.title}
@@ -4295,7 +4295,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       />
                     </div>
                     <div className="p-4 border-t flex justify-between items-center">
-                      <div className="text-sm text-gray-500">
+                      <div className="text-sm text-ai-graphite-500">
                         Mode: {sketch.mode} • Created: {new Date(sketch.createdAt).toLocaleString()}
                       </div>
                       <div className="flex gap-2">
@@ -4345,13 +4345,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                     className="bg-white rounded-xl shadow-2xl p-6 max-w-lg w-full"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <h4 className="text-lg font-semibold text-gray-900 mb-4">Modify Sketch</h4>
-                    <p className="text-sm text-gray-500 mb-4">
+                    <h4 className="text-lg font-semibold text-ai-graphite-900 mb-4">Modify Sketch</h4>
+                    <p className="text-sm text-ai-graphite-500 mb-4">
                       Describe the changes you want to make to "{sketch.title}"
                     </p>
                     
                     {modalSketchImageUrl && (
-                      <div className="mb-4 p-2 bg-gray-100 rounded">
+                      <div className="mb-4 p-2 bg-paper-200 rounded">
                         <img
                           src={modalSketchImageUrl}
                           alt={sketch.title}
@@ -4379,7 +4379,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       <Button
                         onClick={() => handleModifySketch(sketch.id)}
                         disabled={sketchGenerating || !modifySketchPrompt.trim()}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                        className="bg-ai-blue-600 hover:bg-ai-blue-700 text-white"
                       >
                         {sketchGenerating ? (
                           <>
@@ -4414,17 +4414,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           )}
 
           {/* Header with instruction */}
-          <div className="border-b border-gray-200 pb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="border-b border-paper-300 pb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-gray-600">
+              <p className="text-ai-graphite-600">
                 Combine and order your figures for the final specification.
               </p>
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="text-sm text-ai-graphite-500 mt-1">
                 {isSequenceFinalized 
                   ? 'Sequence is finalized. Unlock to make changes.'
                   : 'Drag to reorder. Changes are saved automatically.'}
               </p>
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-ai-graphite-500 mt-1">
                 Tip: Click, hold, and drag anywhere on a figure card to reorder.
               </p>
             </div>
@@ -4487,14 +4487,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
           {arrangeLoading ? (
             <div className="flex items-center justify-center py-16">
-              <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+              <Loader2 className="w-8 h-8 animate-spin text-ai-graphite-400" />
             </div>
           ) : arrangedFigures.length === 0 ? (
             <Card className="border-dashed">
               <CardContent className="py-12 text-center">
                 <Layers className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-                <h4 className="text-lg font-medium text-gray-900 mb-2">No figures to arrange</h4>
-                <p className="text-gray-500">
+                <h4 className="text-lg font-medium text-ai-graphite-900 mb-2">No figures to arrange</h4>
+                <p className="text-ai-graphite-500">
                   Generate diagrams or sketches first, then return here to arrange them.
                 </p>
               </CardContent>
@@ -4504,10 +4504,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               {/* Left: Sortable List */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-medium text-gray-700 uppercase tracking-wide">
+                  <h3 className="text-sm font-medium text-ai-graphite-700 uppercase tracking-wide">
                     Figure Order
                   </h3>
-                  <span className="text-xs text-gray-500">
+                  <span className="text-xs text-ai-graphite-500">
                     {arrangedFigures.length} figure{arrangedFigures.length !== 1 ? 's' : ''}
                   </span>
                 </div>
@@ -4541,16 +4541,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                   <DragOverlay>
                     {activeDragId ? (
-                      <div className="bg-white border border-gray-300 rounded-lg p-3 shadow-lg opacity-90">
+                      <div className="bg-white border border-paper-400 rounded-lg p-3 shadow-lg opacity-90">
                         {(() => {
                           const figure = arrangedFigures.find(f => f.id === activeDragId)
                           if (!figure) return null
                           return (
                             <div className="flex items-center gap-3">
-                              <span className="text-sm font-mono text-gray-500 w-12">
+                              <span className="text-sm font-mono text-ai-graphite-500 w-12">
                                 Fig {figure.finalFigNo}
                               </span>
-                              <span className="text-sm font-medium text-gray-900 truncate">
+                              <span className="text-sm font-medium text-ai-graphite-900 truncate">
                                 {figure.title}
                               </span>
                             </div>
@@ -4565,7 +4565,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               {/* Right: Preview Panel */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-medium text-gray-700 uppercase tracking-wide">
+                  <h3 className="text-sm font-medium text-ai-graphite-700 uppercase tracking-wide">
                     Preview
                   </h3>
                 </div>
@@ -4574,7 +4574,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   <Card>
                     <CardContent className="p-4">
                       {/* Figure preview image */}
-                      <div className="aspect-video bg-gray-50 border border-gray-200 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+                      <div className="aspect-video bg-paper-100 border border-paper-300 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
                         {selectedArrangeFigure.imagePath ? (
                           <img
                             src={selectedArrangeFigure.imagePath}
@@ -4589,14 +4589,14 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             }}
                           />
                         ) : (
-                          <div className="text-gray-400 text-sm">No preview available</div>
+                          <div className="text-ai-graphite-400 text-sm">No preview available</div>
                         )}
                       </div>
 
                       {/* Figure details */}
                       <div className="space-y-3">
                         <div>
-                          <h4 className="font-medium text-gray-900">
+                          <h4 className="font-medium text-ai-graphite-900">
                             Fig {selectedArrangeFigure.finalFigNo} – {selectedArrangeFigure.title}
                           </h4>
                           <div className="flex items-center gap-2 mt-1">
@@ -4607,7 +4607,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         </div>
 
                         {selectedArrangeFigure.description && (
-                          <p className="text-sm text-gray-600">
+                          <p className="text-sm text-ai-graphite-600">
                             {selectedArrangeFigure.description}
                           </p>
                         )}
@@ -4617,7 +4617,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 ) : (
                   <Card className="border-dashed">
                     <CardContent className="py-12 text-center">
-                      <p className="text-gray-500 text-sm">Select a figure to preview</p>
+                      <p className="text-ai-graphite-500 text-sm">Select a figure to preview</p>
                     </CardContent>
                   </Card>
                 )}
@@ -4627,7 +4627,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
           {/* Action Buttons */}
           {arrangedFigures.length > 0 && (
-            <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+            <div className="flex items-center justify-between pt-4 border-t border-paper-300">
               <div className="flex items-center gap-3">
                 <Button
                   variant="outline"
@@ -4655,7 +4655,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
               <div className="flex items-center gap-3">
                 {savingSequence && (
-                  <span className="text-xs text-gray-500 flex items-center gap-1">
+                  <span className="text-xs text-ai-graphite-500 flex items-center gap-1">
                     <Loader2 className="w-3 h-3 animate-spin" />
                     Saving...
                   </span>
@@ -4691,10 +4691,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
             <div className="flex items-start gap-3">
-              <Lock className="w-5 h-5 text-gray-500 mt-1" />
+              <Lock className="w-5 h-5 text-ai-graphite-500 mt-1" />
               <div>
-                <h4 className="text-lg font-semibold text-gray-900">Sequence locked</h4>
-                <p className="text-sm text-gray-600 mt-1">
+                <h4 className="text-lg font-semibold text-ai-graphite-900">Sequence locked</h4>
+                <p className="text-sm text-ai-graphite-600 mt-1">
                   Unlock the figure sequence to rearrange images.
                 </p>
               </div>
@@ -4778,7 +4778,7 @@ function SortableFigureItem({ figure, isSelected, isFinalized, onSelect, onAttem
       style={style}
       className={`
         flex items-center gap-3 p-3 bg-white border rounded-lg transition-colors
-        ${isSelected ? 'border-indigo-300 bg-indigo-50/50' : 'border-gray-200 hover:border-gray-300'}
+        ${isSelected ? 'border-ai-blue-300 bg-ai-blue-50/50' : 'border-paper-300 hover:border-paper-400'}
         ${isDragging ? 'shadow-md' : ''}
         ${isFinalized ? 'cursor-default' : 'cursor-pointer'}
       `}
@@ -4791,21 +4791,21 @@ function SortableFigureItem({ figure, isSelected, isFinalized, onSelect, onAttem
       <button
         className={`
           p-1 rounded touch-none
-          ${isFinalized ? 'opacity-30 cursor-not-allowed' : 'cursor-grab active:cursor-grabbing hover:bg-gray-100'}
+          ${isFinalized ? 'opacity-30 cursor-not-allowed' : 'cursor-grab active:cursor-grabbing hover:bg-paper-200'}
         `}
         disabled={isFinalized}
         aria-label={isFinalized ? 'Sequence is locked' : 'Drag to reorder'}
       >
-        <GripVertical className="w-4 h-4 text-gray-400" />
+        <GripVertical className="w-4 h-4 text-ai-graphite-400" />
       </button>
 
       {/* Figure Number */}
-      <span className="text-sm font-mono text-gray-500 w-12 flex-shrink-0">
+      <span className="text-sm font-mono text-ai-graphite-500 w-12 flex-shrink-0">
         Fig {figure.finalFigNo}
       </span>
 
       {/* Thumbnail */}
-      <div className="w-10 h-10 bg-gray-100 border border-gray-200 rounded flex-shrink-0 overflow-hidden">
+      <div className="w-10 h-10 bg-paper-200 border border-paper-300 rounded flex-shrink-0 overflow-hidden">
         {figure.imagePath ? (
           <img
             src={figure.imagePath}
@@ -4827,8 +4827,8 @@ function SortableFigureItem({ figure, isSelected, isFinalized, onSelect, onAttem
 
       {/* Title and Type */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">{figure.title}</p>
-        <p className="text-xs text-gray-500">
+        <p className="text-sm font-medium text-ai-graphite-900 truncate">{figure.title}</p>
+        <p className="text-xs text-ai-graphite-500">
           {figure.type === 'diagram' ? 'Diagram' : 'Sketch'}
         </p>
       </div>
@@ -4836,7 +4836,7 @@ function SortableFigureItem({ figure, isSelected, isFinalized, onSelect, onAttem
       {/* Type indicator */}
       <div className={`
         w-2 h-2 rounded-full flex-shrink-0
-        ${figure.type === 'diagram' ? 'bg-blue-400' : 'bg-amber-400'}
+        ${figure.type === 'diagram' ? 'bg-ai-blue-400' : 'bg-amber-400'}
       `} title={figure.type === 'diagram' ? 'Block Diagram' : 'AI Sketch'} />
     </div>
   )
