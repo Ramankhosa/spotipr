@@ -14,13 +14,24 @@
 set -euo pipefail
 
 : "${DATABASE_URL:?Set DATABASE_URL}"
-: "${VOYAGE_API_KEY:?Set VOYAGE_API_KEY (embedding is a paid API phase)}"
+
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# VOYAGE_API_KEY: shell env wins; otherwise read it from the app env files
+# (mirrors the precedence the worker itself uses via scripts/load-env.ts).
+if [ -z "${VOYAGE_API_KEY:-}" ]; then
+  for f in "$APP_DIR/.env" "$APP_DIR/.env.local"; do
+    [ -f "$f" ] || continue
+    v=$(grep -E '^VOYAGE_API_KEY=' "$f" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    [ -n "$v" ] && export VOYAGE_API_KEY="$v"
+  done
+fi
+: "${VOYAGE_API_KEY:?Set VOYAGE_API_KEY (in the shell or in the app .env)}"
 
 export PATENT_CORPUS_EMBEDDING_MODEL="${PATENT_CORPUS_EMBEDDING_MODEL:-voyage-3.5-lite}"
 export PATENT_CORPUS_EMBEDDING_DIMENSIONS="${PATENT_CORPUS_EMBEDDING_DIMENSIONS:-512}"
 export PATENT_CORPUS_EMBEDDING_DTYPE="${PATENT_CORPUS_EMBEDDING_DTYPE:-binary}"
 
-APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$APP_DIR"
 
 queued=$(psql "$DATABASE_URL" -tAqc "SELECT count(*) FROM local_patent_embeddings WHERE model='$PATENT_CORPUS_EMBEDDING_MODEL' AND status IN ('QUEUED','FAILED')")
