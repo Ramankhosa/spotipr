@@ -170,6 +170,7 @@ everything is `ON CONFLICT`-idempotent, so deltas are cheap.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `migrate deploy` fails on `halfvec`/`bit` | pgvector < 0.7 | `sudo apt-get install postgresql-17-pgvector` (0.7+ build), then in psql: `ALTER EXTENSION vector UPDATE;` — verify `SELECT extversion FROM pg_extension WHERE extname='vector';` ≥ 0.7. Re-run deploy. |
+| Preflight FAIL: `embeddingBinary` missing | the google_patent_corpus migration was edited after prod applied it (Prisma never re-runs applied migrations) | Fixed by repair migration `20260716120000_add_embedding_binary_column` — `git pull && npx prisma migrate deploy`, re-run preflight. |
 | Preflight FAIL: `gcloud not authenticated` | VM lost auth | `gcloud auth login` (or attach a service account with Storage Object Viewer). |
 | Loader aborts: `only NNG free (< 80G guard)` | disk filling | Verify what's using space (`sudo du -xh --max-depth=2 / \| sort -h \| tail`), free it or grow the disk (`gcloud compute disks resize ... && sudo growpart /dev/sda 1 && sudo resize2fs /dev/sda1`), re-run — it resumes. |
 | Loader interrupted (SSH drop, reboot) | — | Re-run the same command; the ledger skips finished shards, `ON CONFLICT` dedups the partial one. |
