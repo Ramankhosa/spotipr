@@ -106,11 +106,11 @@ function Breadcrumbs({ pathname }: { pathname: string }) {
   })
 
   return (
-    <nav aria-label="Breadcrumb" className="border-b border-border bg-white/60 px-4 sm:px-6 py-2">
+    <nav aria-label="Breadcrumb" className="border-b border-border bg-card/70 px-4 sm:px-6 py-2">
       <ol className="flex items-center gap-1.5 text-xs text-muted-foreground overflow-x-auto whitespace-nowrap">
         {crumbs.map((crumb, index) => (
           <li key={crumb.path} className="flex items-center gap-1.5">
-            {index > 0 && <span aria-hidden="true" className="text-slate-300">/</span>}
+            {index > 0 && <span aria-hidden="true" className="text-muted-foreground/40">/</span>}
             {crumb.isLink ? (
               <Link href={crumb.path} className="hover:text-primary transition-colors">
                 {crumb.label}
@@ -213,7 +213,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-[calc(100vh-4rem)]">
       {!hideSidebar && (
         <aside
-          className={`hidden md:flex flex-col shrink-0 border-r border-border bg-white transition-[width] duration-200 ${
+          className={`hidden md:flex flex-col shrink-0 border-r border-border bg-card transition-[width] duration-200 ${
             collapsed ? 'w-14' : 'w-56'
           }`}
         >

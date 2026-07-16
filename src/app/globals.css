@@ -19,30 +19,33 @@
     font-synthesis-weight: none;
   }
 
+  /* "Banker's green" system: warm greige desk, page-white cards, warm ink,
+     lamp-green primary (the AI's color), sage tints, brass ceremony (see
+     tailwind brass ramp), verdict colors deliberately independent of brand. */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 243 75% 59%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 226 100% 97%;
-    --accent-foreground: 244 55% 41%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 160 84% 39%;
+    --background: 48 25% 92%;        /* greige desk  #f0eee6 */
+    --foreground: 90 6% 12%;         /* warm ink     #1e201c */
+    --card: 40 43% 99%;              /* page white   #fdfcfa */
+    --card-foreground: 90 6% 12%;
+    --popover: 40 43% 99%;
+    --popover-foreground: 90 6% 12%;
+    --primary: 152 34% 27%;          /* lamp green   #2e5d47 */
+    --primary-foreground: 40 43% 99%;
+    --secondary: 96 28% 90%;         /* sage tint    #e3ecdd */
+    --secondary-foreground: 152 35% 17%;
+    --muted: 47 24% 89%;             /* parchment    #e9e6db */
+    --muted-foreground: 75 5% 35%;
+    --accent: 96 28% 90%;            /* sage — selection/hover wash */
+    --accent-foreground: 152 35% 17%;
+    --destructive: 9 68% 38%;        /* brick        #a5321f */
+    --destructive-foreground: 40 43% 99%;
+    --success: 142 72% 29%;          /* verdict green — cooler + lighter than brand */
     --success-foreground: 0 0% 100%;
-    --warning: 32 95% 44%;
+    --warning: 26 90% 37%;           /* amber        #b45309 */
     --warning-foreground: 0 0% 100%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 239 84% 67%;
+    --border: 46 20% 83%;            /* warm hairline #ddd9cc */
+    --input: 46 20% 83%;
+    --ring: 152 34% 27%;
     --radius: 0.5rem;
   }
 }
@@ -62,7 +65,7 @@
   }
 
   .bg-ai-subtle {
-    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    background: linear-gradient(135deg, #fdfcfa 0%, #f0eee6 100%);
   }
 
   .bg-glass {
@@ -111,12 +114,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #e2e8f0;
+  background: #d8d4c2;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #cbd5e1;
+  background: #c2bda6;
 }
 
 /* Dark theme scrollbar for stage navigation */

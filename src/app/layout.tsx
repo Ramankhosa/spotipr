@@ -50,7 +50,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} ${inter.variable} ${cormorant.variable} bg-gpt-gray-50 min-h-screen`}>
+      <body className={`${inter.className} ${inter.variable} ${cormorant.variable} bg-background text-foreground min-h-screen`}>
         <Providers>
           <ConditionalHeader />
           <AppShell>

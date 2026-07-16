@@ -135,7 +135,7 @@ export default function Header() {
 
   if (isLoading) {
     return (
-      <header className="bg-white shadow-sm border-b border-gpt-gray-200">
+      <header className="bg-card shadow-sm border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-3">
@@ -154,7 +154,7 @@ export default function Header() {
   }
 
   return (
-    <header className="bg-white shadow-sm border-b border-gpt-gray-200">
+    <header className="bg-card shadow-sm border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center space-x-3">
@@ -197,7 +197,7 @@ export default function Header() {
                       onClick={() => setViewMode(viewMode === 'user' ? 'admin' : 'user')}
                       className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border transition-all duration-200 ${
                         viewMode === 'admin'
-                          ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                          ? 'bg-lamp-600 text-white border-lamp-600 hover:bg-lamp-700'
                           : 'bg-white text-gpt-gray-700 border-gpt-gray-200 hover:bg-gpt-gray-50'
                       }`}
                     >
