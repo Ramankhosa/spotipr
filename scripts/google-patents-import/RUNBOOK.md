@@ -26,10 +26,10 @@ where it stopped. Nothing here deletes production data.
 
 **On your machine:** commit and push this directory (`scripts/google-patents-import/`).
 
-**On the VM** (`ssh` in, then):
+**On the VM** (`ssh` in, then — note the app lives at `/var/www/patentnest/spotipr`, absolute path, no `~`):
 
 ```bash
-cd ~/spotipr                # or wherever the app lives on the VM
+cd /var/www/patentnest/spotipr
 git pull
 npx prisma migrate deploy   # applies 20260713120000_google_patent_corpus (needs pgvector >= 0.7)
 ```
@@ -44,11 +44,12 @@ Run inside `tmux` so a dropped SSH session doesn't kill it:
 
 ```bash
 tmux new -s patents          # (later: Ctrl-b then d to detach; `tmux attach -t patents` to return)
+# if tmux prints [exited] immediately: tmux kill-server && tmux new -s patents
 
 export DATABASE_URL='postgresql://postgres:YOUR_PASSWORD@localhost:5432/spotipr'
 export GCS_PREFIX='gs://patent-receiving-bucket'
 
-cd ~/spotipr/scripts/google-patents-import
+cd /var/www/patentnest/spotipr/scripts/google-patents-import
 bash import-all.sh
 ```
 
