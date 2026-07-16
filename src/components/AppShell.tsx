@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 
 const PUBLIC_PREFIXES = [
+  '/patentnest',
   '/pricing', '/contact', '/terms', '/privacy',
   '/login', '/register', '/forgot-password', '/reset-password', '/verify-email',
   '/institutional-access', '/unsubscribed', '/clear-cookies', '/share',

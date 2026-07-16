@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import localFont from 'next/font/local'
 import { Providers } from '@/components/providers'
-import Header from '@/components/Header'
+import ConditionalHeader from '@/components/ConditionalHeader'
 import AppShell from '@/components/AppShell'
 import './globals.css'
 
@@ -52,7 +52,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.className} ${inter.variable} ${cormorant.variable} bg-gpt-gray-50 min-h-screen`}>
         <Providers>
-          <Header />
+          <ConditionalHeader />
           <AppShell>
             {children}
           </AppShell>
