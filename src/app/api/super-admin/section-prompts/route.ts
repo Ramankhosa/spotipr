@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyJWT } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import {
   getSectionPrompt,
@@ -13,33 +12,8 @@ import {
 } from '@/lib/section-prompt-service'
 import { invalidateCountryProfileCache } from '@/lib/country-profile-service'
 import { invalidateSupersetSectionsCache } from '@/lib/multi-jurisdiction-service'
-
-// Verify super admin access
-async function verifySuperAdmin(request: NextRequest): Promise<{ userId: string; email: string } | null> {
-  const authHeader = request.headers.get('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) {
-    return null
-  }
-
-  const token = authHeader.substring(7)
-  const payload = verifyJWT(token)
-  
-  if (!payload?.email) {
-    return null
-  }
-
-  // Check if user is super admin - roles is a scalar array field, not a relation
-  const user = await prisma.user.findUnique({
-    where: { email: payload.email },
-    select: { id: true, email: true, roles: true }
-  })
-
-  if (!user?.roles?.includes('SUPER_ADMIN')) {
-    return null
-  }
-
-  return { userId: user.id, email: user.email }
-}
+import { invalidateAliasCache } from '@/lib/section-alias-service'
+import { verifySuperAdmin } from '@/lib/super-admin-auth'
 
 /**
  * GET /api/super-admin/section-prompts
@@ -235,11 +209,12 @@ export async function POST(request: NextRequest) {
       invalidateSectionPromptCache()       // CountrySectionPrompt cache (top-up prompts)
       invalidateCountryProfileCache()      // CountryProfile cache (merge strategies)
       invalidateSupersetSectionsCache()    // SupersetSection cache (base prompts)
-      
+      invalidateAliasCache()               // SupersetSection.aliases cache (key resolution)
+
       console.log('[SuperAdmin] ✅ All prompt caches invalidated by', admin.email)
-      return NextResponse.json({ 
-        success: true, 
-        message: 'All caches cleared: Section Prompts, Country Profiles, Superset Sections' 
+      return NextResponse.json({
+        success: true,
+        message: 'All caches cleared: Section Prompts, Country Profiles, Superset Sections, Aliases'
       })
     }
 

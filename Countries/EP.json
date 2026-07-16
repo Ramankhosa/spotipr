@@ -1,0 +1,698 @@
+{
+  "meta": {
+    "id": "EP",
+    "code": "EP",
+    "name": "European Patent Organisation (EPO)",
+    "continent": "Europe",
+    "office": "European Patent Office",
+    "officeUrl": "https://www.epo.org",
+    "applicationTypes": [
+      "standard",
+      "divisional",
+      "PCT regional phase"
+    ],
+    "languages": [
+      "en",
+      "de",
+      "fr"
+    ],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "promptMergeStrategy": "append",
+    "tags": [
+      "epc",
+      "regional_office",
+      "pct_regional_phase",
+      "paris_convention",
+      "two_part_claims",
+      "no_grace_period",
+      "problem_solution_approach"
+    ],
+    "createdAt": "2026-07-15T00:00:00Z",
+    "updatedAt": "2026-07-15T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "European Patent Application (EPC)",
+        "description": "Standard European patent application under the European Patent Convention (EPC), drafted in accordance with Articles 78, 83, 84 and Rules 42, 43, 46, 47 and 49 EPC and the EPO Guidelines for Examination.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title of Invention",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a clear and concise technical designation of the invention",
+              "helpText": "Per Rule 41(2)(b) EPC the title must clearly and concisely state the technical designation of the invention and exclude all fancy names. Avoid trade marks, personal names, superlatives and vague terms such as 'improved' or 'novel'."
+            },
+            "rules": {
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true,
+              "notes": [
+                "The title appears in the request for grant (Form 1001) and in the published application; the EPO may amend an unsuitable title of its own motion (Guidelines A-III, 7)."
+              ]
+            }
+          },
+          {
+            "id": "technical_field",
+            "label": "Technical Field",
+            "order": 2,
+            "canonicalKeys": [
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "Specify the technical field to which the invention relates",
+              "helpText": "Per Rule 42(1)(a) EPC, specify the technical field to which the invention relates. One or two sentences are usually sufficient; the wording often echoes the preamble of claim 1 and may reference the relevant IPC/CPC classification area."
+            }
+          },
+          {
+            "id": "background_art",
+            "label": "Background Art",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Indicate the background art known to the applicant, citing documents where available",
+              "helpText": "Per Rule 42(1)(b) EPC, indicate the background art which, as far as is known to the applicant, can be regarded as useful for understanding the invention, drawing up the European search report and examining the application, preferably citing documents. Describe drawbacks objectively; statements made here can be treated as admitted prior art under the problem-solution approach."
+            },
+            "rules": {
+              "citeDocumentsPreferred": true,
+              "avoidDisparagingPriorArt": true,
+              "notes": [
+                "Be deliberate about acknowledging the closest prior art: the problem-solution approach (Guidelines G-VII, 5) starts from it, and admissions in this section are difficult to retract during examination or opposition."
+              ]
+            }
+          },
+          {
+            "id": "summary_of_invention",
+            "label": "Summary of Invention",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Disclose the invention as claimed so that the technical problem and its solution can be understood",
+              "helpText": "Per Rule 42(1)(c) EPC, disclose the invention as claimed in such terms that the technical problem (even if not expressly stated as such) and its solution can be understood, and state any advantageous effects of the invention with reference to the background art. Consistory clauses mirroring the independent claims are customary and support the claims under Article 84 EPC."
+            },
+            "rules": {
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true,
+              "stateAdvantageousEffects": true
+            }
+          },
+          {
+            "id": "brief_description_of_drawings",
+            "label": "Brief Description of Drawings",
+            "order": 5,
+            "canonicalKeys": [
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Briefly describe each figure (e.g., 'Fig. 1 shows a schematic block diagram of ...')",
+              "helpText": "Per Rule 42(1)(d) EPC, briefly describe the figures in the drawings, if any. Provide one sentence per figure identifying the type of view and its subject. Reference signs must be consistent between the description, claims and drawings (Rule 49(10) EPC)."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description of Embodiments",
+            "order": 6,
+            "canonicalKeys": [
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Describe in detail at least one way of carrying out the invention claimed",
+              "helpText": "Per Rule 42(1)(e) EPC, describe in detail at least one way of carrying out the invention claimed, using examples where appropriate and referring to the drawings. The disclosure must be sufficiently clear and complete for a person skilled in the art to carry out the invention (Article 83 EPC) across the whole scope claimed. There is no best-mode requirement at the EPO."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireSupportForAllClaims": true,
+              "requireBestModeDisclosure": false,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true,
+              "notes": [
+                "Draft with Article 123(2) EPC in mind: include intermediate generalisations and fallback positions expressly, since amendments may only be based on what is directly and unambiguously derivable from the application as filed.",
+                "Every feature recited in the claims should appear in the description with its reference numeral where drawings are used."
+              ]
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 7,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Draft claims defining the matter for which protection is sought, preferably in two-part form",
+              "helpText": "Per Article 84 EPC, the claims must define the matter for which protection is sought and be clear, concise and supported by the description. Rule 43(1) EPC prefers the two-part form: a preamble stating the features which in combination are part of the prior art, and a characterising portion introduced by 'characterized in that' or 'characterized by'. Claims fees are due for the 16th and each subsequent claim (Rule 45 EPC)."
+            },
+            "rules": {
+              "twoPartFormPreferred": true,
+              "allowMultipleIndependentClaims": false,
+              "oneIndependentClaimPerCategory": true,
+              "allowMultipleDependentClaims": true,
+              "requireSingleGeneralInventiveConcept": true,
+              "mustBeSupportedByDescription": true,
+              "referenceSignsInParenthesesRecommended": true,
+              "notes": [
+                "Rule 43(2) EPC: only one independent claim per category (product, process, apparatus, use) unless the exceptions apply (interrelated products, different uses, alternative solutions).",
+                "Rule 43(7) EPC: where drawings contain reference signs, the claims should include those signs in parentheses; they do not limit claim scope."
+              ]
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 8,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 2000,
+            "ui": {
+              "placeholder": "Provide a concise summary of the disclosure (preferably not more than 150 words)",
+              "helpText": "Per Article 85 and Rule 47 EPC, the abstract must indicate the technical field, the technical problem, the gist of the solution and the principal use(s) of the invention, and should preferably not contain more than 150 words. It serves for technical information only and may not be used to interpret the scope of protection."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "forbidAdvantages": true,
+              "forbidMarketingLanguage": true,
+              "maxWordsRecommended": 150,
+              "mentionMostIllustrativeFigure": true,
+              "referenceSignsInParentheses": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "paragraphNumberFormat": "[0001]",
+      "maxPagesRecommended": 35,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "Paragraph numbering in the format [0001] is not mandatory but is strongly recommended by EPO drafting practice and is standard in professionally prepared applications.",
+        "An additional fee is payable for the 36th and each subsequent page of the application (Rules relating to Fees, Article 2(1), item 1a); keeping the specification at or under 35 pages avoids page fees.",
+        "The application may be filed in any language (Article 14(2) EPC), but a translation into an EPO official language (English, German or French) must be filed within two months (Rule 6(1) EPC)."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": ["A4"],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "Rule 49(5) EPC minimum margins for description, claims and abstract: top 2 cm, left 2.5 cm, right 2 cm, bottom 2 cm (maxima: top/left 4 cm, right/bottom 3 cm).",
+        "Rule 49(8) EPC: text must be typed or printed in 1.5 line spacing with characters whose capital letters are at least 0.21 cm high.",
+        "Rule 49(6) EPC: it is recommended to number every fifth line of each sheet of the description and claims."
+      ]
+    },
+    "description": {
+      "requireEnablement": true,
+      "requireBestModeDisclosure": false,
+      "requireSupportForClaims": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "allowReferenceNumerals": true,
+      "avoidClaimLanguage": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "Article 83 EPC: the invention must be disclosed in a manner sufficiently clear and complete for it to be carried out by a person skilled in the art, over the whole scope claimed.",
+        "There is no best-mode requirement under the EPC; Rule 42(1)(e) requires at least one way of carrying out the invention.",
+        "Rule 42(1)(f) EPC: indicate the way in which the invention is capable of industrial exploitation only where this is not obvious from the description or nature of the invention; a separate section is normally unnecessary.",
+        "Rule 48(1) EPC: the application must not contain statements disparaging products or processes of third parties, or statements clearly irrelevant or unnecessary."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": true,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": [
+        "characterized in that",
+        "characterised in that",
+        "characterized by",
+        "comprising"
+      ],
+      "discouragedConnectors": [],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 1,
+      "maxTotalClaimsRecommended": 15,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_general_inventive_concept_art_82_epc",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": true,
+        "note": "Claims fees are payable for the 16th and each subsequent claim, with a substantially higher rate applying from the 51st claim onwards (Rule 45 EPC; Rules relating to Fees, Article 2(1), item 15). The value 1 for maxIndependentClaimsBeforeExtraFee reflects the Rule 43(2) EPC restriction to one independent claim per category, not a fee threshold."
+      },
+      "notes": [
+        "Rule 43(1) EPC: the two-part form (preamble + characterising portion introduced by 'characterized in that') shall be used 'wherever appropriate'; it is the expected default whenever the closest prior art shares features with the claim.",
+        "Rule 43(2) EPC: one independent claim per category only, unless the subject-matter involves interrelated products, different uses of a product or apparatus, or alternative solutions to a particular problem.",
+        "Rule 43(3)-(4) EPC: dependent claims must contain all features of the claim referred to and be grouped appropriately; multiple dependencies are permitted.",
+        "Article 84 EPC clarity: avoid relative terms ('thin', 'strong'), vague terms ('about', 'substantially') and result-to-be-achieved wording except where allowed (Guidelines F-IV, 4.10).",
+        "Article 82 EPC: the application must relate to one invention or a group of inventions linked by a single general inventive concept."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": true,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "maxWordsRecommended": 150,
+      "mentionMostIllustrativeFigure": true,
+      "forbidMarketingLanguage": true,
+      "notes": [
+        "Rule 47(3) EPC: the abstract shall preferably not contain more than 150 words.",
+        "Rule 47(4) EPC: the abstract shall indicate the figure(s) of the drawings which should accompany it; each main technical feature mentioned in the abstract and illustrated by a drawing shall be followed by its reference sign in parentheses.",
+        "Article 85 EPC: the abstract serves the purpose of technical information only; it may not be taken into account for interpreting the scope of protection.",
+        "Guidelines F-II, 2.3: the abstract should not contain statements on the alleged merits or value of the invention or on its speculative application."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "minTextHeightMm": 3.2,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "table",
+        "exploded_view"
+      ],
+      "notes": [
+        "Rule 46(1) EPC: sheets of drawings must have a usable surface area not exceeding 26.2 cm x 17 cm, with minimum margins of top 2.5 cm, left 2.5 cm, right 1.5 cm and bottom 1 cm.",
+        "Rule 46(2) EPC: drawings shall be executed in durable, black, sufficiently dense and dark, uniformly thick and well-defined lines without colourings; cross-sections indicated by hatching; numbers and letters at least 0.32 cm high.",
+        "Rule 46(2)(j) EPC: drawings shall not contain text matter except single words such as 'water', 'steam', 'open', 'closed' and short catchwords in flow sheets and block diagrams.",
+        "Rule 49(10) EPC: reference signs must be used consistently throughout the application."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "en",
+        "de",
+        "fr"
+      ],
+      "requiresOfficialTranslation": false,
+      "notes": [
+        "Article 14(1) EPC: the official languages of the EPO are English, German and French; the language of filing (or of the translation) becomes the language of the proceedings.",
+        "Article 14(2) EPC and Rule 6(1) EPC: an application may be filed in any language, but a translation into an official language must be filed within two months of filing.",
+        "After grant, validation in individual contracting states may require translation of the claims or the full specification depending on the state's ratification of the London Agreement."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 0,
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "rule_141_priority_search_results",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "There is no general grace period under the EPC: any disclosure before the filing/priority date is prior art under Article 54(2) EPC. Article 55 EPC provides only narrow six-month exceptions for evident abuse and for display at officially recognised international exhibitions.",
+        "No US-style IDS obligation exists, but under Rule 141 EPC the applicant must file a copy of the search results drawn up on the priority application (deemed filed automatically for several offices, including the EPO itself, JPO, KIPO and USPTO).",
+        "The EPO itself imposes no foreign-filing licence, but applicants should check national security-review provisions of the first-filing state (e.g. for residents of France, Italy or Spain filing abroad first).",
+        "Priority may be claimed under Article 87 EPC from any application equivalent to a regular national filing, including US provisional applications."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "A sequence listing not filed on the date of filing must be furnished upon invitation within two months together with a late-furnishing fee (Rule 30(3) EPC); failure leads to refusal.",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": ["XML"]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 250,
+          "severity": "warning",
+          "message": "Title is unusually long. Rule 41(2)(b) EPC requires a clear and concise technical designation of the invention; the EPO may shorten unsuitable titles of its own motion."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_word_limit",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "warning",
+          "message": "Abstract exceeds 150 words. Rule 47(3) EPC states the abstract shall preferably not contain more than 150 words; the EPO may reformulate longer abstracts."
+        },
+        {
+          "id": "abstract_hard_cap",
+          "type": "maxWords",
+          "limit": 250,
+          "severity": "error",
+          "message": "Abstract is far above the Rule 47(3) EPC guideline of 150 words. Shorten it to a concise statement of the technical field, problem, gist of the solution and principal use."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_fee_threshold",
+          "type": "maxCount",
+          "limit": 15,
+          "severity": "warning",
+          "message": "More than 15 claims: a claims fee is payable for the 16th and each subsequent claim (Rule 45 EPC; RFees Art. 2(1), item 15). Consider consolidating dependent claims."
+        },
+        {
+          "id": "claims_high_fee_threshold",
+          "type": "maxCount",
+          "limit": 50,
+          "severity": "warning",
+          "message": "More than 50 claims: a substantially higher claims fee applies from the 51st claim onwards (RFees Art. 2(1), item 15). Reduce the claim set unless strategically essential."
+        }
+      ],
+      "detailed_description": [
+        {
+          "id": "description_min_substance",
+          "type": "minWords",
+          "limit": 300,
+          "severity": "info",
+          "message": "The detailed description appears very short. Article 83 EPC requires a disclosure sufficiently clear and complete for a skilled person to carry out the invention over the whole claimed scope."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": ["detailed_description"],
+        "severity": "error",
+        "message": "Claims appear broader than, or use terminology absent from, the detailed description. Article 84 EPC requires the claims to be supported by the description; align terminology and add embodiments or fallback positions."
+      },
+      {
+        "id": "claims_vs_summary_consistency",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": ["summary_of_invention"],
+        "severity": "warning",
+        "message": "The Summary of Invention does not mirror the independent claims. Rule 42(1)(c) EPC requires the description to disclose the invention as claimed; update the consistory clauses to match the claim wording."
+      },
+      {
+        "id": "abstract_vs_claims_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": ["claims", "detailed_description"],
+        "severity": "warning",
+        "message": "The abstract does not reflect the claimed invention. Rule 47(2) EPC requires the abstract to summarise the technical field, problem, gist of the solution and principal use as disclosed."
+      },
+      {
+        "id": "drawings_reference_consistency",
+        "type": "reference",
+        "from": "brief_description_of_drawings",
+        "mustReference": ["detailed_description"],
+        "severity": "error",
+        "message": "One or more figures or reference signs in the Brief Description of Drawings are not explained in the Detailed Description. Rule 49(10) EPC requires reference signs to be used consistently throughout the application."
+      }
+    ]
+  },
+  "prompts": {
+    "systemPrompt": "You are an expert European patent attorney drafting a European patent application in full compliance with the European Patent Convention (EPC) and the EPO Guidelines for Examination. Apply the problem-solution mindset throughout: identify the closest prior art, the objective technical problem and the claimed solution, and keep the description, claims and abstract mutually consistent. Ensure sufficiency of disclosure (Article 83 EPC), clarity and support (Article 84 EPC), and draft defensively against added-matter objections (Article 123(2) EPC) by making fallback positions explicit.",
+    "promptMergeStrategy": "append",
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "disparagement of third-party products or processes (Rule 48(1)(b) EPC)",
+        "vague relative terms such as 'about', 'substantially', 'thin' without a defined standard"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft the title as required by Rule 41(2)(b) EPC: a clear and concise technical designation of the invention that excludes all fancy names. The title should identify the claim categories present (e.g. 'Method and apparatus for ...') and use the same key terminology as claim 1 so that the request for grant, description and claims are consistent. Do not include trade marks (Guidelines F-II, 4.14 discourages them anywhere unless unavoidable), personal names, the word 'patent', or laudatory terms such as 'improved', 'new' or 'advanced'. Keep it short — typically under 15 words — since the EPO may recast an unsuitable title of its own motion during formalities examination (Guidelines A-III, 7).",
+          "constraints": [
+            "Clear and concise technical designation per Rule 41(2)(b) EPC",
+            "No fancy names, trade marks, personal names or superlatives",
+            "Reflect the claim categories (product, method, apparatus, use) actually claimed",
+            "Use the same terminology as the independent claims"
+          ],
+          "additions": [
+            "The same title must be entered in the request for grant (EPO Form 1001)"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Technical Field section per Rule 42(1)(a) EPC: specify the technical field to which the invention relates in one or two neutral sentences. The wording conventionally paraphrases the preamble of independent claim 1 ('The invention relates to a ... , and to a method of ...'). Do not discuss the problem, the prior art or any advantages here — those belong in Background Art and Summary of Invention. Where helpful for classification, phrase the field so it maps naturally onto the relevant IPC/CPC class.",
+          "constraints": [
+            "Neutral technical terminology, no advantages or problem discussion",
+            "Mirror the preamble of the independent claim(s)",
+            "One short paragraph"
+          ],
+          "additions": [
+            "List every claim category present so the field statement covers the full claim set"
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Background Art section per Rule 42(1)(b) EPC: indicate the background art which, as far as known to the applicant, can be regarded as useful to understand the invention, draw up the European search report and examine the application, and preferably cite the documents reflecting such art (patent publications by number, non-patent literature by full citation). Describe the closest prior art accurately but strategically: under the problem-solution approach (Guidelines G-VII, 5) the examiner will start from what you acknowledge here, and statements in this section are treated as binding admissions. Present drawbacks and limitations of the prior art objectively and technically; do not disparage third-party products or processes (Rule 48(1)(b) EPC). Do not state the invention, its solution or its advantages here — reserve these for the Summary of Invention. Remember that there is no grace period under the EPC (Article 54(2), Article 55): any pre-filing disclosure, including the applicant's own, is citable prior art.",
+          "constraints": [
+            "Cite documents where available (Rule 42(1)(b) EPC)",
+            "Characterise the closest prior art accurately but without over-admission",
+            "Objective technical language; no disparagement (Rule 48(1)(b) EPC)",
+            "Do not reveal the invention or its solution in this section"
+          ],
+          "additions": [
+            "Search results on the priority application must be filed under Rule 141 EPC; align cited art with those results where known",
+            "Admissions here feed directly into the problem-solution analysis for inventive step"
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the Summary of Invention per Rule 42(1)(c) EPC: disclose the invention as claimed in terms that allow the technical problem and its solution to be understood, and state the advantageous effects of the invention with reference to the background art. Structure it as: (1) a statement of the objective technical problem derived from the drawbacks identified in the Background Art; (2) consistory clauses reciting the subject-matter of each independent claim essentially verbatim ('According to a first aspect, there is provided ...'); (3) optional statements introducing preferred features corresponding to key dependent claims; and (4) the advantageous technical effects achieved by the claimed features. Effects stated here underpin inventive step under the problem-solution approach (Guidelines G-VII, 5.2), so tie each effect causally to a claimed feature and keep effects technical, plausible and supported — avoid speculative or commercial benefits. Keep the wording strictly consistent with the claims to satisfy the support requirement of Article 84 EPC and to avoid Article 123(2) EPC problems when claims are later amended.",
+          "constraints": [
+            "Disclose the invention as claimed (Rule 42(1)(c) EPC)",
+            "Consistory clauses must mirror the independent claims verbatim",
+            "State advantageous effects with reference to the background art, each tied to a claimed feature",
+            "Technical effects only; no commercial or speculative benefits"
+          ],
+          "additions": [
+            "Include one consistory clause per independent claim category",
+            "Introduce preferred embodiments with non-limiting language ('In an embodiment, ...') to preserve fallback positions"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Brief Description of Drawings per Rule 42(1)(d) EPC: briefly describe the figures, one sentence per figure, in the form 'Fig. 1 shows a [type of view] of [subject] according to an embodiment of the invention'. Identify the view type precisely (schematic block diagram, flowchart, cross-sectional view, perspective view, graph) because the formal drawing requirements of Rule 46 EPC differ by content. Introduce the list with a standard lead-in such as 'Embodiments of the invention are described, by way of example only, with reference to the accompanying drawings, in which:'. Do not explain operation, advantages or reference signs here — that belongs in the Detailed Description. Every figure present in the drawings must be listed, and figure numbering must be consecutive.",
+          "constraints": [
+            "One sentence per figure; no operational detail",
+            "Identify the view type of each figure",
+            "Figure numbering consecutive and complete",
+            "Use non-limiting language ('according to an embodiment')"
+          ],
+          "additions": [
+            "Reference signs used in the drawings must reappear consistently in the description and claims (Rule 49(10) EPC)"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Detailed Description of Embodiments per Rule 42(1)(e) EPC: describe in detail at least one way of carrying out the invention claimed, using examples where appropriate and referring to the drawings by figure number and reference sign. Satisfy Article 83 EPC sufficiency: a person skilled in the art must be able to carry out the invention over the whole scope claimed without undue burden — for broad claims, include enough embodiments or variants to make the full breadth plausible. Ensure every claimed feature (independent and dependent) is described with at least one concrete implementation, satisfying Article 84 EPC support. Draft defensively against Article 123(2) EPC: spell out intermediate generalisations, state explicitly that features of different embodiments can be combined where technically sensible, and provide literal basis for likely claim amendments, since the EPO applies the strict 'directly and unambiguously derivable' gold standard. Use consistent reference numerals matching the drawings, avoid claim-style language, and note that no best-mode disclosure is required at the EPO. Where values or ranges matter, give preferred, more preferred and most preferred ranges as nested fallbacks. Close with a boilerplate-free statement that the invention is not limited to the described embodiments but defined by the claims.",
+          "constraints": [
+            "At least one detailed way of carrying out the invention (Rule 42(1)(e) EPC)",
+            "Enablement over the whole claimed scope (Article 83 EPC)",
+            "Every claim feature supported by a described embodiment (Article 84 EPC)",
+            "Explicit basis for foreseeable amendments (Article 123(2) EPC)",
+            "Consistent reference numerals matching the drawings (Rule 49(10) EPC)"
+          ],
+          "additions": [
+            "No best-mode requirement under the EPC",
+            "Number paragraphs in the format [0001] per standard EPO drafting practice",
+            "State expressly that embodiments and their features may be combined"
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the claims per Article 84 and Rule 43 EPC. Use the two-part form of Rule 43(1) EPC wherever appropriate — this is the expected default at the EPO: a preamble designating the subject-matter and stating the technical features which, in combination, are part of the closest prior art, followed by a characterising portion introduced by 'characterized in that' or 'characterized by', stating the features for which protection is sought in combination with the preamble. Draft only one independent claim per category (Rule 43(2) EPC) — product, process, apparatus or use — unless one of the exceptions applies (a plurality of interrelated products, different uses of a product or apparatus, or alternative solutions to a particular problem where a single claim is inappropriate). Ensure clarity under Article 84: define the invention by technical features, avoid relative or vague terms ('about', 'substantially', 'thin'), avoid result-to-be-achieved formulations except where the criteria of Guidelines F-IV, 4.10 are met, and do not rely on references to the description or drawings ('as described in ...', Rule 43(6) EPC). Dependent claims must include all features of the claim they reference (Rule 43(3) EPC), be grouped by category, and may use multiple dependencies. Include reference signs in parentheses after the technical features where drawings exist (Rule 43(7) EPC) — they aid clarity and do not limit scope. Keep the total number of claims at or under 15 to avoid claims fees (Rule 45 EPC), and preserve unity of invention as a single general inventive concept (Article 82 EPC).",
+          "constraints": [
+            "Two-part form per Rule 43(1) EPC with 'characterized in that' wherever appropriate",
+            "One independent claim per category (Rule 43(2) EPC)",
+            "Clear, concise, supported by the description (Article 84 EPC)",
+            "Reference signs in parentheses (Rule 43(7) EPC)",
+            "No references to description or drawings in claims (Rule 43(6) EPC)",
+            "Target 15 claims or fewer to avoid claims fees (Rule 45 EPC)"
+          ],
+          "additions": [
+            "Claims fees: payable for the 16th and each subsequent claim; substantially higher from the 51st (RFees Art. 2(1), item 15)",
+            "Multiple dependent claims are permitted and are not penalised by fees",
+            "Unity of invention: single general inventive concept (Article 82, Rule 44 EPC)"
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Abstract per Article 85 and Rule 47 EPC. It must contain a concise summary of the disclosure as contained in the description, claims and drawings, indicating: the technical field to which the invention pertains; the technical problem; the gist of the solution through the invention; and the principal use or uses. It shall preferably not contain more than 150 words (Rule 47(3) EPC) and should be drafted as a single paragraph. Where the application contains drawings, indicate the figure that should be published with the abstract (Rule 47(4) EPC) and follow each main technical feature mentioned in the abstract with its reference sign in parentheses. Where the invention is chemical, include the formula which best characterises it (Rule 47(2) EPC). The abstract serves the purpose of technical information only and cannot be used to interpret scope (Article 85 EPC), so write it for searchers: dense, factual and keyword-rich. Do not include statements on alleged merits or value of the invention or speculative applications (Guidelines F-II, 2.3), and do not use claim-style legalese ('said', 'wherein said').",
+          "constraints": [
+            "Maximum ~150 words (Rule 47(3) EPC)",
+            "Cover technical field, problem, gist of solution and principal use",
+            "Reference signs in parentheses after main technical features (Rule 47(4) EPC)",
+            "Single paragraph; no merits, advantages or marketing statements",
+            "No claim-style language"
+          ],
+          "additions": [
+            "Indicate the most illustrative figure to be published with the abstract",
+            "The EPO may reformulate a non-compliant abstract of its own motion (Rule 66 EPC context; Guidelines B-XI, 8 for the search division)"
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "European Patent Specification (EPC-compliant PDF)",
+        "includesSections": [
+          "title",
+          "technical_field",
+          "background_art",
+          "summary_of_invention",
+          "brief_description_of_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "lineSpacing": 1.5,
+        "addPageNumbers": true,
+        "addParagraphNumbers": true
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TITLE OF INVENTION",
+      "technical_field": "TECHNICAL FIELD",
+      "background_art": "BACKGROUND ART",
+      "summary_of_invention": "SUMMARY OF INVENTION",
+      "brief_description_of_drawings": "BRIEF DESCRIPTION OF DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION OF EMBODIMENTS",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "table",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "Fig. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for functional units and arrows for signal, data or control flow. Keep lines black, uniform and well-defined per Rule 46(2)(a) EPC; label blocks only with reference numerals plus, at most, short catchwords permitted by Rule 46(2)(j) EPC.",
+      "flowchart": "Use standard flowchart symbols matching the claimed method steps one-to-one, so that each step of an independent method claim can be traced to a box. Short catchwords inside boxes are permitted in flow sheets (Rule 46(2)(j) EPC).",
+      "schematic": "Use conventional circuit or system symbols with clean black linework suitable for reproduction. Reference signs must match the description and claims (Rule 49(10) EPC).",
+      "perspective_view": "Show the overall apparatus with every claimed structural element visible and labelled with its reference numeral; numbers and letters at least 0.32 cm high (Rule 46(2)(g) EPC).",
+      "cross_section": "Indicate cross-sections by hatching that does not impede the reading of reference signs and leading lines (Rule 46(2)(b) EPC); distinguish adjacent components by hatching direction.",
+      "graph": "Label axes with quantities and units; curves must remain distinguishable in black and white without colour (Rule 46(2)(a) EPC prohibits colourings).",
+      "table": "Tables may appear in the description; within drawings keep them within the usable surface of 26.2 cm x 17 cm (Rule 46(1) EPC) and do not split across sheets.",
+      "exploded_view": "Show assembly relationships with parts separated along a common axis; assign each part a unique reference numeral explained in the Detailed Description of Embodiments."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all figure numbers and reference signs mentioned in the Brief Description of Drawings are defined and explained in the Detailed Description of Embodiments (Rule 49(10) EPC consistency of reference signs).",
+        "from": "brief_description_of_drawings",
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed structural elements appear in at least one figure when drawings are present, so that Rule 43(7) EPC reference signs can be inserted into the claims.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_description_of_drawings"
+        ]
+      },
+      {
+        "id": "claims_vs_description_support",
+        "description": "Ensure every claimed feature has support and at least one enabling embodiment in the Detailed Description (Articles 83 and 84 EPC).",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ]
+      }
+    ]
+  }
+}

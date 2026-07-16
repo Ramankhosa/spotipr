@@ -1,0 +1,841 @@
+{
+  "meta": {
+    "id": "CN",
+    "code": "CN",
+    "name": "China",
+    "continent": "Asia",
+    "office": "China National Intellectual Property Administration",
+    "officeUrl": "https://english.cnipa.gov.cn",
+    "applicationTypes": [
+      "standard"
+    ],
+    "languages": [
+      "zh",
+      "en"
+    ],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": [
+      "national_phase",
+      "pct_national_phase",
+      "paris",
+      "caf_compliant",
+      "first_to_file",
+      "confidentiality_examination"
+    ],
+    "createdAt": "2026-07-15T00:00:00Z",
+    "updatedAt": "2026-07-15T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Standard Invention Patent Application",
+        "description": "Standard Chinese invention patent application under the Patent Law of the People's Republic of China (as amended 2020) and its Implementing Regulations. The description follows the mandatory five-part structure of Rule 17 of the Implementing Regulations: technical field, background art, contents of the invention (technical problem, technical solution, advantageous effects), description of drawings, and specific mode for carrying out the invention.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title of Invention",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 200,
+            "ui": {
+              "placeholder": "Enter a short, precise technical title (translates to no more than 25 Chinese characters)",
+              "helpText": "State the subject matter of the invention briefly and precisely. CNIPA Examination Guidelines require the Chinese title to generally not exceed 25 characters (up to 40 in the chemical field). Avoid person names, company names, trademarks, model numbers, and non-technical or vague words such as 'and other things' or 'new-type'."
+            },
+            "rules": {
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true,
+              "maxChineseCharacters": 25,
+              "maxChineseCharactersChemicalField": 40
+            }
+          },
+          {
+            "id": "fieldOfInvention",
+            "label": "Technical Field",
+            "order": 2,
+            "canonicalKeys": [
+              "fieldOfInvention",
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the technical field to which the invention belongs or is directly applied",
+              "helpText": "Per Rule 17 of the Implementing Regulations, specify the technical field to which the technical solution belongs or in which it is directly applied — not a broader superordinate field and not the invention itself. Typically one or two sentences, e.g. 'The present invention relates to the field of ..., and in particular to ...'. This corresponds to 技术领域 in the Chinese specification."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background Art",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Describe the background art useful for understanding, searching and examining the invention",
+              "helpText": "Per Rule 17, indicate the background art useful for understanding, searching and examining the invention and, where possible, cite the documents reflecting that art. Objectively describe the existing technical solutions and their shortcomings that the invention addresses. Do not disparage particular prior patents, and do not disclose the invention's own solution here — reserve it for the Contents of the Invention. This corresponds to 背景技术."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary of Invention",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Introduce the inventive concept; details go into the Technical Problem / Technical Solution / Advantageous Effects sections",
+              "helpText": "In CNIPA practice this is the lead-in of 发明内容 (Contents of the Invention), which under Rule 17 must set out the technical problem, the technical solution adopted, and the advantageous effects. Draft a concise overview of the inventive concept in language that mirrors the independent claims; the three mandatory components are drafted in the dedicated sections that follow."
+            },
+            "rules": {
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true,
+              "componentsInDedicatedSections": [
+                "technicalProblem",
+                "technicalSolution",
+                "advantageousEffects"
+              ]
+            }
+          },
+          {
+            "id": "technicalProblem",
+            "label": "Technical Problem",
+            "order": 5,
+            "canonicalKeys": [
+              "technicalProblem",
+              "technical_problem"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the technical problem the invention aims to solve",
+              "helpText": "Per Rule 17, clearly and objectively state the technical problem to be solved by the invention, formulated with reference to the shortcomings identified in the Background Art. Do not exaggerate, use commercial language, or state problems the disclosed solution cannot actually solve."
+            }
+          },
+          {
+            "id": "technicalSolution",
+            "label": "Technical Solution",
+            "order": 6,
+            "canonicalKeys": [
+              "technicalSolution",
+              "technical_solution"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Set out the technical solution adopted to solve the problem",
+              "helpText": "Per Rule 17, clearly and completely describe the technical solution adopted to solve the technical problem, in terms of its technical features. This part should recite at least all essential technical features of the independent claims, normally using wording consistent with the claims, and may then present the additional features of preferred embodiments."
+            },
+            "rules": {
+              "alignWithIndependentClaims": true
+            }
+          },
+          {
+            "id": "advantageousEffects",
+            "label": "Advantageous Effects",
+            "order": 7,
+            "canonicalKeys": [
+              "advantageousEffects",
+              "advantageous_effects"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 6000,
+            "ui": {
+              "placeholder": "Describe the advantageous effects of the invention relative to the background art",
+              "helpText": "Per Rule 17, state the advantageous effects of the invention with reference to the background art. Effects should be technical, credible, and derivable from the technical features of the solution (e.g. improved yield, reduced power consumption, higher accuracy). Avoid unsupported assertions and advertising language; effects stated here are relevant to inventiveness under Article 22(3)."
+            }
+          },
+          {
+            "id": "briefDescriptionOfDrawings",
+            "label": "Brief Description of Drawings",
+            "order": 8,
+            "canonicalKeys": [
+              "briefDescriptionOfDrawings",
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Briefly describe each figure (required whenever drawings are filed)",
+              "helpText": "Per Rule 17, where there are drawings, briefly describe each figure, e.g. 'FIG. 1 is a schematic structural diagram of ... according to an embodiment of the present invention.'. One sentence per figure; do not explain operation here. This corresponds to 附图说明. Omit this section only when the application has no drawings."
+            }
+          },
+          {
+            "id": "detailedDescription",
+            "label": "Specific Mode for Carrying Out the Invention",
+            "order": 9,
+            "canonicalKeys": [
+              "detailedDescription",
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Describe in detail the preferred modes/embodiments for carrying out the invention, with reference to the drawings",
+              "helpText": "Per Rule 17, describe in detail the optimally selected mode contemplated for carrying out the invention, citing examples where appropriate and referring to the drawings. Together with the rest of the description it must satisfy Article 26(3): clear and complete disclosure enabling a person skilled in the art to carry out the invention. Every claimed feature — including those of dependent claims — should be supported by at least one embodiment. This corresponds to 具体实施方式."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireSupportForAllClaims": true,
+              "requireBestModeDisclosure": false,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 10,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Draft claims defining the extent of protection, based on the description (Article 26(4))",
+              "helpText": "Claims must be supported by the description and define the extent of protection clearly and concisely (Article 26(4)). Rule 21 requires independent claims in two-part form (preamble + 'characterized in that' portion) unless inappropriate given the nature of the invention. Multiple dependent claims must refer to preceding claims in the alternative only and must not serve as a basis for other multiple dependent claims (Rule 22). Filing fees cover 10 claims; each claim beyond 10 incurs an additional fee."
+            },
+            "rules": {
+              "twoPartFormPreferred": true,
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "prohibitMultipleDependentOnMultipleDependent": true,
+              "requireSingleGeneralInventiveConcept": true,
+              "mustBeSupportedByDescription": true,
+              "countBeforeExtraFee": 10,
+              "forbidReferencesToDescriptionOrDrawings": true
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 11,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 800,
+            "ui": {
+              "placeholder": "Concise summary: title, technical field, problem, gist of solution, main uses (≤300 Chinese characters)",
+              "helpText": "Per Rule 23 of the Implementing Regulations, the abstract must indicate the title and technical field, and clearly reflect the technical problem, the gist of the technical solution, and the principal uses. The Chinese abstract as filed must not exceed 300 characters including punctuation, must not use commercial advertising language, and may be accompanied by one key figure (drawn from the application drawings) that best characterizes the invention."
+            },
+            "rules": {
+              "maxChineseCharactersIncludingPunctuation": 300,
+              "mayIncludeOneKeyFigure": true,
+              "mayContainChemicalOrMathFormula": true,
+              "forbidCommercialLanguage": true,
+              "singleParagraph": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "The description must follow the Rule 17 five-part order: technical field, background art, contents of the invention (problem / solution / effects), description of drawings, specific mode for carrying out the invention, using the prescribed Chinese headings (技术领域, 背景技术, 发明内容, 附图说明, 具体实施方式) unless another manner or order would produce a better understanding (rare).",
+        "Paragraph numbering in the [0001] style is not a filing requirement but is added on publication and is common good practice in Chinese drafts.",
+        "An additional fee applies where the description (including drawings) exceeds 30 pages, and a higher rate above 300 pages — keep the specification as concise as full enablement permits.",
+        "Amendments after filing must not go beyond the scope of the original disclosure (Article 33); draft the original text with fallback positions and intermediate generalizations, because Chinese added-matter practice is strict."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 2.5,
+      "minMarginBottomCm": 1.5,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 1.5,
+      "recommendedFontFamily": "SimSun_or_serif",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "pageNumberPosition": "top_center",
+      "notes": [
+        "Application documents must be on A4 paper, typed or printed in black, portrait orientation, single-sided, with pages numbered consecutively in Arabic numerals for each document part.",
+        "Chinese text is normally set in SimSun (宋体) at a size no smaller than 4号 (approximately 12 pt) with clear, even lines suitable for reproduction.",
+        "Electronic filing through the CNIPA e-filing system (CPC client) is standard; the layout rules above mirror the paper-form requirements of Rule 121 of the Implementing Regulations."
+      ]
+    },
+    "description": {
+      "requireEnablement": true,
+      "requireBestModeDisclosure": false,
+      "requireSupportForClaims": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "allowReferenceNumerals": true,
+      "avoidClaimLanguage": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "Article 26(3): the description shall set forth the invention in a manner sufficiently clear and complete so as to enable a person skilled in the relevant field of technology to carry it out.",
+        "There is no best-mode requirement; Rule 17 asks for the 'mode contemplated as optimally selected' but failure to disclose the subjectively best mode is not a ground of invalidation.",
+        "Practical applicability (industrial applicability) is a patentability requirement under Article 22(4) but no separate description section is used; ensure the disclosed solution is reproducible and industrially usable.",
+        "For chemical and biotech cases, experimental data demonstrating the asserted effects should be included at filing; post-filing data is accepted only to prove effects derivable from the original disclosure.",
+        "Inventions relying on genetic resources must indicate the direct and original source of the genetic resources (Article 26(5))."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": true,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": true,
+      "preferredConnectors": [
+        "comprising",
+        "characterized in that"
+      ],
+      "discouragedConnectors": [
+        "consisting essentially of"
+      ],
+      "forbiddenPhrases": [
+        "as described in the description",
+        "as shown in the drawings"
+      ],
+      "maxIndependentClaimsBeforeExtraFee": 10,
+      "maxTotalClaimsRecommended": 20,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_general_inventive_concept_art31_rule34",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": true,
+        "claimsIncludedInBasicFee": 10,
+        "note": "The basic filing fee covers 10 claims in total; an additional fee is payable for each claim in excess of 10, counted on the total number of claims (independent plus dependent) at filing."
+      },
+      "notes": [
+        "Rule 20: the claims shall have an independent claim, which shall outline the technical solution of the invention and state the essential technical features necessary to solve the technical problem; dependent claims use additional features to further define the claim referred to.",
+        "Rule 21: an independent claim shall be drafted in two parts — a preamble portion indicating the subject matter and the technical features shared with the closest prior art, and a characterizing portion introduced by 'characterized in that' stating the distinguishing features — unless the nature of the invention makes this form inappropriate.",
+        "Rule 22: a multiple dependent claim shall refer to the preceding claims in the alternative only, and shall not serve as a basis for any other multiple dependent claim.",
+        "Rule 19: reference signs used in the drawings may be placed in parentheses after the corresponding features; they shall not be construed as limiting. Claims must not, except where absolutely necessary, contain references such as 'as described in part ... of the description' or 'as illustrated in figure ...'.",
+        "Article 31 and Rule 34: two or more inventions may be filed in one application only if they belong to a single general inventive concept sharing the same or corresponding special technical features.",
+        "Functional features are construed in invalidation/infringement practice as covering only the embodiments described in the specification and their equivalents — prefer structural language and always provide embodiment support for functional wording."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "maxChineseCharactersIncludingPunctuation": 300,
+      "mayIncludeOneKeyFigure": true,
+      "forbidCommercialLanguage": true,
+      "notes": [
+        "Rule 23: the abstract shall indicate the title of the invention and the technical field to which it pertains, and clearly reflect the technical problem, the gist of the technical solution, and the principal use(s). The Chinese abstract must not exceed 300 characters including punctuation.",
+        "The abstract may contain the chemical formula that best characterizes the invention, and the applicant may designate one figure from the drawings to accompany the abstract (reproduced at approximately 6 cm x 6 cm on publication).",
+        "The abstract is for technical information only and cannot be used to interpret the scope of protection; commercial advertising language is not permitted.",
+        "When drafting in English, keep to roughly 150 words so that the Chinese translation remains within the 300-character statutory limit."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.5,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "shadingAllowed": false,
+      "grayscaleAllowed": false,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "table",
+        "exploded_view"
+      ],
+      "notes": [
+        "Rule 18: drawings shall be executed in black, uniformly thick, well-defined lines made with drafting instruments, without colouring or alterations; engineering blueprints are not acceptable.",
+        "Shading is generally not used in Chinese drawings; hatching in cross-sections is permitted where it does not obscure reference numerals and lead lines.",
+        "Drawings shall be numbered 'FIG. 1', 'FIG. 2' (图1, 图2) in sequence; reference signs must be consistent between the drawings and the description, and signs not mentioned in the description must not appear in the drawings (and vice versa).",
+        "Except for indispensable words, drawings should not contain textual annotations; flowchart boxes may contain brief wording.",
+        "Photographs are accepted only where line drawings cannot adequately show the subject matter (e.g. metallographic structures, electrophoresis gels)."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "zh"
+      ],
+      "requiresOfficialTranslation": true,
+      "notes": [
+        "Rule 3: application documents must be filed in Chinese; there is no foreign-language filing route for direct national applications — the Chinese text as filed is the authentic legal text.",
+        "For PCT national phase entry, a Chinese translation of the international application must be furnished within 30 months from the priority date (extendible to 32 months with a surcharge).",
+        "Where standardized scientific and technical terms exist, they must be used; foreign names and technical terms with no generally accepted Chinese translation should also be indicated in the original language.",
+        "Because the Chinese translation governs, review terminology consistency carefully — translation errors in a granted PCT-route patent are construed against the patentee where the granted scope exceeds the original text."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 6,
+      "foreignFilingLicenseRequired": true,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "reference_materials_on_request_or_examiner_demand",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "Article 24 provides only a narrow 6-month grace period: (1) first disclosure for the public interest during a national emergency or extraordinary situation; (2) first exhibition at an international exhibition sponsored or recognized by the Chinese Government; (3) first publication at a prescribed academic or technological meeting; (4) disclosure by others without the applicant's consent. Ordinary self-publication (e.g. a journal article or product launch) is NOT excused.",
+        "Article 19 (as renumbered by the 2020 amendment): any entity or individual intending to file abroad for an invention or utility model completed in China must first request a confidentiality examination from CNIPA; failure to do so bars any later Chinese patent on that invention.",
+        "There is no US-style IDS duty; however, under Article 36 the applicant must, when requesting substantive examination, furnish pre-filing-date reference materials concerning the invention, and the examiner may require submission of search results from corresponding foreign applications.",
+        "China has no provisional application system, but Paris Convention priority may be claimed from foreign provisional filings; domestic priority from an earlier Chinese invention or utility model application is available within 12 months.",
+        "Substantive examination must be requested within 3 years from the filing date (or international filing date for PCT cases)."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": false,
+      "affectsFilingDate": false,
+      "lateFurnishingNotes": "The sequence listing forms part of the description and should be filed with the application; content added later must not extend beyond the original disclosure (Article 33).",
+      "notes": [
+        "Where nucleotide or amino acid sequences are disclosed, a sequence listing compliant with WIPO Standard ST.26 in XML format must be submitted as a separate part of the description.",
+        "For biological material that cannot be adequately described, deposit with a recognized depositary (e.g. CGMCC, CCTCC) is required no later than the filing date, with the deposit indicated in the application (Rule 27)."
+      ]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 200,
+          "severity": "warning",
+          "message": "Title is unusually long. CNIPA Guidelines expect the Chinese title to generally not exceed 25 characters (40 in the chemical field); shorten to a concise technical expression."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_chars",
+          "type": "maxChars",
+          "limit": 300,
+          "severity": "warning",
+          "message": "Abstract exceeds 300 characters. Rule 23 of the Implementing Regulations limits the Chinese abstract to 300 characters including punctuation — if drafting in English, condense so the Chinese translation fits within the statutory limit."
+        },
+        {
+          "id": "abstract_words",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "info",
+          "message": "Keep the English abstract to roughly 150 words so that its Chinese translation stays within the 300-character limit of Rule 23."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_excess_fee",
+          "type": "maxCount",
+          "limit": 10,
+          "severity": "info",
+          "message": "More than 10 claims: the CNIPA basic filing fee covers 10 claims and each additional claim incurs an excess-claim fee. Confirm the extra claims earn their keep."
+        }
+      ],
+      "detailedDescription": [
+        {
+          "id": "description_min_length",
+          "type": "minWords",
+          "limit": 300,
+          "severity": "warning",
+          "message": "The Specific Mode for Carrying Out the Invention appears too short to satisfy the clear-and-complete disclosure requirement of Article 26(3). Add embodiments and implementation detail."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_vs_technical_solution",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "technicalSolution"
+        ],
+        "severity": "warning",
+        "message": "The essential technical features of the independent claims are not reflected in the Technical Solution section. Rule 17 practice expects the Contents of the Invention to recite the technical solution in wording consistent with the independent claims."
+      },
+      {
+        "id": "claims_vs_description_support",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailedDescription"
+        ],
+        "severity": "error",
+        "message": "Claims appear broader than the embodiments disclosed. Article 26(4) requires claims to be supported by the description; ensure every claimed feature (including functional features) is enabled by the Specific Mode for Carrying Out the Invention."
+      },
+      {
+        "id": "problem_solution_effects_alignment",
+        "type": "consistency",
+        "from": "technicalProblem",
+        "mustBeConsistentWith": [
+          "technicalSolution",
+          "advantageousEffects"
+        ],
+        "severity": "warning",
+        "message": "The Technical Problem, Technical Solution, and Advantageous Effects are not aligned. Rule 17 requires the stated problem to be solved by the stated solution and the effects to follow from it — misalignment invites clarity and inventive-step objections."
+      },
+      {
+        "id": "abstract_vs_summary_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "summary",
+          "technicalSolution"
+        ],
+        "severity": "warning",
+        "message": "The Abstract does not accurately reflect the technical problem and gist of the solution as presented in the Contents of the Invention. Adjust for consistency (Rule 23)."
+      },
+      {
+        "id": "unity_check",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "detailedDescription"
+        ],
+        "severity": "warning",
+        "message": "Claims may relate to multiple general inventive concepts. Check unity under Article 31 and Rule 34 (same or corresponding special technical features) and consider divisional strategy."
+      },
+      {
+        "id": "drawing_consistency",
+        "type": "reference",
+        "from": "briefDescriptionOfDrawings",
+        "mustReference": [
+          "detailedDescription"
+        ],
+        "severity": "error",
+        "message": "One or more figures or reference signs in the Brief Description of Drawings are not explained in the Specific Mode for Carrying Out the Invention. Rule 18 requires reference signs to be used consistently between drawings and description."
+      }
+    ]
+  },
+  "prompts": {
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing or advertising language (prohibited in the abstract by Rule 23 and discouraged throughout)",
+        "unsupported assertions of advantages",
+        "disparagement of specific prior patents",
+        "vague relative terms such as 'thin', 'strong', 'about' in claim language"
+      ]
+    },
+    "systemPrompt": "You are an expert Chinese patent attorney drafting an invention patent specification compliant with the Patent Law of the People's Republic of China (2020 amendment) and its Implementing Regulations, for filing with CNIPA. Follow the Rule 17 five-part description structure, keep claim wording and the Contents of the Invention strictly consistent, ensure enablement under Article 26(3) and claim support under Article 26(4), and remember that the Chinese text as filed will be the authentic legal text with strict added-matter constraints under Article 33.",
+    "promptMergeStrategy": "append",
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft a short, precise technical title for a Chinese invention patent application. CNIPA Examination Guidelines (Part I, Chapter 1) require the title to reflect clearly and briefly the subject matter and type (product, process, or use) of the claimed invention, and the Chinese title should generally not exceed 25 characters (40 permitted in the chemical field). The title must match the subject matter of the independent claims: if there are both product and method independent claims, reflect both (e.g. 'Battery electrode material and preparation method therefor'). Use standardized technical terminology; do not use person names, place names of no technical meaning, company names, trademarks, codes or model numbers, nor non-technical or promotional words such as 'novel', 'new-type', 'high-efficiency', or vague expressions like 'and the like'. Do not use 'patent' or 'invention' as part of the title itself.",
+          "constraints": [
+            "Chinese title generally no more than 25 characters (40 for chemical field) — keep the English draft correspondingly compact",
+            "Must identify the subject matter and category (product / process / use) of every independent claim",
+            "No trademarks, model numbers, person or company names",
+            "No promotional or non-technical words ('novel', 'improved', 'high-performance')",
+            "Use standardized scientific and technical terms"
+          ],
+          "additions": [
+            "The title appears in the request form and on the abstract page and will be translated into Chinese (发明名称) for filing"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Technical Field (技术领域) section per Rule 17 of the Implementing Regulations of the Chinese Patent Law. State the technical field to which the claimed technical solution belongs or in which it is directly applied — this should be the specific field, not a superordinate generic field and not the invention itself. CNIPA practice favors a one-to-two-sentence formulation such as 'The present invention relates to the technical field of ..., and in particular to a ... and a method for ...'. Where useful, align with the relevant IPC classification level. Do not discuss the prior art, the problem, or the advantages here.",
+          "constraints": [
+            "Identify the specific (not superordinate) technical field of the claimed solution",
+            "One or two sentences; neutral terminology only",
+            "No problem statement, no advantages, no summary of the invention",
+            "Should be consistent with the subject matter of the independent claims"
+          ],
+          "additions": [
+            "This section corresponds to 技术领域 and is the first mandatory part of the Rule 17 description structure"
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Background Art (背景技术) section per Rule 17 of the Implementing Regulations. Indicate the background art that is useful for understanding, searching and examining the invention, and where possible cite the documents reflecting that art (patent publications with numbers, or non-patent literature with full citations). Describe objectively the closest existing technical solution — its structure or process steps — and then identify the technical deficiency or shortcoming that the invention will address, in factual, measured terms. The deficiencies identified here must set up, and be consistent with, the Technical Problem section. Do not disclose the invention's own solution, do not disparage particular competitors or patents, and do not admit more than necessary: statements here can be treated as admitted prior art in examination and invalidation.",
+          "constraints": [
+            "Cite background documents where possible (Rule 17 expectation)",
+            "Describe prior solutions objectively before identifying their shortcomings",
+            "Shortcomings must foreshadow the Technical Problem section without stating the invention's solution",
+            "No disparagement of specific patents or companies",
+            "Beware admissions: text here is usable as admitted prior art"
+          ],
+          "additions": [
+            "This section corresponds to 背景技术",
+            "China has no IDS system, but under Article 36 the applicant must furnish pre-filing reference materials when requesting substantive examination"
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the lead-in of the Contents of the Invention (发明内容) per Rule 17 of the Implementing Regulations. In the Chinese specification, this part must set out the technical problem to be solved, the technical solution adopted, and the advantageous effects relative to the background art; in this profile the three mandatory components are drafted in the dedicated Technical Problem, Technical Solution, and Advantageous Effects sections that follow, so use this section for a concise overview of the inventive concept. Present the purpose of the invention and a claim-mirroring statement of each independent aspect (product, method, use), typically in the form 'In view of the above, the present invention provides a ... comprising ...'. Keep the wording strictly consistent with the independent claims — Chinese examiners routinely object to inconsistency between the claims and the Contents of the Invention.",
+          "constraints": [
+            "Overview only — the problem, solution, and effects details belong to the three dedicated sections",
+            "Introduce each independent aspect using wording consistent with the corresponding independent claim",
+            "Neutral, technical language; no advertising tone",
+            "Do not introduce subject matter absent from claims and detailed description (Article 33 added-matter risk on later amendment)"
+          ],
+          "additions": [
+            "This section corresponds to the opening of 发明内容 (Contents of the Invention)",
+            "Rule 17 makes problem–solution–effects a mandatory content of the description; the profile splits them into separate sections mirroring CNIPA drafting practice"
+          ]
+        }
+      },
+      "technicalProblem": {
+        "topUp": {
+          "instruction": "Draft the Technical Problem component of the Contents of the Invention per Rule 17 of the Implementing Regulations. State clearly and objectively the technical problem that the invention aims to solve, formulated with direct reference to the shortcomings of the background art already described. The problem must be a technical one (not commercial or aesthetic), must be actually solved by the technical solution disclosed, and should be stated in terms a person skilled in the art would recognize. Chinese examination practice on inventive step (Article 22(3)) follows a three-step approach in which the technical problem actually solved is redetermined against the closest prior art — a well-drafted, evidence-linked problem statement anchors that analysis in the applicant's favor. Avoid stating multiple unrelated problems (unity risk under Article 31) and avoid overstating: an unsolved stated problem invites a disclosure objection.",
+          "constraints": [
+            "Objective, technical formulation tied to the Background Art deficiencies",
+            "Must actually be solved by the disclosed technical solution",
+            "No commercial, economic-only, or aesthetic 'problems'",
+            "Keep one coherent problem (or a tightly linked cluster) to protect unity under Article 31"
+          ],
+          "additions": [
+            "Corresponds to 本发明所要解决的技术问题 within 发明内容",
+            "Feeds the three-step inventive-step analysis of the CNIPA Examination Guidelines"
+          ]
+        }
+      },
+      "technicalSolution": {
+        "topUp": {
+          "instruction": "Draft the Technical Solution component of the Contents of the Invention per Rule 17 of the Implementing Regulations. Clearly and completely describe the technical solution adopted to solve the stated technical problem, expressed in terms of its technical features. Begin with a statement reciting all essential technical features of each independent claim, in wording consistent with (ideally verbatim to) the claims; then present the additional features of the preferred/dependent embodiments, each introduced as an optional further development ('Further, ...' / 'Preferably, ...'). Cover every independent aspect — product, method, use — in claim order. This consistency matters doubly in China: it supports the claims under Article 26(4), and it preserves amendment room under Article 33 because the Contents of the Invention is part of the original disclosure from which amendments must be derivable.",
+          "constraints": [
+            "Recite all essential technical features of each independent claim, consistent with claim wording",
+            "Then present dependent-claim features as optional further improvements",
+            "Cause-effect linkage: show how the features solve the stated technical problem",
+            "No results-only statements — describe the solution by its technical features",
+            "Cover every claim category present (product, process, use)"
+          ],
+          "additions": [
+            "Corresponds to the 技术方案 portion of 发明内容",
+            "Verbatim consistency between independent claims and this section is standard Chinese drafting practice"
+          ]
+        }
+      },
+      "advantageousEffects": {
+        "topUp": {
+          "instruction": "Draft the Advantageous Effects component of the Contents of the Invention per Rule 17 of the Implementing Regulations. State the advantageous effects of the invention compared with the background art, explaining how they are derived from the distinguishing technical features of the solution — by analysis, by reference to experimental or measured data, or both. Effects should be concrete and technical (e.g. reduced energy consumption by X%, improved detection accuracy, simplified assembly) and each asserted effect should be traceable to features in the claims and supported in the embodiments. In Chinese inventive-step practice these effects are weighed when redetermining the technical problem actually solved, and effects not derivable from the original disclosure cannot be relied on later even with post-filing data — so state every genuinely available effect now. Never use advertising language or absolute superlatives.",
+          "constraints": [
+            "Each effect must be attributable to specific distinguishing technical features",
+            "Quantify where data exists; qualitative analysis is acceptable where mechanism is clear",
+            "Effects must be credible and supported by the embodiments (Article 26(3) coherence)",
+            "No commercial or promotional claims; no unsupported superlatives"
+          ],
+          "additions": [
+            "Corresponds to 有益效果 within 发明内容",
+            "In chemical/pharma cases, include comparative experimental data at filing — post-filing data can only prove effects already derivable from the original text"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Brief Description of Drawings (附图说明) per Rule 17 of the Implementing Regulations, mandatory whenever the application contains drawings. Provide one sentence per figure in the CNIPA-customary form 'FIG. 1 is a schematic structural diagram of ... according to an embodiment of the present invention.', in figure-number order with no gaps. Identify the view type (schematic structural diagram, flowchart, cross-sectional view, block diagram, graph) and the subject shown, but do not explain operation, advantages, or reference numerals here — that belongs to the Specific Mode for Carrying Out the Invention.",
+          "constraints": [
+            "Exactly one concise sentence per figure, in numerical order",
+            "State the view type and subject only; no operational detail",
+            "Figure numbering FIG. 1, FIG. 2 (图1, 图2) without gaps",
+            "Every figure filed must be described, and every described figure must be filed"
+          ],
+          "additions": [
+            "Corresponds to 附图说明",
+            "If a figure is designated to accompany the abstract, it must be one of these application drawings"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Specific Mode for Carrying Out the Invention (具体实施方式) per Rule 17 of the Implementing Regulations and Article 26(3) of the Chinese Patent Law. Describe in detail the mode(s) contemplated for carrying out the invention, citing examples/embodiments and referring to the drawings by reference numerals. The disclosure must be clear and complete enough for a person skilled in the art to carry out the invention: reproduce the solution, solve the technical problem, and achieve the stated effects, without undue burden. Provide at least one fully worked embodiment per independent claim and embodiment support for every dependent-claim feature; where claims use functional or generalized language, include multiple varied embodiments, because Chinese practice construes functional features as limited to the disclosed embodiments and equivalents. Use consistent reference numerals matching the drawings, introduce alternatives and value sub-ranges explicitly (they are the only safe amendment basis under Article 33), and close with the customary statement that the embodiments are illustrative and not limiting. Begin the section with the conventional lead-in that the technical solutions in the embodiments will be described clearly and completely with reference to the accompanying drawings.",
+          "constraints": [
+            "Enablement under Article 26(3): clear, complete, reproducible by a person skilled in the art",
+            "At least one detailed embodiment per independent claim; support for every dependent-claim feature",
+            "Multiple embodiments where claims generalize or use functional language",
+            "Reference numerals consistent with the drawings throughout",
+            "Explicitly state alternatives, ranges, and fallback positions (Article 33 amendment basis)",
+            "Avoid claim-style single-sentence drafting; use flowing technical prose",
+            "For chemistry/biotech: preparation examples, test methods, and comparative data at filing"
+          ],
+          "additions": [
+            "Corresponds to 具体实施方式",
+            "No best-mode requirement in China, but Rule 17 expects the optimally contemplated mode to be described",
+            "Chinese added-matter practice under Article 33 is strict — anything not literally or directly-and-unambiguously derivable from this text cannot be added later"
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the claims (权利要求书) per Article 26(4) of the Chinese Patent Law and Rules 19–22 of the Implementing Regulations: claims must be supported by the description and define the extent of protection sought clearly and concisely. Draft each independent claim in the Rule 21 two-part form — a preamble stating the subject matter and the technical features shared with the closest prior art, then a characterizing portion introduced by 'characterized in that' (其特征在于) stating the distinguishing features — unless the nature of the invention makes this form inappropriate (e.g. pioneering inventions, some chemical compounds). The independent claim must recite all essential technical features necessary to solve the technical problem (Rule 20); omitting an essential feature is a substantive defect. Dependent claims consist of a reference portion and a limiting portion; multiple dependent claims must refer to preceding claims in the alternative only and must never depend on another multiple dependent claim (Rule 22). Keep all claims within a single general inventive concept (Article 31, Rule 34); parallel independent claims for product, preparation method, and use are acceptable when linked by the same special technical features. Reference numerals may be added in parentheses and are non-limiting (Rule 19); avoid references to the description or drawings, vague relative terms, and pure functional definitions without embodiment support. Remember excluded subject matter: mental rules and methods per se (Article 25) — computer-implemented claims must recite technical means solving a technical problem — and diagnostic/treatment methods practiced on the human or animal body are unpatentable (claim products or in-vitro methods instead).",
+          "constraints": [
+            "Two-part ('characterized in that') form for independent claims per Rule 21 unless inappropriate",
+            "Independent claims must recite ALL essential technical features (Rule 20)",
+            "Multiple dependent claims: alternative references only; never dependent on another multiple dependent claim (Rule 22)",
+            "Single general inventive concept across all claims (Article 31 / Rule 34)",
+            "Support in the description for every feature (Article 26(4)); functional features construed narrowly",
+            "No 'as described in the description' or 'as shown in figure ...' references (Rule 19)",
+            "Basic fee covers 10 claims; each claim over 10 incurs an excess-claim fee — prioritize accordingly",
+            "Avoid method-of-treatment/diagnosis claims and abstract non-technical schemes (Articles 25, 2(2))"
+          ],
+          "additions": [
+            "Reference numerals in parentheses are permitted and non-limiting (Rule 19)",
+            "Typical CN claim set: 1 product independent claim, 1 method independent claim, optionally 1 use claim, plus focused dependents within the 10-claim basic fee where feasible",
+            "Draft with invalidation in mind: dependent claims are the fallback positions, since post-grant amendment in China is essentially limited to deleting or combining claims"
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Abstract (说明书摘要) per Rule 23 of the Implementing Regulations of the Chinese Patent Law. The abstract is a summary of the description that must indicate the title of the invention and the technical field, and clearly reflect the technical problem to be solved, the gist of the technical solution, and the principal use(s) of the invention. The Chinese abstract as filed must not exceed 300 characters including punctuation — when drafting in English keep to roughly 150 words so the translation fits. It may contain the single chemical formula that best characterizes the invention, and one figure from the application drawings may be designated to accompany it (published at about 6 cm x 6 cm). Write one neutral technical paragraph; commercial advertising language is prohibited, and the abstract has no legal effect on claim scope, so do not lean on it for protection.",
+          "constraints": [
+            "Hard limit: 300 Chinese characters including punctuation (Rule 23); ~150 English words as drafting proxy",
+            "Must state: title, technical field, technical problem, gist of the solution, principal uses",
+            "Single paragraph; no commercial or promotional language",
+            "May include one characterizing chemical formula; one designated key figure allowed",
+            "No claim references and no reliance on the abstract for scope — it is technical information only"
+          ],
+          "additions": [
+            "Designate the abstract figure from the filed drawings (typically FIG. 1)",
+            "CNIPA may re-draft a non-compliant abstract ex officio"
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "CN Invention Patent Specification (CNIPA-style, A4)",
+        "includesSections": [
+          "title",
+          "fieldOfInvention",
+          "background",
+          "summary",
+          "technicalProblem",
+          "technicalSolution",
+          "advantageousEffects",
+          "briefDescriptionOfDrawings",
+          "detailedDescription",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "marginTopCm": 2.5,
+        "marginBottomCm": 1.5,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "lineSpacing": 1.5,
+        "addPageNumbers": true,
+        "addParagraphNumbers": true
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TITLE OF INVENTION",
+      "fieldOfInvention": "TECHNICAL FIELD",
+      "background": "BACKGROUND ART",
+      "summary": "SUMMARY OF INVENTION",
+      "technicalProblem": "TECHNICAL PROBLEM",
+      "technicalSolution": "TECHNICAL SOLUTION",
+      "advantageousEffects": "ADVANTAGEOUS EFFECTS",
+      "briefDescriptionOfDrawings": "BRIEF DESCRIPTION OF DRAWINGS",
+      "detailedDescription": "SPECIFIC MODE FOR CARRYING OUT THE INVENTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "table",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "FIG. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for components/modules and arrows for signal, data, or control flow, drawn in uniform black lines without colour or shading (Rule 18). Labels must match the reference numerals used in the Specific Mode for Carrying Out the Invention.",
+      "flowchart": "Use standard flowchart symbols with brief wording inside boxes (indispensable words are permitted). Step numbering (S101, S102 ...) should correspond to the method claims and the description.",
+      "schematic": "Use simplified structural or circuit symbols in clean black linework suitable for black-and-white reproduction; no colouring, no engineering-blueprint style. Match labels to claims and description.",
+      "perspective_view": "Show the overall apparatus in black solid lines without surface shading; label every structural element that appears in the claims with its reference numeral.",
+      "cross_section": "Use hatching to indicate sectioned material, ensuring hatching does not obscure reference numerals or lead lines. Section lines should be indicated on the related overview figure.",
+      "graph": "Provide labelled axes with units and clear black-and-white distinguishable line styles (solid/dashed/dotted) rather than colour; graphs are treated as drawings and follow the same Rule 18 requirements.",
+      "table": "Tables may appear in the description when helpful (and in claims only when absolutely necessary, Rule 19); keep each table within the A4 printable area on a single page.",
+      "exploded_view": "Show assembly relationships with parts separated along a common axis, each part bearing a unique reference numeral explained in the Specific Mode for Carrying Out the Invention."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure every figure and reference sign mentioned in the Brief Description of Drawings is defined and explained in the Specific Mode for Carrying Out the Invention, and that no reference sign appears in only one of drawings/description (Rule 18 consistency requirement).",
+        "from": "briefDescriptionOfDrawings",
+        "mustBeExplainedIn": [
+          "detailedDescription"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed structural elements appear in at least one figure when drawings are present, so that parenthetical reference numerals in the claims (Rule 19) can be traced through the Brief Description of Drawings.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "briefDescriptionOfDrawings"
+        ]
+      },
+      {
+        "id": "claims_vs_contents_of_invention",
+        "description": "Ensure the essential technical features of each independent claim are recited, in consistent wording, in the Technical Solution component of the Contents of the Invention (Rule 17 / Article 26(4) alignment).",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "technicalSolution",
+          "detailedDescription"
+        ]
+      },
+      {
+        "id": "effects_vs_embodiments",
+        "description": "Ensure every advantageous effect asserted in the Contents of the Invention is supported by analysis or data in the embodiments (post-filing data cannot cure effects not derivable from the original disclosure).",
+        "from": "advantageousEffects",
+        "mustBeSupportedBy": [
+          "detailedDescription"
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { CountryReadiness } from './import-types'
 
 interface CountryProfile {
   id: string
@@ -28,9 +29,10 @@ interface CountryProfile {
 interface CountryProfileListProps {
   refreshTrigger: number
   onRefresh: () => void
+  readinessByCountry?: Record<string, CountryReadiness>
 }
 
-export function CountryProfileList({ refreshTrigger, onRefresh }: CountryProfileListProps) {
+export function CountryProfileList({ refreshTrigger, onRefresh, readinessByCountry }: CountryProfileListProps) {
   const [profiles, setProfiles] = useState<CountryProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -98,12 +100,11 @@ export function CountryProfileList({ refreshTrigger, onRefresh }: CountryProfile
 
   const handleDelete = async (countryCode: string) => {
     try {
-      const response = await fetch('/api/super-admin/countries', {
+      const response = await fetch(`/api/super-admin/countries?countryCode=${encodeURIComponent(countryCode)}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: new URLSearchParams({ countryCode })
+        }
       })
 
       if (response.ok) {
@@ -241,6 +242,9 @@ export function CountryProfileList({ refreshTrigger, onRefresh }: CountryProfile
                     Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Readiness
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Version
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -257,9 +261,13 @@ export function CountryProfileList({ refreshTrigger, onRefresh }: CountryProfile
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <div>
-                          <div className="text-sm font-medium text-gray-900">
+                          <a
+                            href={`/super-admin/jurisdictions/${profile.countryCode}`}
+                            className="text-sm font-medium text-gray-900 hover:text-blue-700"
+                            title="Open country configuration"
+                          >
                             {profile.name}
-                          </div>
+                          </a>
                           <div className="text-sm text-gray-500">
                             {profile.profileData?.meta?.continent || 'Unknown'}
                           </div>
@@ -281,6 +289,29 @@ export function CountryProfileList({ refreshTrigger, onRefresh }: CountryProfile
                         <option value="INACTIVE">Inactive</option>
                         <option value="DRAFT">Draft</option>
                       </select>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {(() => {
+                        const readiness = readinessByCountry?.[profile.countryCode]
+                        if (!readiness) return <span className="text-xs text-gray-400">—</span>
+                        const failures = readiness.checks.filter(c => c.status === 'fail').length
+                        const warnings = readiness.checks.filter(c => c.status === 'warn').length
+                        return readiness.ready ? (
+                          <span
+                            className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800"
+                            title={warnings > 0 ? `${warnings} warning(s)` : 'All checks pass'}
+                          >
+                            Ready{warnings > 0 ? ` (${warnings}⚠)` : ''}
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800"
+                            title={readiness.checks.filter(c => c.status === 'fail').map(c => c.label).join('; ')}
+                          >
+                            {failures} blocker{failures === 1 ? '' : 's'}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       v{profile.version}

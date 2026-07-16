@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+// Canonical camelCase section keys used by the app (SupersetSection.sectionKey values).
+// Kept as a static list so validation works client-side without a DB round-trip;
+// the server-side import preview re-resolves keys against the live SupersetSection table.
+const CANONICAL_CAMEL_KEYS = [
+  'title', 'preamble', 'crossReference', 'fieldOfInvention', 'background',
+  'objectsOfInvention', 'summary', 'technicalProblem', 'technicalSolution',
+  'advantageousEffects', 'briefDescriptionOfDrawings', 'detailedDescription',
+  'bestMode', 'bestMethod', 'industrialApplicability', 'claims', 'abstract',
+  'listOfNumerals'
+]
+
 // Define the comprehensive schema for country_profile.json
 const countryProfileSchema = z.object({
   meta: z.object({
@@ -131,11 +142,14 @@ const countryProfileSchema = z.object({
       recommendedLineSpacing: z.number().min(0.1)
     }).optional(),
 
-    // Optional: PCT/regional logic for designated states
+    // Optional: PCT/regional logic for designated states.
+    // Only `mode` is required — real profiles (e.g. PCT) carry varying fields
+    // and the runtime consumer (getDesignatedStatesRules) reads the block as-is.
     designatedStates: z.object({
       mode: z.enum(['all_by_default', 'explicit_selection']),
-      totalStates: z.number().int().min(1),
-      electionAllowed: z.boolean(),
+      totalStates: z.number().int().min(1).optional(),
+      electionAllowed: z.boolean().optional(),
+      electionRequired: z.boolean().optional(),
       electionRequiredForChapterII: z.boolean().optional(),
       chapterIIDeadlineMonths: z.number().int().min(1).optional(),
       notes: z.string().optional()
@@ -145,11 +159,15 @@ const countryProfileSchema = z.object({
   validation: z.object({
     sectionChecks: z.record(z.array(z.object({
       id: z.string().min(1),
-      type: z.enum(['maxWords', 'maxCount', 'required', 'format', 'maxChars']),
+      type: z.enum(['maxWords', 'minWords', 'maxChars', 'minChars', 'maxCount', 'required', 'format', 'pattern']),
       limit: z.number().min(0).optional(),
+      pattern: z.string().optional(),
       severity: z.enum(['error', 'warning', 'info']),
       message: z.string().min(1)
-    }))),
+    }).refine(
+      (check) => !['maxWords', 'minWords', 'maxChars', 'minChars', 'maxCount'].includes(check.type) || check.limit !== undefined,
+      { message: 'limit is required for word/char/count limit checks' }
+    ))),
 
     crossSectionChecks: z.array(z.object({
       id: z.string().min(1),
@@ -158,6 +176,7 @@ const countryProfileSchema = z.object({
       mustBeSupportedBy: z.array(z.string()).optional(),
       mustBeConsistentWith: z.array(z.string()).optional(),
       mustReference: z.array(z.string()).optional(),
+      mustBeShownIn: z.array(z.string()).optional(),
       severity: z.enum(['error', 'warning', 'info']),
       message: z.string().min(1)
     }))
@@ -170,10 +189,23 @@ const countryProfileSchema = z.object({
       avoid: z.array(z.string())
     }),
 
-    sections: z.record(z.object({
-      instruction: z.string().min(1),
-      constraints: z.array(z.string())
-    }))
+    // Sections accept either the legacy flat shape or the modern top-up shape
+    sections: z.record(z.union([
+      z.object({
+        instruction: z.string().min(1),
+        constraints: z.array(z.string()).default([]),
+        additions: z.array(z.string()).optional(),
+        importFiguresDirectly: z.boolean().optional()
+      }),
+      z.object({
+        topUp: z.object({
+          instruction: z.string().min(1),
+          constraints: z.array(z.string()).default([]),
+          additions: z.array(z.string()).optional(),
+          importFiguresDirectly: z.boolean().optional()
+        })
+      })
+    ]))
   }),
 
   export: z.object({
@@ -279,13 +311,22 @@ export function validateCountryProfile(profileData: any): ValidationResult {
       }
     })
 
-    // Check that validation sectionChecks reference valid sections
+    // Check that validation sectionChecks reference valid sections.
+    // Accept structure section ids, any canonical keys declared in the structure,
+    // and the app's canonical camelCase section keys (profiles may key prompts/
+    // headings/checks by canonical key rather than structure id).
     const allSectionIds = new Set(
       profile.structure.variants.flatMap(v => v.sections.map(s => s.id))
     )
+    const knownSectionKeys = new Set<string>(
+      Array.from(allSectionIds).concat(
+        profile.structure.variants.flatMap(v => v.sections.flatMap(s => s.canonicalKeys)),
+        CANONICAL_CAMEL_KEYS
+      )
+    )
 
     Object.keys(profile.validation.sectionChecks).forEach(sectionId => {
-      if (!allSectionIds.has(sectionId)) {
+      if (!knownSectionKeys.has(sectionId)) {
         warnings.push(`validation.sectionChecks references unknown section "${sectionId}"`)
       }
     })
@@ -310,14 +351,14 @@ export function validateCountryProfile(profileData: any): ValidationResult {
 
     // Check prompts.sections reference valid sections
     Object.keys(profile.prompts.sections).forEach(sectionId => {
-      if (!allSectionIds.has(sectionId)) {
+      if (!knownSectionKeys.has(sectionId)) {
         warnings.push(`prompts.sections references unknown section "${sectionId}"`)
       }
     })
 
     // Check export section headings reference valid sections
     Object.keys(profile.export.sectionHeadings).forEach(sectionId => {
-      if (!allSectionIds.has(sectionId)) {
+      if (!knownSectionKeys.has(sectionId)) {
         warnings.push(`export.sectionHeadings references unknown section "${sectionId}"`)
       }
     })
@@ -358,18 +399,5 @@ export function validateCountryProfile(profileData: any): ValidationResult {
   } catch (error) {
     errors.push(`Validation failed with error: ${error instanceof Error ? error.message : 'Unknown error'}`)
     return { valid: false, errors, warnings }
-  }
-}
-
-/**
- * Validates that a country code is unique (doesn't already exist in the database)
- */
-export async function validateCountryCodeUnique(countryCode: string, excludeId?: string): Promise<{ valid: boolean; message?: string }> {
-  try {
-    // This would be implemented with database check
-    // For now, return valid since we're focusing on structure validation
-    return { valid: true }
-  } catch (error) {
-    return { valid: false, message: 'Database validation failed' }
   }
 }

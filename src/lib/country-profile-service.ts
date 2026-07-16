@@ -184,8 +184,10 @@ export async function getDraftingPrompts(countryCode: string, sectionId: string,
   const profile = await getCountryProfile(countryCode)
   if (!profile) return null
 
-  const jsonPrompt = profile.profileData.prompts?.sections?.[sectionId]
-  if (jsonPrompt) {
+  const jsonPromptConfig = profile.profileData.prompts?.sections?.[sectionId]
+  // Profiles may store prompts in the canonical topUp shape or the legacy flat shape
+  const jsonPrompt = jsonPromptConfig?.topUp ?? jsonPromptConfig
+  if (jsonPrompt?.instruction) {
     return {
       instruction: jsonPrompt.instruction || '',
       constraints: jsonPrompt.constraints || [],

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { verifyJWT } from '@/lib/auth'
 import { z } from 'zod'
+import { isCountrySupported, getSupportedCountryCodes } from '@/lib/country-profile-service'
 
 const applicantProfileSchema = z.object({
   applicantLegalName: z.string().min(3, 'Legal name must be at least 3 characters').max(200, 'Legal name too long'),
@@ -32,7 +33,7 @@ const applicantProfileSchema = z.object({
   agentState: z.string().optional(),
   agentCountryCode: z.string().optional(),
   agentPostalCode: z.string().optional(),
-  defaultJurisdiction: z.enum(['IN', 'PCT', 'US', 'EP']),
+  defaultJurisdiction: z.string().min(2).max(3).transform(v => v.toUpperCase()),
   defaultRoute: z.enum(['national', 'pct_international', 'pct_national']),
   defaultLanguage: z.string().default('EN'),
   defaultEntityStatusIn: z.enum(['startup', 'small_entity', 'university', 'regular']),
@@ -94,6 +95,18 @@ export async function POST(
 
     const body = await request.json()
     const validatedData = applicantProfileSchema.parse(body)
+
+    // Jurisdiction must be an active drafting country (dynamic, not a fixed enum)
+    if (!(await isCountrySupported(validatedData.defaultJurisdiction))) {
+      const supported = await getSupportedCountryCodes()
+      return NextResponse.json({
+        error: 'Validation failed',
+        details: [{
+          field: 'defaultJurisdiction',
+          message: `"${validatedData.defaultJurisdiction}" is not an active drafting jurisdiction. Supported: ${supported.join(', ')}`
+        }]
+      }, { status: 400 })
+    }
 
     // Upsert the applicant profile
     const applicantProfile = await prisma.applicantProfile.upsert({

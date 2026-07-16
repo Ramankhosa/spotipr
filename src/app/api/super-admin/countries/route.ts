@@ -4,6 +4,9 @@ import { prisma } from '@/lib/prisma'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { validateCountryProfile } from '@/lib/country-profile-validation'
 import { invalidateCountryProfileCache } from '@/lib/country-profile-service'
+import { invalidateSectionPromptCache } from '@/lib/section-prompt-service'
+import { invalidateAliasCache } from '@/lib/section-alias-service'
+import { computeCountryReadiness } from '@/lib/country-readiness-service'
 
 // Schema for creating/updating country profiles
 const createCountryProfileSchema = z.object({
@@ -16,8 +19,15 @@ const createCountryProfileSchema = z.object({
 const updateCountryProfileSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   profileData: z.record(z.any()).optional(), // JSON object validated separately
-  status: z.enum(['ACTIVE', 'INACTIVE', 'DRAFT']).optional()
+  status: z.enum(['ACTIVE', 'INACTIVE', 'DRAFT']).optional(),
+  force: z.boolean().optional()
 })
+
+function invalidateCountryCaches() {
+  invalidateCountryProfileCache()
+  invalidateSectionPromptCache()
+  invalidateAliasCache()
+}
 
 // GET /api/super-admin/countries - List all country profiles
 export async function GET(request: NextRequest) {
@@ -144,7 +154,7 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    invalidateCountryProfileCache()
+    invalidateCountryCaches()
 
     return NextResponse.json({
       success: true,
@@ -199,7 +209,7 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    const { name, profileData, status } = basicValidation.data
+    const { name, profileData, status, force } = basicValidation.data
 
     // Check if profile data is being updated and validate it
     if (profileData) {
@@ -222,6 +232,21 @@ export async function PUT(request: NextRequest) {
         { error: 'Country profile not found' },
         { status: 404 }
       )
+    }
+
+    // Gate activation on readiness: a country that would throw at draft time
+    // must not be exposed to users (override with force:true)
+    if (status === 'ACTIVE' && existingProfile.status !== 'ACTIVE' && !force) {
+      const readiness = await computeCountryReadiness(countryCode)
+      if (!readiness.ready) {
+        return NextResponse.json(
+          {
+            error: `Cannot activate ${countryCode}: readiness checks failed. Fix the blockers or retry with force:true.`,
+            readiness
+          },
+          { status: 409 }
+        )
+      }
     }
 
     // Update the country profile
@@ -247,7 +272,7 @@ export async function PUT(request: NextRequest) {
       }
     })
 
-    invalidateCountryProfileCache()
+    invalidateCountryCaches()
 
     return NextResponse.json({
       success: true,
@@ -310,7 +335,7 @@ export async function DELETE(request: NextRequest) {
       where: { countryCode }
     })
 
-    invalidateCountryProfileCache()
+    invalidateCountryCaches()
 
     return NextResponse.json({
       success: true,

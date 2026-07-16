@@ -155,6 +155,8 @@ export interface CountryProfileRules {
   sequenceListing?: SequenceListingRules
   /** Page layout rules */
   pageLayout?: PageLayoutRules
+  /** PCT/regional designated-states logic */
+  designatedStates?: DesignatedStatesRules
 }
 
 export interface GlobalRules {
@@ -243,6 +245,16 @@ export interface PageLayoutRules {
   recommendedLineSpacing: number
 }
 
+export interface DesignatedStatesRules {
+  mode: 'all_by_default' | 'explicit_selection'
+  totalStates?: number
+  electionAllowed?: boolean
+  electionRequired?: boolean
+  electionRequiredForChapterII?: boolean
+  chapterIIDeadlineMonths?: number
+  notes?: string
+}
+
 // ============================================================================
 // Validation Configuration
 // ============================================================================
@@ -254,7 +266,7 @@ export interface CountryProfileValidation {
 
 export interface SectionCheck {
   id: string
-  type: 'maxWords' | 'maxChars' | 'maxCount' | 'minWords' | 'pattern'
+  type: 'maxWords' | 'minWords' | 'maxChars' | 'minChars' | 'maxCount' | 'required' | 'format' | 'pattern'
   limit?: number
   pattern?: string
   severity: 'error' | 'warning' | 'info'
@@ -263,10 +275,12 @@ export interface SectionCheck {
 
 export interface CrossSectionCheck {
   id: string
-  type: 'support' | 'consistency'
+  type: 'support' | 'consistency' | 'reference' | 'uniqueness'
   from: string
   mustBeSupportedBy?: string[]
   mustBeConsistentWith?: string[]
+  mustReference?: string[]
+  mustBeShownIn?: string[]
   severity: 'error' | 'warning' | 'info'
   message: string
 }
@@ -301,6 +315,8 @@ export type SectionPromptConfig = LegacySectionPrompt | TopUpSectionPrompt
 export interface LegacySectionPrompt {
   instruction: string
   constraints: string[]
+  additions?: string[]
+  importFiguresDirectly?: boolean
 }
 
 export interface TopUpSectionPrompt {
@@ -311,6 +327,8 @@ export interface TopUpSectionPrompt {
     constraints: string[]
     /** Extra items to add (separate from constraints) */
     additions?: string[]
+    /** When true, bypass the LLM and import figure titles directly */
+    importFiguresDirectly?: boolean
   }
 }
 

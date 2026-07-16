@@ -284,8 +284,7 @@ export default function SuperAdminDashboard() {
       title: 'Jurisdiction & Content',
       icon: '🌍',
       items: [
-        { label: 'Jurisdiction Config', icon: '🏗️', href: '/super-admin/jurisdiction-config' },
-        { label: 'Country Profiles', icon: '🗺️', href: '/super-admin/countries' },
+        { label: 'Jurisdictions Hub', icon: '🌍', href: '/super-admin/jurisdictions', badge: 'NEW' },
         { label: 'Section Prompts', icon: '📝', href: '/super-admin/section-prompts' },
         { label: 'Jurisdiction Styles', icon: '🎨', href: '/super-admin/jurisdiction-styles' },
         { label: 'Patent Journal Extractor', icon: '📄', href: '/super-admin/patent-corpus', badge: 'NEW' },

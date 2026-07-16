@@ -1,0 +1,735 @@
+{
+  "meta": {
+    "id": "UK",
+    "code": "UK",
+    "name": "United Kingdom",
+    "continent": "Europe",
+    "office": "Intellectual Property Office (UKIPO)",
+    "officeUrl": "https://www.gov.uk/government/organisations/intellectual-property-office",
+    "applicationTypes": [
+      "standard"
+    ],
+    "languages": [
+      "en"
+    ],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": [
+      "national_phase",
+      "pct_national_phase",
+      "paris",
+      "english_language",
+      "epc_member_national_route",
+      "no_best_mode"
+    ],
+    "createdAt": "2026-07-15T00:00:00Z",
+    "updatedAt": "2026-07-15T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Standard UK Patent Application",
+        "description": "Standard national patent application filed at the UK Intellectual Property Office under the Patents Act 1977 and the Patents Rules 2007, drafted in accordance with the UKIPO Manual of Patent Practice.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title of Invention",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a concise title indicating the subject matter of the invention",
+              "helpText": "Provide a short technical title that indicates the matter to which the invention relates (r.12(2) Patents Rules 2007). Avoid trademarks, personal names, fancy names and overly broad or vague wording; the UKIPO may amend an unsuitable title on publication."
+            },
+            "rules": {
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true
+            }
+          },
+          {
+            "id": "technical_field",
+            "label": "Technical Field",
+            "order": 2,
+            "canonicalKeys": [
+              "fieldOfInvention",
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the technical field to which the invention relates",
+              "helpText": "State the field of the invention in neutral technical terms, typically opening 'This invention relates to...'. Keep it brief; the field statement frames but must not contradict the scope of the claims."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background of the Invention",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Describe the relevant prior art and the problem it leaves unsolved",
+              "helpText": "Describe the known art and its limitations objectively. Be careful with admissions: anything acknowledged as common general knowledge or prior art can be used against the application when inventive step is assessed (s.3 Patents Act 1977). The UK has no general grace period, so do not describe the applicant's own pre-filing disclosures as background."
+            }
+          },
+          {
+            "id": "objects_of_invention",
+            "label": "Objects of the Invention",
+            "order": 4,
+            "canonicalKeys": [
+              "objectsOfInvention",
+              "objects_of_invention"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "Optionally state the objects (aims) of the invention",
+              "helpText": "Optional, traditional section stating what the invention aims to achieve. Modern UK practice often omits it or keeps it minimal: stated objects that the claimed invention does not actually achieve can be used against the patent in litigation. Prefer a single, modest object such as addressing the problem identified in the background."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Summary of the Invention",
+            "order": 5,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Summarize the invention, typically mirroring the independent claims (consistory clauses)",
+              "helpText": "Present each aspect of the invention in consistory clauses mirroring the independent claims ('According to a first aspect of the invention, there is provided...'). This helps satisfy the support requirement of s.14(5)(c) Patents Act 1977. Optionally summarize key preferred features and technical advantages."
+            },
+            "rules": {
+              "alignWithClaims": true,
+              "useConsistoryClauses": true
+            }
+          },
+          {
+            "id": "brief_description_of_drawings",
+            "label": "Brief Description of the Drawings",
+            "order": 6,
+            "canonicalKeys": [
+              "briefDescriptionOfDrawings",
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Introduce the figures ('Figure 1 is a schematic view of...')",
+              "helpText": "If drawings are filed, introduce them with a lead-in such as 'Embodiments of the invention will now be described, by way of example only, with reference to the accompanying drawings, in which:' followed by one sentence per figure. Omit this section if there are no drawings."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description",
+            "order": 7,
+            "canonicalKeys": [
+              "detailedDescription",
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Describe embodiments clearly and completely enough for a skilled person to perform the invention",
+              "helpText": "Disclose the invention clearly and completely enough for it to be performed by a person skilled in the art (s.14(3) Patents Act 1977). Describe embodiments 'by way of example only', use reference numerals consistent with the drawings, and provide support for the full breadth of every claim (s.14(5)(c)). There is no best-mode requirement in the UK."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireSupportForAllClaims": true,
+              "requireBestModeDisclosure": false,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 8,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Draft claims defining the invention clearly and concisely",
+              "helpText": "Claims must define the matter for which protection is sought, be clear and concise, be supported by the description, and relate to one invention or a single inventive concept (s.14(5) Patents Act 1977). Open-ended 'comprising' language is standard. Excess claims fees apply for each claim over 25."
+            },
+            "rules": {
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "requireSingleInventiveConcept": true,
+              "mustBeSupportedByDescription": true,
+              "omnibusClaimsProhibited": true,
+              "notes": [
+                "Omnibus claims ('...as described herein with reference to the drawings') are no longer allowed except where absolutely necessary (r.12(6C) Patents Rules 2007, in force since 2017).",
+                "Excess claims fees are payable at the search stage for each claim over 25."
+              ]
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 9,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 1200,
+            "ui": {
+              "placeholder": "Concise technical summary, preferably not more than 150 words",
+              "helpText": "Write a concise summary (preferably not more than 150 words, per UKIPO practice and r.15 Patents Rules 2007) starting with the title, stating the technical field, the problem and the gist of the solution. The abstract is for technical information only and does not affect claim scope (s.14(7) Patents Act 1977); the examiner may reframe it."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "mustStartWithTitle": true,
+              "maxWordsRecommended": 150,
+              "forbidAdvantages": true,
+              "forbidMarketingLanguage": true,
+              "forbidClaimReferences": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "Claims and abstract are not needed to secure a filing date (s.15(1) Patents Act 1977) but must be filed within 12 months of filing (or as prescribed); this profile drafts a complete specification from the outset.",
+        "Excess pages fees are payable at the substantive examination stage for each page of description over 35 — concision has a direct cost benefit.",
+        "Paragraph numbering is not required by the Patents Rules 2007 but bracketed numbering ([0001]) is accepted and convenient for prosecution; this profile exports without paragraph numbers by default.",
+        "Formal requirements for documents are set out in Schedule 2 to the Patents Rules 2007 (A4, 1.5 line spacing, prescribed margins)."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.0,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "Schedule 2 Patents Rules 2007: A4 sheets used upright, single-sided, with margins of at least 2 cm and 1.5 line spacing for the description, claims and abstract; capital letters at least 0.21 cm high.",
+        "Description, claims and abstract must each begin on a new sheet."
+      ]
+    },
+    "description": {
+      "requireBestModeDisclosure": false,
+      "avoidClaimLanguage": true,
+      "allowReferenceNumerals": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "requireEnablement": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "s.14(3) Patents Act 1977: the specification must disclose the invention clearly and completely enough for it to be performed by a person skilled in the art (sufficiency).",
+        "There is no best-mode requirement in UK law; describing embodiments 'by way of example only' is standard practice.",
+        "Industrial applicability (s.4) is a patentability requirement but rarely needs a dedicated section; it should be evident from the description.",
+        "Excluded matter under s.1(2) (programs for computers, business methods, presentations of information, etc., 'as such') should be drafted around by emphasizing the technical contribution (Aerotel/Macrossan four-step test, MoPP 1.18-1.29)."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": false,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": [
+        "comprising"
+      ],
+      "discouragedConnectors": [
+        "consisting of (closes the claim scope; use only when intentional)",
+        "characterised in that (two-part form is permitted but not required in UK practice)"
+      ],
+      "forbiddenPhrases": [
+        "as described herein with reference to the drawings (omnibus claim, prohibited by r.12(6C) Patents Rules 2007)",
+        "substantially as hereinbefore described"
+      ],
+      "maxIndependentClaimsBeforeExtraFee": 25,
+      "maxTotalClaimsRecommended": 25,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_inventive_concept (s.14(5)(d) Patents Act 1977; r.16 Patents Rules 2007)",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": true,
+        "extraFeeThresholdTotalClaims": 25,
+        "note": "Excess claims fees are payable with the search fee for each claim over 25 (total claim count). Excess pages fees apply separately at examination for description pages over 35."
+      },
+      "notes": [
+        "s.14(5) Patents Act 1977: claims shall (a) define the matter for which protection is sought, (b) be clear and concise, (c) be supported by the description, and (d) relate to one invention or a group forming a single inventive concept.",
+        "Two-part (characterised-by) form is acceptable but not required; UK practice favors free-form claims with 'comprising'.",
+        "Reference numerals in parentheses are permitted and do not limit claim scope.",
+        "Multiple dependencies, including on other multiple dependent claims, are permitted (unlike US practice), but keep dependency trees rational for clarity."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": true,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "maxWordsRecommended": 150,
+      "mustStartWithTitle": true,
+      "notes": [
+        "r.15 Patents Rules 2007 and MoPP 14.176-14.200: the abstract must start with a title, summarize the technical field, the technical explanation of the invention and its principal use, and should preferably not exceed 150 words.",
+        "s.14(7) Patents Act 1977: the abstract only gives technical information; it does not form part of the state of the art as of the filing date and cannot be relied on for claim interpretation. The comptroller may reframe it."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.0,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "shadingAllowed": true,
+      "grayscaleAllowed": true,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "exploded_view"
+      ],
+      "notes": [
+        "Schedule 2 Part 3 Patents Rules 2007: drawings in durable, black, sufficiently dense and dark, uniformly thick and well-defined lines without colouring; scale must allow linear reduction to two-thirds without loss of detail.",
+        "Drawings must not contain text except single words or short phrases where indispensable (e.g., 'water', 'steam', flowchart step labels).",
+        "Reference numerals must be consistent between the drawings, description and claims; numerals not mentioned in the description must not appear in the drawings."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "en"
+      ],
+      "requiresOfficialTranslation": false,
+      "notes": [
+        "Applications may be filed in English or Welsh (r.14 Patents Rules 2007); this profile drafts in English.",
+        "For PCT national phase entry, an English translation of the international application is required if it was not published in English (31-month deadline from priority)."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 6,
+      "foreignFilingLicenseRequired": true,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "no_formal_ids",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "The UK has NO general grace period. The 6-month period of s.2(4) Patents Act 1977 applies ONLY to disclosures obtained unlawfully or in breach of confidence, and to display at officially recognised international exhibitions. Any other pre-filing disclosure by the inventor destroys novelty.",
+        "s.23 Patents Act 1977: UK residents must not file abroad without UKIPO permission (or without first filing in the UK and waiting six weeks) ONLY where the application contains information relating to military technology or whose publication might be prejudicial to national security or public safety. For all other subject matter, first filing abroad is free. Breach in the restricted categories is a criminal offence.",
+        "There is no US-style IDS duty; there is no continuing obligation to disclose prior art to the UKIPO, though results from corresponding applications may be requested under s.18.",
+        "Priority may be claimed under s.5 from an earlier application filed within 12 months, including foreign provisional applications; a UK application filed without claims under s.15(1) can itself serve as a priority-founding first filing.",
+        "Claims and abstract, if not filed at the filing date, must follow within the period prescribed by r.22 Patents Rules 2007 (12 months from filing/priority); request for search and examination deadlines run per rr.22-28."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "The UKIPO accepts sequence listings furnished after the filing date in response to an examination objection, provided no added matter results (s.76 Patents Act 1977).",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": [
+        "TXT",
+        "PDF"
+      ]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 500,
+          "severity": "warning",
+          "message": "Title is unusually long. UKIPO practice favors a short title indicating the subject matter; unsuitable titles may be recast on publication."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_max_words",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "warning",
+          "message": "Abstract exceeds 150 words. UKIPO practice (r.15 Patents Rules 2007, MoPP 14.191) is that the abstract should preferably not exceed 150 words; the examiner may reframe longer abstracts."
+        },
+        {
+          "id": "abstract_chars",
+          "type": "maxChars",
+          "limit": 1200,
+          "severity": "warning",
+          "message": "Abstract is very long. Keep it a single concise paragraph suitable for publication on the front page."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_excess_fee",
+          "type": "maxCount",
+          "limit": 25,
+          "severity": "info",
+          "message": "More than 25 claims: UKIPO charges an excess claims fee for each claim over 25 at the search stage. Consider consolidating dependent claims."
+        }
+      ],
+      "detailed_description": []
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "Claims must be supported by the description (s.14(5)(c) Patents Act 1977). Ensure every claimed feature, across the full claimed breadth, is disclosed and enabled in the Detailed Description."
+      },
+      {
+        "id": "claims_vs_summary_consistency",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "summary"
+        ],
+        "severity": "warning",
+        "message": "Independent claims are not mirrored by consistory clauses in the Summary of the Invention. Align the summary with the claims to reinforce s.14(5)(c) support."
+      },
+      {
+        "id": "abstract_vs_description_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "detailed_description"
+        ],
+        "severity": "warning",
+        "message": "The Abstract does not accurately reflect the disclosure. Adjust it to summarize the technical field, problem and solution actually described."
+      },
+      {
+        "id": "objects_vs_claims_consistency",
+        "type": "consistency",
+        "from": "objects_of_invention",
+        "mustBeConsistentWith": [
+          "claims"
+        ],
+        "severity": "warning",
+        "message": "Stated objects of the invention are not achieved by the claimed subject matter. Overstated objects can be used against the patent; moderate or remove them."
+      },
+      {
+        "id": "unity_check",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "detailed_description"
+        ],
+        "severity": "warning",
+        "message": "Claims may relate to more than one inventive concept (s.14(5)(d) Patents Act 1977; r.16 Patents Rules 2007). Consider a divisional application under s.15(9)."
+      },
+      {
+        "id": "drawing_reference_check",
+        "type": "reference",
+        "from": "brief_description_of_drawings",
+        "mustReference": [
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "One or more figures or reference numerals in the Brief Description of the Drawings are not explained in the Detailed Description. Every figure and numeral must be described."
+      }
+    ]
+  },
+  "prompts": {
+    "systemPrompt": "You are an expert UK patent attorney drafting a national patent application for filing at the UK Intellectual Property Office under the Patents Act 1977 and the Patents Rules 2007, in accordance with the UKIPO Manual of Patent Practice. Draft in precise, formal British English. Ensure sufficiency of disclosure under s.14(3), clarity, conciseness and support of the claims under s.14(5), and strict terminological consistency across sections. There is no best-mode requirement; describe embodiments by way of example only. Be alert to excluded matter under s.1(2) and frame the invention through its technical contribution.",
+    "promptMergeStrategy": "append",
+    "baseStyle": {
+      "tone": "technical, neutral, precise, formal British English",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "absolute promises ('always', 'guarantees') that could found insufficiency or object-failure attacks",
+        "claim-style language in the description",
+        "admissions of common general knowledge beyond what is necessary"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft a short technical title that indicates the matter to which the invention relates, as required by r.12(2) Patents Rules 2007 and discussed in the UKIPO Manual of Patent Practice at 14.34-14.41. The title should be broad enough to remain accurate if the claims are amended during prosecution, but specific enough to be informative — e.g., 'Heat exchanger assembly' rather than 'Improved device'. Do not use trademarks, personal names, fancy or coined names, or laudatory words ('improved', 'novel'); the comptroller may recast an unsuitable title on publication. Where multiple claim categories are pursued (apparatus and method), a compound title such as 'Method and apparatus for...' is conventional. Keep it to a single line.",
+          "constraints": [
+            "Maximum 500 characters; aim for under 10 words",
+            "No trademarks, trade names, personal names or laudatory terms",
+            "Must indicate the technical subject matter of the claims",
+            "Cover all claim categories (e.g., 'Method and apparatus for...')"
+          ],
+          "additions": [
+            "Legal basis: r.12(2) Patents Rules 2007; MoPP 14.34-14.41."
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Technical Field section in one or two short paragraphs, conventionally opening 'This invention relates to... and in particular, though not exclusively, to...'. The 'though not exclusively' formula is standard UK drafting to avoid implicitly limiting claim scope to the particular application described. Use neutral terminology consistent with the claims; do not discuss prior art deficiencies, the problem, or advantages here.",
+          "constraints": [
+            "One to two paragraphs in formal British English",
+            "Use the 'relates to..., though not exclusively,' convention to preserve breadth",
+            "No advantages, problem discussion or prior art criticism",
+            "Terminology must match the claims"
+          ],
+          "additions": [
+            "A well-framed field statement supports purposive claim construction without narrowing scope."
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Background of the Invention with deliberate care about admissions. Under s.3 Patents Act 1977 inventive step is assessed against the state of the art, and anything the specification acknowledges as known or as common general knowledge will be taken at face value against the applicant (and can be cited in UK litigation). Therefore: describe only prior art that is genuinely public and relevant; identify documents precisely (publication numbers, authors) where cited; characterize their teaching accurately and their shortcomings factually, without exaggeration and without disparagement. Frame an objective technical problem that the prior art leaves unsolved — this sets up the inventive-step story consistent with the problem-solution reasoning examiners apply (MoPP 3.01 et seq.). Critically, the UK has NO general grace period: s.2(4) excuses only disclosures obtained unlawfully or in breach of confidence and displays at recognised international exhibitions, within 6 months before filing. Never describe the applicant's own pre-filing publications, sales or presentations as background art, and flag to the user if they appear in the source material. Do not foreshadow the invention's solution here.",
+          "constraints": [
+            "Objective, factual description of genuinely public prior art only",
+            "Minimize admissions: do not concede common general knowledge beyond necessity",
+            "Cite documents with full identification where available",
+            "End with the unsolved technical problem; do not reveal the solution",
+            "No general grace period exists — never treat inventor's own recent disclosures as citable background"
+          ],
+          "additions": [
+            "Legal basis: s.2 (state of the art, s.2(4) narrow exceptions), s.3 (inventive step) Patents Act 1977; MoPP 2.29-2.40 and 3.01 et seq.",
+            "Admissions in the background are binding in UK proceedings — draft conservatively."
+          ]
+        }
+      },
+      "objectsOfInvention": {
+        "topUp": {
+          "instruction": "Draft the optional Objects of the Invention section conservatively, or advise omitting it. Traditional UK drafting stated objects ('It is an object of the present invention to provide...'), but modern practice treats object clauses with caution: an object the claimed invention does not achieve across its whole scope can support insufficiency or lack-of-support attacks, and narrows the room for argument in litigation. If included, state at most one or two modest objects tied directly to the problem identified in the Background, e.g., 'It is an object of at least preferred embodiments of the present invention to address the problem identified above.' The 'at least preferred embodiments' qualifier is deliberate and should be preserved. Never promise absolute results ('to eliminate', 'to guarantee').",
+          "constraints": [
+            "Optional section — omit unless the user's source material supplies clear objects",
+            "At most one or two modest objects, tied to the stated problem",
+            "Qualify with 'at least preferred embodiments' or 'at least partially'",
+            "No absolute promises or superlatives"
+          ],
+          "additions": [
+            "Overstated objects have been used against patentees in UK proceedings; conservative drafting is the norm."
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the Summary of the Invention using UK consistory-clause practice. For each independent claim, provide a consistory clause that repeats the claim substance in prose: 'According to a first aspect of the present invention, there is provided [apparatus/a method] comprising...'. Matching the summary to the claims verbatim is the classic mechanism for securing support under s.14(5)(c) Patents Act 1977, and gives basis for claim amendments without added matter under s.76. After each consistory clause, optionally recite key preferred features ('Preferably...', 'Optionally...', 'In some embodiments...') corresponding to important dependent claims — these statements provide amendment fallback positions. Conclude with a short paragraph of technical advantages, each expressed factually and hedged where appropriate ('may provide', 'can reduce'), since unqualified advantage statements can be tested against the whole claim scope. Keep every term identical to the claims; introduce no new terminology.",
+          "constraints": [
+            "One consistory clause per independent claim, mirroring the claim language",
+            "Use 'According to a first/second/further aspect...' structure",
+            "Follow with 'Preferably/Optionally' statements for key dependent-claim features",
+            "Advantages hedged ('may', 'can') and technically substantiated",
+            "No terminology absent from the claims and detailed description"
+          ],
+          "additions": [
+            "Legal basis: s.14(5)(c) (support), s.76 (added matter constraints on amendment) Patents Act 1977; MoPP 14.142-14.152.",
+            "Consistory clauses double as the amendment basis during prosecution — completeness here pays off later."
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Brief Description of the Drawings in conventional UK form, only if drawings are present. Open with the standard bridging sentence: 'Embodiments of the invention will now be described, by way of example only, with reference to the accompanying drawings, in which:' — the phrase 'by way of example only' is important UK boilerplate signalling that the embodiments do not limit the claims. Then list each figure with one clause: 'Figure 1 is a schematic side view of a heat exchanger according to an embodiment of the invention;'. Identify the view type (schematic, perspective, cross-sectional, block diagram, flow chart, graph) and subject. Do not describe operation or advantages. Figure numbering must be consecutive and match the drawing sheets exactly.",
+          "constraints": [
+            "Include the 'by way of example only' bridging sentence",
+            "One clause per figure: 'Figure N is a [view type] of [subject];'",
+            "No operational detail, advantages or reference-numeral definitions",
+            "Figure list must match the filed drawings one-to-one",
+            "Omit the section entirely if there are no drawings"
+          ],
+          "additions": [
+            "Drawings must comply with Schedule 2 Part 3 Patents Rules 2007: black lines, no colour, minimal text."
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Detailed Description to satisfy s.14(3) Patents Act 1977: disclose the invention clearly and completely enough for it to be performed by a person skilled in the art, across the whole scope of the claims (classical and Biogen insufficiency are both live grounds of revocation under s.72(1)(c)). Describe at least one embodiment in full working detail — structure or steps, then operation — using reference numerals in parentheses consistent with the drawings. There is NO best-mode requirement in the UK; keep embodiments framed 'by way of example only' and expressly non-limiting, ending with a boilerplate paragraph noting that variations and modifications within the scope of the claims will occur to the skilled person. Support every claim feature and every dependent-claim variant somewhere in the description (s.14(5)(c)), and include intermediate generalisations and preferred ranges deliberately: under s.76 amendments may not add matter, so any fallback position must be written in now. For computer-implemented inventions, foreground the technical effect and implementation detail (signal flows, memory, hardware interaction) to survive the s.1(2) excluded-matter analysis under the Aerotel four-step test (MoPP 1.18-1.29). For chemical/biotech cases include worked examples and data supporting the full claimed breadth. Define any term used in a non-standard sense; the description is the dictionary for purposive construction.",
+          "constraints": [
+            "Sufficiency across the full claim breadth (s.14(3); Biogen insufficiency risk for broad claims)",
+            "No best-mode obligation — embodiments 'by way of example only'",
+            "Reference numerals in parentheses, consistent with drawings and claims",
+            "Write in all fallback positions and preferred ranges now (s.76 bars added matter later)",
+            "Close with a non-limiting variations paragraph",
+            "For software: emphasize technical contribution per Aerotel (s.1(2))"
+          ],
+          "additions": [
+            "Legal basis: s.14(3) (sufficiency), s.14(5)(c) (support), s.76 (added matter), s.72(1)(c) (revocation for insufficiency) Patents Act 1977; MoPP 14.58-14.106.",
+            "Excess pages fees apply over 35 description pages — be complete but economical."
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the Claims to satisfy s.14(5) Patents Act 1977: they must (a) define the matter for which protection is sought, (b) be clear and concise, (c) be supported by the description, and (d) relate to one invention or a group linked by a single inventive concept (r.16 Patents Rules 2007). Use free-form claims with the open transitional word 'comprising' — the UK does not require two-part/characterised-by form, and free-form drafting is the domestic norm. Draft one independent claim per category needed (apparatus/product, method, possibly use or system), each reciting only the essential features that distinguish over the background art; put everything else in dependent claims. Dependent claims should be single-sentence, reference their parents ('A method according to claim 1, wherein...'), and may use multiple dependencies ('according to any one of claims 1 to 4') — multiple dependents on multiple dependents are permitted in the UK. Reference numerals in parentheses after structural features are permitted and do not limit scope. Do NOT draft omnibus claims ('...substantially as described herein with reference to the drawings') — they are prohibited by r.12(6C) Patents Rules 2007 except where the invention cannot otherwise be defined. Keep the total at or under 25 claims where reasonably possible: each claim over 25 attracts an excess claims fee at the search stage. Number claims sequentially; the final independent/dependent structure must map cleanly onto the consistory clauses in the Summary. For computer-implemented inventions, include claims directed to the method, the apparatus/system, and a computer program (program claims are allowed in the UK per MoPP 1.38 where the program embodies the technical contribution).",
+          "constraints": [
+            "Free-form claims with 'comprising'; two-part form not required",
+            "Independent claims recite essential features only",
+            "Dependent claims: 'according to any one of claims X to Y' multiple dependencies allowed, including on multiple dependents",
+            "No omnibus claims (r.12(6C) Patents Rules 2007)",
+            "Prefer 25 claims or fewer (excess claims fee per claim over 25)",
+            "Reference numerals in parentheses permitted, non-limiting",
+            "Single inventive concept across all claims (s.14(5)(d), r.16)"
+          ],
+          "additions": [
+            "Legal basis: s.14(5) Patents Act 1977; r.12(6C) and r.16 Patents Rules 2007; MoPP 14.107-14.141.",
+            "Claim construction in the UK is purposive (Actavis v Eli Lilly adds a doctrine-of-equivalents layer) — clear, purpose-revealing claim language matters.",
+            "Avoid s.1(2) excluded matter as such; frame software claims around the technical contribution (Aerotel test)."
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Abstract per r.15 Patents Rules 2007 and MoPP 14.176-14.200. It must commence with the title of the invention, then give a concise summary of the technical field, the technical explanation of the invention (the gist of the solution) and its principal use — written so a searcher can quickly judge relevance. UKIPO practice is that it should preferably not exceed 150 words and normally fit in a single paragraph. Where there are drawings, indicate the figure to be published with the abstract and include the reference numerals of the main features in parentheses. Do not state merits or advantages, do not use claim language or claim references, and do not include speculative applications. Remember s.14(7): the abstract serves only as technical information, does not form part of the state of the art as filed, and cannot be used to interpret claim scope — the examiner may reframe an unsatisfactory abstract, but a clean draft avoids that.",
+          "constraints": [
+            "Single paragraph, preferably 150 words or fewer",
+            "Must start with the title of the invention",
+            "Summarize field, technical solution and principal use",
+            "Include main reference numerals in parentheses when drawings exist",
+            "No advantages, merits, claim references or legal phrasing"
+          ],
+          "additions": [
+            "Legal basis: s.14(2)(c) and s.14(7) Patents Act 1977; r.15 Patents Rules 2007; MoPP 14.176-14.200.",
+            "This platform validates maxWords 150 on this section as a warning."
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "Patent Specification (UKIPO-compliant PDF)",
+        "includesSections": [
+          "title",
+          "technical_field",
+          "background",
+          "objects_of_invention",
+          "summary",
+          "brief_description_of_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "lineSpacing": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TITLE OF INVENTION",
+      "technical_field": "TECHNICAL FIELD",
+      "background": "BACKGROUND OF THE INVENTION",
+      "objects_of_invention": "OBJECTS OF THE INVENTION",
+      "summary": "SUMMARY OF THE INVENTION",
+      "brief_description_of_drawings": "BRIEF DESCRIPTION OF THE DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "Figure {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for functional components and arrows for signal or data flow. Labels should be single words or short phrases only (Schedule 2 Patents Rules 2007) and reference numerals must match the Detailed Description.",
+      "flowchart": "Use standard flowchart symbols for steps and decisions. Step labels should correspond to the claimed method steps; short text inside symbols is acceptable in UK drawings.",
+      "schematic": "Use simplified symbols showing functional relationships in dense black lines suitable for reduction to two-thirds scale without loss of detail. Match all labels to reference numerals defined in the description.",
+      "perspective_view": "Use perspective views to show the overall apparatus. Assign a unique reference numeral to each element described in the Detailed Description; avoid shading that would not survive black-and-white reproduction.",
+      "cross_section": "Use cross-sectional views with hatching to distinguish parts; indicate the section plane on a related figure (e.g., 'A-A').",
+      "graph": "Use clearly labelled axes with SI units and legends readable in black-and-white; graphs presenting comparative data support sufficiency and inventive step.",
+      "exploded_view": "Use exploded views to show assembly relationships; every part carries a unique reference numeral referenced in the description."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all figure numbers and reference numerals mentioned in the Brief Description of the Drawings are defined and explained in the Detailed Description, and that no numeral appears in only one of the two.",
+        "from": "brief_description_of_drawings",
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed structural elements appear in at least one figure when drawings are present, traceable via the Brief Description of the Drawings.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_description_of_drawings"
+        ]
+      },
+      {
+        "id": "claims_vs_description_support",
+        "description": "Ensure every claim, across its full breadth, is supported by the Detailed Description (s.14(5)(c) Patents Act 1977) including all dependent-claim features.",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "summary_vs_claims",
+        "description": "Ensure each independent claim has a matching consistory clause in the Summary of the Invention.",
+        "from": "summary",
+        "mustBeSupportedBy": [
+          "claims"
+        ]
+      }
+    ]
+  }
+}

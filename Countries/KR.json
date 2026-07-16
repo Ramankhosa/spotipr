@@ -1,0 +1,834 @@
+{
+  "meta": {
+    "id": "KR",
+    "code": "KR",
+    "name": "South Korea",
+    "continent": "Asia",
+    "office": "Korean Intellectual Property Office",
+    "officeUrl": "https://www.kipo.go.kr",
+    "applicationTypes": [
+      "standard"
+    ],
+    "languages": [
+      "ko",
+      "en"
+    ],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": [
+      "national_phase",
+      "pct_national_phase",
+      "paris",
+      "caf_compliant",
+      "first_to_file",
+      "foreign_language_filing_supported"
+    ],
+    "createdAt": "2026-07-15T00:00:00Z",
+    "updatedAt": "2026-07-15T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Standard Patent Application",
+        "description": "Standard Korean patent application under the Korean Patent Act (Act No. 950 of 1961, as amended) and the Enforcement Rules/Decree of the Patent Act, following KIPO's prescribed specification structure: technical field, background art, content of invention (technical problem, technical solution, advantageous effects), brief description of drawings, and detailed description of the invention.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title of Invention",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a concise technical title identifying the invention",
+              "helpText": "Provide a short technical title that identifies the subject matter of the invention (발명의 명칭). It should correspond to the categories of the independent claims (e.g. 'Apparatus and method for ...'). Avoid trademarks, person or company names, promotional words, and vague expressions; KIPO practice expects plain, standardized technical terminology."
+            },
+            "rules": {
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true
+            }
+          },
+          {
+            "id": "fieldOfInvention",
+            "label": "Technical Field",
+            "order": 2,
+            "canonicalKeys": [
+              "fieldOfInvention",
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the technical field to which the invention pertains",
+              "helpText": "State the specific technical field of the invention (기술분야), typically in one or two sentences: 'The present disclosure relates to ..., and more particularly to ...'. Use neutral technical terminology consistent with the independent claims; do not discuss prior art, problems, or effects here."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Background Art",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Describe the background art of the invention, citing documents where available",
+              "helpText": "Article 42(3)(ii) of the Korean Patent Act requires the description to state the background art of the invention (배경기술). Objectively describe the existing technology closest to the invention and its limitations, citing patent or non-patent literature where available (commonly as a separate 'Prior Art Documents' note). Do not disclose the inventive solution here, and avoid disparaging specific patents; omission of background art is a ground for rejection (though not invalidation)."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Content of Invention",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Introduce the inventive concept; the problem, solution and effects follow in dedicated sections",
+              "helpText": "This is the lead-in of 발명의 내용 (Content of Invention), which in KIPO's standard specification form comprises the technical problem (해결하려는 과제), the technical solution (과제의 해결 수단), and the advantageous effects (발명의 효과). Draft a concise overview of each independent aspect in wording aligned with the independent claims; the three components are drafted in the dedicated sections that follow."
+            },
+            "rules": {
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true,
+              "componentsInDedicatedSections": [
+                "technicalProblem",
+                "technicalSolution",
+                "advantageousEffects"
+              ]
+            }
+          },
+          {
+            "id": "technicalProblem",
+            "label": "Technical Problem",
+            "order": 5,
+            "canonicalKeys": [
+              "technicalProblem",
+              "technical_problem"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the technical problem (objective) the invention aims to solve",
+              "helpText": "State objectively the technical problem or objective of the invention (해결하려는 과제), formulated against the limitations identified in the Background Art. The problem should be technical, recognizable by a person having ordinary skill in the art, and actually solved by the disclosed solution."
+            }
+          },
+          {
+            "id": "technicalSolution",
+            "label": "Technical Solution",
+            "order": 6,
+            "canonicalKeys": [
+              "technicalSolution",
+              "technical_solution"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Describe the means by which the invention solves the problem",
+              "helpText": "Describe the technical means for solving the problem (과제의 해결 수단), reciting the essential features of each independent claim in consistent wording — commonly a restatement of each independent claim as 'According to an aspect of the present disclosure, there is provided ...' — followed by the optional features of preferred embodiments. Consistency with the claims supports Article 42(4)(i) (claims supported by the description)."
+            },
+            "rules": {
+              "alignWithIndependentClaims": true
+            }
+          },
+          {
+            "id": "advantageousEffects",
+            "label": "Advantageous Effects",
+            "order": 7,
+            "canonicalKeys": [
+              "advantageousEffects",
+              "advantageous_effects"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 6000,
+            "ui": {
+              "placeholder": "Describe the technical effects of the invention over the background art",
+              "helpText": "State the advantageous effects of the invention (발명의 효과) relative to the background art, tying each effect to the distinguishing technical features. Effects asserted here are weighed in the inventive-step analysis under Article 29(2); keep them technical, credible, and supported by the detailed description. Avoid promotional language."
+            }
+          },
+          {
+            "id": "briefDescriptionOfDrawings",
+            "label": "Brief Description of Drawings",
+            "order": 8,
+            "canonicalKeys": [
+              "briefDescriptionOfDrawings",
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Briefly describe each figure (include whenever drawings are filed)",
+              "helpText": "Where drawings are attached, briefly describe each figure (도면의 간단한 설명), one sentence per figure: 'FIG. 1 is a block diagram illustrating ... according to an embodiment of the present disclosure.'. Identify view type and subject only; operational detail belongs in the Detailed Description. Omit this section only when no drawings are filed."
+            }
+          },
+          {
+            "id": "detailedDescription",
+            "label": "Detailed Description of the Invention",
+            "order": 9,
+            "canonicalKeys": [
+              "detailedDescription",
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Describe embodiments in detail so a person having ordinary skill in the art can easily carry out the invention",
+              "helpText": "Article 42(3)(i) of the Korean Patent Act requires the invention to be stated clearly and in detail so that a person having ordinary skill in the art can easily practice it (발명을 실시하기 위한 구체적인 내용). Describe one or more embodiments with reference numerals consistent with the drawings, provide support for every claimed feature, and include working/experimental examples where the technical field demands them. Best mode is not required in Korea."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireSupportForAllClaims": true,
+              "requireBestModeDisclosure": false,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims",
+            "order": 10,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Draft claims that are supported by the description and define the invention clearly and concisely",
+              "helpText": "Claims (청구범위) must be supported by the detailed description and define the invention clearly and concisely (Article 42(4)). A claim citing two or more claims must cite them in the alternative and must not cite another claim that itself cites two or more claims (Enforcement Decree/Rules on claim drafting). All claims must satisfy unity of invention (Article 45). Examination-request fees include a per-claim component, so every claim carries a recurring cost."
+            },
+            "rules": {
+              "twoPartFormPreferred": false,
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "prohibitMultipleDependentOnMultipleDependent": true,
+              "requireSingleGeneralInventiveConcept": true,
+              "mustBeSupportedByDescription": true,
+              "perClaimFees": true
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract",
+            "order": 11,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 1000,
+            "ui": {
+              "placeholder": "Provide a concise technical summary of the invention",
+              "helpText": "Under Article 43 of the Korean Patent Act the application must include an abstract (요약서), a concise summary of the disclosure for technical-information purposes only — it cannot be used to define the scope of protection (Article 43-2 practice). Summarize the technical field, problem, gist of the solution, and main use in one paragraph (roughly 150 words / a few hundred Korean characters), without promotional language or claim references."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "forbidMarketingLanguage": true,
+              "forbidClaimReferences": true,
+              "maxWordsRecommended": 150,
+              "hardCapWordsUI": 200,
+              "notForClaimConstruction": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "KIPO's standard specification form uses the headings 발명의 명칭 (Title), 기술분야 (Technical Field), 배경기술 (Background Art), 발명의 내용 (Content of Invention, comprising 해결하려는 과제 / 과제의 해결 수단 / 발명의 효과), 도면의 간단한 설명 (Brief Description of Drawings), and 발명을 실시하기 위한 구체적인 내용 (Detailed Description).",
+        "Filing is almost exclusively electronic via KIPO's e-filing software (통합서식작성기/특허로), which applies identifier tags and paragraph numbering automatically; manual paragraph numbering is not required at drafting stage.",
+        "Claims may be filed after the description under the delayed-claim-filing system, but must be present before the request for examination takes effect.",
+        "Amendments must remain within the scope of the original specification and drawings (Article 47(2)); draft with explicit fallback positions."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.0,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Batang_or_serif",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "Documents are prepared on A4 portrait pages; KIPO's electronic filing formats govern the final layout, so the margin values above are drafting recommendations mirroring the paper-form rules of the Enforcement Rules of the Patent Act.",
+        "Korean text is conventionally set in a readable serif font (e.g. Batang) at 12 pt or larger with generous line spacing for examiner readability."
+      ]
+    },
+    "description": {
+      "requireEnablement": true,
+      "requireBestModeDisclosure": false,
+      "requireSupportForClaims": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "allowReferenceNumerals": true,
+      "avoidClaimLanguage": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "Article 42(3)(i): the detailed description must state the invention clearly and in detail so that a person having ordinary skill in the art can easily carry it out ('easily practicable' standard).",
+        "Article 42(3)(ii): the description must state the background art of the claimed invention; failure to do so is a rejection ground.",
+        "Korea has no best-mode requirement; disclose at least one enabling embodiment per claim, with working examples and data where the art is unpredictable (chemistry, bio, pharma).",
+        "Industrial applicability is a patentability requirement under Article 29(1) but no separate specification section is used; medical methods practiced on the human body are considered industrially inapplicable and thus unpatentable — claim products, compositions, or apparatus instead."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": false,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": true,
+      "preferredConnectors": [
+        "comprising",
+        "including"
+      ],
+      "discouragedConnectors": [
+        "consisting essentially of"
+      ],
+      "forbiddenPhrases": [
+        "as described in the description",
+        "as shown in the drawings"
+      ],
+      "maxIndependentClaimsBeforeExtraFee": 0,
+      "maxTotalClaimsRecommended": 20,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_general_inventive_concept_art45",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": true,
+        "perClaimFeeFromFirstClaim": true,
+        "note": "KIPO's examination-request fee and annuities include a per-claim add-on counted from the first claim (not a free allowance followed by excess fees), so every claim — independent or dependent — carries a recurring cost. maxIndependentClaimsBeforeExtraFee is set to 0 to reflect that no claim is fee-free."
+      },
+      "notes": [
+        "Article 42(4): claims must (i) be supported by the detailed description and (ii) define the invention clearly and concisely.",
+        "Claim-drafting method (Article 42(8) and the Enforcement Decree): a claim referring to two or more claims must refer to them in the alternative; a claim referring to two or more claims must not refer to another claim that itself refers to two or more claims (no multiple-dependent-on-multiple-dependent); a dependent claim must not refer to a following (higher-numbered) claim.",
+        "Article 45 and Enforcement Decree Article 6: one application per invention or per group of inventions so linked as to form a single general inventive concept (same or corresponding special technical features).",
+        "Independent claims in any style (single-part or Jepson-like two-part) are acceptable; KIPO practice does not prefer two-part form.",
+        "Reference numerals in parentheses are permitted and do not limit claim scope, but are less customary than in Japan.",
+        "Product-by-process claims are construed by the manufactured product's structure/properties per Supreme Court practice — use only where structure cannot be defined directly."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": false,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "maxWordsRecommended": 150,
+      "hardCapWordsUI": 200,
+      "notes": [
+        "Article 43 requires an abstract; it serves technical-information purposes only and may not be used to interpret the scope of protection.",
+        "KIPO may re-prepare a non-compliant abstract ex officio. Keep it a single concise paragraph covering the technical field, the problem, the gist of the solution, and the principal use.",
+        "There is no statutory word cap, but roughly 150 English words (a few hundred Korean characters) matches KIPO publication practice; a representative figure is designated separately in the e-filing form."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.0,
+      "marginBottomCm": 2.0,
+      "marginLeftCm": 2.0,
+      "marginRightCm": 2.0,
+      "shadingAllowed": true,
+      "grayscaleAllowed": true,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "table",
+        "exploded_view"
+      ],
+      "notes": [
+        "Drawings must be presented in black, clearly executed lines on A4 sheets suitable for reproduction; colour drawings are not accepted for patent applications (photographs are allowed only where a drawing cannot show the subject matter, e.g. micrographs).",
+        "Figures are numbered consecutively (도 1, 도 2 — rendered FIG. 1, FIG. 2 in English drafts) and reference numerals must be consistent with the detailed description.",
+        "Hatching and limited shading are acceptable where they aid understanding and do not impair reproduction.",
+        "Korean practice commonly includes a designated representative drawing (대표도) identified in the filing form for publication."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "ko"
+      ],
+      "requiresOfficialTranslation": true,
+      "notes": [
+        "The authentic application text is Korean. Since 1 January 2015, an application may be filed in English under Article 42-3 (foreign-language application), with a Korean translation due within 14 months from the earliest priority date (or filing date if no priority); the Korean translation then becomes the text of the application.",
+        "If the translation is not filed in time, the foreign-language application is deemed withdrawn (with limited reinstatement options).",
+        "For PCT national phase entry, the Korean translation of the international application is due within 31 months from the priority date (one-month extension available on request).",
+        "Translation errors can be corrected within the scope of the original foreign-language text, so keep the English original precise and self-consistent."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 12,
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "background_art_statement_in_description",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "Article 30 provides a 12-month grace period covering any disclosure originating from the person entitled to the patent (publications, conference papers, exhibitions, sales, online disclosure) and disclosures made against the applicant's will; official gazette publications of the applicant's own earlier application are excluded.",
+        "To invoke the grace period for the applicant's own disclosure, the claim should be made at filing with proving documents within 30 days, but Korea allows a late grace-period claim (with fee) up to specified later stages (e.g. within the window for a decision to grant).",
+        "No foreign filing license is required; however, inventions relevant to national defense may be subject to secrecy orders under Article 41.",
+        "There is no US-style IDS duty; the statutory duty is the Article 42(3)(ii) background-art statement in the description, and examiners may request known prior art from corresponding foreign prosecution.",
+        "Korea has no provisional application system, but Paris priority may be claimed from foreign provisional applications; domestic priority under Article 55 is available within 12 months from an earlier Korean application.",
+        "A request for examination must be filed within 3 years from the filing date (Article 59); otherwise the application is deemed withdrawn."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "affectsFilingDate": false,
+      "lateFurnishingNotes": "A defective or missing sequence listing may be remedied on invitation within the amendment framework, provided no new matter beyond the original disclosure is introduced (Article 47(2)).",
+      "notes": [
+        "Where nucleotide or amino acid sequences are disclosed, a sequence listing compliant with WIPO Standard ST.26 in XML format must accompany the application under the KIPO sequence-listing rules.",
+        "Deposit of biological material with a recognized Korean or international (Budapest Treaty) depositary is required where the material is not readily available to the public."
+      ]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 500,
+          "severity": "warning",
+          "message": "Title is unusually long. KIPO practice expects a concise technical title matching the categories of the independent claims."
+        }
+      ],
+      "background": [
+        {
+          "id": "background_required_statement",
+          "type": "minWords",
+          "limit": 30,
+          "severity": "warning",
+          "message": "Background Art appears too thin. Article 42(3)(ii) of the Korean Patent Act requires the description to state the background art of the invention; cite documents where available."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_words",
+          "type": "maxWords",
+          "limit": 200,
+          "severity": "warning",
+          "message": "Abstract exceeds 200 words. KIPO publication practice favors a concise single-paragraph abstract (~150 words); overly long abstracts may be re-prepared ex officio."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_fee_awareness",
+          "type": "maxCount",
+          "limit": 20,
+          "severity": "info",
+          "message": "More than 20 claims: KIPO examination-request fees and annuities include a per-claim component for every claim, so large claim sets carry a significant recurring cost. Confirm each claim adds fallback value."
+        }
+      ],
+      "detailedDescription": [
+        {
+          "id": "description_min_length",
+          "type": "minWords",
+          "limit": 300,
+          "severity": "warning",
+          "message": "The Detailed Description appears too short to let a person having ordinary skill in the art easily carry out the invention (Article 42(3)(i)). Add embodiments, implementation detail, and examples."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_vs_technical_solution",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "technicalSolution"
+        ],
+        "severity": "warning",
+        "message": "The features of the independent claims are not reflected in the Technical Solution section. KIPO practice expects the Content of Invention to restate each independent aspect in wording consistent with the claims."
+      },
+      {
+        "id": "claims_vs_description_support",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailedDescription"
+        ],
+        "severity": "error",
+        "message": "Claims appear broader than the disclosed embodiments. Article 42(4)(i) requires claims to be supported by the detailed description; ensure every claimed feature is enabled and described."
+      },
+      {
+        "id": "problem_solution_effects_alignment",
+        "type": "consistency",
+        "from": "technicalProblem",
+        "mustBeConsistentWith": [
+          "technicalSolution",
+          "advantageousEffects"
+        ],
+        "severity": "warning",
+        "message": "The Technical Problem, Technical Solution, and Advantageous Effects are not aligned. The stated problem should be solved by the stated means and the effects should follow from them; misalignment invites description and inventive-step objections."
+      },
+      {
+        "id": "abstract_vs_summary_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "summary",
+          "technicalSolution"
+        ],
+        "severity": "warning",
+        "message": "The Abstract does not accurately reflect the problem and gist of the solution presented in the Content of Invention. Adjust for consistency (Article 43)."
+      },
+      {
+        "id": "unity_check",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "detailedDescription"
+        ],
+        "severity": "warning",
+        "message": "Claims may relate to multiple general inventive concepts. Check unity of invention under Article 45 (single general inventive concept; same or corresponding special technical features) and consider divisional strategy."
+      },
+      {
+        "id": "drawing_consistency",
+        "type": "reference",
+        "from": "briefDescriptionOfDrawings",
+        "mustReference": [
+          "detailedDescription"
+        ],
+        "severity": "error",
+        "message": "One or more figures or reference numerals in the Brief Description of Drawings are not explained in the Detailed Description of the Invention. Reference numerals must be used consistently between drawings and description."
+      }
+    ]
+  },
+  "prompts": {
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing or promotional language",
+        "unsupported assertions of advantages",
+        "disparagement of specific prior patents",
+        "ambiguous relative terms in claim language ('about', 'substantially' without basis)"
+      ]
+    },
+    "systemPrompt": "You are an expert Korean patent attorney (변리사) drafting a patent specification compliant with the Korean Patent Act and KIPO practice. Follow KIPO's standard specification structure, ensure the detailed description lets a person having ordinary skill in the art easily practice the invention (Article 42(3)), keep the claims clear, concise, and supported (Article 42(4)), observe the statutory claim-dependency rules, and remember that the Korean text (or the Korean translation of an English-filed application under Article 42-3) will be the authentic legal text.",
+    "promptMergeStrategy": "append",
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft a concise technical title (발명의 명칭) for a Korean patent application per KIPO's Enforcement Rules on specification form. The title must identify the subject matter briefly and correspond to the categories of the independent claims — where the claim set includes both an apparatus and a method, use a combined form such as 'Apparatus and method for ...'. Use standardized technical terms; avoid trademarks, coined marketing names, person or company names, model numbers, and promotional or vague qualifiers such as 'novel', 'improved', 'high-efficiency', or 'and the like'. KIPO records both a Korean title and an English title for publication, so write the English title in plain, translatable form.",
+          "constraints": [
+            "Concise and strictly technical; identify the claimed subject matter and its categories",
+            "Cover every independent-claim category (apparatus, method, system, medium, use)",
+            "No trademarks, model numbers, personal or company names",
+            "No promotional or vague words ('novel', 'advanced', 'etc.')",
+            "Must be consistent with the Technical Field and claims"
+          ],
+          "additions": [
+            "KIPO publications carry parallel Korean and English titles — this English title should translate cleanly into 발명의 명칭"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Technical Field (기술분야) section per KIPO's standard specification form. State in one or two sentences the specific technical field to which the invention pertains, typically as 'The present disclosure relates to ..., and more particularly, to ...'. The field stated should match the subject matter of the independent claims and be neither broader nor narrower than the claimed invention. Do not describe prior art, the problem, the solution, or effects here.",
+          "constraints": [
+            "One or two sentences; specific rather than superordinate field",
+            "Consistent with the independent claims and the title",
+            "Neutral terminology; no problem or effect discussion"
+          ],
+          "additions": [
+            "This section corresponds to 기술분야 in the KIPO specification form"
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Background Art (배경기술) section as required by Article 42(3)(ii) of the Korean Patent Act, which obliges the applicant to state the background art of the claimed invention in the description — an omission is a ground for rejection. Describe objectively the conventional technology closest to the invention: its configuration or process and how it operates, then identify its technical limitations in factual terms that set up the Technical Problem section. Cite documentary prior art where available (Korean/foreign patent publications with numbers, or non-patent literature), conventionally gathered under a 'Prior Art Documents' (선행기술문헌) heading distinguishing patent documents from non-patent literature. Do not disclose the inventive solution, do not disparage specific patents, and be measured with characterizations — statements here can be used as admissions in prosecution and litigation.",
+          "constraints": [
+            "Statutory duty: background art must be stated (Article 42(3)(ii))",
+            "Cite prior art documents where available, separating patent and non-patent literature",
+            "Objective description first, then limitations that motivate the Technical Problem",
+            "Do not reveal the inventive solution here",
+            "Avoid over-admissions and disparagement"
+          ],
+          "additions": [
+            "Corresponds to 배경기술, optionally followed by 선행기술문헌 (Prior Art Documents)",
+            "Korea has no US-style IDS duty; this in-description statement is the statutory disclosure mechanism"
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the lead-in of the Content of Invention (발명의 내용) per KIPO's standard specification form, in which this part comprises the Technical Problem (해결하려는 과제), the Technical Solution (과제의 해결 수단), and the Advantageous Effects (발명의 효과) — drafted here as dedicated sections that follow. Use this section for a concise overview: state the purpose of the disclosure and introduce each independent aspect (apparatus, method, system, computer-readable medium) with a claim-mirroring sentence such as 'According to an aspect of the present disclosure, there is provided ...'. Keep the wording consistent with the independent claims to support Article 42(4)(i), and add the customary statement that additional aspects will be apparent from the description that follows. Do not introduce features that appear nowhere in the claims or detailed description.",
+          "constraints": [
+            "Concise overview only; problem/solution/effects go in their dedicated sections",
+            "One claim-mirroring statement per independent aspect",
+            "Wording consistent with the independent claims (Article 42(4)(i) support)",
+            "No new features beyond claims and detailed description; no promotional tone"
+          ],
+          "additions": [
+            "Corresponds to the opening of 발명의 내용 (Content of Invention)",
+            "KIPO's form splits this part into 해결하려는 과제 / 과제의 해결 수단 / 발명의 효과 — mirrored by the next three sections"
+          ]
+        }
+      },
+      "technicalProblem": {
+        "topUp": {
+          "instruction": "Draft the Technical Problem (해결하려는 과제) component of the Content of Invention per KIPO's standard specification form. State objectively the technical problem or objective the invention aims to achieve, derived from the limitations identified in the Background Art. The problem must be technical in nature, recognizable by a person having ordinary skill in the art, and genuinely solved by the disclosed means — Korean inventive-step analysis under Article 29(2) considers whether the cited art suggests the claimed solution to this problem, so a precise, feature-linked problem statement strengthens the case for non-obviousness. State one coherent problem or a tightly linked set (unity under Article 45); avoid commercial objectives and avoid overpromising beyond what the disclosure achieves.",
+          "constraints": [
+            "Objective and technical; anchored to the Background Art limitations",
+            "Actually solved by the disclosed technical solution",
+            "No purely commercial or aesthetic objectives",
+            "Coherent single problem or linked cluster to protect unity (Article 45)"
+          ],
+          "additions": [
+            "Corresponds to 해결하려는 과제 within 발명의 내용",
+            "Anchors the inventive-step analysis under Article 29(2)"
+          ]
+        }
+      },
+      "technicalSolution": {
+        "topUp": {
+          "instruction": "Draft the Technical Solution (과제의 해결 수단) component of the Content of Invention per KIPO's standard specification form. Describe the means by which the invention solves the stated problem, expressed as technical features: restate each independent claim as an aspect ('According to an aspect of the present disclosure, there is provided a ... comprising ...'), using wording consistent with — conventionally near-verbatim to — the claims, then introduce the significant optional features of embodiments ('In an embodiment, ...'). Cover every claim category in order. This consistency supports the Article 42(4)(i) requirement that claims be supported by the description, and preserves amendment room under Article 47(2) because amendments must stay within the original specification and drawings.",
+          "constraints": [
+            "Restate each independent claim as an aspect, in claim-consistent wording",
+            "Then present dependent/optional features as embodiment statements",
+            "Show how the recited means solve the stated technical problem",
+            "Cover all claim categories (apparatus, method, system, medium)",
+            "No results-only statements; define the solution by its technical features"
+          ],
+          "additions": [
+            "Corresponds to 과제의 해결 수단 within 발명의 내용",
+            "Aspect-style restatement of claims is standard Korean drafting practice"
+          ]
+        }
+      },
+      "advantageousEffects": {
+        "topUp": {
+          "instruction": "Draft the Advantageous Effects (발명의 효과) component of the Content of Invention per KIPO's standard specification form. State the technical effects the invention achieves over the background art, tying each effect to the distinguishing features that produce it, with quantitative data where available or clear mechanistic reasoning otherwise. Under Korean inventive-step practice (Article 29(2)), remarkable or unexpected effects that are described in — or directly inferable from — the specification can support non-obviousness, whereas effects absent from the original text are difficult to rely on later; therefore state every genuinely achievable effect at filing. Include the customary caveat that effects are not limited to those mentioned. Keep the language technical and measured; no promotional claims.",
+          "constraints": [
+            "Each effect linked to specific distinguishing technical features",
+            "Quantify where data exists; otherwise explain the mechanism",
+            "Effects must be supported by (or directly inferable from) the detailed description",
+            "No promotional language or unsupported superlatives",
+            "Optionally close with 'Effects of the present disclosure are not limited to the above'"
+          ],
+          "additions": [
+            "Corresponds to 발명의 효과 within 발명의 내용",
+            "Effects stated here feed the unexpected-effects argument for inventive step under Article 29(2)"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Brief Description of Drawings (도면의 간단한 설명) per KIPO's standard specification form, included whenever drawings are filed. Provide one sentence per figure in numerical order: 'FIG. 1 is a block diagram illustrating a ... according to an embodiment of the present disclosure.'. Identify the view type (block diagram, flowchart, cross-sectional view, perspective view, graph) and the subject depicted; do not explain structure or operation in detail. Ensure every filed figure is listed and numbering has no gaps; a representative drawing (대표도) will be designated in the filing form, typically FIG. 1 or the most characteristic figure.",
+          "constraints": [
+            "One concise sentence per figure, in order, no gaps",
+            "View type and subject only; no operational detail",
+            "Consistent figure numbering with the drawings as filed",
+            "Support later designation of a representative drawing"
+          ],
+          "additions": [
+            "Corresponds to 도면의 간단한 설명"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Detailed Description of the Invention (발명을 실시하기 위한 구체적인 내용) per Article 42(3)(i) of the Korean Patent Act: the invention must be stated clearly and in detail so that a person having ordinary skill in the art can easily carry it out. Open with the customary paragraphs noting that embodiments are described with reference to the accompanying drawings, that like reference numerals denote like elements, and that terms such as 'first/second' and singular forms do not limit the invention. Then describe one or more embodiments systematically: overall configuration with reference numerals matching the drawings, the function and interconnection of each element, method operations keyed to flowchart steps (S110, S120 ...), and variations/alternatives for features that the claims generalize. Provide support for every claim feature, independent and dependent; in unpredictable arts (chemistry, bio, pharma) include working examples, preparation methods, test protocols, and comparative data — Korean courts and examiners apply the enablement and support requirements strictly where data is missing. Best mode is not required. Close with the standard statement that the embodiments are illustrative and the scope is defined by the claims and their equivalents.",
+          "constraints": [
+            "'Easily practicable' enablement standard of Article 42(3)(i)",
+            "At least one complete embodiment per independent claim; support for all dependent features",
+            "Reference numerals consistent with the drawings; method steps keyed to flowcharts",
+            "Describe variations for generalized/functional claim language",
+            "Working examples and data in unpredictable arts",
+            "Stay self-contained: amendments are confined to the original disclosure (Article 47(2))",
+            "Avoid claim-style single-sentence prose"
+          ],
+          "additions": [
+            "Corresponds to 발명을 실시하기 위한 구체적인 내용",
+            "Korea has no best-mode requirement",
+            "For English-filed (Article 42-3) applications, this text becomes authentic only through the Korean translation — keep sentences precise and translation-friendly"
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the claims (청구범위) per Article 42(4) of the Korean Patent Act: each claim must be supported by the detailed description and must define the invention clearly and concisely. Observe the statutory claim-drafting method under Article 42(8) and the Enforcement Decree: number claims consecutively; a claim citing two or more claims must cite them in the alternative ('claim 1 or claim 2', 'any one of claims 1 to 3'); a claim citing two or more claims must NOT cite another claim that itself cites two or more claims (multiple-dependent-on-multiple-dependent is prohibited and is a formality rejection); and a claim may only refer to preceding claims. Independent claims may be in any form — two-part form is not preferred in Korean practice; recite the elements with their structural or operational interrelationships, since Korean examination treats a mere aggregation of elements without interconnection as a clarity defect. Keep unity under Article 45 (single general inventive concept via same or corresponding special technical features); parallel independent claims for apparatus, method, system, and computer-readable medium are standard where linked. Note fee economics: examination-request fees and annuities include a per-claim component for every claim, so prune low-value claims. Avoid claiming methods of medical treatment of humans (industrially inapplicable under Article 29(1)); claim compositions, apparatus, or non-therapeutic methods instead. For software, claim an apparatus, a method, and a computer program stored on a medium / computer-readable recording medium — claims to a program signal or the program per se without a medium are not accepted.",
+          "constraints": [
+            "Support and clarity per Article 42(4); every term consistent with the description",
+            "Multiple dependent claims: alternative citation only; never citing another multiple dependent claim",
+            "Dependent claims may cite only preceding claims",
+            "Unity of invention under Article 45",
+            "Per-claim fees for every claim — keep the set lean (≈20 claims is a practical ceiling)",
+            "No human medical treatment/diagnosis method claims (Article 29(1) industrial applicability practice)",
+            "Software: apparatus + method + computer program stored in a computer-readable medium; no per-se program claims",
+            "No references to the description or drawings ('as shown in FIG. 1')"
+          ],
+          "additions": [
+            "Claims may be filed after the description (delayed claim filing) but must exist before examination proceeds",
+            "Draft dependents as genuine fallback positions for invalidation trials before the IPTAB, where claim amendment is narrowly limited",
+            "Reference numerals in parentheses are allowed and non-limiting but are less customary than in Japan"
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Abstract (요약서) required by Article 43 of the Korean Patent Act. The abstract serves technical-information purposes only and cannot be used to define or interpret the scope of protection, so write it purely as a search-friendly summary: the technical field, the problem addressed, the gist of the technical solution (the key features of the main independent claim in plain prose), and the principal use or application. Keep it to a single paragraph of roughly 150 words (KIPO publication practice; the office may re-prepare a non-compliant abstract ex officio). Do not use promotional language, do not refer to claim numbers, and do not include speculative advantages. A representative drawing (대표도) is designated separately in the e-filing form to accompany the published abstract.",
+          "constraints": [
+            "Single paragraph, ~150 words recommended (hard UI cap 200)",
+            "Cover technical field, problem, gist of solution, principal use",
+            "No claim references, no marketing language, no speculative effects",
+            "No legal effect on claim scope — informational only (Article 43)"
+          ],
+          "additions": [
+            "Designate the representative drawing in the filing form (commonly FIG. 1)",
+            "KIPO publishes Korean and English abstracts; keep the English draft translation-friendly"
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "KR Patent Specification (KIPO-style, A4)",
+        "includesSections": [
+          "title",
+          "fieldOfInvention",
+          "background",
+          "summary",
+          "technicalProblem",
+          "technicalSolution",
+          "advantageousEffects",
+          "briefDescriptionOfDrawings",
+          "detailedDescription",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.0,
+        "marginRightCm": 2.0,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "lineSpacing": 1.5,
+        "addPageNumbers": true,
+        "addParagraphNumbers": false
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TITLE OF INVENTION",
+      "fieldOfInvention": "TECHNICAL FIELD",
+      "background": "BACKGROUND ART",
+      "summary": "CONTENT OF INVENTION",
+      "technicalProblem": "TECHNICAL PROBLEM",
+      "technicalSolution": "TECHNICAL SOLUTION",
+      "advantageousEffects": "ADVANTAGEOUS EFFECTS",
+      "briefDescriptionOfDrawings": "BRIEF DESCRIPTION OF DRAWINGS",
+      "detailedDescription": "DETAILED DESCRIPTION OF THE INVENTION",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "table",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "FIG. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for units/modules connected by arrows for signal or data flow, in clean black lines suitable for black-and-white reproduction. Labels must match reference numerals in the Detailed Description (Korean filings render figures as 도 1, 도 2).",
+      "flowchart": "Use standard flowchart symbols with step identifiers in the S110/S120 style; the steps must correspond one-to-one with the method claims and the Detailed Description.",
+      "schematic": "Use simplified structural or circuit symbols in black solid lines; keep linework clear for reproduction and align element labels with the claims and description.",
+      "perspective_view": "Show the overall apparatus structure with every claimed structural element labelled with its reference numeral; avoid heavy surface shading.",
+      "cross_section": "Use hatching to distinguish sectioned materials or components, keeping numerals and lead lines legible; indicate the section plane on the related overview figure.",
+      "graph": "Label axes with quantities and units and use distinguishable black-and-white line styles (solid/dashed/dotted); graphs must remain readable in monochrome publication.",
+      "table": "Use tables for parameters, test conditions, and comparative experimental results (important in chemistry/pharma cases); keep each table within the A4 printable area.",
+      "exploded_view": "Show assembly relationships with parts separated along the assembly axis, each part carrying a unique reference numeral explained in the Detailed Description."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure every figure and reference numeral mentioned in the Brief Description of Drawings is defined and explained in the Detailed Description of the Invention, with consistent numeral usage between drawings and text.",
+        "from": "briefDescriptionOfDrawings",
+        "mustBeExplainedIn": [
+          "detailedDescription"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed structural elements and method steps appear in at least one figure when drawings are present, traceable via the Brief Description of Drawings (and supporting selection of the representative drawing).",
+        "from": "claims",
+        "mustBeShownIn": [
+          "briefDescriptionOfDrawings"
+        ]
+      },
+      {
+        "id": "claims_vs_content_of_invention",
+        "description": "Ensure each independent claim is restated as an aspect in the Technical Solution section and fully supported by the Detailed Description (Article 42(4)(i) support requirement).",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "technicalSolution",
+          "detailedDescription"
+        ]
+      },
+      {
+        "id": "effects_vs_embodiments",
+        "description": "Ensure every advantageous effect asserted in the Content of Invention is demonstrated or directly inferable from the embodiments and data in the Detailed Description, so it can be relied on for inventive step under Article 29(2).",
+        "from": "advantageousEffects",
+        "mustBeSupportedBy": [
+          "detailedDescription"
+        ]
+      }
+    ]
+  }
+}

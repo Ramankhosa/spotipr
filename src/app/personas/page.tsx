@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
 import { DEFAULT_LIMITS, SECTION_WORD_LIMITS } from '@/lib/writing-sample-limits'
+import { getFlagEmoji } from '@/lib/country-flags'
 import Link from 'next/link'
 
 interface Persona {
@@ -36,14 +37,13 @@ interface SectionInfo {
   usedBy?: string[] // Countries that use this section (for universal view)
 }
 
-const JURISDICTIONS = [
+// Fallback until the active drafting countries load from the API
+const DEFAULT_JURISDICTIONS = [
   { code: '*', label: '🌐 Universal' },
   { code: 'IN', label: '🇮🇳 India' },
   { code: 'US', label: '🇺🇸 United States' },
   { code: 'EP', label: '🇪🇺 Europe' },
-  { code: 'PCT', label: '🌍 PCT' },
-  { code: 'CA', label: '🇨🇦 Canada' },
-  { code: 'AU', label: '🇦🇺 Australia' }
+  { code: 'PCT', label: '🌍 PCT' }
 ]
 
 // Word count indicator component with visual feedback
@@ -134,6 +134,33 @@ export default function PersonasPage() {
   
   // Track which jurisdictions have samples (for tick marks)
   const [jurisdictionSampleCounts, setJurisdictionSampleCounts] = useState<Record<string, number>>({})
+
+  // Active drafting jurisdictions (dynamic — any imported country appears here)
+  const [jurisdictions, setJurisdictions] = useState(DEFAULT_JURISDICTIONS)
+
+  useEffect(() => {
+    if (!token) return
+    const fetchJurisdictions = async () => {
+      try {
+        const res = await fetch('/api/country-names', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          const countries = (data.countries || []).map((c: any) => ({
+            code: c.code,
+            label: `${getFlagEmoji(c.code)} ${c.name}`
+          }))
+          if (countries.length > 0) {
+            setJurisdictions([{ code: '*', label: '🌐 Universal' }, ...countries])
+          }
+        }
+      } catch {
+        // keep the static fallback
+      }
+    }
+    fetchJurisdictions()
+  }, [token])
 
   const isAdmin = user?.roles?.some((r: string) => ['OWNER', 'ADMIN'].includes(r))
   
@@ -565,7 +592,7 @@ export default function PersonasPage() {
 
                 {/* Jurisdiction Tabs */}
                 <div className="flex flex-wrap gap-2 mb-4">
-                  {JURISDICTIONS.map(j => {
+                  {jurisdictions.map(j => {
                     const sampleCount = jurisdictionSampleCounts[j.code] || 0
                     const hasSamples = sampleCount > 0
                     
@@ -599,7 +626,7 @@ export default function PersonasPage() {
                       onClick={() => openDeleteJurisdictionModal(activeJurisdiction)}
                       className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
                     >
-                      🗑️ Clear {JURISDICTIONS.find(j => j.code === activeJurisdiction)?.label} Samples
+                      🗑️ Clear {jurisdictions.find(j => j.code === activeJurisdiction)?.label} Samples
                     </button>
                   </div>
                 )}
@@ -635,7 +662,7 @@ export default function PersonasPage() {
                               {activeJurisdiction === '*' && section.usedBy && section.usedBy.length > 0 && (
                                 <p className="text-xs text-gray-400 mt-0.5">
                                   Applies to: {section.usedBy.map(code => {
-                                    const j = JURISDICTIONS.find(j => j.code === code)
+                                    const j = jurisdictions.find(j => j.code === code)
                                     return j ? j.label.replace(/^[^\s]+\s/, '') : code
                                   }).join(', ')}
                                 </p>
@@ -867,7 +894,7 @@ export default function PersonasPage() {
                 <p className="text-sm text-gray-700 dark:text-gray-300">
                   This will delete all writing samples for 
                   <strong className="mx-1">
-                    {JURISDICTIONS.find(j => j.code === jurisdictionToDelete)?.label || jurisdictionToDelete}
+                    {jurisdictions.find(j => j.code === jurisdictionToDelete)?.label || jurisdictionToDelete}
                   </strong>
                   from persona <strong>&quot;{editingPersona?.name}&quot;</strong>.
                 </p>

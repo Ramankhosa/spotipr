@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { verifyJWT } from '@/lib/auth'
+import { isCountrySupported, getSupportedCountryCodes } from '@/lib/country-profile-service'
 
 // Force dynamic rendering for API routes that use headers
 export const dynamic = 'force-dynamic'
@@ -182,8 +183,9 @@ export async function POST(
       errors.push('correspondence_country_code must be 2 characters (ISO-2)')
     }
 
-    if (!['IN', 'PCT', 'US', 'EP'].includes(normalizedData.defaultJurisdiction)) {
-      errors.push('default_jurisdiction must be one of: IN, PCT, US, EP')
+    if (!(await isCountrySupported(normalizedData.defaultJurisdiction))) {
+      const supported = await getSupportedCountryCodes()
+      errors.push(`default_jurisdiction must be an active drafting jurisdiction (one of: ${supported.join(', ')})`)
     }
 
     if (!['national', 'pct_international', 'pct_national'].includes(normalizedData.defaultRoute)) {

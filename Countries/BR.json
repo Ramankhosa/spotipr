@@ -1,0 +1,709 @@
+{
+  "meta": {
+    "id": "BR",
+    "code": "BR",
+    "name": "Brazil",
+    "continent": "South America",
+    "office": "Instituto Nacional da Propriedade Industrial (INPI)",
+    "officeUrl": "https://www.gov.br/inpi",
+    "applicationTypes": [
+      "standard"
+    ],
+    "languages": [
+      "pt"
+    ],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "tags": [
+      "national_phase",
+      "pct_national_phase",
+      "paris",
+      "portuguese_language",
+      "caracterizado_por_claims",
+      "mercosur"
+    ],
+    "createdAt": "2026-07-15T00:00:00Z",
+    "updatedAt": "2026-07-15T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "Standard Brazilian Patent Application (Patente de Invenção)",
+        "description": "Standard Brazilian invention patent application under the Industrial Property Law (Lei No. 9.279 of 14 May 1996, 'LPI') and INPI Normative Instruction No. 30/2013 governing the presentation of the specification, claims, drawings and abstract.",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Título da Invenção",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Insira um título conciso e tecnicamente preciso da invenção",
+              "helpText": "Provide a concise, clear and precise technical title in Portuguese that identifies the subject matter of the invention (IN 30/2013). Do not use trade names, trademarks, fancy names, personal names or vague expressions such as 'novo' (new) or 'melhorado' (improved)."
+            },
+            "rules": {
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "forbidWordsNewOrImproved": true,
+              "mustBeTechnical": true,
+              "notes": [
+                "Under INPI practice the title must be identical in the request form (formulário de depósito), the specification and the abstract.",
+                "The claim preamble must repeat the title or the part of the title corresponding to the claim category, so keep the title aligned with the intended claim wording."
+              ]
+            }
+          },
+          {
+            "id": "field_of_invention",
+            "label": "Campo da Invenção",
+            "order": 2,
+            "canonicalKeys": [
+              "fieldOfInvention",
+              "field_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "Descreva o campo técnico ao qual a invenção pertence",
+              "helpText": "State the technical field (setor técnico) to which the invention relates, as required by IN 30/2013 for the relatório descritivo. Use neutral technical language in Portuguese; classification-style wording (e.g., aligned with IPC terms) is acceptable."
+            }
+          },
+          {
+            "id": "background",
+            "label": "Fundamentos da Invenção",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Descreva o estado da técnica e suas limitações",
+              "helpText": "Describe the state of the art (estado da técnica) relevant to understanding, searching and examining the invention, citing documents known to the applicant where appropriate. Present the drawbacks of existing solutions objectively and identify the technical problem the invention solves, without disparaging specific third-party patents."
+            }
+          },
+          {
+            "id": "summary",
+            "label": "Sumário da Invenção",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "Apresente a invenção, o problema técnico resolvido e as vantagens obtidas",
+              "helpText": "Summarize the invention in problem-solution form: the technical problem arising from the state of the art, the solution provided by the invention, and its advantages over the prior art. Keep the terminology strictly consistent with the independent claims (Art. 25 LPI requires claims to be grounded in the description)."
+            },
+            "rules": {
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true
+            }
+          },
+          {
+            "id": "brief_description_of_drawings",
+            "label": "Breve Descrição dos Desenhos",
+            "order": 5,
+            "canonicalKeys": [
+              "briefDescriptionOfDrawings",
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "Descreva brevemente cada figura (ex.: 'A Figura 1 mostra...')",
+              "helpText": "If drawings are filed, provide a one-sentence description of each figure (e.g., 'A Figura 1 mostra uma vista esquemática de...'). Figure numbering and reference numerals must match the drawings and the detailed description exactly. Omit this section entirely if the application has no drawings."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Descrição Detalhada da Invenção",
+            "order": 6,
+            "canonicalKeys": [
+              "detailedDescription",
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Descreva a invenção de forma clara e suficiente, incluindo a melhor forma de execução",
+              "helpText": "Describe the invention clearly and sufficiently so that a person skilled in the art (técnico no assunto) can carry it out, and indicate, where applicable, the best mode of execution (melhor forma de execução), as required by Art. 24 LPI. Use reference numerals consistently with the drawings and support every claimed feature."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireBestModeDisclosure": true,
+              "requireSupportForAllClaims": true,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true,
+              "notes": [
+                "Art. 24 LPI: the specification must describe the subject matter clearly and sufficiently to permit its reproduction by a person skilled in the art and indicate, when applicable, the best mode of carrying it out.",
+                "For biological material that cannot be described sufficiently, deposit with an authorized institution is required (Art. 24, sole paragraph, LPI)."
+              ]
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Reivindicações",
+            "order": 7,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Redija as reivindicações usando a expressão 'caracterizado por'",
+              "helpText": "Draft claims in Portuguese, each in a single sentence, beginning with the title (or the part of the title corresponding to its category), followed by a preamble stating the known features and the expression 'caracterizado por' introducing the characterizing technical features (IN 30/2013). Claims must be grounded in the description (Art. 25 LPI). Include reference numerals in parentheses when drawings exist."
+            },
+            "rules": {
+              "twoPartFormRequired": true,
+              "mandatoryExpression": "caracterizado por",
+              "singleSentencePerClaim": true,
+              "preambleMustRepeatTitle": true,
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "dependentCannotDependOnMultipleMultipleDependent": true,
+              "requireSingleInventiveConcept": true,
+              "mustBeSupportedByDescription": true,
+              "referenceNumeralsInParenthesesWhenDrawings": true,
+              "notes": [
+                "IN 30/2013 makes the expression 'caracterizado por' mandatory in every claim, separating the preamble (state-of-the-art features) from the characterizing part.",
+                "Claims must not rely on references to the description or drawings in place of technical features (e.g., 'como descrito na descrição' is not allowed).",
+                "Excess claim fees apply for each claim above the 10th at filing."
+              ]
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Resumo",
+            "order": 8,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 2000,
+            "ui": {
+              "placeholder": "Resumo técnico conciso da invenção (50 a 200 palavras)",
+              "helpText": "Write a concise technical summary (Resumo) in Portuguese of 50 to 200 words, in a single paragraph, starting with the title of the invention (IN 30/2013). Summarize the technical field, the problem and the essence of the solution. Do not include advantages, commercial statements or claim references."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "mustStartWithTitle": true,
+              "minWords": 50,
+              "maxWords": 200,
+              "forbidAdvantages": true,
+              "forbidMarketingLanguage": true,
+              "forbidClaimReferences": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": true,
+      "paragraphNumberFormat": "[0001]",
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "All application documents must be filed in Portuguese (Art. 19 LPI and INPI practice); documents originally in another language require translation.",
+        "IN 30/2013 requires the sheets of the specification, claims and abstract to be sequentially numbered, with lines or paragraphs numbered sequentially; the widely adopted e-filing practice is bracketed paragraph numbering in the form [0001].",
+        "There is no statutory page limit, but INPI charges additional fees for specifications exceeding the basic page allowance; keep the document as concise as full sufficiency permits.",
+        "The title must be identical across the request form, specification and abstract."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": [
+        "A4"
+      ],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "IN 30/2013 follows PCT-style formatting: A4 sheets, used in portrait orientation, written on one side only, in dark indelible characters.",
+        "Sheets must be free of erasures, corrections and interlineations; text should use 1.5 line spacing for legibility."
+      ]
+    },
+    "description": {
+      "requireBestModeDisclosure": true,
+      "avoidClaimLanguage": true,
+      "allowReferenceNumerals": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "requireEnablement": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "Art. 24 LPI: the description must be clear and sufficient for reproduction by a person skilled in the art and must indicate, when applicable, the best mode of execution (melhor forma de execução).",
+        "Industrial application (aplicação industrial) is a patentability requirement under Arts. 8 and 15 LPI; it need not be a separate section but should be evident from the description.",
+        "Non-patentable subject matter under Arts. 10 and 18 LPI (e.g., abstract theories, methods per se, therapeutic methods, living beings except transgenic microorganisms) should not be presented as the claimed invention."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": true,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": true,
+      "preferredConnectors": [
+        "caracterizado por"
+      ],
+      "discouragedConnectors": [
+        "consistindo em (closes the claim scope; use only when intentional)"
+      ],
+      "forbiddenPhrases": [
+        "como descrito na descrição",
+        "como mostrado nos desenhos",
+        "aproximadamente (in the characterizing part, unless justified)"
+      ],
+      "maxIndependentClaimsBeforeExtraFee": 10,
+      "maxTotalClaimsRecommended": 25,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_inventive_concept (Art. 22 LPI)",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": true,
+        "extraFeeThresholdTotalClaims": 10,
+        "note": "INPI charges an additional fee per claim above the 10th claim (total claim count), assessed at filing and on later claim additions."
+      },
+      "notes": [
+        "The two-part form with the mandatory expression 'caracterizado por' is required in every claim under IN 30/2013; this is a formal requirement, not merely a preference.",
+        "Each claim must be a single sentence beginning with the title or the part of the title corresponding to its category (e.g., 'Processo...', 'Aparelho...').",
+        "Multiple dependent claims are permitted but must not serve as a basis for other multiple dependent claims.",
+        "Unity of invention: a group of inventions is acceptable only if interlinked by a single inventive concept (Art. 22 LPI)."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 200,
+      "noBenefitsOrAdvantages": true,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "minWords": 50,
+      "maxWords": 200,
+      "mustStartWithTitle": true,
+      "notes": [
+        "IN 30/2013: the abstract (Resumo) must be a summary of the technical disclosure of 50 to 200 words, preferably not exceeding 20 lines, starting with the title.",
+        "The abstract serves search purposes only and cannot be used to interpret the scope of protection."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "shadingAllowed": true,
+      "grayscaleAllowed": false,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "exploded_view"
+      ],
+      "notes": [
+        "Drawings must be executed in firm, uniform black lines without color, suitable for direct reproduction (IN 30/2013, PCT-style formality standard).",
+        "Drawings must not contain explanatory text beyond short keywords (e.g., 'água', 'vapor') where indispensable for understanding.",
+        "Every reference numeral used in the drawings must appear in the detailed description and vice versa."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "pt"
+      ],
+      "requiresOfficialTranslation": true,
+      "notes": [
+        "The application must be filed in Portuguese. For PCT national phase entry, a Portuguese translation of the international application is mandatory at entry (30-month deadline from priority).",
+        "Priority documents in another language must be accompanied by a translation, or by a simple translation of the filing certificate data where INPI practice allows (Art. 16 LPI)."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 12,
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "no_formal_ids",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "Art. 12 LPI provides a 12-month grace period for disclosures made by the inventor, by INPI through unauthorized publication, or by third parties based on information obtained from the inventor.",
+        "Brazil has no foreign filing license requirement; Brazilian residents may file first abroad.",
+        "There is no US-style IDS duty, but Art. 34 LPI allows INPI to require the applicant to submit search results and office actions from corresponding foreign applications during examination.",
+        "Paris Convention priority (Art. 16 LPI) may be claimed from foreign applications, including provisional applications that constitute a regular national filing.",
+        "Annuities are due from the beginning of the third year from filing, even while the application is pending (Art. 84 LPI)."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "INPI accepts later furnishing of the sequence listing during formal examination, provided it does not add matter beyond the original disclosure.",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": [
+        "TXT",
+        "PDF"
+      ]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 500,
+          "severity": "warning",
+          "message": "Title is unusually long. INPI practice favors a concise, precise technical title without trade names or vague terms."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_min_words",
+          "type": "minWords",
+          "limit": 50,
+          "severity": "warning",
+          "message": "Abstract is shorter than 50 words. IN 30/2013 requires the Resumo to contain between 50 and 200 words."
+        },
+        {
+          "id": "abstract_max_words",
+          "type": "maxWords",
+          "limit": 200,
+          "severity": "error",
+          "message": "Abstract exceeds 200 words. IN 30/2013 limits the Resumo to a maximum of 200 words (preferably no more than 20 lines)."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_excess_fee",
+          "type": "maxCount",
+          "limit": 10,
+          "severity": "info",
+          "message": "More than 10 claims: INPI charges an additional official fee for each claim above the 10th. Consider consolidating dependent claims."
+        }
+      ],
+      "detailed_description": []
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "Claims must be grounded in the description (Art. 25 LPI). Every technical feature recited after 'caracterizado por' must be described and enabled in the Descrição Detalhada."
+      },
+      {
+        "id": "claims_vs_summary_consistency",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "summary"
+        ],
+        "severity": "warning",
+        "message": "Key features of the independent claims are not reflected in the Sumário da Invenção. Align the summary with the claimed problem-solution."
+      },
+      {
+        "id": "abstract_vs_description_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": [
+          "detailed_description"
+        ],
+        "severity": "warning",
+        "message": "The Resumo does not accurately reflect the invention as described. Adjust the abstract so it summarizes the actual technical disclosure."
+      },
+      {
+        "id": "unity_check",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": [
+          "detailed_description"
+        ],
+        "severity": "warning",
+        "message": "Claims may cover more than one inventive concept. Check unity of invention under Art. 22 LPI and consider a divisional application (Art. 26 LPI)."
+      },
+      {
+        "id": "drawing_reference_check",
+        "type": "reference",
+        "from": "brief_description_of_drawings",
+        "mustReference": [
+          "detailed_description"
+        ],
+        "severity": "error",
+        "message": "One or more figures or reference numerals in the Breve Descrição dos Desenhos are not explained in the Descrição Detalhada. Every figure and numeral must be described."
+      }
+    ]
+  },
+  "prompts": {
+    "systemPrompt": "You are an expert Brazilian patent attorney (agente da propriedade industrial) drafting a patent of invention (patente de invenção) for filing with the INPI under Lei No. 9.279/96 (LPI) and INPI Normative Instruction No. 30/2013. All drafted output must be in formal, technical Brazilian Portuguese suitable for direct filing. Follow the section structure, claim formalities (mandatory 'caracterizado por'), and validation constraints in this configuration. Use neutral, impersonal technical language, ensure sufficiency of disclosure for a técnico no assunto, and maintain strict terminological consistency between claims, summary and detailed description.",
+    "promptMergeStrategy": "append",
+    "baseStyle": {
+      "tone": "technical, neutral, precise, formal Brazilian Portuguese",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "colloquialisms or Anglicisms where established Portuguese technical terms exist",
+        "claim-style language in the description",
+        "disparagement of specific third-party patents"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft the title (Título da Invenção) in formal Brazilian Portuguese, per IN 30/2013. The title must be concise, clear and precise, technically identifying the subject matter of the invention without any fancy or commercial denomination. Because Brazilian claim practice requires each claim to open with the title (or the portion of the title corresponding to the claim category), compose the title so it can serve directly as claim preamble openers — e.g., 'Processo e aparelho para tratamento de efluentes industriais' supports both a process claim ('Processo para tratamento...') and an apparatus claim ('Aparelho para tratamento...'). Do not use trademarks, personal names, coined product names, or laudatory/vague words such as 'novo', 'melhorado', 'aperfeiçoado' or 'inovador'. Keep the title identical to the one that will appear in the request form and at the start of the Resumo. Prefer nouns designating the categories actually claimed (produto, processo, aparelho, sistema, uso).",
+          "constraints": [
+            "Output in Portuguese",
+            "Maximum 500 characters; aim for one line",
+            "No trademarks, trade names, personal names or superlatives",
+            "No 'novo', 'melhorado' or similar laudatory qualifiers",
+            "Must name every claim category intended (e.g., 'Composição e processo de...')",
+            "Must be usable verbatim as the opening words of each claim"
+          ],
+          "additions": [
+            "Legal basis: IN 30/2013 (título claro, conciso e preciso); Art. 19 LPI (application content).",
+            "The same title must appear in the request form, specification and abstract."
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Campo da Invenção section in formal Brazilian Portuguese. State in one or two short paragraphs the technical field (setor técnico) to which the invention pertains, as IN 30/2013 requires the relatório descritivo to begin by specifying the technical field. Open with the conventional formula 'A presente invenção refere-se a...' or 'A presente invenção pertence ao campo de...'. Use neutral, classification-oriented terminology consistent with the International Patent Classification where natural. Do not discuss the prior art's deficiencies, the technical problem, or the invention's advantages here — those belong to Fundamentos and Sumário. Keep scope wording slightly broader than the claims but never inconsistent with them.",
+          "constraints": [
+            "Output in Portuguese",
+            "One to two paragraphs, neutral technical terminology",
+            "No advantages, no problem discussion, no prior art criticism",
+            "Terminology must match the claims and detailed description"
+          ],
+          "additions": [
+            "Legal basis: IN 30/2013 (relatório descritivo must specify the technical field)."
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Fundamentos da Invenção section in formal Brazilian Portuguese. Describe the state of the art (estado da técnica) that can be regarded as useful for the understanding, search and examination of the invention, as required by IN 30/2013, citing, where known to the applicant, the documents that reflect it (patent publications by number, articles by author/journal/year). Explain objectively how existing solutions work and identify their technical limitations, deficiencies or drawbacks in factual, verifiable terms — this framing establishes the technical problem the invention solves and prepares the mandatory two-part claim structure, since features acknowledged here as known belong in the claim preamble before 'caracterizado por'. Never disparage specific competitors or assert that cited documents are invalid. Do not reveal the invention's solution or advantages in this section; end by stating the unmet technical need. Remember that Brazil applies absolute novelty (Art. 11 LPI) subject only to the 12-month grace period of Art. 12 LPI, so treat any inventor disclosure within that window carefully and avoid characterizing the applicant's own prior work as state of the art unless it truly is.",
+          "constraints": [
+            "Output in Portuguese",
+            "Describe prior art objectively; cite documents with full identification where available",
+            "Do not disclose the invention's solution or advantages here",
+            "Anything admitted as known here should be drafted so it can sit in the claim preamble (before 'caracterizado por')",
+            "No disparagement of third-party patents or products"
+          ],
+          "additions": [
+            "Legal basis: Arts. 11 and 12 LPI (novelty and grace period); IN 30/2013 (description of the state of the art with citation of known documents).",
+            "Brazil has no US-style IDS, but under Art. 34 LPI the INPI may later require prior art search results from corresponding foreign applications — accurate background drafting avoids inconsistencies at that stage."
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the Sumário da Invenção in formal Brazilian Portuguese using a clear problem-solution structure. First, state concisely the technical problem left open by the state of the art described in the Fundamentos. Then present the invention as the solution, paraphrasing each independent claim in prose: use formulations such as 'Em um primeiro aspecto, a presente invenção fornece um processo... ' mirroring the claim wording, including the essential features that will appear after 'caracterizado por'. Cover every claim category (produto, processo, aparelho, uso) with one paragraph per aspect, and optionally summarize important preferred embodiments corresponding to key dependent claims. Close with a short statement of the technical advantages actually achieved and supported by the detailed description — advantages stated here must be technical and substantiated, since they may be relied on for inventive step (atividade inventiva, Art. 13 LPI) arguments during examination. Keep terminology strictly identical to the claims: Art. 25 LPI requires claims to be grounded in the description, and divergences between summary and claims invite clarity objections.",
+          "constraints": [
+            "Output in Portuguese",
+            "Problem-solution structure: technical problem, then solution, then advantages",
+            "One paragraph per independent claim/aspect, mirroring claim language",
+            "Advantages must be technical, plausible and supported by the detailed description",
+            "No marketing language or unsupported superlatives"
+          ],
+          "additions": [
+            "Legal basis: Art. 13 LPI (inventive step assessed against the state of the art), Art. 25 LPI (claims grounded in the description); IN 30/2013.",
+            "Consistency between Sumário and Reivindicações is checked by this platform's cross-section validation."
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Breve Descrição dos Desenhos in formal Brazilian Portuguese, only if the application contains drawings. Provide exactly one sentence per figure in the conventional INPI style: 'A Figura 1 mostra uma vista esquemática de...', 'A Figura 2 apresenta um fluxograma do processo de...'. Identify the type of view (vista esquemática, vista em corte, vista em perspectiva, diagrama de blocos, fluxograma, gráfico) and its subject, without describing operation, advantages or embodiment details — those belong in the Descrição Detalhada. Figure numbers must be consecutive and match the drawing sheets; every figure filed must be listed and no listed figure may be missing from the drawings. Do not introduce reference numerals here beyond what is needed to identify the figure's subject.",
+          "constraints": [
+            "Output in Portuguese",
+            "One sentence per figure, format 'A Figura N mostra/apresenta...'",
+            "State the view type and subject only; no operational detail",
+            "Figure list must match the filed drawings one-to-one",
+            "Omit the section entirely if there are no drawings"
+          ],
+          "additions": [
+            "Legal basis: IN 30/2013 (list of figures with brief indication of what each represents).",
+            "Drawings themselves must be black-and-white line drawings on A4 without explanatory text beyond indispensable keywords."
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Descrição Detalhada da Invenção in formal Brazilian Portuguese satisfying Art. 24 LPI: the description must be clear and sufficient for a técnico no assunto (person skilled in the art) to reproduce the invention, and must indicate, when applicable, the best mode of execution (melhor forma de execução) — Brazil, unlike Europe, retains an express best-mode indication requirement, so identify at least one embodiment as the preferred/best form ('Em uma concretização preferida...'). Describe each embodiment (concretização) systematically: structure or steps first, then operation and interaction of features, using reference numerals in parentheses that match the drawings exactly. Support every feature of every claim, including each feature recited after 'caracterizado por' and all dependent-claim features, with enough detail (materials, parameters, ranges, process conditions, worked examples where the field demands them, e.g., chemistry/pharma) to avoid insufficiency objections. Make the industrial applicability (Art. 15 LPI) evident from the description. Avoid claim-style language and avoid limiting expressions ('a invenção é apenas...'); use 'em uma concretização', 'preferencialmente', 'opcionalmente' to preserve scope. Where biological material is essential and cannot be described, reference the deposit under Art. 24, sole paragraph, LPI. Draft mindful of Art. 32 LPI: post-filing amendments may not broaden beyond the original disclosure, so include fallback positions and intermediate generalizations now.",
+          "constraints": [
+            "Output in Portuguese",
+            "Sufficiency for a técnico no assunto (Art. 24 LPI) — enable every claim",
+            "Expressly indicate the best mode of execution ('melhor forma de execução')",
+            "Reference numerals in parentheses, consistent with drawings and claims",
+            "Include fallback embodiments and preferred ranges to support future amendments (Art. 32 LPI)",
+            "No claim-style language; no unsupported generalizations"
+          ],
+          "additions": [
+            "Legal basis: Art. 24 LPI (sufficiency and best mode); Art. 25 LPI (claim support); Art. 32 LPI (amendment limits); Art. 15 LPI (industrial application); IN 30/2013.",
+            "Number paragraphs sequentially in the form [0001], [0002], ... per INPI e-filing practice.",
+            "Do not present subject matter excluded under Arts. 10 and 18 LPI (e.g., therapeutic methods, programs per se) as the invention itself; frame software inventions through their technical effect."
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the Reivindicações in formal Brazilian Portuguese in strict compliance with Art. 25 LPI and IN 30/2013. Every claim MUST: (1) be a single sentence; (2) begin with the title or the part of the title corresponding to its category (e.g., 'Processo para...', 'Aparelho para...'); (3) contain a preamble reciting the features already known from the state of the art; and (4) use the mandatory expression 'caracterizado por' (or its inflected form 'caracterizada por' / 'caracterizado pelo fato de que') to introduce the characterizing technical features — this two-part form is a formal requirement in Brazil, not a stylistic preference, and its absence is a formal defect. Claims must be grounded in the description (fundamentadas no relatório descritivo, Art. 25 LPI), define the matter precisely, and must not refer to the description or drawings in place of features ('como descrito no relatório' is prohibited). Include reference numerals in parentheses after structural features when the application has drawings; the numerals do not limit the claim. Dependent claims start with the claim category word plus 'de acordo com a reivindicação N', followed by 'caracterizado por' and the additional features. Multiple dependencies are allowed ('de acordo com qualquer uma das reivindicações 1 a 3') but must not depend on other multiple dependent claims. Maintain unity of invention: all claims must be interlinked by a single inventive concept (Art. 22 LPI). Note the fee structure: each claim above the 10th incurs an excess fee, so consolidate where possible. Number claims sequentially in Arabic numerals; end each claim with a period.",
+          "constraints": [
+            "Output in Portuguese",
+            "Every claim in two-part form with the mandatory expression 'caracterizado por'",
+            "Each claim is one sentence, opening with the title or its category-specific part",
+            "No references to description/drawings as a substitute for technical features",
+            "Reference numerals in parentheses when drawings exist",
+            "Dependent claims: 'de acordo com a reivindicação N, caracterizado por...'",
+            "Multiple dependents allowed, but not on other multiple dependents",
+            "Single inventive concept across all claims (Art. 22 LPI)",
+            "Prefer at most 10 claims; flag when exceeding (excess fees per claim above 10)"
+          ],
+          "additions": [
+            "Legal basis: Art. 22 LPI (unity), Art. 25 LPI (claims define the extent of protection and must be grounded in the description), IN 30/2013 (formal claim requirements including 'caracterizado por').",
+            "Claim scope is interpreted per Art. 41 LPI (claims interpreted in light of description and drawings) — precise characterizing features matter.",
+            "Avoid claiming subject matter excluded by Arts. 10 and 18 LPI (methods of treatment, software per se, business methods); recast as product, apparatus, use ('Uso de... caracterizado por...') or technically-effected process claims."
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Resumo in formal Brazilian Portuguese per IN 30/2013. It must be a single paragraph of 50 to 200 words (preferably no more than 20 lines), beginning with the title of the invention exactly as it appears in the specification, followed by a concise summary of the technical disclosure: the technical field, the problem addressed, and the essence of the solution — indicating the principal use where relevant. Write it as a search-oriented technical digest: it must allow a searcher to quickly assess whether the document is relevant. Do not state advantages, commercial value or speculative merits; do not use claim language ('caracterizado por' is unnecessary here), claim references, or legal phrases. Include the reference numerals of the main technical features in parentheses if drawings exist, following INPI publication practice. Remember the abstract does not define protection scope (protection is defined by the claims, Art. 41 LPI).",
+          "constraints": [
+            "Output in Portuguese",
+            "Single paragraph, 50-200 words (hard limits per IN 30/2013)",
+            "Must begin with the title of the invention",
+            "Technical summary only: field, problem, essence of solution",
+            "No advantages, marketing language, claim references or legal phrasing"
+          ],
+          "additions": [
+            "Legal basis: IN 30/2013 (Resumo of 50-200 words starting with the title); Art. 41 LPI (abstract has no scope-defining effect).",
+            "This platform validates minWords 50 / maxWords 200 on this section."
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "Especificação de Patente (INPI-compliant PDF)",
+        "includesSections": [
+          "title",
+          "field_of_invention",
+          "background",
+          "summary",
+          "brief_description_of_drawings",
+          "detailed_description",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "lineSpacing": 1.5,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "addPageNumbers": true,
+        "addParagraphNumbers": true,
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TÍTULO DA INVENÇÃO",
+      "field_of_invention": "CAMPO DA INVENÇÃO",
+      "background": "FUNDAMENTOS DA INVENÇÃO",
+      "summary": "SUMÁRIO DA INVENÇÃO",
+      "brief_description_of_drawings": "BREVE DESCRIÇÃO DOS DESENHOS",
+      "detailed_description": "DESCRIÇÃO DETALHADA DA INVENÇÃO",
+      "claims": "REIVINDICAÇÕES",
+      "abstract": "RESUMO"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "Figura {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for components and arrows for signal, data or material flow. Label blocks with reference numerals matching the Descrição Detalhada; any text inside blocks should be short Portuguese keywords only.",
+      "flowchart": "Use standard flowchart symbols for process steps and decisions. Step labels should correspond to the claimed method steps ('Processo... caracterizado por') and use Portuguese keywords; number steps to match the description.",
+      "schematic": "Use simplified symbols showing functional relationships in firm black lines suitable for black-and-white reproduction. Match every label to reference numerals defined in the description.",
+      "perspective_view": "Use perspective or isometric views to show the overall structure of the apparatus. Assign a unique reference numeral to each important structural element described in the Descrição Detalhada.",
+      "cross_section": "Use cross-sectional views with hatching to distinguish materials or components. Indicate the cutting plane on a related figure where helpful.",
+      "graph": "Use clearly labeled axes with units in Portuguese (or SI symbols) and legends readable in black-and-white; graphs supporting experimental results strengthen sufficiency under Art. 24 LPI.",
+      "exploded_view": "Use exploded views to show assembly relationships; each part must carry a unique reference numeral referenced in the description."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all figure numbers and reference numerals mentioned in the Breve Descrição dos Desenhos are defined and explained in the Descrição Detalhada da Invenção, and vice versa.",
+        "from": "brief_description_of_drawings",
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed structural elements (with their parenthetical reference numerals) appear in at least one figure when drawings are present, traceable via the Breve Descrição dos Desenhos.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_description_of_drawings"
+        ]
+      },
+      {
+        "id": "claims_vs_description_support",
+        "description": "Ensure every feature recited after 'caracterizado por' in each claim is grounded in the Descrição Detalhada (Art. 25 LPI).",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ]
+      }
+    ]
+  }
+}

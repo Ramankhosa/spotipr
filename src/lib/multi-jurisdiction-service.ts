@@ -155,6 +155,14 @@ export function getJurisdictionLanguage(jurisdiction: string): string {
   return JURISDICTION_LANGUAGE_MAP[jurisdiction.toUpperCase()] || 'en'
 }
 
+/**
+ * Whether the jurisdiction has an explicit language mapping
+ * (unknown jurisdictions silently fall back to English)
+ */
+export function hasJurisdictionLanguage(jurisdiction: string): boolean {
+  return jurisdiction.toUpperCase() in JURISDICTION_LANGUAGE_MAP
+}
+
 // ============================================================================
 // Language-Aware Figure Selection
 // ============================================================================

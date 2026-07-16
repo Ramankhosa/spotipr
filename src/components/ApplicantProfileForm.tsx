@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { z } from 'zod'
 
 const applicantProfileSchema = z.object({
@@ -32,7 +32,7 @@ const applicantProfileSchema = z.object({
   agentState: z.string().optional(),
   agentCountryCode: z.string().optional(),
   agentPostalCode: z.string().optional(),
-  defaultJurisdiction: z.enum(['IN', 'PCT', 'US', 'EP']),
+  defaultJurisdiction: z.string().min(2).max(3),
   defaultRoute: z.enum(['national', 'pct_international', 'pct_national']),
   defaultLanguage: z.string().default('EN'),
   defaultEntityStatusIn: z.enum(['startup', 'small_entity', 'university', 'regular']),
@@ -93,6 +93,39 @@ export function ApplicantProfileForm({ projectId, initialData, onSuccess }: Appl
 
   const [sameAsApplicant, setSameAsApplicant] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  // Active drafting jurisdictions (dynamic — any imported country profile qualifies)
+  const [jurisdictionOptions, setJurisdictionOptions] = useState<Array<{ code: string; name: string }>>([
+    { code: 'IN', name: 'India' },
+    { code: 'PCT', name: 'PCT (International)' },
+    { code: 'US', name: 'United States' },
+    { code: 'EP', name: 'European Patent Office' }
+  ])
+
+  useEffect(() => {
+    const fetchJurisdictions = async () => {
+      try {
+        const response = await fetch('/api/country-names', {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+        })
+        if (response.ok) {
+          const data = await response.json()
+          const countries = (data.countries || []).map((c: any) => ({ code: c.code, name: c.name }))
+          if (countries.length > 0) {
+            // Keep the saved value selectable even if its profile was deactivated
+            const saved = initialData?.defaultJurisdiction
+            if (saved && !countries.some((c: { code: string }) => c.code === saved)) {
+              countries.push({ code: saved, name: saved })
+            }
+            setJurisdictionOptions(countries)
+          }
+        }
+      } catch {
+        // Keep the static fallback options on failure
+      }
+    }
+    fetchJurisdictions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showCsvUpload, setShowCsvUpload] = useState(false)
   const [csvFile, setCsvFile] = useState<File | null>(null)
@@ -840,10 +873,11 @@ export function ApplicantProfileForm({ projectId, initialData, onSuccess }: Appl
                 className="appearance-none relative block w-full px-3 py-3 border border-gpt-gray-300 text-gpt-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-gpt-blue-500 focus:border-transparent transition-all duration-200"
                 required
               >
-                <option value="IN">IN</option>
-                <option value="PCT">PCT</option>
-                <option value="US">US</option>
-                <option value="EP">EP</option>
+                {jurisdictionOptions.map(option => (
+                  <option key={option.code} value={option.code}>
+                    {option.code} — {option.name}
+                  </option>
+                ))}
               </select>
               {errors.defaultJurisdiction && <p className="mt-1 text-sm text-red-600">{errors.defaultJurisdiction}</p>}
             </div>

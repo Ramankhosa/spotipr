@@ -3696,27 +3696,6 @@ Use the Super Admin panel to add the missing prompt.
     return labels[sectionKey] || sectionKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
   }
 
-  /**
-   * Determine if section is required for jurisdiction
-   */
-  private static isSectionRequired(sectionKey: string, jurisdiction: string): boolean {
-    // Core sections that are typically required
-    const alwaysRequired = ['title', 'claims', 'abstract']
-
-    if (alwaysRequired.includes(sectionKey)) return true
-
-    // Country-specific requirements
-    const countryRequirements: Record<string, string[]> = {
-      'US': ['detailed_description', 'background', 'summary'],
-      'IN': ['field', 'background', 'objects', 'summary', 'detailed_description'],
-      'EP': ['detailed_description', 'background', 'claims'],
-      'CN': ['detailed_description', 'claims'],
-      'JP': ['detailed_description', 'claims']
-    }
-
-    return countryRequirements[jurisdiction]?.includes(sectionKey) || false
-  }
-
   private static async buildSectionDefinitions(jurisdiction: string): Promise<Array<{ key: string; label: string; required: boolean; constraints?: string[]; altKeys: string[] }>> {
     const profile = await getCountryProfile(jurisdiction)
     const defs: Array<{ key: string; label: string; required: boolean; constraints?: string[]; altKeys: string[] }> = []

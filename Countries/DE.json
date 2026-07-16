@@ -1,0 +1,717 @@
+{
+  "meta": {
+    "id": "DE",
+    "code": "DE",
+    "name": "Germany",
+    "continent": "Europe",
+    "office": "German Patent and Trade Mark Office (DPMA)",
+    "officeUrl": "https://www.dpma.de",
+    "applicationTypes": [
+      "standard",
+      "divisional",
+      "PCT national phase"
+    ],
+    "languages": [
+      "de",
+      "en"
+    ],
+    "version": 1,
+    "status": "active",
+    "inheritsFrom": null,
+    "promptMergeStrategy": "append",
+    "tags": [
+      "national_office",
+      "pct_national_phase",
+      "paris_convention",
+      "two_part_claims",
+      "no_grace_period",
+      "german_language_filing"
+    ],
+    "createdAt": "2026-07-15T00:00:00Z",
+    "updatedAt": "2026-07-15T00:00:00Z"
+  },
+  "structure": {
+    "defaultVariant": "standard",
+    "variants": [
+      {
+        "id": "standard",
+        "label": "German Patent Application (DPMA)",
+        "description": "Standard national German patent application before the Deutsches Patent- und Markenamt (DPMA) under the Patentgesetz (PatG) and the Patentverordnung (PatV), including the customary two-part claim form (Oberbegriff / kennzeichnender Teil).",
+        "sections": [
+          {
+            "id": "title",
+            "label": "Title of Invention (Bezeichnung der Erfindung)",
+            "order": 1,
+            "canonicalKeys": [
+              "title"
+            ],
+            "required": true,
+            "group": "header",
+            "maxLengthChars": 500,
+            "ui": {
+              "placeholder": "Enter a short and precise technical designation of the invention",
+              "helpText": "The Bezeichnung der Erfindung must be a brief and exact technical designation (§ 4(1) PatV). Avoid fancy names, trade marks, personal names and laudatory terms; the DPMA may object to non-technical titles during formalities examination."
+            },
+            "rules": {
+              "forbidTradeMarks": true,
+              "forbidPersonalNames": true,
+              "forbidSuperlatives": true,
+              "mustBeTechnical": true,
+              "notes": [
+                "The same title is entered in the request for grant (DPMA form P2007) and appears on the published application (Offenlegungsschrift)."
+              ]
+            }
+          },
+          {
+            "id": "technical_field",
+            "label": "Technical Field",
+            "order": 2,
+            "canonicalKeys": [
+              "technical_field"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "State the technical field to which the invention relates",
+              "helpText": "Per § 10(2) No. 1 PatV, the description begins by stating the technical field of the invention. One or two neutral sentences mirroring the preamble (Oberbegriff) of claim 1 are customary."
+            }
+          },
+          {
+            "id": "background_art",
+            "label": "Background Art (Stand der Technik)",
+            "order": 3,
+            "canonicalKeys": [
+              "background",
+              "background_art"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 10000,
+            "ui": {
+              "placeholder": "Describe the prior art known to the applicant, citing sources (Fundstellen)",
+              "helpText": "Per § 10(2) No. 2 PatV, indicate the prior art known to the applicant that is useful for understanding the invention and its protectability, citing the sources. Describe drawbacks objectively; statements here serve as the basis for the Oberbegriff of the two-part claims."
+            },
+            "rules": {
+              "citeDocumentsPreferred": true,
+              "avoidDisparagingPriorArt": true,
+              "notes": [
+                "§ 34(7) PatG: at the request of the DPMA, the applicant must state the prior art to the best of their knowledge, fully and truthfully."
+              ]
+            }
+          },
+          {
+            "id": "summary_of_invention",
+            "label": "Summary of the Invention (Aufgabe und Lösung)",
+            "order": 4,
+            "canonicalKeys": [
+              "summary",
+              "summary_of_invention"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 12000,
+            "ui": {
+              "placeholder": "State the objective technical problem (Aufgabe) and its solution by the claimed features",
+              "helpText": "German drafting practice per § 10(2) No. 3 PatV: state the technical problem (Aufgabe) arising from the prior art, then the solution ('Diese Aufgabe wird gelöst durch ...') by reciting the features of the independent claims, followed by the advantageous effects of the invention. Keep the wording consistent with the claims."
+            },
+            "rules": {
+              "mustIncludeProblemSolution": true,
+              "alignWithClaims": true,
+              "stateAdvantageousEffects": true
+            }
+          },
+          {
+            "id": "brief_description_of_drawings",
+            "label": "Brief Description of Drawings (Figurenliste)",
+            "order": 5,
+            "canonicalKeys": [
+              "brief_description_of_drawings"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 8000,
+            "ui": {
+              "placeholder": "List each figure briefly (e.g., 'Fig. 1 shows a schematic view of ...')",
+              "helpText": "Per § 10(2) No. 4 PatV, briefly describe each figure of the drawings. Provide one sentence per figure identifying the view type and subject. Drawings must comply with Annex 2 to the PatV (black lines, A4, prescribed margins)."
+            }
+          },
+          {
+            "id": "detailed_description",
+            "label": "Detailed Description (Ausführungsbeispiele)",
+            "order": 6,
+            "canonicalKeys": [
+              "detailed_description"
+            ],
+            "required": true,
+            "group": "body",
+            "maxLengthChars": 60000,
+            "ui": {
+              "placeholder": "Describe at least one embodiment (Ausführungsbeispiel) in detail with reference signs",
+              "helpText": "Per § 34(4) PatG, the application must disclose the invention clearly and completely enough for a person skilled in the art to carry it out. Describe at least one detailed embodiment referring to the drawings with consistent reference signs (Bezugszeichen). There is no best-mode requirement under German law."
+            },
+            "rules": {
+              "requireEnablement": true,
+              "requireSupportForAllClaims": true,
+              "requireBestModeDisclosure": false,
+              "allowReferenceNumerals": true,
+              "avoidClaimStyleLanguage": true,
+              "notes": [
+                "Draft with § 38 PatG in mind: amendments must not extend the subject-matter beyond the content of the application as originally filed, so include express fallback positions and combinable variants.",
+                "Every claimed feature should appear in at least one Ausführungsbeispiel with its reference sign."
+              ]
+            }
+          },
+          {
+            "id": "industrial_applicability",
+            "label": "Industrial Applicability (optional)",
+            "order": 7,
+            "canonicalKeys": [
+              "industrial_applicability"
+            ],
+            "required": false,
+            "group": "body",
+            "maxLengthChars": 4000,
+            "ui": {
+              "placeholder": "Explain the commercial/industrial applicability if not self-evident",
+              "helpText": "Per § 5 PatG an invention is industrially applicable if it can be made or used in any kind of industry, including agriculture. Include this section only where applicability is not obvious from the description or the nature of the invention."
+            }
+          },
+          {
+            "id": "claims",
+            "label": "Claims (Patentansprüche)",
+            "order": 8,
+            "canonicalKeys": [
+              "claims"
+            ],
+            "required": true,
+            "group": "claims",
+            "maxLengthChars": 30000,
+            "ui": {
+              "placeholder": "Draft the Patentansprüche, customarily in two-part form (Oberbegriff / kennzeichnender Teil)",
+              "helpText": "Per § 34(3) No. 3 PatG and § 9 PatV, the claims define what is to be protected as patentable (§ 14 PatG: the scope of protection is determined by the claims). The two-part form — Oberbegriff reflecting the closest prior art, kennzeichnender Teil introduced by 'dadurch gekennzeichnet, dass' — is customary. The filing fee covers 10 claims; each further claim incurs an additional fee (Patentkostengesetz)."
+            },
+            "rules": {
+              "twoPartFormPreferred": true,
+              "allowMultipleIndependentClaims": true,
+              "allowMultipleDependentClaims": true,
+              "requireSingleGeneralInventiveConcept": true,
+              "mustBeSupportedByDescription": true,
+              "referenceSignsInParenthesesRecommended": true,
+              "claimsIncludedInFilingFee": 10,
+              "notes": [
+                "§ 9(1) PatV permits one-part (einteilige) or two-part (zweiteilige) claims; where the two-part form is used, the characterising portion begins with 'dadurch gekennzeichnet, dass' or equivalent.",
+                "§ 9(8) PatV: reference signs shall be inserted in the claims where they facilitate understanding; they do not limit the claim.",
+                "§ 34(5) PatG: the application may relate to one invention only, or to a group of inventions linked so as to form a single general inventive concept."
+              ]
+            }
+          },
+          {
+            "id": "abstract",
+            "label": "Abstract (Zusammenfassung)",
+            "order": 9,
+            "canonicalKeys": [
+              "abstract"
+            ],
+            "required": true,
+            "group": "abstract",
+            "maxLengthChars": 1500,
+            "ui": {
+              "placeholder": "Provide a concise summary of the disclosure (maximum 1,500 characters)",
+              "helpText": "Per § 36 PatG, the Zusammenfassung is a concise summary of the disclosure indicating the technical field, the technical problem, its solution and the principal use(s). DPMA practice limits the abstract to 1,500 characters. It serves exclusively for technical information and may not be used to interpret the scope of protection."
+            },
+            "rules": {
+              "singleParagraph": true,
+              "forbidAdvantages": true,
+              "forbidMarketingLanguage": true,
+              "maxLengthChars": 1500,
+              "mentionMostIllustrativeFigure": true,
+              "referenceSignsInParentheses": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rules": {
+    "global": {
+      "requiresClaims": true,
+      "requiresAbstract": true,
+      "requiresDrawingsIfReferenced": true,
+      "paragraphNumberingRequired": false,
+      "paragraphNumberFormat": "[0001]",
+      "maxPagesRecommended": 100,
+      "allowEquations": true,
+      "allowTables": true,
+      "notes": [
+        "Paragraph numbering in the format [0001] is not mandatory before the DPMA but is standard professional practice and simplifies later amendment and citation.",
+        "There is no per-page surcharge for German patent applications; the filing fee under the Patentkostengesetz depends on the number of claims (10 included).",
+        "The abstract (§ 36 PatG) may be filed up to fifteen months after the filing date or priority date if not submitted with the application."
+      ]
+    },
+    "pageLayout": {
+      "defaultPageSize": "A4",
+      "allowedPageSizes": ["A4"],
+      "minMarginTopCm": 2.0,
+      "minMarginBottomCm": 2.0,
+      "minMarginLeftCm": 2.5,
+      "minMarginRightCm": 2.0,
+      "recommendedFontFamily": "Times New Roman",
+      "recommendedFontSizePt": 12,
+      "recommendedLineSpacing": 1.5,
+      "notes": [
+        "Annex 1 to the PatV prescribes A4 paper in portrait orientation with minimum margins of 2.5 cm left, 2 cm top, 2 cm right and 2 cm bottom for the description, claims and abstract.",
+        "Text must be typed or printed in 1.5 line spacing with characters of sufficient size (capital letters at least 0.21 cm) in dark, indelible colour.",
+        "Sheets should be numbered consecutively in arabic numerals; numbering every fifth line of the description and claims is recommended."
+      ]
+    },
+    "description": {
+      "requireEnablement": true,
+      "requireBestModeDisclosure": false,
+      "requireSupportForClaims": true,
+      "requireEmbodimentSupportForAllClaims": true,
+      "industrialApplicabilitySectionRequired": false,
+      "allowReferenceNumerals": true,
+      "avoidClaimLanguage": true,
+      "allowExamples": true,
+      "allowComparativeExamples": true,
+      "notes": [
+        "§ 34(4) PatG: the invention must be disclosed in the application clearly and completely enough for a person skilled in the art to carry it out (Ausführbarkeit).",
+        "§ 10(2) PatV prescribes the customary order of the description: technical field, prior art with citations, problem (Aufgabe), solution and advantages, brief description of drawings, and at least one detailed embodiment (Ausführungsbeispiel).",
+        "There is no best-mode requirement under German law; one enabling embodiment suffices, but broader claims should be backed by additional variants.",
+        "§ 38 PatG: amendments after filing must not extend beyond the content of the original application; extensive fallback disclosure is therefore advisable."
+      ]
+    },
+    "claims": {
+      "twoPartFormPreferred": true,
+      "allowMultipleDependent": true,
+      "prohibitMultipleDependentOnMultipleDependent": false,
+      "preferredConnectors": [
+        "dadurch gekennzeichnet, dass",
+        "characterized in that",
+        "comprising"
+      ],
+      "discouragedConnectors": [],
+      "forbiddenPhrases": [],
+      "maxIndependentClaimsBeforeExtraFee": 10,
+      "maxTotalClaimsRecommended": 10,
+      "countBeforeExtraFee": 10,
+      "allowReferenceNumeralsInClaims": true,
+      "requireSupportInDescription": true,
+      "unityStandard": "single_general_inventive_concept_para_34_5_patg",
+      "feeModel": {
+        "extraFeeBasedOnIndependents": false,
+        "extraFeeBasedOnTotalClaims": true,
+        "note": "Under the Patentkostengesetz the filing fee includes 10 claims; a per-claim surcharge applies to the 11th and each further claim. There is no separate fee based on the number of independent claims, so maxIndependentClaimsBeforeExtraFee mirrors the 10-claim total threshold."
+      },
+      "notes": [
+        "§ 9(1) PatV: claims may be drafted in one-part or two-part form; the two-part form (Oberbegriff + kennzeichnender Teil introduced by 'dadurch gekennzeichnet, dass') is customary where the invention builds on identifiable prior art.",
+        "§ 9(2)-(5) PatV: dependent claims (Unteransprüche) must reference preceding claims and may be grouped; multiple dependencies are permitted.",
+        "§ 9(8) PatV: reference signs are to be inserted in the claims where they facilitate understanding of the claim; they do not limit scope.",
+        "§ 14 PatG: the scope of protection is determined by the claims, interpreted in the light of the description and drawings.",
+        "§ 34(5) PatG unity: one invention or a group linked by a single general inventive concept."
+      ]
+    },
+    "abstract": {
+      "wordLimit": 150,
+      "noBenefitsOrAdvantages": true,
+      "noClaimLanguage": true,
+      "singleParagraph": true,
+      "maxLengthCharsRecommended": 1500,
+      "hardCapChars": 1500,
+      "mentionMostIllustrativeFigure": true,
+      "forbidMarketingLanguage": true,
+      "notes": [
+        "§ 36(1) PatG: the abstract is a concise summary of the disclosure contained in the application; it serves exclusively for the purpose of technical information.",
+        "DPMA practice limits the abstract to 1,500 characters including spaces; the word limit of ~150 words is a drafting guideline consistent with that character cap.",
+        "The abstract should state the technical field, the problem, the solution and the principal use(s), may indicate the most illustrative figure, and should follow main technical features with their reference signs in parentheses."
+      ]
+    },
+    "drawings": {
+      "requiredWhenApplicable": true,
+      "paperSize": "A4",
+      "colorAllowed": false,
+      "lineStyle": "black_and_white_solid",
+      "referenceNumeralsMandatoryWhenDrawings": true,
+      "minReferenceTextSizePt": 8,
+      "marginTopCm": 2.5,
+      "marginBottomCm": 1.0,
+      "marginLeftCm": 2.5,
+      "marginRightCm": 1.5,
+      "minTextHeightMm": 3.2,
+      "typesAllowed": [
+        "block_diagram",
+        "flowchart",
+        "schematic",
+        "perspective_view",
+        "cross_section",
+        "graph",
+        "table",
+        "exploded_view"
+      ],
+      "notes": [
+        "Annex 2 to the PatV (mirroring PCT Rule 11): usable surface of drawing sheets not exceeding 26.2 cm x 17 cm; minimum margins top 2.5 cm, left 2.5 cm, right 1.5 cm, bottom 1 cm.",
+        "Drawings must be executed in durable, black, uniformly thick lines without colouring; cross-sections indicated by hatching; numbers and letters at least 0.32 cm high.",
+        "Drawings shall not contain text matter beyond single words or short catchwords where indispensable (e.g., in flowcharts and block diagrams).",
+        "Reference signs must be consistent across description, claims and drawings."
+      ]
+    },
+    "language": {
+      "allowedLanguages": [
+        "de"
+      ],
+      "requiresOfficialTranslation": true,
+      "notes": [
+        "The language of proceedings before the DPMA is German (§ 126 PatG). The specification must be in German for grant.",
+        "§ 35a PatG: an application may be filed in any language, but a German translation must be filed within three months; for applications filed in English or French the period is twelve months from filing (but no later than fifteen months from the earliest priority date).",
+        "If the translation is not filed in time, the application is deemed withdrawn."
+      ]
+    },
+    "procedural": {
+      "gracePeriodMonths": 0,
+      "foreignFilingLicenseRequired": false,
+      "idsRequired": false,
+      "priorArtDisclosureThreshold": "on_dpma_request_para_34_7_patg",
+      "allowProvisionalPriority": true,
+      "notes": [
+        "There is no general grace period under German law: any disclosure before the filing/priority date is prior art (§ 3(1) PatG). § 3(5) PatG provides only narrow six-month exceptions for evident abuse and display at officially recognised exhibitions.",
+        "No US-style IDS obligation exists, but under § 34(7) PatG the applicant must, at the DPMA's request, state the prior art fully and truthfully to the best of their knowledge.",
+        "No foreign-filing licence is required for German residents; note, however, § 52 PatG secrecy provisions for inventions containing state secrets before filing abroad.",
+        "Paris Convention priority (12 months) may be claimed from any regular first filing, including US provisional applications; domestic priority from an earlier German application is available under § 40 PatG."
+      ]
+    },
+    "sequenceListing": {
+      "requiredIfSeqDisclosed": true,
+      "format": "ST.26-XML",
+      "allowLateFurnishing": true,
+      "lateFurnishingNotes": "A missing sequence listing must be furnished upon invitation by the DPMA; late furnishing does not affect the filing date but non-compliance can lead to refusal (§ 11a PatV in conjunction with WIPO Standard ST.26).",
+      "affectsFilingDate": false,
+      "additionalFormatsAllowedForReference": ["XML"]
+    }
+  },
+  "validation": {
+    "sectionChecks": {
+      "title": [
+        {
+          "id": "title_length",
+          "type": "maxChars",
+          "limit": 250,
+          "severity": "warning",
+          "message": "Title is unusually long. § 4(1) PatV requires a short and exact technical designation of the invention (Bezeichnung der Erfindung)."
+        }
+      ],
+      "abstract": [
+        {
+          "id": "abstract_char_limit",
+          "type": "maxChars",
+          "limit": 1500,
+          "severity": "error",
+          "message": "Abstract exceeds 1,500 characters. DPMA practice under § 36 PatG limits the Zusammenfassung to 1,500 characters; shorten it to the technical field, problem, solution and principal use."
+        },
+        {
+          "id": "abstract_word_guideline",
+          "type": "maxWords",
+          "limit": 150,
+          "severity": "warning",
+          "message": "Abstract exceeds ~150 words. Keep the Zusammenfassung concise (§ 36 PatG); it serves exclusively for technical information."
+        }
+      ],
+      "claims": [
+        {
+          "id": "claims_fee_threshold",
+          "type": "maxCount",
+          "limit": 10,
+          "severity": "warning",
+          "message": "More than 10 claims: the filing fee under the Patentkostengesetz covers 10 claims, and a surcharge is due for the 11th and each further claim. Consider consolidating dependent claims."
+        }
+      ],
+      "detailed_description": [
+        {
+          "id": "description_min_substance",
+          "type": "minWords",
+          "limit": 300,
+          "severity": "info",
+          "message": "The detailed description appears very short. § 34(4) PatG requires a disclosure clear and complete enough for a person skilled in the art to carry out the invention."
+        }
+      ]
+    },
+    "crossSectionChecks": [
+      {
+        "id": "claims_supported_by_description",
+        "type": "support",
+        "from": "claims",
+        "mustBeSupportedBy": ["detailed_description"],
+        "severity": "error",
+        "message": "Claims appear broader than, or use terminology absent from, the detailed description. § 34(4) PatG requires an enabling disclosure, and claims must be supported by the description; add embodiments or fallback wording."
+      },
+      {
+        "id": "claims_vs_summary_consistency",
+        "type": "consistency",
+        "from": "claims",
+        "mustBeConsistentWith": ["summary_of_invention"],
+        "severity": "warning",
+        "message": "The Aufgabe-Lösung statement does not mirror the independent claims. Per § 10(2) No. 3 PatV the description must state the solution using the features of the claims; align the wording."
+      },
+      {
+        "id": "abstract_vs_claims_consistency",
+        "type": "consistency",
+        "from": "abstract",
+        "mustBeConsistentWith": ["claims", "detailed_description"],
+        "severity": "warning",
+        "message": "The Zusammenfassung does not reflect the claimed invention. § 36 PatG requires a concise summary of the disclosure covering the problem, its solution and the principal use."
+      },
+      {
+        "id": "drawings_reference_consistency",
+        "type": "reference",
+        "from": "brief_description_of_drawings",
+        "mustReference": ["detailed_description"],
+        "severity": "error",
+        "message": "One or more figures or reference signs (Bezugszeichen) in the Figurenliste are not explained in the detailed description. Reference signs must be used consistently across description, claims and drawings."
+      }
+    ]
+  },
+  "prompts": {
+    "systemPrompt": "You are an expert German patent attorney (Patentanwalt) drafting a national German patent application for filing with the Deutsches Patent- und Markenamt (DPMA) in compliance with the Patentgesetz (PatG) and the Patentverordnung (PatV). Follow German drafting conventions: the Aufgabe-Loesung (problem-solution) structure in the description, two-part claims with Oberbegriff and kennzeichnender Teil where the invention builds on known prior art, and consistent reference signs (Bezugszeichen) across description, claims and drawings. Ensure enabling disclosure under Paragraph 34(4) PatG and draft defensively against Paragraph 38 PatG added-matter constraints by making fallback positions explicit. The final filing language is German; if drafting in English, keep sentences precise and directly translatable.",
+    "promptMergeStrategy": "append",
+    "baseStyle": {
+      "tone": "technical, neutral, precise",
+      "voice": "impersonal_third_person",
+      "avoid": [
+        "marketing language",
+        "unsupported advantages",
+        "disparagement of third-party products or processes",
+        "vague relative terms without a defined standard"
+      ]
+    },
+    "sections": {
+      "title": {
+        "topUp": {
+          "instruction": "Draft the Bezeichnung der Erfindung per § 4(1) PatV: a short and exact technical designation of the invention, free of fancy names. Reflect every claim category present (e.g. 'Vorrichtung und Verfahren zur ...' / 'Device and method for ...') and reuse the key terminology of claim 1 so that the request for grant, description and claims are consistent. Do not include trade marks, personal names, the word 'Patent', or laudatory terms such as 'improved' or 'novel'. Keep it typically under 15 words; the DPMA raises formal objections against non-technical or promotional titles.",
+          "constraints": [
+            "Short and exact technical designation (§ 4(1) PatV)",
+            "No fancy names, trade marks, personal names or superlatives",
+            "Reflect the claim categories actually claimed",
+            "Use the same terminology as the independent claims"
+          ],
+          "additions": [
+            "For filing, the title will appear in German on the request form (DPMA form P2007)"
+          ]
+        }
+      },
+      "fieldOfInvention": {
+        "topUp": {
+          "instruction": "Draft the Technical Field section per § 10(2) No. 1 PatV: state the technical field to which the invention relates in one or two neutral sentences. German practice conventionally phrases this as 'Die Erfindung betrifft ...' followed by wording that mirrors the Oberbegriff (preamble) of independent claim 1. Do not discuss the prior art, the problem or advantages here; those belong in Stand der Technik and the Aufgabe-Lösung section.",
+          "constraints": [
+            "Neutral technical terminology, no advantages or problem discussion",
+            "Mirror the Oberbegriff of the independent claim(s)",
+            "One short paragraph"
+          ],
+          "additions": [
+            "Cover every claim category so the field statement supports the full claim set"
+          ]
+        }
+      },
+      "background": {
+        "topUp": {
+          "instruction": "Draft the Stand der Technik section per § 10(2) No. 2 PatV: indicate the prior art known to the applicant which is useful for understanding the invention and assessing its protectability, and cite the sources (Fundstellen) — patent publications by number, non-patent literature by full citation. What you acknowledge here defines the Oberbegriff of the two-part claims (§ 9 PatV), so characterise the closest prior art accurately but without over-admission. Present drawbacks and limitations objectively and technically, without disparaging third-party products. Do not disclose the invention or its solution here — reserve that for the Aufgabe-Lösung section. Remember that German law has no general grace period (§ 3(1) PatG; § 3(5) PatG covers only evident abuse and officially recognised exhibitions within six months), so treat any pre-filing disclosure, including the applicant's own, as citable prior art. Note also § 34(7) PatG: on request of the DPMA the applicant must state the prior art fully and truthfully.",
+          "constraints": [
+            "Cite sources for the prior art (§ 10(2) No. 2 PatV)",
+            "Characterise the closest prior art accurately; it defines the claim Oberbegriff",
+            "Objective technical language; no disparagement",
+            "Do not reveal the invention or its solution in this section"
+          ],
+          "additions": [
+            "No general grace period in Germany — flag any pre-filing disclosures to the applicant",
+            "Statements here are admissions that shape examination and nullity proceedings"
+          ]
+        }
+      },
+      "summary": {
+        "topUp": {
+          "instruction": "Draft the Summary per § 10(2) No. 3 PatV using the classical German Aufgabe-Lösung structure: (1) derive the objective technical problem (Aufgabe) from the drawbacks of the Stand der Technik — phrase it as what is to be achieved, not as a pointer to the solution; (2) state the solution with the canonical formula 'Diese Aufgabe wird erfindungsgemäß gelöst durch ...' reciting the features of each independent claim essentially verbatim (consistory clauses); (3) introduce advantageous refinements corresponding to key dependent claims with non-limiting language ('In einer vorteilhaften Ausgestaltung ...' / 'In an advantageous embodiment ...'); and (4) state the advantageous technical effects, each tied causally to a claimed feature. Effects must be technical and plausible, not commercial or speculative. Keep the wording strictly aligned with the Patentansprüche so the description supports the claims and later amendments do not violate § 38 PatG (no extension beyond the original disclosure).",
+          "constraints": [
+            "Aufgabe-Lösung structure per § 10(2) No. 3 PatV",
+            "Solution statement recites the independent claim features verbatim",
+            "Advantageous effects tied to specific claimed features",
+            "Technical effects only; no commercial or speculative benefits"
+          ],
+          "additions": [
+            "Include one consistory clause per independent claim",
+            "Introduce refinements with non-limiting language to preserve fallback positions under § 38 PatG"
+          ]
+        }
+      },
+      "briefDescriptionOfDrawings": {
+        "topUp": {
+          "instruction": "Draft the Figurenliste per § 10(2) No. 4 PatV: briefly describe each figure of the drawings, one sentence per figure, in the form 'Fig. 1 zeigt ...' / 'Fig. 1 shows a [view type] of [subject] according to an embodiment'. Identify the view type precisely (schematic representation, block diagram, flowchart, sectional view, perspective view, graph). Introduce the list with a lead-in such as 'The invention is explained in more detail below with reference to embodiments shown in the drawings, in which:'. Do not explain operation, advantages or reference signs here — that belongs in the Ausführungsbeispiele. Every figure in the drawings must be listed with consecutive numbering, and the drawings themselves must comply with Annex 2 to the PatV (black uniform lines, A4, prescribed margins, minimal text).",
+          "constraints": [
+            "One sentence per figure; no operational detail",
+            "Identify the view type of each figure",
+            "Figure numbering consecutive and complete",
+            "Use non-limiting language ('according to an embodiment')"
+          ],
+          "additions": [
+            "Reference signs introduced in the figures must reappear consistently in the description and claims"
+          ]
+        }
+      },
+      "detailedDescription": {
+        "topUp": {
+          "instruction": "Draft the Ausführungsbeispiele per § 10(2) No. 5 PatV and § 34(4) PatG: describe at least one embodiment of the invention in detail, referring to the drawings by figure number and reference sign (Bezugszeichen), so that a person skilled in the art can carry out the invention without inventive effort (Ausführbarkeit). Every feature of every claim — independent and dependent — should be described with at least one concrete implementation; broad claims should be backed by several variants so the claimed breadth is enabled. Draft defensively against § 38 PatG (and § 21(1) No. 4 PatG revocation for inadmissible extension): spell out intermediate generalisations, state explicitly that features of different embodiments can be combined where technically sensible, and provide literal basis for foreseeable claim amendments. Use consistent reference numerals matching the drawings, avoid claim-style language, and note that German law imposes no best-mode requirement. Give nested preferred ranges for parameters ('bevorzugt ... besonders bevorzugt ...') as fallback positions. Close by stating that the invention is not restricted to the embodiments shown but is defined by the claims.",
+          "constraints": [
+            "At least one detailed embodiment (§ 10(2) No. 5 PatV)",
+            "Enabling disclosure for the skilled person (§ 34(4) PatG)",
+            "Every claim feature backed by a described implementation",
+            "Explicit basis for foreseeable amendments (§ 38 PatG)",
+            "Consistent Bezugszeichen matching the drawings"
+          ],
+          "additions": [
+            "No best-mode requirement under German law",
+            "Number paragraphs in the format [0001] per standard practice",
+            "State expressly that embodiments and their features may be combined"
+          ]
+        }
+      },
+      "industrialApplicability": {
+        "topUp": {
+          "instruction": "Draft an Industrial Applicability statement only where applicability is not self-evident from the nature of the invention (§ 5 PatG: an invention is susceptible of industrial application if it can be made or used in any kind of industry, including agriculture). This is most relevant for medical and diagnostic subject-matter, where §§ 2a, 5 PatG exclusions must be navigated. Where included, state concretely how and in which industry the invention can be made or used. Omit the section entirely for ordinary mechanical, electrical or software-implemented inventions.",
+          "constraints": [
+            "Include only if applicability is not self-evident",
+            "State concrete industrial fields of making or use",
+            "Mind the §§ 2a, 5 PatG exclusions for methods of treatment and diagnosis"
+          ],
+          "additions": [
+            "Usually omitted in German practice; keep to one short paragraph when present"
+          ]
+        }
+      },
+      "claims": {
+        "topUp": {
+          "instruction": "Draft the Patentansprüche per § 34(3) No. 3 PatG and § 9 PatV. Use the two-part form customary in German practice wherever the invention builds on identifiable prior art: an Oberbegriff (preamble) containing the features known in combination from the closest prior art cited in the Stand der Technik, and a kennzeichnender Teil introduced by 'dadurch gekennzeichnet, dass' (in English drafts: 'characterized in that') containing the distinguishing features (§ 9(1)-(2) PatV). The one-part form is acceptable where the two-part form is inappropriate (e.g. pioneer inventions or method claims with interleaved known and new steps). Multiple independent claims in different categories (Erzeugnis, Verfahren, Vorrichtung, Verwendung) are permissible subject to unity under § 34(5) PatG (single general inventive concept). Dependent claims (Unteransprüche) must reference preceding claims, may use multiple dependencies, and should each add a technically meaningful fallback. Insert reference signs in parentheses where they facilitate understanding (§ 9(8) PatV); they do not limit scope. Remember § 14 PatG: the claims determine the scope of protection, interpreted in light of the description and drawings — so keep claim terminology identical to the description. The filing fee covers 10 claims; a surcharge applies to the 11th and each further claim (Patentkostengesetz), so target 10 claims and consolidate optional features where sensible.",
+          "constraints": [
+            "Two-part form with Oberbegriff and 'dadurch gekennzeichnet, dass' where prior art overlaps (§ 9 PatV)",
+            "Unity: single general inventive concept (§ 34(5) PatG)",
+            "Claims must be clear and fully supported by the description",
+            "Reference signs in parentheses where helpful (§ 9(8) PatV)",
+            "Target 10 claims or fewer to stay within the filing fee (Patentkostengesetz)"
+          ],
+          "additions": [
+            "Multiple dependent claims are permitted and not separately penalised",
+            "Independent claims in several categories are common (device + method + use)",
+            "Draft the kennzeichnender Teil so it contains the genuinely distinguishing features over the closest cited art"
+          ]
+        }
+      },
+      "abstract": {
+        "topUp": {
+          "instruction": "Draft the Zusammenfassung per § 36 PatG: a concise summary of the disclosure contained in the application, indicating the technical field, the technical problem, the solution through the invention and the principal use or uses. DPMA practice caps the abstract at 1,500 characters (including spaces); aim for roughly 100-150 words in a single paragraph. Where drawings are present, indicate the figure that best characterises the invention for publication with the abstract, and follow each main technical feature with its reference sign in parentheses. The abstract serves exclusively for technical information (§ 36(1) PatG) and cannot be used to interpret the scope of protection, so write it for searchers: dense, factual and keyword-rich. Do not include advantages, merits, marketing statements or claim-style legalese. If not filed with the application, the abstract must be submitted within fifteen months of the filing or priority date.",
+          "constraints": [
+            "Maximum 1,500 characters (§ 36 PatG / DPMA practice)",
+            "Cover technical field, problem, solution and principal use",
+            "Reference signs in parentheses after main technical features",
+            "Single paragraph; no advantages or marketing statements",
+            "No claim-style language"
+          ],
+          "additions": [
+            "Indicate the most illustrative figure for publication",
+            "For filing, the abstract must be in German; keep the English draft directly translatable"
+          ]
+        }
+      }
+    }
+  },
+  "export": {
+    "documentTypes": [
+      {
+        "id": "spec_pdf",
+        "label": "German Patent Specification (DPMA-compliant PDF)",
+        "includesSections": [
+          "title",
+          "technical_field",
+          "background_art",
+          "summary_of_invention",
+          "brief_description_of_drawings",
+          "detailed_description",
+          "industrial_applicability",
+          "claims",
+          "abstract"
+        ],
+        "pageSize": "A4",
+        "marginTopCm": 2.0,
+        "marginBottomCm": 2.0,
+        "marginLeftCm": 2.5,
+        "marginRightCm": 2.0,
+        "fontFamily": "Times New Roman",
+        "fontSizePt": 12,
+        "lineSpacing": 1.5,
+        "addPageNumbers": true,
+        "addParagraphNumbers": true
+      }
+    ],
+    "sectionHeadings": {
+      "title": "TITLE OF INVENTION",
+      "technical_field": "TECHNICAL FIELD",
+      "background_art": "BACKGROUND ART",
+      "summary_of_invention": "SUMMARY OF THE INVENTION",
+      "brief_description_of_drawings": "BRIEF DESCRIPTION OF DRAWINGS",
+      "detailed_description": "DETAILED DESCRIPTION",
+      "industrial_applicability": "INDUSTRIAL APPLICABILITY",
+      "claims": "CLAIMS",
+      "abstract": "ABSTRACT"
+    }
+  },
+  "diagrams": {
+    "requiredWhenApplicable": true,
+    "supportedDiagramTypes": [
+      "block",
+      "flowchart",
+      "schematic",
+      "perspective_view",
+      "cross_section",
+      "graph",
+      "table",
+      "exploded_view"
+    ],
+    "figureLabelFormat": "Fig. {number}",
+    "autoGenerateReferenceTable": true,
+    "diagramGenerationHints": {
+      "block": "Use rectangles for functional units and arrows for signal, data or control flow. Execute lines in durable, black, uniformly thick strokes per Annex 2 PatV; label blocks with reference numerals and at most short indispensable catchwords.",
+      "flowchart": "Use standard flowchart symbols matching the claimed method steps one-to-one so each step of an independent Verfahrensanspruch can be traced to a box. Short catchwords inside boxes are permitted.",
+      "schematic": "Use conventional circuit or system symbols with clean black linework suitable for black-and-white reproduction. Bezugszeichen must match the description and claims.",
+      "perspective_view": "Show the overall apparatus with every claimed structural element visible and labelled with its reference numeral; numbers and letters at least 0.32 cm high per Annex 2 PatV.",
+      "cross_section": "Indicate cross-sections by hatching that does not impede reading of reference signs; distinguish adjacent components by hatching direction.",
+      "graph": "Label axes with quantities and units; curves must remain distinguishable in black and white since colouring is not permitted.",
+      "table": "Tables may appear in the description; within drawings keep them inside the usable surface of 26.2 cm x 17 cm and do not split across sheets.",
+      "exploded_view": "Show assembly relationships with parts separated along a common axis; assign each part a unique Bezugszeichen explained in the Ausführungsbeispiele."
+    }
+  },
+  "crossChecks": {
+    "enableSemanticCrossCheck": true,
+    "checkList": [
+      {
+        "id": "drawings_vs_description",
+        "description": "Ensure all figure numbers and reference signs (Bezugszeichen) mentioned in the Figurenliste are defined and explained in the detailed description (Ausführungsbeispiele).",
+        "from": "brief_description_of_drawings",
+        "mustBeExplainedIn": [
+          "detailed_description"
+        ]
+      },
+      {
+        "id": "claims_vs_drawings",
+        "description": "Ensure key claimed structural elements appear in at least one figure when drawings are present, so that reference signs per § 9(8) PatV can be inserted into the Patentansprüche.",
+        "from": "claims",
+        "mustBeShownIn": [
+          "brief_description_of_drawings"
+        ]
+      },
+      {
+        "id": "claims_vs_description_support",
+        "description": "Ensure every claimed feature has support and at least one enabling embodiment in the detailed description (§ 34(4) PatG Ausführbarkeit).",
+        "from": "claims",
+        "mustBeSupportedBy": [
+          "detailed_description"
+        ]
+      }
+    ]
+  }
+}

@@ -207,7 +207,7 @@ export async function GET(request: NextRequest, { params }: { params: { countryC
       
       // Fallback: Return full superset when no jurisdictions specified
       console.log('[CountryProfile:REFERENCE] Returning full superset (no jurisdictions specified)')
-      return NextResponse.json({ profile: getFullReferenceProfile() })
+      return NextResponse.json({ profile: await getFullReferenceProfile() })
     }
 
     // Fetch profile and section mappings in parallel

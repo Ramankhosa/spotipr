@@ -121,7 +121,7 @@ const SECTION_KEY_TO_PROMPT_KEY: Record<string, string> = {
   listOfNumerals: 'reference_numerals'
 }
 
-const PROMPT_KEY_TO_SECTION_KEY: Record<string, string> = Object.fromEntries(
+export const PROMPT_KEY_TO_SECTION_KEY: Record<string, string> = Object.fromEntries(
   Object.entries(SECTION_KEY_TO_PROMPT_KEY).map(([sectionKey, promptKey]) => [promptKey, sectionKey])
 )
 
@@ -605,9 +605,11 @@ export async function getSectionLookup(
   const jurisdiction = countryCode.toUpperCase()
   
   try {
-    // IMPORTANT: Order by displayOrder - this is the ONLY source of truth for section sequence
+    // IMPORTANT: Order by displayOrder - this is the ONLY source of truth for section sequence.
+    // isEnabled filter aligns this lookup with the drafting/export resolvers,
+    // which never surface disabled sections.
     const mappings = await prisma.countrySectionMapping.findMany({
-      where: { countryCode: jurisdiction },
+      where: { countryCode: jurisdiction, isEnabled: true },
       orderBy: { displayOrder: 'asc' }
     })
     

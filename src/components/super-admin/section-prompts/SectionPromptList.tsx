@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { SectionPromptEditor } from './SectionPromptEditor'
+import { getFlagEmoji } from '@/lib/country-flags'
 
 interface SectionPrompt {
   id: string
@@ -418,24 +419,9 @@ export function SectionPromptList({ refreshTrigger, onRefresh }: SectionPromptLi
   )
 }
 
-// Helper to get country flag emoji
+// Helper to get country flag emoji (any ISO alpha-2 code works)
 function getCountryFlag(countryCode: string): string {
-  const flags: Record<string, string> = {
-    'IN': '🇮🇳',
-    'US': '🇺🇸',
-    'AU': '🇦🇺',
-    'CA': '🇨🇦',
-    'CANADA': '🇨🇦',
-    'JP': '🇯🇵',
-    'CN': '🇨🇳',
-    'EP': '🇪🇺',
-    'PCT': '🌐',
-    'UK': '🇬🇧',
-    'DE': '🇩🇪',
-    'FR': '🇫🇷',
-    'KR': '🇰🇷',
-    'BR': '🇧🇷'
-  }
-  return flags[countryCode.toUpperCase()] || '🏳️'
+  if (countryCode.toUpperCase() === 'CANADA') return getFlagEmoji('CA')
+  return getFlagEmoji(countryCode)
 }
 

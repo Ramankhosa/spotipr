@@ -11,29 +11,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyJWT } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-
-// ============================================================================
-// Auth Helper
-// ============================================================================
-
-async function verifySuperAdmin(request: NextRequest): Promise<{ userId: string; email: string } | null> {
-  const authHeader = request.headers.get('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) return null
-
-  const token = authHeader.substring(7)
-  const payload = verifyJWT(token)
-  if (!payload?.email) return null
-
-  const user = await prisma.user.findUnique({
-    where: { email: payload.email },
-    select: { id: true, email: true, roles: true }
-  })
-
-  if (!user?.roles?.includes('SUPER_ADMIN')) return null
-  return { userId: user.id, email: user.email }
-}
+import { verifySuperAdmin } from '@/lib/super-admin-auth'
 
 // ============================================================================
 // GET - Fetch complete configuration data
@@ -87,9 +66,9 @@ export async function GET(request: NextRequest) {
       mappings: mappingsBySectionKey[s.sectionKey] || []
     }))
 
-    // Fetch all countries (from profiles)
+    // Fetch all countries (from profiles) — include DRAFT/INACTIVE so admins can
+    // configure mappings BEFORE activating a country (staged activation flow)
     const countryProfiles = await prisma.countryProfile.findMany({
-      where: { status: 'ACTIVE' },
       select: {
         countryCode: true,
         name: true,
@@ -353,7 +332,9 @@ export async function POST(request: NextRequest) {
           )
         }
 
-        // Create country profile with minimal data
+        // Create country profile with minimal data.
+        // DRAFT, not ACTIVE: a scaffold profile has no structure/prompts and must
+        // pass readiness checks (via the countries PUT) before users can draft with it.
         const profile = await prisma.countryProfile.create({
           data: {
             countryCode: code,
@@ -369,7 +350,7 @@ export async function POST(request: NextRequest) {
               prompts: { sections: {} }
             },
             version: 1,
-            status: 'ACTIVE',
+            status: 'DRAFT',
             createdBy: admin.userId
           }
         })

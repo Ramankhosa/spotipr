@@ -1,38 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { verifyJWT } from '@/lib/auth'
-
-/**
- * Verify super admin access
- */
-async function verifySuperAdmin(request: NextRequest): Promise<{ userId: string; email: string } | null> {
-  const authHeader = request.headers.get('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) {
-    console.log('[JurisdictionStyles] No auth header')
-    return null
-  }
-
-  const token = authHeader.substring(7)
-  const payload = verifyJWT(token)
-  
-  if (!payload?.email) {
-    console.log('[JurisdictionStyles] Invalid JWT payload')
-    return null
-  }
-
-  // Check if user is super admin
-  const user = await prisma.user.findUnique({
-    where: { email: payload.email },
-    select: { id: true, email: true, roles: true }
-  })
-
-  if (!user?.roles?.includes('SUPER_ADMIN')) {
-    console.log('[JurisdictionStyles] User is not SUPER_ADMIN:', payload.email)
-    return null
-  }
-
-  return { userId: user.id, email: user.email }
-}
+import { verifySuperAdmin } from '@/lib/super-admin-auth'
 
 /**
  * GET /api/super-admin/jurisdiction-styles

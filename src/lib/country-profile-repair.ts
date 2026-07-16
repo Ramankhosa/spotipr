@@ -286,6 +286,23 @@ function repairStructureSection(profile: any): RepairAction[] {
     })
   }
 
+  // Point defaultVariant at a real variant when it references a non-existent id
+  if (
+    profile.structure.variants.length > 0 &&
+    !profile.structure.variants.some((v: any) => v?.id === profile.structure.defaultVariant)
+  ) {
+    const fallbackId = profile.structure.variants[0]?.id
+    if (fallbackId) {
+      repairs.push({
+        type: 'fixed',
+        field: 'structure.defaultVariant',
+        description: `defaultVariant "${profile.structure.defaultVariant}" not found in variants — set to "${fallbackId}"`,
+        newValue: fallbackId
+      })
+      profile.structure.defaultVariant = fallbackId
+    }
+  }
+
   // Fix canonical keys for sections
   profile.structure.variants.forEach((variant: any, variantIndex: number) => {
     if (variant.sections && Array.isArray(variant.sections)) {
@@ -411,6 +428,26 @@ function repairPromptsSection(profile: any): RepairAction[] {
       field: 'prompts.sections',
       description: 'Added missing sections object'
     })
+  }
+
+  // Normalize legacy flat prompt configs to the canonical topUp shape so the
+  // stored profile always has one form: { topUp: { instruction, constraints, ... } }
+  for (const [key, config] of Object.entries<any>(profile.prompts.sections)) {
+    if (config && typeof config === 'object' && !config.topUp && typeof config.instruction === 'string') {
+      profile.prompts.sections[key] = {
+        topUp: {
+          instruction: config.instruction,
+          constraints: Array.isArray(config.constraints) ? config.constraints : [],
+          ...(Array.isArray(config.additions) ? { additions: config.additions } : {}),
+          ...(typeof config.importFiguresDirectly === 'boolean' ? { importFiguresDirectly: config.importFiguresDirectly } : {})
+        }
+      }
+      repairs.push({
+        type: 'converted',
+        field: `prompts.sections.${key}`,
+        description: 'Converted legacy prompt config to topUp format'
+      })
+    }
   }
 
   return repairs
