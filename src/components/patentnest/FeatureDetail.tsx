@@ -14,8 +14,8 @@ import type { Feature } from '@/lib/patentnest/features'
 import { Reveal, staggerContainer, staggerItem } from './Reveal'
 import SectionLabel from './SectionLabel'
 import FeatureFigure from './FeatureFigure'
+import { BRASS } from '@/lib/patentnest/palette'
 
-const BRASS = '#8a6a1f'
 const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number]
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -92,6 +92,32 @@ export default function FeatureDetail({
               </figcaption>
             </figure>
           </Reveal>
+
+          {/* proof numbers */}
+          {feature.stats && (
+            <motion.div
+              variants={staggerContainer}
+              initial="hidden"
+              whileInView="show"
+              viewport={{ once: true, margin: '-40px' }}
+              className="mt-8 grid gap-4 sm:grid-cols-3"
+            >
+              {feature.stats.map((s) => (
+                <motion.div
+                  key={s.l}
+                  variants={staggerItem}
+                  className="rounded-xl border border-ai-graphite-900/10 bg-white px-4 py-5 text-center"
+                >
+                  <p className="font-serif text-2xl font-semibold tracking-tight text-ai-graphite-900 sm:text-3xl">
+                    {s.n}
+                  </p>
+                  <p className="mt-1.5 font-mono text-[9px] uppercase tracking-[0.15em] text-ai-graphite-400 sm:text-[10px]">
+                    {s.l}
+                  </p>
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
         </div>
       </section>
 
@@ -128,6 +154,28 @@ export default function FeatureDetail({
           </motion.ol>
         </div>
       </section>
+
+      {/* the sharpest claim, set large */}
+      {feature.pull && (
+        <section className="py-16 sm:py-20">
+          <div className="mx-auto max-w-3xl px-4 text-center sm:px-6">
+            <Reveal>
+              <div className="flex items-center gap-6">
+                <span className="h-px flex-1" style={{ backgroundColor: `${BRASS}55` }} />
+                <span className="font-mono text-[10px] uppercase tracking-[0.3em]" style={{ color: BRASS }}>
+                  Wherein, notably
+                </span>
+                <span className="h-px flex-1" style={{ backgroundColor: `${BRASS}55` }} />
+              </div>
+            </Reveal>
+            <Reveal delay={0.1}>
+              <p className="mt-8 font-serif text-2xl font-medium italic leading-snug tracking-tight text-ai-graphite-900 sm:text-3xl">
+                {feature.pull}
+              </p>
+            </Reveal>
+          </div>
+        </section>
+      )}
 
       {/* wherein — the specifics */}
       <section className="py-20 sm:py-24">
@@ -200,9 +248,16 @@ export default function FeatureDetail({
               See it on your own invention.
             </h2>
           </Reveal>
+          {feature.cta && (
+            <Reveal delay={0.06}>
+              <p className="mx-auto mt-4 max-w-xl font-mono text-[11px] uppercase tracking-[0.2em] text-ai-graphite-500">
+                {feature.cta.line}
+              </p>
+            </Reveal>
+          )}
           <Reveal delay={0.08}>
             <div className="mt-8 flex flex-col items-center gap-4">
-              <Link href={user ? '/patents/draft/new' : '/register'} className="group w-full sm:w-auto">
+              <Link href={user ? feature.cta?.href ?? '/patents/draft/new' : '/register'} className="group w-full sm:w-auto">
                 <span className="flex items-center justify-center gap-2.5 rounded-lg bg-ai-graphite-900 px-8 py-4 text-base font-medium text-white transition-all duration-150 group-hover:bg-ai-graphite-800 group-active:scale-[0.98]">
                   Start your application
                   <ArrowRight className="h-4 w-4 transition-transform duration-150 group-hover:translate-x-0.5" />

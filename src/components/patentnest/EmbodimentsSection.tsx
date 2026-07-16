@@ -12,8 +12,8 @@ import SectionLabel from './SectionLabel'
 import { Reveal, staggerContainer, staggerItem } from './Reveal'
 import FeatureFigure from './FeatureFigure'
 import { FEATURES } from '@/lib/patentnest/features'
+import { BRASS } from '@/lib/patentnest/palette'
 
-const BRASS = '#8a6a1f'
 
 export default function EmbodimentsSection() {
   const features = [...FEATURES].sort((a, b) => a.embodiment - b.embodiment)

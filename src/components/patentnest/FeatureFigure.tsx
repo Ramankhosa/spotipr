@@ -15,11 +15,17 @@ import {
   RefineLoopFig,
   ExportFig,
 } from './figures'
+import { IdeationJourneyFig } from './ideation-figures'
+import { NoveltyJourneyFig } from './novelty-figures'
 
 export default function FeatureFigure({ spec, compact = false }: { spec: FigSpec; compact?: boolean }) {
   switch (spec.kind) {
     case 'spark':
       return <SparkStructureFig compact={compact} />
+    case 'journey':
+      return <IdeationJourneyFig />
+    case 'noveltyJourney':
+      return <NoveltyJourneyFig />
     case 'pipeline':
       return <PipelineFig stages={spec.stages} loopback={spec.loopback} compact={compact} />
     case 'matrix':

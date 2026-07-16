@@ -8,8 +8,8 @@ import Image from 'next/image'
 import { motion } from 'framer-motion'
 import SectionLabel from './SectionLabel'
 import { Reveal, staggerContainer, staggerItem } from './Reveal'
+import { BRASS } from '@/lib/patentnest/palette'
 
-const BRASS = '#8a6a1f'
 
 const CLAIMS = [
   'A patent studio that turns a plain-language disclosure into a complete, filing-ready application.',

@@ -13,10 +13,8 @@
 // (SVG viewBox scales). Keep new feature art inside this vocabulary.
 
 import { motion, useReducedMotion } from 'framer-motion'
+import { BRASS, INK, SOFT } from '@/lib/patentnest/palette'
 
-const INK = '#1e293b' // ai-graphite-800
-const SOFT = '#94a3b8' // ai-graphite-400
-const BRASS = '#8a6a1f'
 const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number]
 
 const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }
@@ -24,7 +22,7 @@ const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }
 /** Shared viewport config: draw once, slightly before fully visible. */
 const VIEW = { once: true, margin: '-60px' } as const
 
-function useFig() {
+export function useFig() {
   const reduce = useReducedMotion()
   return {
     reduce,
@@ -52,7 +50,7 @@ function useFig() {
 }
 
 /** Quiet dash-flow: a dashed line whose dashes drift, reading as throughput. */
-function FlowLine({ d, delay = 0 }: { d: string; delay?: number }) {
+export function FlowLine({ d, delay = 0 }: { d: string; delay?: number }) {
   const reduce = useReducedMotion()
   return (
     <>
@@ -88,7 +86,7 @@ function FlowLine({ d, delay = 0 }: { d: string; delay?: number }) {
   )
 }
 
-function FigLabel({ x, y, children, anchor = 'middle', brass = false, size = 8.5 }: {
+export function FigLabel({ x, y, children, anchor = 'middle', brass = false, size = 8.5 }: {
   x: number; y: number; children: string; anchor?: 'start' | 'middle' | 'end'; brass?: boolean; size?: number
 }) {
   return (

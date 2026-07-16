@@ -6,6 +6,8 @@
 
 export type FigSpec =
   | { kind: 'spark' }
+  | { kind: 'journey' }
+  | { kind: 'noveltyJourney' }
   | { kind: 'pipeline'; stages: string[]; loopback?: { from: number; to: number; label: string } }
   | { kind: 'matrix' }
   | { kind: 'fanout'; branches: string[]; sourceLabel?: string; stacked?: boolean }
@@ -28,6 +30,12 @@ export interface Feature {
   how: { title: string; body: string }[]
   /** "Wherein" cards — the distinctive specifics. */
   details: { title: string; body: string }[]
+  /** Three proof numbers shown under the hero figure. */
+  stats?: { n: string; l: string }[]
+  /** One-sentence pull quote — the feature's sharpest claim, set large. */
+  pull?: string
+  /** Where the CTA sends a signed-in user, and its supporting line. */
+  cta?: { href: string; line: string }
 }
 
 // Content below is drawn from the actual implementation (ideation-service,
@@ -43,7 +51,7 @@ export const FEATURES: Feature[] = [
         'A mind-mapping engine that breaks your assumptions on purpose — and turns a rough seed into mechanism-pure, claimable ideas.',
       size: 'lg',
     },
-    fig: { kind: 'spark' },
+    fig: { kind: 'journey' },
     hero: {
       headline: 'Invention is a discipline. Practice it.',
       lede: 'The Ideation Studio takes a rough seed idea and works it the way an inventor’s mind should: grounding it, discovering the dimensions that matter, breaking the assumptions holding it in place — and returning structured ideas each built on exactly one causal mechanism.',
@@ -88,6 +96,13 @@ export const FEATURES: Feature[] = [
         body: 'An idea carries its lineage into novelty search and drafting — the session and frame stay linked from first spark to filed application.',
       },
     ],
+    stats: [
+      { n: '8', l: 'assumption-breaking move types' },
+      { n: '1', l: 'mechanism per idea — by rule' },
+      { n: '30 days', l: 'reservations, redacted for others' },
+    ],
+    pull: 'Most tools brainstorm features. This one breaks assumptions — and refuses any idea that isn’t one clean mechanism.',
+    cta: { href: '/idea-bank', line: 'Plant a seed · watch the dimensions unfold' },
   },
   {
     slug: 'novelty-assessment',
@@ -98,7 +113,7 @@ export const FEATURES: Feature[] = [
         'A staged pipeline — plan, retrieve, gate, map, report — that ends in an attorney-style novelty report with evidence you can check.',
       size: 'lg',
     },
-    fig: { kind: 'pipeline', stages: ['plan', 'retrieve', 'gate', 'map', 'report'] },
+    fig: { kind: 'noveltyJourney' },
     hero: {
       headline: 'Novelty is not a feeling. It’s a finding.',
       lede: 'The novelty pipeline turns a disclosure into a precise prior-art search plan you approve before anything runs — then retrieves across patent offices and scholarly indexes, gates candidates by evidence quality, maps every inventive feature against every reference, and hands you an attorney-style report.',
@@ -110,7 +125,7 @@ export const FEATURES: Feature[] = [
       },
       {
         title: 'Two-lane retrieval',
-        body: 'Keyword search across patent providers (PQAI, EPO, Indian corpus, Google Patents, and more) runs alongside a semantic embedding lane; a neural reranker unifies rankings across corpora. Scholarly literature is searched in parallel.',
+        body: 'Keyword search across a corpus of 30+ million patents from the major offices — USPTO, EPO, WIPO, Japan, China, Korea, India, and more — runs alongside a semantic embedding lane; a neural reranker unifies rankings across corpora. Scholarly literature is searched in parallel.',
       },
       {
         title: 'The relevance gate',
@@ -122,7 +137,7 @@ export const FEATURES: Feature[] = [
       },
       {
         title: 'The attorney report',
-        body: 'A numbered PDF: scope and methodology, key-feature analysis matrix, citation analysis, applicant landscape, claim-positioning observations, risk levels, and limitations. Emailed to you when it’s ready.',
+        body: 'A numbered PDF: scope and methodology, key-feature analysis matrix, citation analysis, applicant landscape, claim-positioning observations, risk levels, and limitations. Emailed to you — typically within 15 minutes.',
       },
     ],
     details: [
@@ -194,6 +209,13 @@ export const FEATURES: Feature[] = [
         body: 'Features that come back clear across the matrix are exactly where your claims should press — the map is a drafting instrument.',
       },
     ],
+    stats: [
+      { n: '≤18', l: 'words per verbatim quote' },
+      { n: '4', l: 'verdicts · present partial absent unknown' },
+      { n: '1', l: 'verdict per cell, never hedged' },
+    ],
+    pull: 'Every “disclosed” must arrive holding its quote — copied character-for-character from the reference itself.',
+    cta: { href: '/novelty-search', line: 'See your features mapped against the art' },
   },
   {
     slug: 'prior-art-review',
@@ -216,7 +238,7 @@ export const FEATURES: Feature[] = [
       },
       {
         title: 'Corpus-first search',
-        body: 'The stage searches PQAI, EPO, and Indian patent corpora first, falling back to Google Patents when the primaries come up empty.',
+        body: 'The stage searches curated international, European, and Indian patent corpora first, widening to global patent collections when the primaries come up empty.',
       },
       {
         title: 'A verdict for every candidate',
@@ -249,6 +271,13 @@ export const FEATURES: Feature[] = [
         body: 'The same corpus providers and threat vocabulary as the full novelty pipeline — one retrieval stack, one language of risk, end to end.',
       },
     ],
+    stats: [
+      { n: '5', l: 'threat verdicts per reference' },
+      { n: '0.3', l: 'relevance floor — below it, excluded' },
+      { n: '100%', l: 'of automated drafts run the review' },
+    ],
+    pull: 'By the time the first section is written, the draft has already read the art it must be different from.',
+    cta: { href: '/patents/draft/new', line: 'Start a draft that does its reading' },
   },
   {
     slug: 'multi-jurisdiction',
@@ -304,6 +333,13 @@ export const FEATURES: Feature[] = [
         body: 'Across a batch, multiple workers draft different inventions concurrently — a disclosure portfolio becomes a filing-ready portfolio.',
       },
     ],
+    stats: [
+      { n: '12', l: 'drafting-ready patent offices' },
+      { n: '1', l: 'frozen claim set anchoring the family' },
+      { n: 'A4 · Letter', l: 'formatting resolved per office' },
+    ],
+    pull: 'Sections an office doesn’t use are skipped, not padded — a JP draft and a US draft are different documents, on purpose.',
+    cta: { href: '/patents/draft/new', line: 'One disclosure · a filing-ready family' },
   },
   {
     slug: 'batch-drafting',
@@ -364,6 +400,13 @@ export const FEATURES: Feature[] = [
         body: 'Attorney-review states on every item make batch output a work queue for counsel, not a pile of files.',
       },
     ],
+    stats: [
+      { n: '25', l: 'inventions per batch' },
+      { n: '2×', l: 'formats per office — DOCX and PDF' },
+      { n: '1', l: 'ZIP with the whole portfolio' },
+    ],
+    pull: 'Workers claim jobs with database locks and heartbeats — a stalled draft is reclaimed, never lost.',
+    cta: { href: '/patents/draft/batch', line: 'Upload the spreadsheet · collect the portfolio' },
   },
   {
     slug: 'writing-personas',
@@ -419,6 +462,13 @@ export const FEATURES: Feature[] = [
         body: 'Archiving is type-to-confirm and preserves samples for recovery — a persona is practice knowledge, treated that way.',
       },
     ],
+    stats: [
+      { n: '1 + 5', l: 'primary + secondary personas blended' },
+      { n: 'Per office', l: 'jurisdiction-aware samples, with fallback' },
+      { n: '0', l: 'sample content ever reused' },
+    ],
+    pull: 'The model is ordered to mimic your style — and forbidden to touch your substance.',
+    cta: { href: '/personas', line: 'Teach it your voice in an afternoon' },
   },
   {
     slug: 'image-intelligence',
@@ -474,6 +524,13 @@ export const FEATURES: Feature[] = [
         body: 'Each analyzed figure records the model used, its status, and any warnings — you can always see how a description came to be.',
       },
     ],
+    stats: [
+      { n: '4', l: 'formats read · PNG JPEG WebP SVG' },
+      { n: '(12)', l: 'descriptions aligned to your numerals' },
+      { n: '100%', l: 'analyzed before drafting begins' },
+    ],
+    pull: '“The round thing on the left” comes back as “sensor head (12)” — because the model read your components first.',
+    cta: { href: '/patents/draft/new', line: 'Upload the sketch · get the figure' },
   },
   {
     slug: 'claim-refinement',
@@ -529,6 +586,13 @@ export const FEATURES: Feature[] = [
         body: 'In multi-jurisdiction runs the frozen set anchors every office’s draft, keeping the family consistent at its most important point.',
       },
     ],
+    stats: [
+      { n: '3', l: 'scope styles · broad balanced narrow' },
+      { n: '§ 112', l: 'antecedent defects caught before filing' },
+      { n: '1', l: 'frozen anchor the whole draft obeys' },
+    ],
+    pull: 'Once frozen, the claims are read-only — the description bends to them, never the reverse.',
+    cta: { href: '/patents/draft/new', line: 'Draft claims with a scope dial, not a dice roll' },
   },
   {
     slug: 'ai-review',
@@ -588,6 +652,13 @@ export const FEATURES: Feature[] = [
         body: 'Word and character limits per section come from each office’s configuration — the review enforces the rules of the office you’re filing at.',
       },
     ],
+    stats: [
+      { n: '85–100', l: 'overall score, with recommendation' },
+      { n: '8', l: 'fixes auto-applied per office in pipeline' },
+      { n: '0', l: 'edits ever made to claims or figures' },
+    ],
+    pull: 'The reviewer is blocked — in the prompt and again in code — from touching your claims or figures.',
+    cta: { href: '/patents/draft/new', line: 'Ship drafts that arrive pre-examined' },
   },
   {
     slug: 'auto-export',
@@ -643,6 +714,13 @@ export const FEATURES: Feature[] = [
         body: 'Export sits at the end of the same pipeline that reviewed the draft — the package you download is the package the gate approved.',
       },
     ],
+    stats: [
+      { n: '2', l: 'formats per office — DOCX + PDF' },
+      { n: '[0001]', l: 'paragraph numbering where required' },
+      { n: '1', l: 'quality gate before anything ships' },
+    ],
+    pull: 'The exported document is the draft — same sections, same order, same source of truth. Not a lossy copy.',
+    cta: { href: '/patents/draft/new', line: 'End at a filing package, not a formatting weekend' },
   },
 ]
 

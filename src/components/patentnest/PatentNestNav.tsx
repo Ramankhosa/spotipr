@@ -9,8 +9,8 @@ import { useEffect, useState } from 'react'
 import { motion, useScroll, useSpring } from 'framer-motion'
 import { useAuth } from '@/lib/auth-context'
 import { cn } from '@/lib/utils'
+import { BRASS } from '@/lib/patentnest/palette'
 
-const BRASS = '#8a6a1f'
 
 export default function PatentNestNav() {
   const { user } = useAuth()
@@ -30,7 +30,7 @@ export default function PatentNestNav() {
       className={cn(
         'fixed inset-x-0 top-0 z-50 transition-colors duration-300',
         scrolled
-          ? 'border-b border-ai-graphite-900/10 bg-[#faf9f7]/85 backdrop-blur-md'
+          ? 'border-b border-ai-graphite-900/10 bg-paper-200/85 backdrop-blur-md'
           : 'border-b border-transparent bg-transparent'
       )}
     >

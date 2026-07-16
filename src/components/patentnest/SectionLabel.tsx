@@ -5,9 +5,9 @@
 // draws itself in as the section enters view.
 
 import { motion, useReducedMotion } from 'framer-motion'
+import { BRASS } from '@/lib/patentnest/palette'
 
 const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number]
-const BRASS = '#8a6a1f'
 
 export default function SectionLabel({ children }: { children: string }) {
   const reduce = useReducedMotion()

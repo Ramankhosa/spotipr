@@ -9,8 +9,8 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { Reveal } from './Reveal'
+import { BRASS } from '@/lib/patentnest/palette'
 
-const BRASS = '#8a6a1f'
 
 function Seal() {
   const reduce = useReducedMotion()

@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 // this route (see components/ConditionalHeader.tsx).
 export default function PatentNestLandingPage() {
   return (
-    <div className="min-h-screen bg-[#faf9f7] font-sans text-ai-graphite-900 antialiased selection:bg-[#8a6a1f]/20">
+    <div className="min-h-screen bg-paper-200 font-sans text-ai-graphite-900 antialiased selection:bg-brass-600/20">
       <PatentNestNav />
       <main>
         <DocumentHero />

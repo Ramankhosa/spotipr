@@ -17,7 +17,7 @@ const frame =
 
 function Chrome({ title }: { title: string }) {
   return (
-    <div className="flex items-center gap-3 border-b border-ai-graphite-900/5 bg-[#fbfaf8] px-4 py-2.5">
+    <div className="flex items-center gap-3 border-b border-ai-graphite-900/5 bg-paper-50 px-4 py-2.5">
       <span className="flex gap-1.5">
         <i className="h-2 w-2 rounded-full bg-ai-graphite-200" />
         <i className="h-2 w-2 rounded-full bg-ai-graphite-200" />
@@ -38,7 +38,7 @@ export function DraftingMock() {
       <Chrome title="adaptive-irrigation-controller — Draft 3" />
       <div className="grid sm:grid-cols-[190px_1fr]">
         {/* section rail */}
-        <aside className="hidden border-r border-ai-graphite-900/5 bg-[#fbfaf8] p-3 sm:block">
+        <aside className="hidden border-r border-ai-graphite-900/5 bg-paper-50 p-3 sm:block">
           <p className="px-2 pb-2 font-mono text-[9px] uppercase tracking-[0.2em] text-ai-graphite-400">
             Specification
           </p>
@@ -113,7 +113,7 @@ export function DiscloseMock() {
         <p className="font-mono text-[9px] uppercase tracking-[0.25em] text-ai-graphite-400">
           Describe your invention
         </p>
-        <div className="mt-3 rounded-lg border border-ai-graphite-900/10 bg-[#fbfaf8] p-3 text-[12px] leading-relaxed text-ai-graphite-700">
+        <div className="mt-3 rounded-lg border border-ai-graphite-900/10 bg-paper-50 p-3 text-[12px] leading-relaxed text-ai-graphite-700">
           A drip-irrigation controller that senses soil moisture in each zone and reschedules
           watering around the weather forecast, so fields stop being watered in the rain…
         </div>
@@ -138,7 +138,7 @@ export function NoveltyMock() {
     <div className={frame}>
       <Chrome title="Novelty search — evidence map" />
       <div className="p-5">
-        <div className="flex items-center gap-2 rounded-lg border border-ai-graphite-900/10 bg-[#fbfaf8] px-3 py-2">
+        <div className="flex items-center gap-2 rounded-lg border border-ai-graphite-900/10 bg-paper-50 px-3 py-2">
           <Search className="h-3.5 w-3.5 text-ai-graphite-400" />
           <span className="text-[12px] text-ai-graphite-700">
             adaptive drip irrigation controller, per-zone moisture…

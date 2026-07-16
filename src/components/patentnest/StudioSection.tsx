@@ -84,7 +84,7 @@ export default function StudioSection() {
                 <ul className="mt-6 space-y-2.5">
                   {s.points.map((p) => (
                     <li key={p} className="flex items-start gap-3 text-sm text-ai-graphite-700">
-                      <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[#8a6a1f]" />
+                      <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-brass-600" />
                       {p}
                     </li>
                   ))}

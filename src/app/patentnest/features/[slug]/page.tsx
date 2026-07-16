@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import PatentNestNav from '@/components/patentnest/PatentNestNav'
 import FeatureDetail from '@/components/patentnest/FeatureDetail'
+import NoveltyDetail from '@/components/patentnest/NoveltyDetail'
 import PaperFooter from '@/components/patentnest/PaperFooter'
 import { FEATURES, getFeature, adjacentFeatures } from '@/lib/patentnest/features'
 
@@ -29,10 +30,14 @@ export default function FeaturePage({ params }: { params: { slug: string } }) {
 
   const { prev, next } = adjacentFeatures(feature.slug)
 
+  // The novelty pipeline gets the flagship treatment: staged walkthrough,
+  // evidence-grounding and feature-mapping deep dives, comparative example.
+  const Body = feature.slug === 'novelty-assessment' ? NoveltyDetail : FeatureDetail
+
   return (
-    <div className="min-h-screen bg-[#faf9f7] font-sans text-ai-graphite-900 antialiased selection:bg-[#8a6a1f]/20">
+    <div className="min-h-screen bg-paper-200 font-sans text-ai-graphite-900 antialiased selection:bg-brass-600/20">
       <PatentNestNav />
-      <FeatureDetail feature={feature} prev={prev} next={next} />
+      <Body feature={feature} prev={prev} next={next} />
       <PaperFooter />
     </div>
   )

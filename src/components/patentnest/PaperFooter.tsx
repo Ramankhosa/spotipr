@@ -11,7 +11,7 @@ export default function PaperFooter() {
           <span className="font-serif text-lg font-semibold tracking-tight text-ai-graphite-900">
             PatentNest
           </span>
-          <span className="font-mono text-[11px] text-[#8a6a1f]">.ai</span>
+          <span className="font-mono text-[11px] text-brass-600">.ai</span>
         </div>
 
         <nav className="flex flex-wrap items-center justify-center gap-x-7 gap-y-2 text-sm text-ai-graphite-500">
