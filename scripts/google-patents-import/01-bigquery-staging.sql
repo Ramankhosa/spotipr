@@ -22,8 +22,10 @@
 --   bq query --nouse_legacy_sql --maximum_bytes_billed=2000000000000 --project_id=$GCP_PROJECT < 01-bigquery-staging.sql
 -- =============================================================================
 
+-- No CLUSTER BY: this is a transit table (exported to GCS then dropped), so a full
+-- output sort would be pure overhead. Clustering only matters for the claims lookup
+-- table in 02-bigquery-claims-staging.sql.
 CREATE OR REPLACE TABLE `__PROJECT__.spotipr_patents.publications_staging`
-CLUSTER BY pub_canonical
 AS
 SELECT
   r.publication_number,
