@@ -35,9 +35,18 @@ function Caption({ x, y, name, promise, color }: { x: number; y: number; name: s
 
 /* ================================================== A · SERPENTINE ======= */
 
-export function SerpentineHeroFig() {
-  const f = useFig()
+export function SerpentineHeroFig({ speed = 0.62 }: { speed?: number }) {
+  // Simulation finding: a senior partner gives the page ~5 seconds — the pen
+  // must reach GRANTED in ~10s, not 17. `speed` scales the whole choreography
+  // (delays and draw durations) without re-authoring the timeline.
+  const f0 = useFig()
   const reduce = useReducedMotion()
+  const S = speed
+  const f = {
+    draw: (delay = 0, dur = 0.9) => f0.draw(delay * S, Math.max(0.25, dur * S)),
+    pop: (delay = 0) => f0.pop(delay * S),
+    fade: (delay = 0) => f0.fade(delay * S),
+  }
 
   return (
     <svg viewBox="0 0 900 600" className="h-auto w-full" role="img"
@@ -76,7 +85,7 @@ export function SerpentineHeroFig() {
       {reduce ? <circle cx={510} cy={110} r={3.5} fill={BRASS} /> : (
         <motion.circle cx={510} cy={110} r={3.5} fill={BRASS}
           initial={{ opacity: 0 }} whileInView={{ opacity: [0, 1, 0.45, 1] }} viewport={VIEW}
-          transition={{ delay: 4.0, duration: 2.6, repeat: Infinity, repeatDelay: 0.4 }} />
+          transition={{ delay: 4.0 * S, duration: 2.6, repeat: Infinity, repeatDelay: 0.4 }} />
       )}
       {/* searched art flying past on the straightaway */}
       {(['US 10,842 B2', 'EP 3,301 A1', 'WO 19/144']).map((p, i) => (
@@ -155,7 +164,7 @@ export function SerpentineHeroFig() {
       <motion.g
         initial={{ opacity: 0, scale: reduce ? 1 : 1.25 }}
         whileInView={{ opacity: 1, scale: 1 }} viewport={VIEW}
-        transition={{ delay: reduce ? 0 : 13.9, duration: 0.3, ease: 'easeOut' }}
+        transition={{ delay: reduce ? 0 : 13.9 * S, duration: 0.3, ease: 'easeOut' }}
         style={{ transformOrigin: '512px 474px' }}
       >
         <rect x={466} y={456} width={94} height={36} rx={5} fill="none" stroke={INK} strokeWidth="2" transform="rotate(-7 513 474)" />
@@ -174,7 +183,7 @@ export function SerpentineHeroFig() {
       {reduce ? null : (
         <motion.circle cx={672} cy={496} r={18} fill="none" stroke={BRASS} strokeWidth="1.2"
           initial={{ opacity: 0, scale: 1 }} whileInView={{ opacity: [0, 0.5, 0], scale: [1, 1.45, 1.8] }} viewport={VIEW}
-          transition={{ delay: 16.4, duration: 2.8, repeat: Infinity, repeatDelay: 1.2 }}
+          transition={{ delay: 16.4 * S, duration: 2.8, repeat: Infinity, repeatDelay: 1.2 }}
           style={{ transformOrigin: '672px 496px' }} />
       )}
       <motion.text x={772} y={492} fontSize="13" letterSpacing="0.26em" fill={BRASS} style={mono} {...f.fade(16.2)}>

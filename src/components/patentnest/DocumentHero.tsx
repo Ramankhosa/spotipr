@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
-import { SerpentineHeroFig } from './hero-variants'
+import { SerpentineHeroFig, CinematicHero } from './hero-variants'
 import { BRASS } from '@/lib/patentnest/palette'
 
 const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number]
@@ -44,8 +44,14 @@ export default function DocumentHero() {
           transition={{ duration: 0.8, ease: EASE, delay: 0.1 }}
           className="mt-10"
         >
-          <div className="rounded-xl border border-ai-graphite-900/10 bg-white p-5 sm:p-10">
+          {/* Simulation finding: a 900-unit SVG on a 375px phone renders its
+              captions at ~6px — unreadable. Below `sm` the hero becomes the
+              stage-by-stage cinematic (real HTML type, phone-native). */}
+          <div className="hidden rounded-xl border border-ai-graphite-900/10 bg-white p-5 sm:block sm:p-10">
             <SerpentineHeroFig />
+          </div>
+          <div className="sm:hidden">
+            <CinematicHero />
           </div>
           <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-ai-graphite-400">
             Fig. 1 — from disclosure to grant · one unbroken line
