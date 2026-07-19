@@ -75,3 +75,9 @@ restore-*.js
 # LLM seed scripts (already in Seed folder)
 scripts/seed-llm-models.ts
 scripts/test-*.ts
+
+# TypeScript incremental build cache — a build artifact. Tracking it ships a
+# stale cache to every checkout, and with "incremental": true tsc may skip
+# re-checking files it believes are unchanged.
+tsconfig.tsbuildinfo
+*.tsbuildinfo
