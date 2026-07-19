@@ -1,0 +1,12 @@
+# Prisma stores a sha256 of each migration.sql in _prisma_migrations.checksum.
+# With core.autocrlf=true on Windows, a checkout rewrites LF -> CRLF, which
+# changes those bytes and makes Prisma report "migration checksum mismatch"
+# against a database that is actually correct. Pin these to LF everywhere.
+*.sql text eol=lf
+prisma/migrations/** text eol=lf
+
+# Shell scripts must be LF or they fail on Linux with `bad interpreter: ...^M`.
+*.sh text eol=lf
+
+# Normalize the rest by content detection; binaries stay untouched.
+* text=auto

@@ -5008,7 +5008,9 @@ model OaDocumentChunk {
   sectionRef String? // e.g. "¶0038-¶0041"
   text       String
   tokenCount Int                          @default(0)
-  // pgvector column; text-embedding-3-small default (1536). Migration adds the column + ANN index.
+  // pgvector column, bit(512) — matches the corpus contract (voyage-3.5-lite,
+  // 512-dim binary, Hamming <~>). Migration adds the column + bit_hamming_ops
+  // ANN index. Keep in sync with PATENT_CORPUS_EMBEDDING_* in patent-corpus-service.ts.
   embedding  Unsupported("bit(512)")?
   createdAt  DateTime                     @default(now())
 

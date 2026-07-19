@@ -2,8 +2,13 @@ import 'dotenv/config'
 import { Prisma } from '@prisma/client'
 import { prisma } from '../src/lib/prisma'
 import {
+  PATENT_CORPUS_EMBEDDING_COLUMN,
   PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+  PATENT_CORPUS_EMBEDDING_DISTANCE_OP,
+  PATENT_CORPUS_EMBEDDING_DTYPE,
   PATENT_CORPUS_EMBEDDING_MODEL,
+  PATENT_CORPUS_EMBEDDING_SQL_TYPE,
+  corpusEmbeddingToLiteral,
   hasSearchEmbeddingApiKey,
   requestSearchQueryEmbedding,
 } from '../src/lib/patent-corpus-service'
@@ -106,20 +111,27 @@ async function main() {
         OR indexname ILIKE '%trgm%'
         OR indexname ILIKE '%embedding_hnsw%'
         OR indexname ILIKE '%embedding_ivfflat%'
+        OR indexname ILIKE '%binary_ivf%'
       )
     ORDER BY tablename, indexname
   `
   log('search_indexes', { count: searchIndexes.length, indexes: searchIndexes })
   const searchIndexNames = new Set(searchIndexes.map(row => String(row.indexName || '')))
+  // The Google corpus is the primary lane now — its text index was missing from
+  // this list, so the check reported green while the 46M-row lane was unindexed.
   const requiredProductionIndexes = [
+    'local_patents_google_search_tsv_idx',
     'local_patents_indian_search_tsv_idx',
     'local_patents_indian_metadata_tsv_idx',
     'local_patents_title_trgm_idx',
     'local_patents_abstract_trgm_idx',
   ]
   const missingProductionIndexes = requiredProductionIndexes.filter(indexName => !searchIndexNames.has(indexName))
+  // The binary Hamming ANN index (bit_hamming_ops) is named *_binary_ivf_idx and
+  // matched neither legacy pattern, so this warned permanently on a healthy prod.
   const hasVectorIndex = searchIndexNames.has('local_patent_embeddings_embedding_hnsw_idx') ||
-    searchIndexNames.has('local_patent_embeddings_embedding_ivfflat_idx')
+    searchIndexNames.has('local_patent_embeddings_embedding_ivfflat_idx') ||
+    searchIndexNames.has('local_patent_embeddings_binary_ivf_idx')
   if (missingProductionIndexes.length) {
     findings.push(`Production is missing search indexes: ${missingProductionIndexes.join(', ')}. Run pending Prisma migrations before increasing query timeouts.`)
   }
@@ -214,7 +226,19 @@ async function main() {
         durationMs: Date.now() - embeddingStartedAt,
       })
 
-      const vectorLiteral = `[${vector.map(value => Number(value).toFixed(8)).join(',')}]`
+      // Derive column/operator/cast/similarity from the configured dtype. This
+      // previously hardcoded the float lane (`embedding` / `<=>` / `::vector`,
+      // no /DIMENSIONS term), so under the production binary config it reported
+      // "no vectors" against a perfectly healthy corpus — actively misleading
+      // during an incident, which is exactly when this script gets run.
+      const vectorLiteral = corpusEmbeddingToLiteral(vector)
+      const col = Prisma.raw(`"${PATENT_CORPUS_EMBEDDING_COLUMN}"`)
+      const op = Prisma.raw(PATENT_CORPUS_EMBEDDING_DISTANCE_OP)
+      const cast = Prisma.raw(`${PATENT_CORPUS_EMBEDDING_SQL_TYPE}(${PATENT_CORPUS_EMBEDDING_DIMENSIONS})`)
+      // Hamming distance is 0..DIMENSIONS; cosine distance is 0..2.
+      const denom = Prisma.raw(
+        PATENT_CORPUS_EMBEDDING_DTYPE === 'binary' ? `/ ${PATENT_CORPUS_EMBEDDING_DIMENSIONS}.0` : ''
+      )
       const vectorSearchStartedAt = Date.now()
       const nearest = await prisma.$transaction(async tx => {
         await tx.$executeRaw`SELECT set_config('statement_timeout', '10000', true)`
@@ -222,13 +246,13 @@ async function main() {
           SELECT
             p."publicationNumber",
             e."model",
-            1 - (e."embedding" <=> ${vectorLiteral}::vector) AS "vectorScore"
+            1 - ((e.${col} ${op} ${vectorLiteral}::${cast})::float8 ${denom}) AS "vectorScore"
           FROM "local_patent_embeddings" e
           JOIN "local_patents" p ON p."id" = e."localPatentId"
           WHERE e."model" = ${PATENT_CORPUS_EMBEDDING_MODEL}
             AND e."status" = 'COMPLETED'::"PatentEmbeddingStatus"
-            AND e."embedding" IS NOT NULL
-          ORDER BY e."embedding" <=> ${vectorLiteral}::vector
+            AND e.${col} IS NOT NULL
+          ORDER BY e.${col} ${op} ${vectorLiteral}::${cast}
           LIMIT 5
         `)
       })

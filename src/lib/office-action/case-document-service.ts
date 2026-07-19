@@ -102,11 +102,31 @@ export async function embedChunks(documentId: string): Promise<boolean> {
   const chunks = await prisma.oaDocumentChunk.findMany({ where: { documentId }, select: { id: true, text: true } })
   if (!chunks.length) return true
 
-  let corpus: any = null
+  // Destructured dynamic import so TypeScript type-checks these names — an
+  // untyped `as any` handle would let a rename compile fine and silently turn
+  // OA retrieval into a permanent no-op.
+  let corpus: {
+    requestCorpusEmbedding: typeof import('../patent-corpus-service').requestCorpusEmbedding
+    corpusEmbeddingToLiteral: typeof import('../patent-corpus-service').corpusEmbeddingToLiteral
+    sqlType: string
+    dimensions: number
+  } | null = null
   try {
-    corpus = await import('../patent-corpus-service')
+    const {
+      requestCorpusEmbedding, corpusEmbeddingToLiteral,
+      PATENT_CORPUS_EMBEDDING_SQL_TYPE, PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+    } = await import('../patent-corpus-service')
+    corpus = {
+      requestCorpusEmbedding, corpusEmbeddingToLiteral,
+      sqlType: PATENT_CORPUS_EMBEDDING_SQL_TYPE,
+      dimensions: PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+    }
   } catch { /* embedding stack unavailable */ }
-  if (typeof corpus?.requestCorpusEmbedding !== 'function' || typeof corpus?.corpusEmbeddingToLiteral !== 'function') return false
+  if (!corpus) return false
+
+  // Derived, not hardcoded: if the corpus dtype ever flips to float,
+  // corpusEmbeddingToLiteral returns a bracketed list and this cast follows it.
+  const cast = `${corpus.sqlType}(${corpus.dimensions})`
 
   let embedded = 0
   for (const c of chunks) {
@@ -116,10 +136,8 @@ export async function embedChunks(documentId: string): Promise<boolean> {
       // requestSearchQueryEmbedding (see office-action/context-budget.ts).
       const vec = await corpus.requestCorpusEmbedding(c.text, { purpose: 'corpus-indexing' })
       if (!Array.isArray(vec) || !vec.length) continue
-      // 64 packed ubinary bytes -> '0101…' bit-string for the bit(512) column
-      // (cast matches the column type fixed by 20260718150000_oa_case_documents).
       await prisma.$executeRawUnsafe(
-        `UPDATE "oa_document_chunks" SET "embedding" = $1::bit(512) WHERE "id" = $2`,
+        `UPDATE "oa_document_chunks" SET "embedding" = $1::${cast} WHERE "id" = $2`,
         corpus.corpusEmbeddingToLiteral(vec), c.id
       )
       embedded += 1

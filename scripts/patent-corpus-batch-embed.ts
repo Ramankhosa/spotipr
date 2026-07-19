@@ -707,7 +707,11 @@ async function main() {
       `PATENT_CORPUS_EMBEDDING_MODEL=${PATENT_CORPUS_EMBEDDING_MODEL} embeds through the realtime worker instead: ` +
       'run `npm run patent-corpus:worker` with PATENT_CORPUS_REALTIME_EMBEDDINGS enabled (see scripts/google-patents-import/README.md).'
     )
-    process.exit(1)
+    // Exit 0, not 1: this guard is correct, but under pm2 a non-zero exit is a
+    // crash and gets restarted forever (it produced 651 restarts after the
+    // voyage flip). A clean exit lets pm2 mark the process stopped instead.
+    // Also `pm2 delete patent-corpus-batch-embed` so a reboot cannot revive it.
+    process.exit(0)
   }
   const embeddingMode = String(process.env.PATENT_CORPUS_EMBEDDING_MODE || 'realtime').trim().toLowerCase()
   const allowBatchSubmissions = embeddingMode === 'batch' ||

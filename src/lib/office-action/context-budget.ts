@@ -45,13 +45,21 @@ export interface RetrieveOptions {
  * requestSearchQueryEmbedding (input_type: query). Embedding it as a document —
  * the old requestCorpusEmbedding default — silently degrades retrieval quality.
  */
-async function embedQuery(text: string): Promise<string | null> {
+async function embedQuery(text: string): Promise<{ literal: string; cast: string } | null> {
   try {
-    const mod: any = await import('../patent-corpus-service')
-    if (typeof mod.requestSearchQueryEmbedding !== 'function' || typeof mod.corpusEmbeddingToLiteral !== 'function') return null
-    const vec = await mod.requestSearchQueryEmbedding(text)
+    // Destructured so TypeScript type-checks these names (a rename must not
+    // silently degrade to a no-op).
+    const {
+      requestSearchQueryEmbedding, corpusEmbeddingToLiteral,
+      PATENT_CORPUS_EMBEDDING_SQL_TYPE, PATENT_CORPUS_EMBEDDING_DIMENSIONS,
+    } = await import('../patent-corpus-service')
+    const vec = await requestSearchQueryEmbedding(text)
     if (!Array.isArray(vec) || !vec.length) return null
-    return mod.corpusEmbeddingToLiteral(vec)
+    return {
+      literal: corpusEmbeddingToLiteral(vec),
+      // Derived, not hardcoded — follows the corpus dtype if it ever changes.
+      cast: `${PATENT_CORPUS_EMBEDDING_SQL_TYPE}(${PATENT_CORPUS_EMBEDDING_DIMENSIONS})`,
+    }
   } catch (e) {
     console.warn('[OA context] query embedding failed:', e instanceof Error ? e.message : e)
     return null
@@ -67,8 +75,8 @@ export async function retrieveContext(opts: RetrieveOptions): Promise<RetrievedC
   const topK = opts.topK ?? RETRIEVAL_DEFAULTS.topK
   const maxTokens = opts.maxTokens ?? RETRIEVAL_DEFAULTS.maxContextTokens
 
-  const literal = await embedQuery(opts.query)
-  if (!literal) return []
+  const embedded = await embedQuery(opts.query)
+  if (!embedded) return []
 
   const kindFilter = opts.kinds?.length
     ? `AND c."kind" IN (${opts.kinds.map(k => `'${k.replace(/'/g, "''")}'`).join(',')})`
@@ -79,13 +87,13 @@ export async function retrieveContext(opts: RetrieveOptions): Promise<RetrievedC
   try {
     rows = await prisma.$queryRawUnsafe(
       `SELECT c."documentId", c."kind", c."sectionRef", c."text", c."tokenCount",
-              (c."embedding" <~> $1::bit(512)) AS distance
+              (c."embedding" <~> $1::${embedded.cast}) AS distance
          FROM "oa_document_chunks" c
          JOIN "oa_case_documents" d ON d."id" = c."documentId"
         WHERE c."caseId" = $2 AND c."embedding" IS NOT NULL ${kindFilter} ${safeFilter}
         ORDER BY distance ASC
         LIMIT ${Math.max(1, topK)}`,
-      literal,
+      embedded.literal,
       opts.caseId
     )
   } catch (e) {
