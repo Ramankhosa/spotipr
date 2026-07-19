@@ -50,6 +50,7 @@ enum ServiceType {
   DIAGRAM_GENERATION
   PATENT_REVIEW // AI-powered patent draft review (Pro tier)
   IDEATION // Mind-map patent ideation engine
+  OFFICE_ACTION_RESPONSE // Office Action Studio: FER/OA response drafting
 }
 
 // Team roles within a team
@@ -534,6 +535,7 @@ enum FeatureCode {
   PERSONA_SYNC
   PATENT_REVIEW // AI-powered patent draft review (Pro tier)
   IDEATION // Mind-map patent ideation engine
+  OFFICE_ACTION_RESPONSE // Office Action Studio: FER/OA response drafting
 }
 
 enum TaskCode {
@@ -556,6 +558,8 @@ enum TaskCode {
   IDEATION_OBVIOUSNESS_FILTER // Stage 3.5: Check combination novelty before generation
   IDEATION_GENERATE // Idea frame generation
   IDEATION_NOVELTY // Novelty gate reasoning
+  LLM7_ADVANCED_MANUAL_SEARCH // Prior-Art Studio: advanced manual search query generator (novelty search quota)
+  LLM8_OA_RESPONSE // Office Action Studio: parse/classify/chart/argue/draft stages
 }
 
 enum ModelClass {
@@ -1521,7 +1525,11 @@ model LocalPatent {
   sourceImportFile PatentImportFile?      @relation(fields: [sourceImportFileId], references: [id], onDelete: SetNull)
 
   @@index([sourceImportFileId])
-  // Raw-SQL search indexes created by migrations 20260518143000 / 20260518170000 / 20260619120000 / 20260619170000.
+  // Raw-SQL search indexes created by migrations 20260518143000 / 20260518170000 / 20260619120000 / 20260619170000 / 20260719120000.
+  // 20260719120000 adds local_patents_google_search_tsv_idx: a PARTIAL full-text GIN
+  // over google-patents-corpus rows only (~5.8 GB over 45.4M rows, built 19 Jul 2026).
+  // Its expression must stay byte-identical to searchDocumentExpression() in
+  // src/lib/patent-search/providers/indian-corpus-provider.ts or the planner ignores it.
   // Modeled here so `prisma migrate dev` does not regenerate destructive DROP INDEX migrations.
   // NOTE: migration 20260713140000 makes the four trigram GIN indexes PARTIAL
   // (WHERE corpusSources @> {indian-corpus}) to keep them off the 110M-row Google
@@ -1609,34 +1617,43 @@ model PatentImportFile {
 }
 
 model LocalPatentEmbedding {
-  id            String                       @id @default(cuid())
-  localPatentId Int
-  model         String
-  dimensions    Int
-  textHash      String
-  status        PatentEmbeddingStatus        @default(QUEUED)
-  errorMessage  String?
-  embedding     Unsupported("vector(1536)")?
+  id              String                       @id @default(cuid())
+  localPatentId   Int
+  model           String
+  dimensions      Int
+  textHash        String
+  status          PatentEmbeddingStatus        @default(QUEUED)
+  errorMessage    String?
+  embedding       Unsupported("vector(1536)")?
   // Shortened float embeddings (e.g. voyage @ 512 dims) in half precision.
-  embeddingHalf Unsupported("halfvec(512)")?
+  embeddingHalf   Unsupported("halfvec(512)")?
   // Binary (Matryoshka 512 + quantized) embeddings — 64 bytes/vector, Hamming ANN.
   // The memory-compressed representation for the ~100M-row Google Patents corpus.
   // Requires pgvector >= 0.7.
   embeddingBinary Unsupported("bit(512)")?
-  lockedBy      String?
-  lockedUntil   DateTime?
-  heartbeatAt   DateTime?
-  attemptCount  Int                          @default(0)
-  nextAttemptAt DateTime                     @default(now())
-  embeddedAt    DateTime?
-  createdAt     DateTime                     @default(now())
-  updatedAt     DateTime                     @default(now()) @updatedAt
+  lockedBy        String?
+  lockedUntil     DateTime?
+  heartbeatAt     DateTime?
+  attemptCount    Int                          @default(0)
+  nextAttemptAt   DateTime                     @default(now())
+  embeddedAt      DateTime?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @default(now()) @updatedAt
 
   patent LocalPatent @relation(fields: [localPatentId], references: [id], onDelete: Cascade)
 
   @@unique([localPatentId, model, textHash])
   @@index([status, nextAttemptAt])
   @@index([localPatentId])
+  // ANN index created by raw SQL in migration 20260719120000 (Prisma cannot express
+  // ivfflat / bit_hamming_ops / partial predicates):
+  //   local_patent_embeddings_binary_ivf_idx
+  //     USING ivfflat ("embeddingBinary" bit_hamming_ops) WITH (lists = 5000)
+  //     WHERE "embeddingBinary" IS NOT NULL
+  // Built out-of-band CONCURRENTLY on prod (19 Jul 2026, ~2.4 GB over 29.8M vectors).
+  // Recall is tuned at runtime via `ivfflat.probes` (currently 24) -- no rebuild needed.
+  // REINDEX after a large corpus refresh; IVFFlat centroids are fixed at build time.
+  // Dev may show drift here; that is expected and harmless.
   @@map("local_patent_embeddings")
 }
 
@@ -2450,7 +2467,7 @@ model DiagramSource {
   updatedAt DateTime @updatedAt
 
   // Relations
-  session DraftingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session           DraftingSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   imageAnalysisJobs DiagramImageAnalysisJob[]
 
   // Unique per session + figure + language (allows multiple language versions)
@@ -3127,31 +3144,31 @@ model AutoPatentDraftBatch {
 }
 
 model AutoPatentDraftBatchItem {
-  id            String   @id @default(cuid())
-  batchId       String
-  tenantId      String
-  userId        String
-  projectId     String?
-  patentId      String?
-  sessionId     String?
-  jobId         String?
-  itemNo        Int
-  title         String
+  id             String    @id @default(cuid())
+  batchId        String
+  tenantId       String
+  userId         String
+  projectId      String?
+  patentId       String?
+  sessionId      String?
+  jobId          String?
+  itemNo         Int
+  title          String
   generatedTitle String?
-  jurisdictions String[] @default([])
-  status        String   @default("QUEUED")
-  currentStep   String?
-  progressPct   Int      @default(5)
-  warnings      Json?
-  errorMessage  String?
-  artifactIds   String[] @default([])
-  priorArtAudit Json?
-  reviewStatus  String   @default("NEEDS_REVIEW")
-  attorneyNotes String?  @db.Text
-  reviewedAt    DateTime?
-  reviewedById  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  jurisdictions  String[]  @default([])
+  status         String    @default("QUEUED")
+  currentStep    String?
+  progressPct    Int       @default(5)
+  warnings       Json?
+  errorMessage   String?
+  artifactIds    String[]  @default([])
+  priorArtAudit  Json?
+  reviewStatus   String    @default("NEEDS_REVIEW")
+  attorneyNotes  String?   @db.Text
+  reviewedAt     DateTime?
+  reviewedById   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   batch AutoPatentDraftBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   user  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -4684,4 +4701,408 @@ model AdminDiscount {
   @@index([isActive])
   @@index([validFrom, validUntil])
   @@map("admin_discounts")
+}
+
+// ============================================================================
+// PRIOR-ART STUDIO (advanced manual patent search)
+// Sessions are the unit of work: a living query plan, its runs, per-family
+// review state, and an append-only evidence trail that compiles to a report.
+// ============================================================================
+
+model PriorArtStudioSession {
+  id          String  @id @default(cuid())
+  userId      String
+  tenantId    String?
+  title       String  @default("Untitled search")
+  status      String  @default("ACTIVE") // ACTIVE | ARCHIVED
+  plan        Json // StudioPlan (current working version)
+  planVersion Int     @default(1)
+  seedText    String? // pasted disclosure / invention description
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runs      PriorArtStudioRun[]
+  docStates PriorArtStudioDocState[]
+  trail     PriorArtStudioTrailEntry[]
+  theories  PriorArtStudioTheory[]
+
+  @@index([userId, updatedAt])
+  @@index([tenantId])
+  @@map("prior_art_studio_sessions")
+}
+
+model PriorArtStudioRun {
+  id             String @id @default(cuid())
+  sessionId      String
+  planVersion    Int
+  planSnapshot   Json // StudioPlan as executed
+  planHash       String
+  gateCounts     Json // { corpus, filters, recall, families, shown, lanes: { matchOnly, castOnly, both } }
+  providerStats  Json?
+  warnings       Json?
+  results        Json // condensed family-grouped results for re-render + diffing
+  resultCount    Int    @default(0)
+  familyCount    Int    @default(0)
+  newFamilyCount Int    @default(0)
+  durationMs     Int?
+
+  createdAt DateTime @default(now())
+
+  session PriorArtStudioSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("prior_art_studio_runs")
+}
+
+model PriorArtStudioDocState {
+  id                String  @id @default(cuid())
+  sessionId         String
+  familyKey         String // familyId when present, else publicationNumber
+  publicationNumber String
+  tag               String? // RELEVANT | MAYBE | NOT_RELEVANT
+  excluded          Boolean @default(false)
+  note              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  session PriorArtStudioSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, familyKey])
+  @@index([sessionId, tag])
+  @@map("prior_art_studio_doc_states")
+}
+
+model PriorArtStudioTrailEntry {
+  id        String @id @default(cuid())
+  sessionId String
+  kind      String // COPILOT | EDIT | RUN | TAG | NOTE | SYSTEM
+  actor     String // "user:<id>" or "model:<code>"
+  summary   String
+  data      Json?
+
+  createdAt DateTime @default(now())
+
+  session PriorArtStudioSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("prior_art_studio_trail_entries")
+}
+
+// ============================================================
+// Office Action Studio (FER / OA response) — see
+// OFFICE_ACTION_STUDIO_PRODUCT_PLAN.md. Jurisdiction behavior
+// lives in CountryProfile.profileData.officeActionProfile;
+// these models hold no country-specific logic. Instrument types
+// and canonical objection codes are Strings on purpose — they
+// are profile vocabulary, not deploy-time enums.
+// ============================================================
+
+enum OfficeActionCaseStatus {
+  ACTIVE
+  REPLIED
+  HEARING
+  CLOSED
+}
+
+enum OaParseStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum OfficeActionJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// One prosecution matter: an application in one jurisdiction.
+// Standalone-first; optional links to a drafting patent/session
+// let us import spec/claims when the draft lives in spotipr.
+model OfficeActionCase {
+  id                String                 @id @default(cuid())
+  userId            String
+  tenantId          String?
+  patentId          String? // optional link to a spotipr drafting patent
+  jurisdictionCode  String // e.g. "IN" — resolves the officeActionProfile
+  applicationNumber String
+  applicantName     String?
+  title             String?
+  status            OfficeActionCaseStatus @default(ACTIVE)
+  specificationText String? // as-filed spec (pasted or imported) — basis finder input
+  claimsText        String? // current claims — claim charting input
+  inventionDigest   Json? // one-time compact digest of the invention (cost lever 1)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  documents     OfficeActionDocument[]
+  drafts        OaResponseDraft[]
+  caseDocuments OaCaseDocument[]
+
+  @@index([userId, createdAt])
+  @@index([tenantId])
+  @@index([jurisdictionCode, status])
+  @@map("office_action_cases")
+}
+
+// One office communication (FER, SER, hearing notice, OA…).
+model OfficeActionDocument {
+  id              String        @id @default(cuid())
+  caseId          String
+  instrumentType  String? // profile instrument id, e.g. "FER" — set by intake detection
+  issueDate       DateTime?
+  fileKey         String? // uploaded PDF storage key
+  fileName        String?
+  rawText         String? // extracted text (OCR'd if needed)
+  parseStatus     OaParseStatus @default(PENDING)
+  parseConfidence Float?
+  parsedJson      Json? // extracted metadata (dates, examiner, cited docs…)
+  deadlinesJson   Json? // ComputedDeadline[] snapshot from the deadline engine
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  case       OfficeActionCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  objections OaObjection[]
+  citations  OaCitation[]
+
+  @@index([caseId, createdAt])
+  @@index([parseStatus])
+  @@map("office_action_documents")
+}
+
+// One objection card. examinerText is verbatim (string-match verified
+// against rawText); canonicalCode is the profile-mapped pipeline code.
+model OaObjection {
+  id             String   @id @default(cuid())
+  documentId     String
+  sortOrder      Int      @default(0)
+  canonicalCode  String // NOVELTY | INVENTIVE_STEP | … | OTHER
+  subTypeId      String? // e.g. "3k" for IN ELIGIBILITY subtypes
+  localBasis     String? // e.g. "Section 2(1)(ja)"
+  examinerText   String // verbatim quote from the report
+  quoteVerified  Boolean  @default(false) // exact-substring check against rawText
+  claimsAffected Json? // number[]
+  citationLabels Json? // string[] e.g. ["D1","D2"]
+  status         String   @default("EXTRACTED") // EXTRACTED | CONFIRMED | DISMISSED
+  analysisJson   Json? // per-objection assessment (strength, options…)
+  strategyJson   Json? // attorney-selected strategy + amendment proposals
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  document OfficeActionDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, sortOrder])
+  @@map("oa_objections")
+}
+
+// One cited document (D1…Dn or NPL) and its resolution state.
+model OaCitation {
+  id             String   @id @default(cuid())
+  documentId     String
+  label          String // "D1"
+  kind           String   @default("PATENT") // PATENT | NPL
+  docNumber      String? // as printed in the report
+  normalizedKey  String? // normalized publication number for corpus lookup
+  resolvedVia    String? // local-corpus | google-patents | epo-ops | pqai | indian-corpus | manual
+  fetchStatus    String   @default("PENDING") // PENDING | RESOLVED | NOT_FOUND | MANUAL_REQUIRED
+  fullTextKey    String? // storage key when fetched/uploaded
+  passagesJson   Json? // pinpointed passages (verified quotes + locations)
+  claimChartJson Json? // feature × citation chart for affected claims
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  document OfficeActionDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, label])
+  @@index([fetchStatus])
+  @@map("oa_citations")
+}
+
+// A versioned response draft assembled from the profile skeleton.
+model OaResponseDraft {
+  id                String   @id @default(cuid())
+  caseId            String
+  documentId        String? // which communication this responds to
+  version           Int      @default(1)
+  sectionsJson      Json // skeleton section id → drafted content
+  amendedClaimsJson Json? // { marked, clean, basisMap }
+  complianceJson    Json? // lint results (coverage, quotes, basis, forms checklist)
+  exportFileKey     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  case OfficeActionCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, version])
+  @@map("oa_response_drafts")
+}
+
+// Background job for long-running pipeline steps (parse, classify,
+// resolve citations, chart, draft). Lease/heartbeat fields mirror
+// PatentDraftingJob so the worker pattern transfers unchanged.
+model OfficeActionJob {
+  id            String                @id @default(cuid())
+  caseId        String
+  documentId    String?
+  userId        String
+  jobType       String // PARSE | CLASSIFY | RESOLVE_CITATIONS | CLAIM_CHART | DRAFT
+  status        OfficeActionJobStatus @default(QUEUED)
+  currentStep   String?
+  payload       Json
+  result        Json?
+  attemptCount  Int                   @default(0)
+  maxAttempts   Int                   @default(3)
+  nextAttemptAt DateTime              @default(now())
+  lockedBy      String?
+  lockedUntil   DateTime?
+  heartbeatAt   DateTime?
+  lastError     String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([caseId, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([lockedUntil])
+  @@map("office_action_jobs")
+}
+
+// Attorney-provided invention context (full spec/claims/drawings) and
+// supplementary material for the FER reply. Indexed once, retrieved per-need
+// (see OFFICE_ACTION_CONTEXT_AND_COST.md). newMatterSafe gates s.59 basis use.
+model OaCaseDocument {
+  id            String   @id @default(cuid())
+  caseId        String
+  kind          String // SPECIFICATION | CLAIMS | DRAWINGS | SUPPLEMENTARY
+  source        String // UPLOAD | SPOTIPR_PROJECT | PASTE
+  title         String?
+  fileKey       String?
+  text          String? // normalized full text
+  sectionsJson  Json? // canonical-section -> paragraph-id ranges
+  intentNote    String? // attorney's instruction for supplementary material
+  targetCodes   Json? // canonical objection codes this doc serves
+  newMatterSafe Boolean  @default(false) // true only for as-filed spec/claims
+  indexStatus   String   @default("PENDING") // PENDING | INDEXED | FAILED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  case   OfficeActionCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  chunks OaDocumentChunk[]
+
+  @@index([caseId, kind])
+  @@map("oa_case_documents")
+}
+
+model OaDocumentChunk {
+  id         String                       @id @default(cuid())
+  caseId     String
+  documentId String
+  kind       String // mirrors the document kind (retrieval filter)
+  sectionRef String? // e.g. "¶0038-¶0041"
+  text       String
+  tokenCount Int                          @default(0)
+  // pgvector column; text-embedding-3-small default (1536). Migration adds the column + ANN index.
+  embedding  Unsupported("bit(512)")?
+  createdAt  DateTime                     @default(now())
+
+  document OaCaseDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, kind])
+  @@index([documentId])
+  @@map("oa_document_chunks")
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval tuning — super-admin controlled runtime configuration.
+//
+// The novelty pipeline's knobs (candidate caps, rerank floor, deep-analysis
+// ceiling) used to live only in env vars, which are read once at import and so
+// need a redeploy to change. These tables let a super admin tune them at runtime
+// and record what each setting did to retrieval quality.
+//
+// Deliberately NOT covered here: the embedding model, dimensions and dtype.
+// Those must match the vectors already stored in local_patent_embeddings — a
+// runtime change would silently make every vector query match zero rows — so
+// they stay env-only. See docs/novelty-search-local-corpus-cutover.md.
+// ---------------------------------------------------------------------------
+
+model SystemSetting {
+  // Registry key, e.g. "retrieval.maxVectorQueries". The code-side registry in
+  // src/lib/settings/registry.ts owns the type, default, range and description;
+  // this table only stores overrides that differ from that default.
+  key       String   @id
+  value     Json
+  category  String
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([category])
+  @@map("system_settings")
+}
+
+model PatentProviderAccess {
+  // Matches PatentSearchProviderId. A row here overrides the provider's built-in
+  // enabled flag; absence means "use the code default".
+  providerId      String   @id
+  enabled         Boolean  @default(true)
+  // Whether this provider may be dispatched in the fallback lane that runs when
+  // the local corpus returns nothing.
+  allowAsFallback Boolean  @default(true)
+  notes           String?
+  updatedBy       String?
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  @@map("patent_provider_access")
+}
+
+model RetrievalCalibrationRun {
+  id          String    @id @default(cuid())
+  label       String
+  // Settings overrides this run was executed under (registry key -> value).
+  configJson  Json
+  // Novelty search run ids used as the benchmark set.
+  searchIds   String[]
+  // Per-search candidate lists, rerank score percentiles, and overlap vs baseline.
+  resultsJson Json?
+  // Run this was compared against, if any.
+  baselineId  String?
+  status      String    @default("RUNNING")
+  error       String?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  createdBy   String?
+
+  @@index([status])
+  @@index([startedAt])
+  @@map("retrieval_calibration_runs")
+}
+
+/// A pinned invalidity/obviousness theory. Coverage arithmetic is computed by
+/// the Element Grid, but the MOTIVATION is attorney-authored and required —
+/// the system never asserts that references may properly be combined.
+model PriorArtStudioTheory {
+  id                 String   @id @default(cuid())
+  sessionId          String
+  kind               String // ANTICIPATION | COMBINATION
+  publicationNumbers String[]
+  familyKeys         String[]
+  motivation         String
+  elementCoverage    Json?
+  createdBy          String
+
+  createdAt DateTime @default(now())
+
+  session PriorArtStudioSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("prior_art_studio_theories")
 }

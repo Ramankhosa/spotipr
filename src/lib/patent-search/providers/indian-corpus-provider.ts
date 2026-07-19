@@ -8,6 +8,7 @@ import {
   PATENT_CORPUS_EMBEDDING_MODEL,
   PATENT_CORPUS_EMBEDDING_SQL_TYPE,
   PATENT_CORPUS_SOURCE_EPO,
+  PATENT_CORPUS_SOURCE_GOOGLE,
   PATENT_CORPUS_SOURCE_INDIAN,
   PATENT_CORPUS_SOURCE_PQAI,
   corpusEmbeddingToLiteral,
@@ -53,34 +54,59 @@ import {
   uniqueStrings,
   yearFromDate,
 } from '../utils'
+import { expandCountrySelection, normalizeCountryCode } from '../patent-countries'
+import { getSettings } from '@/lib/settings/settings-service'
 
-const MAX_VECTOR_RETRIEVAL_QUERIES = Math.max(
-  1,
-  Number(process.env.PATENT_SEARCH_MAX_VECTOR_QUERIES || '4') || 4
-)
-const TEXT_MATCH_CANDIDATE_CAP = Math.max(
-  200,
-  Number(process.env.PATENT_SEARCH_TEXT_CANDIDATE_CAP || '1600') || 1600
-)
-const TRIGRAM_MATCH_CANDIDATE_CAP = Math.max(
-  100,
-  Number(process.env.PATENT_SEARCH_TRIGRAM_CANDIDATE_CAP || '900') || 900
-)
-const METADATA_MATCH_CANDIDATE_CAP = Math.max(
-  100,
-  Number(process.env.PATENT_SEARCH_METADATA_CANDIDATE_CAP || '600') || 600
-)
-const SEARCH_STATEMENT_TIMEOUT_MS = Math.max(
+// Retrieval tuning is resolved once per search from the settings service (which
+// falls back to these same env vars when no admin override exists), so a super admin
+// can retune the funnel without a redeploy. Resolved into locals at the top of
+// search() rather than read per lane, so one search is internally consistent even if
+// the cache refreshes mid-run.
+const DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS = Math.max(
   1000,
   Number(process.env.PATENT_SEARCH_STATEMENT_TIMEOUT_MS || '8000') || 8000
 )
-const TRIGRAM_SIMILARITY_THRESHOLD = String(
-  Math.max(0.05, Math.min(0.5, Number(process.env.PATENT_SEARCH_TRIGRAM_THRESHOLD || '0.18') || 0.18))
-)
+
+interface RetrievalTuning {
+  maxVectorQueries: number
+  textCandidateCap: number
+  trigramCandidateCap: number
+  metadataCandidateCap: number
+  statementTimeoutMs: number
+  trigramThreshold: string
+}
+
+async function resolveRetrievalTuning(): Promise<RetrievalTuning> {
+  try {
+    const values = await getSettings()
+    const num = (key: string, fallback: number) => {
+      const value = values[key]
+      return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+    }
+    return {
+      maxVectorQueries: Math.max(1, num('retrieval.maxVectorQueries', 4)),
+      textCandidateCap: Math.max(200, num('retrieval.textCandidateCap', 1600)),
+      trigramCandidateCap: Math.max(100, num('retrieval.trigramCandidateCap', 900)),
+      metadataCandidateCap: Math.max(100, num('retrieval.metadataCandidateCap', 600)),
+      statementTimeoutMs: Math.max(1000, num('retrieval.statementTimeoutMs', DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS)),
+      trigramThreshold: String(Math.max(0.05, Math.min(0.5, num('retrieval.trigramThreshold', 0.18)))),
+    }
+  } catch {
+    // Settings are a tuning convenience, never a dependency of search.
+    return {
+      maxVectorQueries: 4,
+      textCandidateCap: 1600,
+      trigramCandidateCap: 900,
+      metadataCandidateCap: 600,
+      statementTimeoutMs: DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS,
+      trigramThreshold: '0.18',
+    }
+  }
+}
 const PATENT_SEARCH_DEBUG = ['1', 'true', 'yes', 'on'].includes(
   String(process.env.PATENT_SEARCH_DEBUG || '').trim().toLowerCase()
 )
-let missingOpenAiKeyWarningReported = false
+let missingEmbeddingKeyWarningReported = false
 
 type SearchLogLevel = 'info' | 'warn' | 'error'
 
@@ -119,12 +145,15 @@ function logOptionalSearchError(
 ) {
   const errorDetails = searchErrorDetails(error)
   if (isStatementTimeoutError(error)) {
-    logEmbeddingSearch('info', `${stage}_timed_out`, {
+    // force=true: on the 45M-row Google corpus a statement timeout is the
+    // dominant failure mode of the optional lanes, not background noise —
+    // without force this logged nothing unless PATENT_SEARCH_DEBUG was set.
+    logEmbeddingSearch('warn', `${stage}_timed_out`, {
       ...details,
       ...errorDetails,
       databaseCode: (error as any)?.meta?.code,
       databaseMessage: (error as any)?.meta?.message,
-    })
+    }, true)
     return
   }
   logEmbeddingSearch('warn', `${stage}_failed`, {
@@ -180,10 +209,16 @@ function corpusSourceCondition(corpusSource: string) {
   if (corpusSource === PATENT_CORPUS_SOURCE_EPO) {
     return Prisma.sql`p."corpusSources" @> ARRAY['epo-ops']::TEXT[]`
   }
+  if (corpusSource === PATENT_CORPUS_SOURCE_GOOGLE) {
+    // Literal, not a bind parameter: the planner can only prove a partial-index
+    // predicate (WHERE "corpusSources" @> '{google-patents-corpus}') against a
+    // constant. A parameterized qual under a generic plan skips the partial GIN.
+    return Prisma.sql`p."corpusSources" @> ARRAY['google-patents-corpus']::TEXT[]`
+  }
   return Prisma.sql`p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]`
 }
 
-async function queryRawWithStatementTimeout<T = any>(query: Prisma.Sql, timeoutMs = SEARCH_STATEMENT_TIMEOUT_MS) {
+async function queryRawWithStatementTimeout<T = any>(query: Prisma.Sql, timeoutMs = DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS) {
   // Use a sequential transaction instead of an interactive callback transaction.
   // Prisma's interactive transaction default expires after 5 seconds, which is
   // shorter than this provider's PostgreSQL statement timeout (8 seconds).
@@ -337,6 +372,22 @@ function anyTextExpression() {
   `
 }
 
+// Restrict to the selected patent offices. Matches the stored country value against
+// every known spelling for the code (so selecting India also catches the IPIndia
+// corpus's legacy 'INDIA' rows), and falls back to the publication-number prefix for
+// rows imported before the country column was populated.
+function buildCountryCondition(codes: string[] | undefined) {
+  const selected = uniqueStrings((codes || []).map(code => normalizeCountryCode(code)).filter(Boolean))
+  if (!selected.length) return null
+  const storedValues = expandCountrySelection(selected)
+  if (!storedValues.length) return null
+  const prefixParts = selected.map(code => Prisma.sql`upper(p."publicationNumber") LIKE ${`${code}%`}`)
+  return Prisma.sql`(
+    upper(coalesce(p."country", '')) IN (${Prisma.join(storedValues.map(value => Prisma.sql`${value}`), ', ')})
+    OR (p."country" IS NULL AND (${Prisma.join(prefixParts, ' OR ')}))
+  )`
+}
+
 function buildClassificationCondition(values: string[]) {
   const normalized = uniqueStrings(values.map(normalizeClassification).filter(Boolean))
   if (!normalized.length) return null
@@ -395,6 +446,8 @@ function buildWhereConditions(filters: PatentSearchFilters) {
     ...(filters.ipcCodes || []),
   ])
   if (classificationCondition) conditions.push(classificationCondition)
+  const countryCondition = buildCountryCondition(filters.countries)
+  if (countryCondition) conditions.push(countryCondition)
   addDateConditions(conditions, filters)
   addNumericConditions(conditions, filters)
   return conditions
@@ -516,9 +569,15 @@ function withExcludedTerms(filters: PatentSearchFilters, excludedTerms: string[]
   return terms.length ? { ...filters, excludeTerms: terms } : filters
 }
 
+// Scope restrictions (country, excluded terms) narrow an existing search but are not
+// themselves a reason to run the "return everything matching the filters" field query
+// — country is set on nearly every intelligent search, and treating it as a positive
+// criterion would flood the candidate pool with recent-but-irrelevant patents.
+const SCOPE_ONLY_FILTER_KEYS = new Set(['excludeTerms', 'countries'])
+
 function hasPositiveFieldFilters(filters: PatentSearchFilters) {
   return Object.entries(filters).some(([key, value]) => {
-    if (key === 'excludeTerms') return false
+    if (SCOPE_ONLY_FILTER_KEYS.has(key)) return false
     if (Array.isArray(value)) return value.length > 0
     return value !== undefined && value !== null && value !== ''
   })
@@ -623,6 +682,9 @@ export class IndianCorpusProvider implements PatentSearchProvider {
 
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
     const searchStartedAt = Date.now()
+    const tuning = await resolveRetrievalTuning()
+    const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = tuning.statementTimeoutMs) =>
+      queryRawWithStatementTimeout<T>(query, timeoutMs)
     const traceId = request.requestHeaders?.['x-request-id'] ||
       `patent-search-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const safeLimit = clampLimit(request.limit, 20, 300)
@@ -719,13 +781,13 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         const searchDocument = this.titleAbstractOnlySearch
           ? titleAbstractSearchDocumentExpression()
           : searchDocumentExpression()
-        const textCandidatePoolLimit = Math.min(Math.max(candidateLimit * 8, 300), TEXT_MATCH_CANDIDATE_CAP)
+        const textCandidatePoolLimit = Math.min(Math.max(candidateLimit * 8, 300), tuning.textCandidateCap)
         const conditions = [
           Prisma.sql`numnode(q.query) > 0`,
           Prisma.sql`${searchDocument} @@ q.query`,
           ...filterConditions,
         ]
-        const textRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
+        const textRows = await runQuery<any>(Prisma.sql`
           WITH q AS (
             SELECT websearch_to_tsquery('english'::regconfig, ${textQuery}) AS query
           ),
@@ -751,13 +813,13 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       if (this.metadataSearchEnabled) {
         try {
           const metadataDocument = metadataDocumentExpression()
-          const metadataCandidatePoolLimit = Math.min(Math.max(candidateLimit * 3, 120), METADATA_MATCH_CANDIDATE_CAP)
+          const metadataCandidatePoolLimit = Math.min(Math.max(candidateLimit * 3, 120), tuning.metadataCandidateCap)
           const metadataConditions = [
             Prisma.sql`numnode(mq.query) > 0`,
             Prisma.sql`${metadataDocument} @@ mq.query`,
             ...filterConditions,
           ]
-          const metadataRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
+          const metadataRows = await runQuery<any>(Prisma.sql`
             WITH mq AS (
               SELECT websearch_to_tsquery('simple'::regconfig, ${textQuery}) AS query
             ),
@@ -787,15 +849,14 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       request.title,
       Math.max(36, Math.min(256, request.maxSemanticQueryWords || 36))
     )
-    const vectorRetrievalQueries = retrievalQueries.slice(0, MAX_VECTOR_RETRIEVAL_QUERIES)
+    const vectorRetrievalQueries = retrievalQueries.slice(0, tuning.maxVectorQueries)
     logEmbeddingSearch('info', 'search_start', {
       traceId,
       providerId: this.id,
       corpusSource: this.corpusSource,
       searchMode: request.searchMode || 'intelligent',
       embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
-      hasOpenAIKey: hasSearchEmbeddingApiKey(),
-      hasDedicatedSearchOpenAIKey: Boolean(process.env.OPENAI_SEARCH_API_KEY),
+      hasEmbeddingKey: hasSearchEmbeddingApiKey(),
       textQueryLength: textQuery.length,
       retrievalQueryCount: retrievalQueries.length,
       vectorRetrievalQueryCount: vectorRetrievalQueries.length,
@@ -804,7 +865,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     })
 
     if (this.semanticSearchEnabled && vectorRetrievalQueries.length > 0 && hasSearchEmbeddingApiKey() && !manualMode) {
-      let vectorStage = 'openai_embedding_request'
+      let vectorStage = 'query_embedding_request'
       try {
         const embeddingStartedAt = Date.now()
         const vectors = await requestSearchQueryEmbeddings(
@@ -829,7 +890,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           if (limit <= 0) continue
           const vectorLiteral = corpusEmbeddingToLiteral(vector)
           const queryStartedAt = Date.now()
-          const vectorRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
+          const vectorRows = await runQuery<any>(Prisma.sql`
             SELECT ${commonSelectSql(Prisma.sql`,
               1 - ((${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorLiteral}${EMBEDDING_CAST_SQL})${EMBEDDING_SIMILARITY_DENOM}) AS "vectorScore"`)}
             FROM "local_patents" p
@@ -885,16 +946,17 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         : manualMode
         ? 'manual_mode'
         : !hasSearchEmbeddingApiKey()
-          ? 'missing_openai_api_key'
+          ? 'missing_embedding_api_key'
           : 'no_retrieval_queries'
-      const forceWarning = skipReason === 'missing_openai_api_key' && !missingOpenAiKeyWarningReported
-      if (forceWarning) missingOpenAiKeyWarningReported = true
+      const forceWarning = skipReason === 'missing_embedding_api_key' && !missingEmbeddingKeyWarningReported
+      if (forceWarning) missingEmbeddingKeyWarningReported = true
       logEmbeddingSearch(forceWarning ? 'warn' : 'info', 'vector_search_skipped', {
         traceId,
         reason: skipReason,
         searchMode: request.searchMode || 'intelligent',
+        embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
         retrievalQueryCount: vectorRetrievalQueries.length,
-        hasOpenAIKey: hasSearchEmbeddingApiKey(),
+        hasEmbeddingKey: hasSearchEmbeddingApiKey(),
       }, forceWarning)
       if (request.strictSemantic) {
         throw new Error(`Semantic patent search is unavailable: ${skipReason}.`)
@@ -904,10 +966,10 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const hasEnoughCandidatesForRequestedLimit = rows.size >= safeLimit
     if (textQuery.length >= 3 && !manualMode && !request.skipTrigramSearch && !hasEnoughCandidatesForRequestedLimit) {
       try {
-        const trigramCandidatePoolLimit = Math.min(Math.max(candidateLimit * 6, 180), TRIGRAM_MATCH_CANDIDATE_CAP)
-        const titleRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
+        const trigramCandidatePoolLimit = Math.min(Math.max(candidateLimit * 6, 180), tuning.trigramCandidateCap)
+        const titleRows = await runQuery<any>(Prisma.sql`
           WITH settings AS (
-            SELECT set_config('pg_trgm.similarity_threshold', ${TRIGRAM_SIMILARITY_THRESHOLD}, true)
+            SELECT set_config('pg_trgm.similarity_threshold', ${tuning.trigramThreshold}, true)
           ),
           hits AS MATERIALIZED (
             SELECT p."id"
@@ -953,7 +1015,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
 
     if (hasPositiveFieldFilters(filters)) {
       try {
-        const fieldRows = await queryRawWithStatementTimeout<any>(Prisma.sql`
+        const fieldRows = await runQuery<any>(Prisma.sql`
           SELECT ${commonSelectSql(Prisma.sql`, 1.0 AS "fieldScore"`)}
           FROM "local_patents" p
           ${whereSql(filterConditions)}

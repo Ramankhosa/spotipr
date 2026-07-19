@@ -8,7 +8,11 @@
 import { usePathname } from 'next/navigation'
 import Header from '@/components/Header'
 
-const HEADERLESS_ROUTES = ['/patentnest']
+// '/' matches exactly (the startsWith check adds a trailing slash, so only the
+// root itself is headerless); the PatentNest landing page is now the default
+// homepage and brings its own nav. The classic homepage at /classic-home keeps
+// the global Header, as it always had.
+const HEADERLESS_ROUTES = ['/', '/patentnest']
 
 export default function ConditionalHeader() {
   const pathname = usePathname()

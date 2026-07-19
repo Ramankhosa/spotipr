@@ -16,6 +16,7 @@ import {
   FileSearch,
   Lightbulb,
   Feather,
+  Scale,
   Users,
   Building2,
   BarChart3,
@@ -25,7 +26,7 @@ import {
 } from 'lucide-react'
 
 const PUBLIC_PREFIXES = [
-  '/patentnest',
+  '/patentnest', '/classic-home',
   '/pricing', '/contact', '/terms', '/privacy',
   '/login', '/register', '/forgot-password', '/reset-password', '/verify-email',
   '/institutional-access', '/unsubscribed', '/clear-cookies', '/share',
@@ -55,6 +56,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   'idea-bank': 'Idea Bank',
   personas: 'Writing Personas',
   'patent-search': 'Prior-art Search',
+  'office-actions': 'FER Response',
   setup: 'Setup',
   applicant: 'Applicant',
   subscription: 'Subscription',
@@ -79,6 +81,7 @@ const LINKABLE_PATTERNS = [
   /^\/idea-bank$/,
   /^\/personas$/,
   /^\/patent-search$/,
+  /^\/office-actions$/,
   /^\/patents\/draft\/batch$/,
   /^\/patents\/draft\/batch\/history$/,
   /^\/tenant-admin\/(users|teams|analytics)$/
@@ -140,6 +143,7 @@ const MAIN_NAV: NavItem[] = [
   { label: 'New Draft', href: '/patents/draft/new', icon: PenLine },
   { label: 'Novelty Search', href: '/novelty-search', icon: Search },
   { label: 'Prior-art Search', href: '/patent-search', icon: FileSearch },
+  { label: 'FER Response', href: '/office-actions', icon: Scale },
   { label: 'Idea Bank', href: '/idea-bank', icon: Lightbulb },
   { label: 'Writing Personas', href: '/personas', icon: Feather }
 ]

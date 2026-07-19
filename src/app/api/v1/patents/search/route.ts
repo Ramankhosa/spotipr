@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { PatentApiError, patentApiQueryHash } from '@/lib/patent-api-auth'
 import { runPatentApiRoute } from '@/lib/patent-api-route'
-import { searchPublicIndianPatents } from '@/lib/patent-public-api'
+import { getPublicSearchCoverage, searchPublicIndianPatents } from '@/lib/patent-public-api'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -31,8 +31,9 @@ export async function POST(request: NextRequest) {
     }
 
     const results = await searchPublicIndianPatents(query, rawLimit)
+    const coverage = await getPublicSearchCoverage()
     return {
-      data: { query, count: results.length, results },
+      data: { query, count: results.length, results, coverage },
       resultCount: results.length,
       queryHash: patentApiQueryHash(query),
     }

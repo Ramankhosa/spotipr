@@ -62,7 +62,7 @@ export default function NoveltySearchPage() {
 
   if (!hasPermission) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-paper-100 flex items-center justify-center">
         <div className="max-w-md mx-auto text-center">
           <div className="text-red-600 mb-4">
             <svg className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -74,14 +74,14 @@ export default function NoveltySearchPage() {
               />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Access Denied</h3>
-          <p className="text-gray-600 mb-4">
+          <h3 className="text-lg font-medium text-ai-graphite-900 mb-2">Access Denied</h3>
+          <p className="text-ai-graphite-600 mb-4">
             You don&apos;t have permission to access the Novelty Search feature. Please contact your administrator for
             access.
           </p>
           <button
             onClick={() => router.push('/dashboard')}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-ai-blue-600 hover:bg-ai-blue-700"
           >
             Return to Dashboard
           </button>
@@ -110,7 +110,7 @@ export default function NoveltySearchPage() {
         <Suspense
           fallback={
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-ai-blue-600" />
             </div>
           }
         >

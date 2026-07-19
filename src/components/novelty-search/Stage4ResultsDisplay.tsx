@@ -92,7 +92,7 @@ export default function Stage4ResultsDisplay({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-lg border border-slate-200 border-t-indigo-500 border-t-4 bg-white p-6 shadow-sm">
+      <section className="rounded-lg border border-slate-200 border-t-ai-blue-500 border-t-4 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <div className="text-sm font-medium text-slate-500">AI Preliminary Screening</div>
@@ -117,7 +117,7 @@ export default function Stage4ResultsDisplay({
           <Link
             href={`/novelty-search/${metadata.search_id || searchId}/consolidated`}
             target="_blank"
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-ai-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-ai-blue-700"
           >
             Consolidated Report
             <ExternalLink className="h-4 w-4" />
@@ -151,16 +151,16 @@ export default function Stage4ResultsDisplay({
       </section>
 
       {adaptive.mode && adaptive.mode !== 'off' && (
-        <section className="rounded-lg border border-blue-200 bg-blue-50 p-5">
-          <h3 className="text-base font-semibold text-blue-950">Adaptive Screening Trail</h3>
-          <div className="mt-3 grid gap-3 text-sm text-blue-900 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-5">
+          <h3 className="text-base font-semibold text-ai-blue-950">Adaptive Screening Trail</h3>
+          <div className="mt-3 grid gap-3 text-sm text-ai-blue-900 sm:grid-cols-2 lg:grid-cols-4">
             <div><span className="font-medium">Mode:</span> {String(adaptive.mode)}</div>
             <div><span className="font-medium">Gated:</span> {adaptive.gatedCount ?? '-'}</div>
             <div><span className="font-medium">Deeply analyzed:</span> {adaptive.analyzedCount ?? '-'}</div>
             <div><span className="font-medium">Token saving estimate:</span> {Number(adaptive.projectedTokensSaved || 0).toLocaleString()}</div>
           </div>
           {adaptiveReason && (
-            <p className="mt-3 text-sm text-blue-900">
+            <p className="mt-3 text-sm text-ai-blue-900">
               <span className="font-medium">{adaptive.terminalStopReason ? 'Stop reason' : 'Observed projected stop'}:</span>{' '}
               {String(adaptiveReason).replace(/_/g, ' ')}
             </p>
@@ -169,9 +169,9 @@ export default function Stage4ResultsDisplay({
       )}
 
       {honestAssessment && (
-        <section className="rounded-lg border border-indigo-200 bg-indigo-50 p-5">
-          <h3 className="text-base font-semibold text-indigo-950">Honest Assessment</h3>
-          <p className="mt-2 text-sm leading-6 text-indigo-900">{sanitize(honestAssessment)}</p>
+        <section className="rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-5">
+          <h3 className="text-base font-semibold text-ai-blue-950">Honest Assessment</h3>
+          <p className="mt-2 text-sm leading-6 text-ai-blue-900">{sanitize(honestAssessment)}</p>
         </section>
       )}
 
@@ -279,7 +279,7 @@ function BulletsCard({ title, bullets, tone }: { title: string; bullets: string[
     ? 'border-emerald-200 bg-emerald-50'
     : tone === 'amber'
       ? 'border-amber-200 bg-amber-50'
-      : 'border-indigo-200 bg-indigo-50';
+      : 'border-ai-blue-200 bg-ai-blue-50';
 
   return (
     <section className={`rounded-lg border p-5 ${toneClass}`}>
@@ -304,7 +304,7 @@ function NumberedCard({ title, items }: { title: string; items: string[] }) {
       <div className="mt-3 space-y-2">
         {items.map((item, index) => (
           <div key={index} className="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-            <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-medium text-white">
+            <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-ai-blue-600 text-xs font-medium text-white">
               {index + 1}
             </span>
             <span>{safeReportText(item)}</span>
@@ -359,7 +359,7 @@ function PatentAnalysisAccordion({ patent, sanitize }: { patent: any; sanitize: 
         )}
 
         <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-          <div className="h-full rounded-full bg-indigo-500" style={{ width: `${relevancePercent}%` }} />
+          <div className="h-full rounded-full bg-ai-blue-500" style={{ width: `${relevancePercent}%` }} />
         </div>
 
         {relevantParts.length > 0 && (
@@ -380,7 +380,7 @@ function PatentAnalysisAccordion({ patent, sanitize }: { patent: any; sanitize: 
         <Link
           href={`https://patents.google.com/patent/${encodeURIComponent(String(pn).replace(/\s+/g, ''))}`}
           target="_blank"
-          className="inline-flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-700"
+          className="inline-flex items-center gap-2 text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
         >
           Open in Google Patents
           <ExternalLink className="h-4 w-4" />
@@ -428,11 +428,11 @@ function LegacyRemarkAccordion({ item, sanitize }: { item: any; sanitize: (value
           <div className="font-mono text-sm font-semibold text-slate-900">{pn}</div>
           {item.title && <div className="mt-1 text-sm text-slate-600">{sanitize(item.title)}</div>}
         </div>
-        <span className="text-xs font-medium text-indigo-600">Details</span>
+        <span className="text-xs font-medium text-ai-blue-600">Details</span>
       </summary>
       <div className="border-t border-slate-200 p-4">
         <div className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{sanitize(item.remarks) || '-'}</div>
-        <Link href={href} target="_blank" className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-700">
+        <Link href={href} target="_blank" className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700">
           Open in Google Patents
           <ExternalLink className="h-4 w-4" />
         </Link>

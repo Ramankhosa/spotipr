@@ -1,0 +1,459 @@
+. /Ref.No /  /Application No/ 202531116984                                /Date of Dispatch/Email: 14-01-2026
+
+ ,/To
+TARUN KHURANA,
+KHURANA & KHURANA, Advocates and IP Attorneys D 45, UPSIDC, Site IV, Kasna Road, Greater Noida
+201310, UP, National Capital Region, India.
+Email : info@khuranaandkhurana.com,docket@khuranaandkhurana.com
+
+:   , 1970   12  13    , 2003     
+Subject: Examination report under sections 12 & 13 of the Patents Act, 1970 and the Patents Rules, 2003.
+
+1.         ( ,   , 2003 ( )   24-(8)     
+     )             26-11-2025            
+
+           (,            )     
+
+            
+   Please find enclosed herewith an Examination Report ( i.e. a first statement of objections as specified in Rule
+   24-C(8) of The Patents Rules, 2003 (as amended) ) in respect of above-mentioned application. This report is
+   issued with reference to a request for examination dated 26-11-2025.The last date for filing a response to the
+   Examination Report (i.e. a period to comply with all the requirements raised in this examination report) is six
+   months from the date on which the first statement of objections is issued to the Applicant.
+
+2.              , 2003 ( )   24-(10)  
+
+                1970   21(1)         
+
+   
+   The instant application shall be deemed to have been abandoned under Section 21(1) of The Patents Act, 1970,
+   unless all the requirements raised in this report are complied with in the period as specified in Rule 24-C(10) of
+   The Patents Rules, 2003 (as amended).
+
+3.     , 2003   24-(11)          
+   Your attention is also invited to the provisions of Rule 24-C(11) of the Patents Rules 2003.
+
+4.                
+   You are advised to file the reply at the earliest for early disposal.
+
+5.               ()          ,    
+         ,     24(5)   24(10)  ,     ,   
+          
+   The applicant is hereby advised to submit a reply to the objections communicated through this First Examination
+   Report (FER) preferably within three months from the date of its issuance, thereby enabling this office to
+   process the application within a period of six months as per Rule 24B(5) or Rule 24C(10), as the case may be.
+
+                                                                                                   Anita Devi
+                                                                           / Controller of Patents
+
+ /Enclosed:  /As above
+ :          
+NOTE: This is an electronically generated report.
+
+           
+All communications should be sent to the Controller of Patents at the above mentioned address.
+                        THE PATENT OFFICE
+
+                           /Examination Report
+
+   /Application Number                                            202531116984
+
+    /Date of Filing                                               25-11-2025
+
+    /Date of Priority                                             --
+
+                           / PCT International Application No. &  --
+Date
+
+ /Applicant                                                       National Institute of Technology
+                                                                  Patna
+
+          /Request for Examination No. & Date                     E2025308378726-11-2025
+
+   /Date of Publication                                           26-12-2025
+
+       ,     ,    ,          /
+This examination report consists of four parts, namely summary of the report, detailed
+technical report, formal requirements and documents on record.
+
+ -1:   
+PART-I: SUMMARY OF THE REPORT
+
+. .                                                          /Claim Numbers       /Remarks
+/Sl.  /Requirements under the Act
+No.                                                       /Claims: 1-10          /Yes
+                                                          /Claims:               /No
+                                 /Novelty                 /Claims:               /Yes
+                                                          /Claims: 1-10          /No
+       2(1)()                                             /Claims: 1-10          /Yes
+1.   /Invention u/s    / Inventive step                   /Claims:               /No
+                                                          /Claims:               /Yes
+      2(1)(j)                                             /Claims: 1-10          /No
+                                   /Industrial            /Claims:               /Yes
+                                Applicability             /Claims: 1-10          /No
+                                                          /Claims: 1-10          /Yes
+       3   -  ( ,  3(-) /Non-                             /Claims:               /No
+2. patentability u/s 3
+                                                         NO                      /Yes
+      (if yes, specify section3(a-p))                                            /No
+                                                         NO                      /Yes
+3.  4   -  /Non-patentability u/s 4                                              /No
+                                                          /Claims: 1-10          /Yes
+4.     10 (5)       /Unity of invention                   /Claims:               /No
+      u/s 10 (5)                                          /Claims:               /Yes
+                                                          /Claims: 1-10          /No
+       10(4)       (/                                     /Claims: 1-10
+5. )/Sufficiency of disclosure u/s 10 (4)                 /Claims:                           Page 1 of 7
+                                                          /Claims:
+      (Specify Yes/No)                                    /Claims: 1-10
+
+      - /   ( )     (/ 
+
+6.    ) /Reference to co-pending/foreign application(s)
+      required
+
+      (Specify Yes/No)
+
+                          /   /Clarity /
+                        Conciseness
+
+      [ 10(5)  10(4) ()]   /Definitive
+7.    /Claims
+
+      [u/s 10(5) & 10(4) (c)]    /Supported by
+                                description
+
+                         /Scope
+                  THE PATENT OFFICE
+
+          () /Other requirement(s):
+      Note:
+8. (i) "The Patents Act, 1970 (as amended in 2005)" is called hereinafter "the Act".
+      (ii) "The Patents Rules, 2003 (as amended in 2024)" is called hereinafter "the Rules".
+
+ ­II    
+PART-II: DETAILED TECHNICAL REPORT
+
+.       /A.List of documents cited:
+
+()    / (a). Patent Literature :
+
+       /No Document Cited
+()  -   /(b).Non-patent literature
+
+                                                              
+
+. .        /Details of                                       (                                       
+  /             documents               (//)                      )                /Relevant         /Claims of
+                                       /Publication date                          claims of cited  alleged invention
+Sl.no                                                     /Relevant description
+                                                          (page and paragraph       document
+
+                                                               no.) of cited
+
+                                                          document
+
+       D1:Cui, Zhen, et al.
+
+       "Dynamic tunable triple-band
+
+       terahertz perfect absorber                         Introduction, Model
+
+1      based on graphene 01/01/2025                       design and             -                 1-10
+
+       metamaterial." Physica B:                          simulation, Abstract
+
+       Condensed Matter 696
+
+       (2025): 416641.: 13868.
+
+       D2:Cai, Fei, and Zhifei Kou.
+
+       "A novel triple-band terahertz
+
+2      metamaterial absorber using     02/06/2023         Whole Document         -                 1-10
+       a stacked structure of MoS2
+
+       and graphene." Photonics.
+
+       Vol. 10. No. 6. MDPI, 2023.
+
+       D3:Hasankhani, Masoud,
+
+       Hamid Vahed, and
+
+       Mohammad Bemani.
+
+       "Switchable and tunable
+
+       terahertz metamaterial
+
+3 absorber based on graphene 01/07/2024                   Whole Document         -                 1-10
+
+       and VO2 resonator with
+
+       ultra-broadband and multi-
+
+       band absorption." Optics
+
+       Communications 562 (2024):
+
+       130567.
+
+.           /B. Detailed observations on the requirements under the
+Act:
+
+                                                                                                                                              Page 2 of 7
+                  THE PATENT OFFICE
+
+(1).   / INVENTIVE STEP:
+
+(I)     ( )      ( )     ,     ( ) (1-10)   
+   
+Claim(s) (1-10) lack(s) inventive step, being obvious in view of teaching (s) of cited document(s) above under
+reference for the following reasons:
+
+INDEPENDENT CLAIM 1
+
+D1 is considered to be the prior art closest to the subject matter of claim 1 and discloses the following features of
+claim 1 (References from D1 are given in brackets):
+
+A tunable triple-band terahertz metamaterial absorber device (page 2, Introduction: "a designed tunable triple-
+band terahertz absorber") comprising:
+
+a metallic ground plane to reflect incident electromagnetic waves (page 2, Model design and simulation: "a metal
+substrate"; "The substrate is gold, featuring a conductivity of  = 4.6 × 10 S/m and a thickness of 0.2 m.
+exceeding the skin depth of incident elec-tromagnetic waves");
+
+a dielectric substrate layer positioned on the metallic ground plane to confine electromagnetic waves (page 2,
+Model design and simulation: "dielectric layer"; " Both dielectric layer 1 and dielectric layer 2 are composed of
+SiO2");
+
+a resonator structure positioned on the dielectric substrate layer, to generate triple-band electromagnetic
+absorption (Abstract: "This absorber consists of a metal substrate, a layer of graphene square rings, a layer of
+graphene disks, and two layers of SiO2 dielectric sandwiched between them. Simulation results demonstrate
+absorption peaks at 1.23 THz, 4.2 THz, and 6.38 THz, with respective absorption rates of 99.9 %, 99.8 %, and
+98.3 %."; page 4, column 2, para 2);
+
+and a graphene layer positioned on the resonator structure with a chemical potential adjustable through external
+biasing to dynamically tune resonance frequencies in the terahertz range and to provide polarization-insensitive
+absorption for incident electromagnetic waves (Abstract: " It was found that by adjusting graphene's chemical
+potential, the absorption spectrum can be actively controlled. Furthermore, the absorber is insensitive to
+polarization and can sustain the stability of the absorption spectrum within an incident angle range of 0~35";
+Introduction: "Applying an external bias can modify the chemical potential of graphene, thereby adjusting its
+surface conductivity").
+
+However D1 do not discloses the following features:
+
+A)The resonator structure comprises a circular base portion with a first plus-shaped extraction region and a
+second plus-shaped element positioned within the first plus-shaped extraction region.
+
+1)Regarding technical feature (A) : D1 discloses only a graphene square ring resonator and a graphene disk
+resonator for generating triple-band absorption, and does not incorporate a circular base with nested plus-
+shaped extraction regions and inner plus-shaped elements,
+
+however, D2 explicitly teaches a stacked structure with crossed linear slots (plus-shaped) and four pairs of
+concentric circular slots in a MoS-graphene metamaterial, achieving triple-band absorption through these
+geometric features that provide polarization-insensitive performance and tunability via chemical potential
+adjustment (Structures and Theoretical Model: "The complementary frequency-selective surface (FSS) structure
+was used for the absorber, and its equivalent circuit model was analysed"; "The complementary frequency-
+selective surface consists of crossed linear slot units and circular slot units, and the multi-frequency
+characteristics are achieved by the coupling response between the different units"; "The complementary
+frequency-selective surface of the absorber, consisting of two crossed linear slots and four pairs of concentric
+circular slots, has three absorptions at 0.6 THz (99.7%), 1.5 THz (95.4%), and 2.5 THz (99.5%)").
+
+Additionally, D3 discloses an inner cross pattern (plus-shaped) within an outer square ring in a VO resonator
+combined with graphene, enabling switchable multi-band (including triple-band) absorption with polarization
+insensitivity (Design and method: "The VO layer, with a thickness of 0.17 µm, is composed of two square rings,
+
+                                                                                                                                              Page 3 of 7
+               THE PATENT OFFICE
+
+an outer and an inner one. The outer ring has a gap, and a cross pattern is situated within these two rings";
+Abstract: "The proposed absorber can achieve more than 99% absorption while operating in multi-band
+absorption mode at 2.26, 6.68, and 7.71 THz"; "The suggested absorber also has a wide incidence angle
+insensitivity").
+
+In view of D2's clear motivation to use crossed slots and concentric circular geometries for efficient triple-band
+absorption and D3's teaching that inner cross patterns within ring structures are routine for multi-band
+reconfiguration, modifying D1's square ring and disk resonator to incorporate a circular base with plus-shaped
+extraction regions and an inner plus-shaped element constitutes a predictable and obvious modification within the
+ordinary skill of the art to optimize multi-band performance without altering the principle of operation, and
+therefore does not constitute any inventiveness.
+
+Hence, the subject matter of claim 14 lacks an inventive step because of D1, D2, D3 and common general
+knowledge. Hence the same cannot be allowed u/s 2(1) (ja) of the Act.
+
+DEPENDENT CLAIM 2-10
+
+The subject matter of Claims 2­10 does not introduce any inventive features beyond those of independent Claim
+1. These dependent claims merely define routine design variations and conventional parameter selections, such
+as resonator dimensional adjustments, material choices, stacking configurations, biasing conditions, or
+performance-related characteristics (e.g., bandwidth, absorption level, polarization insensitivity, or tunability),
+which a person skilled in the art would ordinarily implement while designing graphene-based terahertz
+metamaterial absorbers.
+
+The claimed features represent well-known design optimisations and customary engineering refinements
+commonly employed to tailor resonance frequencies, absorption strength, or tunability in metamaterial absorber
+systems, and do not result in any technical advancement or unexpected technical effect beyond what is already
+disclosed or rendered obvious by the prior art.
+
+Accordingly, Claims 2­10 do not involve an inventive step and therefore cannot be allowed under Section
+2(1)(ja) of the Act.
+
+(II)     ( ) -           
+Claim(s)of the instant application conflict(s) with claim(s) of co-pending application no.
+
+(3).    /SUFFICIENCY OF DISCLOSURE:
+
+(4).  /SCOPE:
+
+(I) () 1-10                        () .
+Claim(s) 1-10 does/do not define the scope of invention for which the protection is claimed for the following
+reasons:
+
+1.  The term " lower frequencies.", "ultrathin" as used in the claims lack precise technical meaning
+
+    and is not clearly defined in the description or claims. The use of such relative and comparative
+
+    expressions renders the scope of the claims uncertain and potentially misleading, thereby unduly
+
+    broadening their ambit.
+
+2.  The unit cell structure recited in Claim 10 is unclear, as the claim does not specify to which
+
+    material or component of the device the unit cell relates (e.g., graphene layer, resonator
+
+    structure, or the overall absorber). This ambiguity renders the scope of Claim 10 indeterminate
+
+    and hence the same is not allowed u/s 10(4)(c) of the act.
+
+3.  The term "monolayer non-patterned configuration" is overly broad and lacks clear technical
+
+    definition, rendering the scope of the claim unclear and indeterminate. Hence, the same is not
+
+    allowable u/s 10(4)(c) of the Act.
+
+                                                                                                       Page 4 of 7
+    THE PATENT OFFICE
+
+4.  The term "distinct dimensional parameters to generate spatially separated resonance
+
+    frequencies with guard bands" is overly broad and lacks clear technical limits, rendering the
+
+    scope of the claim unclear and indeterminate u/s 10(4)(c) of the Act.
+
+5.  The term "substrate" as used in the expression "an ultrathin substrate" is generic and lacks
+
+    specific material or structural limitations, thereby rendering the scope of the claim overly broad
+
+    and unclear u/s 10(4)(c) of the Act.
+
+(5).  /DEFINITIVENESS:
+
+(I) ()1-10             () 
+Claim(s) 1-10 do not sufficiently define the invention for the reasons as follows:
+
+Proper antecedent basis shall be maintained in the claims. Specifically, the article `a' or `an' should be used when
+a feature is introduced for the first time, and the article `the' or `that' should be used when the same feature is
+subsequently referred to.
+
+(6).    /OTHERS REQUIREMENTS:
+
+(I)
+
+1. Applicant needs to explain in the complete specification / written submission about
+
+(a) the technical problem that the claimed invention is solving;
+
+(b) the distinguishing/characterizing technical features of the claimed invention;
+
+(c) the technical effect that is caused by these distinguishing/characterizing technical features;
+
+(d) the reason why the skilled person would not solve this problem in a manner indicated in the prior art without
+employing any inventive skill;
+
+(e) the difference in the subject matter of the claims of the present application from the cited documents in
+tabular/para-wise format.
+
+2. In case the applicant contemplates amending the claims/specification after this report, then it is required to
+identify (submission of marked copy) the amendments carried out and to indicate the portion (page number and
+line number) of the original specification as filed on which these amendments are based on, as required u/s 10(4)
+of The Act. Please be informed that no new matter shall be added such that the scope of the original disclosure
+changes. That is, care shall be taken that the requirement of section 59 (1) of The Act is also met while any
+amendment is made. Further, the pages where amendments are carried out need to be freshly typed on white
+pages and filed in duplicate. Fees for extra pages/claims (if any) shall be paid by the Applicant.
+
+3. Cited documents D1, D2 & D3 which appear to represent the most relevant prior art, should be acknowledged
+in the description, and the relevant background art disclosed therein should be briefly discussed.
+
+4. Please note that the examination is done based on documents uploaded in the e-module only. You may verify
+whether all documents are uploaded electronically as they were filed or not. In case of any discrepancies, you
+may bring the same to the notice of the concerned.
+
+                                                                                                                                              Page 5 of 7
+                        THE PATENT OFFICE
+
+ ­ III:     /PART-III: FORMAL REQUIREMENTS
+
+    /Objections                                                    /Remarks
+
+Endorsement by          Endorsement by or assignment from the inventor in favour of the applicant is not filed as
+/Assignment from        per the provisions of the Patent Act.
+Inventor
+
+                        All the submitted documents and forms have been presumed as originally signed by the
+
+                        authorized signatory under the provisions of the Patents Act, 1970. If not, submit the
+
+Date and Signature of originally signed copy of the same failing to which the document may not be considered
+
+Applicant               filed. Also, it must be ensured that Form-1, Form-3, Form-5, and all other related
+
+                        documents are duly signed by that registered patent agent, clearly indicating Name,
+
+                        Patent agent number, and Date as in register of a patent agent.
+
+Statement & Under       FORM 3 shall be submitted u/s 8(1) of the Act and u/r 12(1A) of the Rules with an
+Taking (Form 3          appropriate petition u/r 12(5), 138 and 137 of the Rules (as applicable).
+Details)
+
+Power of Attorney       The application number and the title of the invention should be mentioned on a fresh
+(Whether GPA, SPA,      stamp paper to clarify that the stamp duty is paid for the current application, and the
+Stamped, requisite fee  same should be attached with a copy of the GPA.
+etc.)
+
+Other Deficiencies      1)Details like "breakup fee details" are not mentioned. Hence, a corrected FORM 1
+                        shall be submitted.
+
+                        2)Application number is missing in FORM 3, FORM 5, FORM 9 & FORM 28. A fresh
+                        copy of these forms should be submitted.
+
+-IV:     /PART-IV: DOCUMENTS ON RECORD
+
+               
+The examination report has been prepared based on the following documents:
+
+     /                  /Docket                    /Entry Number Description
+ Docket Date               Number
+25 Nov 2025                 26720  12-Request For Early Publication - Form 9
+                                   1-New Application For Patent With Provisional /Complete
+25 Nov 2025                 26720  Specification
+                                   FORM 28
+25 Nov 2025                 26720  11-Mention Of Inventor As Such In A Patent - Form 8
+26 Nov 2025                 26789  Request for Expedited examination
+26 Nov 2025                 26795
+
+    /Name of the Examiner: SIDDHI MUKTA
+
+   /Name of the Controller: Anita Devi
+Controller's Email: anita90.ipo@gov.in
+
+ :            / Note: Last date for filing response to the Examination Report:
+14-07-2026
+
+                                                                                                            Page 6 of 7
+THE PATENT OFFICE
+
+                                                                                                       Page 7 of 7
+

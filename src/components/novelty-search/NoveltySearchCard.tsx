@@ -12,7 +12,7 @@ export default function NoveltySearchCard({ onClick }: NoveltySearchCardProps) {
     <div className="cursor-pointer" onClick={onClick}>
       <Card className="hover:shadow-lg transition-shadow">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-blue-700">
+        <CardTitle className="flex items-center gap-2 text-ai-blue-700">
           <Search className="h-6 w-6" />
           Novelty Search
         </CardTitle>
@@ -28,7 +28,7 @@ export default function NoveltySearchCard({ onClick }: NoveltySearchCardProps) {
               <span>AI-Powered Analysis</span>
             </div>
             <div className="flex items-center gap-2">
-              <FileText className="h-4 w-4 text-blue-600" />
+              <FileText className="h-4 w-4 text-ai-blue-600" />
               <span>Professional Reports</span>
             </div>
             <div className="flex items-center gap-2">
@@ -36,12 +36,12 @@ export default function NoveltySearchCard({ onClick }: NoveltySearchCardProps) {
               <span>Guided Workflow</span>
             </div>
             <div className="flex items-center gap-2">
-              <Search className="h-4 w-4 text-purple-600" />
+              <Search className="h-4 w-4 text-ai-blue-600" />
               <span>International Patent Search</span>
             </div>
           </div>
 
-          <div className="text-xs text-gray-600 space-y-1">
+          <div className="text-xs text-ai-graphite-600 space-y-1">
             <p>• Idea normalization and analysis</p>
             <p>• Initial patent screening</p>
             <p>• Detailed novelty assessment</p>

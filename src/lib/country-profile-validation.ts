@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { validateOfficeActionProfile } from './office-action/oa-profile-schema'
 
 // Canonical camelCase section keys used by the app (SupersetSection.sectionKey values).
 // Kept as a static list so validation works client-side without a DB round-trip;
@@ -389,6 +390,19 @@ export function validateCountryProfile(profileData: any): ValidationResult {
         }
       })
     })
+
+    // Optional Office Action Studio block — validated by its own schema.
+    // (Zod strips unknown top-level keys from result.data, but the import
+    // service persists the ORIGINAL profileData, so the block round-trips.)
+    if (profileData?.officeActionProfile !== undefined) {
+      const oa = validateOfficeActionProfile(profileData.officeActionProfile)
+      errors.push(...oa.errors)
+      warnings.push(...oa.warnings)
+      const oaCode = String(profileData.officeActionProfile?.meta?.code || '').toUpperCase()
+      if (oaCode && oaCode !== profile.meta.code.toUpperCase()) {
+        errors.push(`officeActionProfile.meta.code "${oaCode}" does not match meta.code "${profile.meta.code}"`)
+      }
+    }
 
     return {
       valid: errors.length === 0,

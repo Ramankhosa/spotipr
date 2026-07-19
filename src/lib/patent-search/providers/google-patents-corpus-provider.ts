@@ -13,6 +13,12 @@ export class GooglePatentsCorpusProvider extends IndianCorpusProvider {
       jurisdictions: ['*'],
       corpusSource: PATENT_CORPUS_SOURCE_GOOGLE,
       defaultJurisdiction: '',
+      // The metadata tsvector lane ('simple' over classifications/inventors/
+      // applicants) has partial indexes for indian-corpus/pqai only. On the
+      // ~45M Google rows it is an unindexed sequential scan (EXPLAIN cost ~25M)
+      // that always dies at the statement timeout — disable it here, like
+      // EpoOpsCorpusProvider does. The indian provider keeps the lane.
+      metadataSearchEnabled: false,
     })
   }
 }

@@ -1,7 +1,13 @@
 import { NextRequest } from 'next/server'
 import { prisma } from '../src/lib/prisma'
 import { authenticatePatentApiRequest, createPatentApiKeySecret, PatentApiError } from '../src/lib/patent-api-auth'
-import { getPublicIndianPatent } from '../src/lib/patent-public-api'
+import { getPublicIndianPatent, getPublicSearchCoverage } from '../src/lib/patent-public-api'
+import { extractPublicInventionFeatures, mapFeaturesToPublicPatent } from '../src/lib/patent-api-analysis'
+
+const SMOKE_DISCLOSURE =
+  'A shipping container with phase-change thermal storage panels charged by roof-mounted photovoltaic cells. ' +
+  'A controller predicts door-opening events from a delivery schedule and pre-cools a buffer zone before each stop ' +
+  'so the payload temperature stays within two degrees of the setpoint.'
 
 async function main() {
   const generated = createPatentApiKeySecret()
@@ -44,6 +50,26 @@ async function main() {
     const originalEnabled = process.env.PATENT_PUBLIC_API_ENABLED
     process.env.PATENT_PUBLIC_API_ENABLED = 'true'
     const patent = await getPublicIndianPatent(sample.publicationNumber)
+    const coverage = await getPublicSearchCoverage()
+
+    let analysis: Record<string, unknown> = { skipped: true }
+    if (process.env.SMOKE_ANALYSIS === '1') {
+      const extraction = await extractPublicInventionFeatures({
+        title: 'Solar-powered cold-chain container',
+        description: SMOKE_DISCLOSURE,
+      })
+      const mapping = await mapFeaturesToPublicPatent({
+        features: extraction.features.slice(0, 3),
+        publicationNumber: sample.publicationNumber,
+      })
+      analysis = {
+        extractedFeatures: extraction.features.length,
+        noveltyFocus: extraction.noveltyFocus.length,
+        suggestedSearchQuery: Boolean(extraction.suggestedSearchQuery),
+        mappingCoverage: mapping.coverage,
+        mappingEvidenceBasis: mapping.evidenceBasis,
+      }
+    }
     process.env.PATENT_PUBLIC_API_ENABLED = originalEnabled
     console.log(JSON.stringify({
       authenticatedClientId: auth.client.id,
@@ -54,6 +80,8 @@ async function main() {
       },
       concurrency: { accepted: accepted.length, rateLimited: limited.length },
       lookupPublicationNumber: patent.publicationNumber,
+      coverage: { corpus: coverage.corpus, documents: coverage.documents, semanticCoveragePercent: coverage.semanticCoveragePercent },
+      analysis,
     }))
   } finally {
     await prisma.patentApiClient.delete({ where: { id: client.id } }).catch(() => undefined)

@@ -234,7 +234,7 @@ function statusClass(status: FeatureStatus) {
 
 function threatClass(threat: string) {
   const text = String(threat || '').toLowerCase();
-  if (text.includes('high')) return 'border-blue-200 bg-blue-50 text-blue-700';
+  if (text.includes('high')) return 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700';
   if (text.includes('moderate') || text.includes('related')) return 'border-amber-200 bg-amber-50 text-amber-700';
   if (text.includes('low')) return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   return 'border-slate-200 bg-slate-50 text-slate-600';
@@ -473,7 +473,7 @@ function Section({ id, title, children, breakBefore = false }: { id: string; tit
   return (
     <section className={`mb-10 ${breakBefore ? 'print-break-before' : ''}`} id={id}>
       <div className="mb-4 border-b border-slate-300 pb-2">
-        <h2 className="text-xl font-bold text-blue-700">{title}</h2>
+        <h2 className="text-xl font-bold text-ai-blue-700">{title}</h2>
       </div>
       {children}
     </section>
@@ -491,7 +491,7 @@ function DenseTable({ children }: { children: React.ReactNode }) {
 }
 
 function HeaderCell({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <th className={`border border-slate-300 bg-blue-700 px-3 py-2 text-left font-semibold text-white ${className}`}>{children}</th>;
+  return <th className={`border border-slate-300 bg-ai-blue-700 px-3 py-2 text-left font-semibold text-white ${className}`}>{children}</th>;
 }
 
 function Cell({ children, className = '', ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) {
@@ -712,7 +712,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
         )}
 
         <main className="mx-auto max-w-6xl bg-white px-4 py-6 shadow-sm sm:px-6 lg:px-8 lg:py-10 print:max-w-none print:px-0 print:py-0 print:shadow-none">
-          <header className="mb-10 border-b-4 border-blue-700 pb-8">
+          <header className="mb-10 border-b-4 border-ai-blue-700 pb-8">
             <div className="flex flex-col justify-between gap-6 md:flex-row md:items-start">
               <div className="min-w-0">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Confidential review draft</div>
@@ -748,7 +748,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 ['6', 'Claim-Positioning Observations'],
                 ['7', 'Limitations and Next Steps'],
               ].map(([number, label]) => (
-                <a key={number} href={`#section-${number.replace('.', '-')}`} className="flex gap-3 text-slate-700 hover:text-blue-700">
+                <a key={number} href={`#section-${number.replace('.', '-')}`} className="flex gap-3 text-slate-700 hover:text-ai-blue-700">
                   <span className="w-12 font-semibold">{number}</span>
                   <span>{label}</span>
                 </a>
@@ -759,7 +759,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Scholarly publication index</div>
                 <div className="space-y-2 text-sm">
                   {reportData.paperCitations.map((citation, index) => (
-                    <a key={citation.publicationNumber} href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} className="block text-blue-700 underline">
+                    <a key={citation.publicationNumber} href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} className="block text-ai-blue-700 underline">
                       2.2.{index + 1} {citation.title}
                     </a>
                   ))}
@@ -860,7 +860,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 {reportData.citations.map((citation, index) => (
                   <tr className="print-row" key={citation.publicationNumber}>
                     <Cell>{index + 1}</Cell>
-                    <Cell><a className="font-semibold text-blue-700 underline" href={`#citation-${index + 1}`}>{citation.publicationNumber}</a></Cell>
+                    <Cell><a className="font-semibold text-ai-blue-700 underline" href={`#citation-${index + 1}`}>{citation.publicationNumber}</a></Cell>
                     <Cell>{citation.title}</Cell>
                     <Cell>{citation.referenceRole}</Cell>
                     <Cell>{citation.reviewPriority}</Cell>
@@ -891,7 +891,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                     .map((citation, index) => (
                       <tr className="print-row" key={citation.publicationNumber}>
                         <Cell>{index + 1}</Cell>
-                        <Cell><a className="font-semibold text-blue-700 underline" href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`}>{citation.publicationNumber}</a></Cell>
+                        <Cell><a className="font-semibold text-ai-blue-700 underline" href={`#citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`}>{citation.publicationNumber}</a></Cell>
                         <Cell>{citation.title}</Cell>
                         <Cell>{citation.matchCategoryLabel}</Cell>
                         <Cell>{citation.reviewPriority}</Cell>
@@ -935,7 +935,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 </tbody>
               </table>
             </div>
-            <div className="mt-4 rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+            <div className="mt-4 rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm leading-6 text-ai-blue-950">
               <span className="font-semibold">Matrix interpretation: </span>{reportData.matrixInsight}
             </div>
           </Section>
@@ -947,7 +947,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             <div className="space-y-10">
               {reportData.patentCitations.map((citation, index) => (
                 <article id={`citation-${reportData.citations.findIndex(item => item.publicationNumber === citation.publicationNumber) + 1}`} key={citation.publicationNumber}>
-                  <div className="mb-0 bg-blue-700 px-4 py-3 text-lg font-bold text-white">
+                  <div className="mb-0 bg-ai-blue-700 px-4 py-3 text-lg font-bold text-white">
                     Reference {index + 1}: {citation.publicationNumber}
                   </div>
                   <DenseTable>
@@ -961,7 +961,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                       <tr><Cell className="font-semibold">Assignee(s):</Cell><Cell colSpan={3}>{citation.assignees}</Cell></tr>
                       <tr><Cell className="font-semibold">Title:</Cell><Cell colSpan={3}>{citation.title}</Cell></tr>
                       <tr><Cell className="font-semibold">Technical Disclosure:</Cell><Cell colSpan={3}>{reportSafeText(citation.abstract)}</Cell></tr>
-                      <tr><Cell className="font-semibold">Source:</Cell><Cell colSpan={3}><a className="text-blue-700 underline" href={citation.link} target="_blank" rel="noreferrer">{citation.link}</a></Cell></tr>
+                      <tr><Cell className="font-semibold">Source:</Cell><Cell colSpan={3}><a className="text-ai-blue-700 underline" href={citation.link} target="_blank" rel="noreferrer">{citation.link}</a></Cell></tr>
                     </tbody>
                   </DenseTable>
 
@@ -1032,7 +1032,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                         <tr><Cell className="font-semibold">DOI:</Cell><Cell>{citation.doi}</Cell><Cell className="font-semibold">Academic Source:</Cell><Cell>{citation.sourceProviders}</Cell></tr>
                         <tr><Cell className="font-semibold">Reference Role:</Cell><Cell>{citation.referenceRole}</Cell><Cell className="font-semibold">Review Priority:</Cell><Cell>{citation.reviewPriority}</Cell></tr>
                         <tr><Cell className="font-semibold">Paper Abstract:</Cell><Cell colSpan={3}>{reportSafeText(citation.abstract)}</Cell></tr>
-                        <tr><Cell className="font-semibold">Source:</Cell><Cell colSpan={3}><a className="text-blue-700 underline" href={citation.link} target="_blank" rel="noreferrer">{citation.link}</a></Cell></tr>
+                        <tr><Cell className="font-semibold">Source:</Cell><Cell colSpan={3}><a className="text-ai-blue-700 underline" href={citation.link} target="_blank" rel="noreferrer">{citation.link}</a></Cell></tr>
                       </tbody>
                     </DenseTable>
                     <div className="mt-4 overflow-x-auto rounded-sm border border-slate-300">
@@ -1060,7 +1060,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
 
           {reportData.otherShortlisted.length > 0 && (
             <Section id={reportData.paperCitations.length ? 'section-2-3' : 'section-2-2'} title={`${reportData.paperCitations.length ? '2.3' : '2.2'} List of Other Shortlisted Citations`} breakBefore>
-              <div className="mb-5 rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm font-semibold text-blue-950">
+              <div className="mb-5 rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm font-semibold text-ai-blue-950">
                 These citations were shortlisted for reference but not mapped in detail in this report version.
               </div>
               <DenseTable>
@@ -1077,7 +1077,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                     return (
                       <tr className="print-row" key={`${pn}-${index}`}>
                         <Cell>{index + 1}</Cell>
-                        <Cell><a className="text-blue-700 underline" href={`https://patents.google.com/patent/${pn}`} target="_blank" rel="noreferrer">{pn}</a></Cell>
+                        <Cell><a className="text-ai-blue-700 underline" href={`https://patents.google.com/patent/${pn}`} target="_blank" rel="noreferrer">{pn}</a></Cell>
                         <Cell>{firstText(item?.title, item?.invention_title, 'Untitled Patent')}</Cell>
                       </tr>
                     );
@@ -1099,12 +1099,12 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             {reportData.claimPositioningAnalysis ? (
               <>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">Primary Claim Focus</div>
+                  <div className="rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm leading-6 text-ai-blue-950">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-ai-blue-700">Primary Claim Focus</div>
                     <p className="mt-2 font-semibold text-slate-950">{reportData.claimPositioningAnalysis.primaryClaimFocus}</p>
                     {reportData.claimPositioningAnalysis.secondaryClaimFocus && (
                       <>
-                        <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-blue-700">Secondary Claim Focus</div>
+                        <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-ai-blue-700">Secondary Claim Focus</div>
                         <p className="mt-2 font-semibold text-slate-950">{reportData.claimPositioningAnalysis.secondaryClaimFocus}</p>
                       </>
                     )}
@@ -1252,7 +1252,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
               <ListBlock title="Strategic Recommendations" items={reportData.finalAssessment.recommendations} />
               <ListBlock title="Review Drivers" items={finalRemarks?.confidence_drivers || []} />
             </div>
-            <div className="mt-5 rounded-sm border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+            <div className="mt-5 rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm leading-6 text-ai-blue-950">
               <span className="font-semibold">Potential Differentiation Space: </span>{reportData.potentialDifferentiationSpace}
             </div>
             <div className="mt-5 rounded-sm border border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-700">

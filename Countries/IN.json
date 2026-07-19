@@ -505,5 +505,308 @@
         ]
       }
     ]
+  },
+  "officeActionProfile": {
+    "profileVersion": "1.0",
+    "meta": {
+      "code": "IN",
+      "office": "Office of the Controller General of Patents, Designs & Trade Marks (CGPDTM)",
+      "moduleLabel": "FER Response",
+      "languages": ["en"],
+      "lawVersion": "Patents Act 1970 + Patents Rules 2003 as amended by the Patents (Amendment) Rules 2024",
+      "reviewedOn": "2026-07-17",
+      "status": "draft"
+    },
+    "instruments": [
+      {
+        "id": "FER",
+        "label": "First Examination Report",
+        "detectionHints": [
+          "FIRST EXAMINATION REPORT",
+          "First Examination Report",
+          "Examination report under sections 12 & 13",
+          "under sections 12 & 13",
+          "u/s 12 & 13",
+          "first statement of objections",
+          "SUMMARY OF THE REPORT",
+          "DETAILED TECHNICAL REPORT",
+          "Statement of Objections"
+        ],
+        "extractFields": ["applicationNumber", "dateOfReport", "dateOfDispatch", "dateOfFiling", "dateOfPublication", "requestForExaminationDate", "applicantName", "examinerName", "controllerName", "controllerEmail", "citedDocuments", "claimsExamined", "statedDueDate"]
+      },
+      {
+        "id": "SER",
+        "label": "Subsequent Examination Report",
+        "detectionHints": ["SUBSEQUENT EXAMINATION REPORT", "Subsequent Examination Report", "outstanding objections"],
+        "extractFields": ["applicationNumber", "dateOfReport", "citedDocuments"]
+      },
+      {
+        "id": "HEARING_NOTICE",
+        "label": "Hearing Notice under Section 14",
+        "detectionHints": ["HEARING NOTICE", "hearing under section 14", "u/s 14", "opportunity of being heard", "fixed for hearing"],
+        "extractFields": ["applicationNumber", "hearingDate", "hearingMode", "outstandingObjections"]
+      }
+    ],
+    "timeline": {
+      "deadlines": [
+        {
+          "id": "fer_reply",
+          "instrument": "FER",
+          "trigger": "dateOfReport",
+          "period": "P6M",
+          "what": "Reply to FER (application to be put in order for grant)",
+          "basis": "Rule 24B(5)",
+          "extension": {
+            "period": "P3M",
+            "form": "Form 4",
+            "feePerMonth": { "naturalPersonStartupSmallEntityEdu": 1000, "others": 4000 },
+            "requestWindow": "P9M",
+            "note": "2024 Amendment Rules: the Form 4 request may be filed any time within 9 months of the FER date (Rule 24B(6))."
+          },
+          "consequence": {
+            "type": "DEEMED_ABANDONED",
+            "basis": "Section 21(1)",
+            "revivable": false,
+            "note": "No statutory revival; only writ/appeal in rare procedural-failure cases."
+          }
+        },
+        {
+          "id": "form3_update",
+          "instrument": "FER",
+          "trigger": "dateOfReport",
+          "period": "P3M",
+          "what": "Updated Form 3 (Section 8 foreign-application details), if objected or due",
+          "basis": "Rule 12(3) as amended by the 2024 Rules",
+          "extension": {
+            "period": "P3M",
+            "form": "Form 4",
+            "feePerMonth": { "all": 10000 },
+            "note": "Condonable up to 3 months on request (2024 Rules)."
+          }
+        },
+        {
+          "id": "hearing_written_submissions",
+          "instrument": "HEARING_NOTICE",
+          "trigger": "hearingDate",
+          "period": "P15D",
+          "what": "Written submissions and relevant documents after hearing",
+          "basis": "Rule 28(7)",
+          "consequence": {
+            "type": "SUBMISSIONS_NOT_CONSIDERED",
+            "note": "Late written submissions may be disregarded; they also cannot introduce new arguments (DHC)."
+          }
+        }
+      ]
+    },
+    "prosecution": {
+      "model": "PER_REPORT",
+      "note": "FER → reply → (subsequent report or hearing u/s 14) → grant or refusal u/s 15. Quality of the FER reply usually decides whether prosecution ends in one round."
+    },
+    "objections": [
+      {
+        "canonical": "NOVELTY",
+        "localLabel": "Lack of novelty",
+        "legalBasis": ["Section 2(1)(j)", "Section 13"],
+        "citationDriven": true,
+        "track": "SUBSTANTIVE",
+        "detectionHints": ["lack novelty", "lacks novelty", "not novel", "anticipated by", "novelty is objected", "does not constitute an invention under section 2(1)(j)"],
+        "strategies": ["DISTINGUISH_ART", "AMEND_CLAIMS", "BOTH"],
+        "argumentSkeleton": "For each cited document relied on for novelty: (1) identify the claim feature absent from that single document; (2) quote the exact passage the examiner relied on; (3) state the technical difference and its effect; (4) conclude that the document does not disclose all claimed features arranged as claimed.",
+        "caseLawWhitelist": [
+          { "name": "Lallubhai Chakubhai Jariwala v. Chimanlal Chunilal", "citation": "AIR 1936 Bom 99", "point": "Anticipation requires a single prior disclosure containing the whole of the invention." }
+        ]
+      },
+      {
+        "canonical": "INVENTIVE_STEP",
+        "localLabel": "Lack of inventive step",
+        "legalBasis": ["Section 2(1)(ja)"],
+        "citationDriven": true,
+        "track": "SUBSTANTIVE",
+        "doctrine": "TECHNICAL_ADVANCE_IN",
+        "detectionHints": ["inventive step", "obvious to a person skilled in the art", "2(1)(ja)", "combination of D1", "in view of D"],
+        "strategies": ["ATTACK_COMBINATION", "SHOW_TECHNICAL_ADVANCE", "AMEND_CLAIMS", "BOTH"],
+        "argumentSkeleton": "Address the combination the examiner actually articulated: (1) what each cited document teaches on its own; (2) why the skilled person had no reason to combine them (or why the combination still misses a claim feature); (3) the technical advance or economic significance of the claimed feature over the closest art, tracking the words of s.2(1)(ja); (4) hindsight caution.",
+        "caseLawWhitelist": [
+          { "name": "F. Hoffmann-La Roche Ltd v. Cipla Ltd", "citation": "2015 (64) PTC 1 (Del)", "point": "Obviousness must be assessed without hindsight, from the perspective of the person skilled in the art." },
+          { "name": "Avery Dennison Corp v. Controller of Patents", "citation": "2022/DHC/004697", "point": "Even a small technical advance may support inventive step; examiner must give reasons for the combination." }
+        ]
+      },
+      {
+        "canonical": "ELIGIBILITY",
+        "localLabel": "Non-patentable subject matter",
+        "legalBasis": ["Section 3"],
+        "track": "SUBSTANTIVE",
+        "detectionHints": ["not patentable under section 3", "falls within the scope of section 3", "per se", "computer programme", "algorithm", "known substance", "method of treatment"],
+        "strategies": ["ARGUE_TECHNICAL_EFFECT", "AMEND_CLAIMS", "PROVIDE_EFFICACY_DATA", "DELETE_OR_CONVERT_CLAIMS"],
+        "subTypes": [
+          { "id": "3k", "basis": "Section 3(k)", "guidance": "CRI Guidelines 2025 (final, July 2025): demonstrate technical effect/technical contribution beyond the program per se; no novel-hardware requirement; anchor on how the claimed steps solve a technical problem (e.g. resource use, latency, reliability). Avoid arguing business advantage." },
+          { "id": "3d", "basis": "Section 3(d)", "guidance": "New form / new use / new property of a known substance needs enhanced known efficacy — for pharmaceuticals, therapeutic efficacy per Novartis v. Union of India; comparative data against the known substance is expected; bioavailability alone is insufficient. Examiners often pair 3(d) with an inventive-step objection." },
+          { "id": "3e", "basis": "Section 3(e)", "guidance": "Mere admixture / aggregation of known components: rebut by demonstrating a synergistic effect of the combination beyond the additive properties of the components, with data or worked examples in the specification." },
+          { "id": "3c", "basis": "Section 3(c)", "guidance": "Discovery of a living thing or non-living substance occurring in nature / mere discovery of a scientific principle: argue the claim is to a human-made product or a technical application, not the discovery itself." },
+          { "id": "3f", "basis": "Section 3(f)", "guidance": "Mere arrangement / re-arrangement of known devices each functioning independently: show functional interdependence producing a new combined result." },
+          { "id": "3i", "basis": "Section 3(i)", "guidance": "Methods of treatment/diagnosis of humans or animals are excluded — convert to product, composition, apparatus or in-vitro method claims." },
+          { "id": "3m", "basis": "Section 3(m)", "guidance": "Mere mental act / method of playing a game — show steps that necessarily involve technical means." }
+        ],
+        "caseLawWhitelist": [
+          { "name": "Novartis AG v. Union of India", "citation": "(2013) 6 SCC 1", "point": "Section 3(d) efficacy for pharmaceuticals means therapeutic efficacy." },
+          { "name": "Ferid Allani v. Union of India", "citation": "2019 SCC OnLine Del 11867", "point": "Computer-implemented inventions with technical effect are not excluded by s.3(k)." }
+        ]
+      },
+      {
+        "canonical": "SUFFICIENCY",
+        "localLabel": "Insufficient disclosure",
+        "legalBasis": ["Section 10(4)"],
+        "track": "SUBSTANTIVE",
+        "detectionHints": ["sufficiently describe", "does not sufficiently disclose", "best method", "fully and particularly describe"],
+        "strategies": ["POINT_TO_SPEC_SUPPORT", "AMEND_DESCRIPTION"],
+        "argumentSkeleton": "Map each allegedly undisclosed element to the specification paragraph(s) and drawing(s) where it is described; where the objection targets best method, identify the embodiment disclosing it."
+      },
+      {
+        "canonical": "CLARITY",
+        "localLabel": "Claims not clear, concise or definitive",
+        "legalBasis": ["Section 10(4)(c)", "Section 10(5)"],
+        "track": "SUBSTANTIVE",
+        "detectionHints": ["CLARITY AND CONCISENESS", "DEFINITIVENESS", "SCOPE", "not clearly worded", "are not clearly and distinctly defined", "do not sufficiently define the invention", "does not define the scope", "do not define the scope", "not clearly defined", "claims should be definitive", "antecedent basis", "vague, subjective", "relative in nature", "lacks clear technical", "overly broad", "functional and result-oriented"],
+        "subTypes": [
+          { "id": "clarity", "basis": "Section 10(5) & 10(4)(c)", "guidance": "Clarity & conciseness: for each impugned/relative term give its meaning as the skilled person reads it in light of the specification (cite paragraphs), or amend to a precise, measurable formulation with basis." },
+          { "id": "scope", "basis": "Section 10(4)(c)", "guidance": "Scope: examiner lists specific terms (e.g. 'ultrathin', 'lower frequencies') that are said to be overly broad / not defining the scope. Handle each listed term: add a structural/measurable limitation from the specification, or construe it definitely with a paragraph cite." },
+          { "id": "definitiveness", "basis": "Section 10(5) & 10(4)(c)", "guidance": "Definitiveness: often an antecedent-basis point ('a'/'an' for first use, 'the'/'said' thereafter) or functional/result-oriented language without structural limits. Fix antecedent basis by amendment; for functional language add objectively verifiable structural limitations from the specification." }
+        ],
+        "strategies": ["CLARIFY_AMEND", "ARGUE_CLARITY"],
+        "argumentSkeleton": "Handle each impugned term individually: quote the examiner's specific term, then either (a) construe it definitely from the specification with a paragraph cite, or (b) amend to a precise/structural formulation and cite its basis. Indian FERs frequently split this into separate 'Clarity and Conciseness' and 'Definitiveness' objections — answer both if present."
+      },
+      {
+        "canonical": "UNITY",
+        "localLabel": "Plurality of distinct inventions",
+        "legalBasis": ["Section 10(5)"],
+        "track": "SUBSTANTIVE",
+        "detectionHints": ["plurality of distinct inventions", "unity of invention", "single inventive concept"],
+        "strategies": ["ARGUE_SINGLE_CONCEPT", "ELECT_AND_DIVIDE"],
+        "argumentSkeleton": "Identify the shared special technical feature linking the claim groups; if election is unavoidable, elect the commercially central group and note the right to file a divisional under s.16 while the application is pending.",
+        "actions": ["Consider divisional application under Section 16 before grant if election is taken"]
+      },
+      {
+        "canonical": "PROCEDURAL_DISCLOSURE",
+        "localLabel": "Details of corresponding foreign applications (Section 8)",
+        "legalBasis": ["Section 8", "Rule 12"],
+        "responseType": "PROCEDURAL",
+        "track": "FORMAL",
+        "detectionHints": ["section 8", "Form 3", "details of corresponding applications", "particulars of applications filed outside India"],
+        "strategies": ["FILE_UPDATED_FORM3"],
+        "actions": [
+          "File updated Form 3 with current status of all corresponding foreign applications",
+          "Note: post-2024 Rules, Form 3 is due once at RQ and thereafter within 3 months of the FER or on the Controller's direction"
+        ]
+      },
+      {
+        "canonical": "FORMALITIES",
+        "localLabel": "Formal requirements",
+        "legalBasis": ["Patents Rules 2003"],
+        "responseType": "PROCEDURAL",
+        "track": "FORMAL",
+        "detectionHints": ["Form 1", "Form 5", "power of authority", "Form 26", "abstract", "title of the invention", "marked copy", "proof of right"],
+        "strategies": ["COMPLY"],
+        "actions": ["File or rectify the identified forms/documents; list each with the compliance made"]
+      }
+    ],
+    "doctrines": {
+      "TECHNICAL_ADVANCE_IN": {
+        "steps": [
+          "Identify the feature(s) of the claimed invention absent from the closest cited art",
+          "Articulate the technical advance as compared to existing knowledge (or economic significance) of those features, using the language of s.2(1)(ja)",
+          "Explain why that advance would not be obvious to a person skilled in the art from the cited documents, alone or in the combination the examiner articulated",
+          "Guard against hindsight: show the combination is constructed from the invention's own teaching"
+        ],
+        "styleNotes": "Track the statutory wording of s.2(1)(ja) explicitly; engage the examiner's actual combination rather than reciting generalities.",
+        "leadingCases": [
+          { "name": "F. Hoffmann-La Roche Ltd v. Cipla Ltd" },
+          { "name": "Avery Dennison Corp v. Controller of Patents" }
+        ]
+      }
+    },
+    "amendments": {
+      "legalBasis": ["Section 57", "Section 59"],
+      "scopeRule": "Amendments only by way of disclaimer, correction or explanation, for incorporation of actual fact; no new matter; amended claims must fall wholly within the scope of the claims before amendment (Section 59(1)).",
+      "basisRequired": true,
+      "voluntaryForm": { "form": "Form 13", "requiredForOaReply": false },
+      "format": {
+        "markedCopy": true,
+        "cleanCopy": true,
+        "markStyle": "underline-strikethrough",
+        "note": "File a marked-up copy highlighting amendments plus a clean copy of the amended pages/claims with the reply."
+      }
+    },
+    "citations": {
+      "labels": "D1, D2, …",
+      "patentNumberFormats": [
+        "US ?\\d{6,11} ?[A-B]?\\d?",
+        "EP ?\\d{6,8} ?[A-B]?\\d?",
+        "WO ?\\d{4}/\\d{5,6}",
+        "IN ?\\d{1,6}(/[A-Z]{3}/\\d{4})?",
+        "JP ?\\d{4}-?\\d{6}",
+        "CN ?\\d{9,12}[A-B]?"
+      ],
+      "nplAllowed": true
+    },
+    "response": {
+      "skeleton": [
+        "addressBlock",
+        "subjectLine",
+        "preliminarySubmissions",
+        "objectionWiseReply",
+        "amendedClaimsMarked",
+        "amendedClaimsClean",
+        "conclusionAndPrayer",
+        "signatureBlock"
+      ],
+      "tone": "formal-respectful",
+      "phrases": {
+        "opening": "With reference to the First Examination Report dated {dateOfReport} issued in respect of Application No. {applicationNumber}, the Applicant respectfully submits as follows.",
+        "objectionHeading": "Re: Objection {number} — {label}",
+        "prayer": "In view of the foregoing submissions and amendments, the Applicant respectfully submits that the application is in order for grant, and requests the Learned Controller to allow the application to proceed to grant.",
+        "hearingRequest": "Should any objection remain outstanding despite the foregoing, the Applicant respectfully requests an opportunity of being heard under Section 14 of the Act before any adverse decision is taken."
+      },
+      "export": {
+        "formats": ["docx", "pdf"],
+        "formatting": {
+          "font": "Times New Roman",
+          "fontSizePt": 12,
+          "lineSpacing": 1.15,
+          "justify": true,
+          "marginCm": 2.5,
+          "numberedSections": true,
+          "restateExaminerObjection": true,
+          "salutation": "Sir/Madam,",
+          "sectionTitles": {
+            "preliminarySubmissions": "PRELIMINARY SUBMISSIONS",
+            "objectionWiseReply": "RESPONSE TO THE OBJECTIONS",
+            "amendments": "AMENDMENTS TO THE CLAIMS",
+            "conclusionAndPrayer": "CONCLUSION AND PRAYER"
+          }
+        }
+      }
+    },
+    "hearing": {
+      "available": true,
+      "trigger": "Objections outstanding after the FER reply",
+      "writtenSubmissionsAfter": "P15D",
+      "adjournment": { "requestBefore": "P3D", "max": 2, "eachUpTo": "P30D", "basis": "Rule 28(6)" },
+      "guidance": "Address only the objections maintained in the hearing notice; annex proposed claim amendments. Written submissions under Rule 28(7) must be filed within 15 days of the hearing and cannot introduce new arguments or reopen the debate."
+    },
+    "prompts": {
+      "OA_PARSE": "You are parsing an Indian patent office First Examination Report (FER). These reports are BILINGUAL: almost every line is a Hindi label, then '/', then the English label, then the value — read the English label and take the value after it (Hindi may be garbled/empty in extraction; ignore it). Fixed template: (1) a COVER LETTER on IPO letterhead — the 'To' address here is the AGENT/attorney for service, NOT the applicant; it carries the 'Date of Dispatch/Email' (DD-MM-YYYY) that the reply deadline runs from, the subject line 'Examination report under sections 12 & 13', and the Controller's signature. (2) 'THE PATENT OFFICE / Examination Report' with a bordered METADATA TABLE: Application Number, Date of Filing, Date of Priority, PCT International Application No. & Date, Applicant (this is the true applicant name), Request for Examination No. & Date (the RfE number and its date are often run together with no space, e.g. 'E2025308378726-11-2025' = number 'E20253083787' + date '26-11-2025' — split the trailing DD-MM-YYYY as the date), Date of Publication. (3) PART-I SUMMARY OF THE REPORT — a Yes/No requirements grid; its Yes/No meaning INVERTS per row (claims on the Yes row for Novelty = novel/OK, but claims on the No row for Inventive step = LACKS inventive step). This grid is unreliable for deciding what is objected — use it only to corroborate claim numbers, NOT to create objections. (4) PART-II DETAILED TECHNICAL REPORT: section A 'List of documents cited' has '(a) Patent Literature' (frequently 'No Document Cited') and '(b) Non-patent literature' as a TABLE with columns Sl.no | Details of documents (each row starts 'D1:', 'D2:', … with the full journal/patent citation) | Publication date | Relevant description (page and paragraph no.) of cited document | Relevant claims of cited document | Claims of alleged invention. Section B 'Detailed observations on the requirements under the Act' contains the AUTHORITATIVE objections as NUMBERED items (1)–(6), each headed by type, typically: (1) INVENTIVE STEP, (2) NON PATENTABILITY, (3) SUFFICIENCY OF DISCLOSURE, (4) SCOPE, (5) DEFINITIVENESS/CLARITY AND CONCISENESS, (6) OTHERS REQUIREMENTS. CRITICAL: many of these numbered headers are printed even when the examiner raised NOTHING under them — a header followed by no observation text (or only the blank template line like 'Claim(s) of the instant application conflict(s) with claim(s) of co-pending application no.' with no number) is NOT an objection; emit an objection ONLY where there is actual substantive observation text. '(6) OTHERS REQUIREMENTS' is a standard section: it usually asks the applicant to explain in the reply the technical problem / distinguishing features / technical effect / why the skilled person would not arrive at it / the difference from cited docs in a tabular or para-wise format, and restates the s.59(1) marked-copy amendment procedure — capture it as one objection of canonical OTHER so the drafter addresses the problem-solution explanation the examiner requested. The examiner sometimes leaves copy-paste artifacts (e.g. 'claim 14' in a claims 1–10 application) — copy them verbatim and note the inconsistency, do not silently correct. (5) PART-III FORMAL REQUIREMENTS is a two-column TABLE (Objections | Remarks); each non-empty row is a formal objection — categories include Endorsement/Assignment from Inventor (proof of right), Date and Signature of Applicant, Statement & Undertaking (Form 3 / Section 8), Power of Attorney, and Other Deficiencies (missing application number on forms, fee-breakup, etc.) — reassemble each row's label + remark as one objection. (6) PART-IV DOCUMENTS ON RECORD (docket list — NOT objections). Examiner name, Controller name and Controller email appear at the END of the report (after PART-IV), along with the 'Last date for filing response' — scan the whole document for these, not just the top. Extract: applicationNumber; dateOfDispatch (ISO) and set dateOfReport = dateOfDispatch; dateOfFiling; dateOfPublication; applicantName (from the metadata table); examinerName; controllerName; controllerEmail; statedDueDate (from 'Last date for filing response to the Examination Report', ISO). For citedDocuments: reassemble each 'D<n>' row from the section-A table into { label, docNumber (full citation), kind (NPL for journal/article/book, PATENT for a publication number), publicationDate (ISO), relevantDescription (the examiner's pinpoint text), relevantClaimsOfCited, claimsOfAllegedInvention (number[]) } — this table is the examiner's own claim-chart seed, capture it. For objections: take ONLY the PART-II section B numbered observations and the PART-III formal requirements; copy the full VERBATIM English text; preserve the office numbering; record the statute cited (e.g. 2(1)(ja), 3(d), 3(e), 10(4), 10(5), section 8) and the affected claims. Do not paraphrase and do not invent objections from the PART-I grid.",
+      "OA_CLASSIFY": "Classify each extracted objection of this Indian FER into exactly one canonical code using the statute cited and the detection hints. Indian conventions: s.2(1)(j)/s.13 → NOVELTY; s.2(1)(ja) → INVENTIVE_STEP; any s.3 subclause → ELIGIBILITY (record the subclause, e.g. 3d/3e/3k, as subTypeId — a single observation may cite several, pick the primary and note the rest in rationale); s.10(4) sufficiency → SUFFICIENCY; 'Clarity and Conciseness', 'Scope', or 'Definitiveness' (s.10(5), s.10(4)(c)) → CLARITY (subTypeId 'clarity', 'scope' or 'definitiveness'); s.10(5) plurality/unity → UNITY; s.8/Form 3/Statement & Undertaking → PROCEDURAL_DISCLOSURE; endorsement/proof of right/signature/POA/abstract/title/marked-copy/missing-application-number-on-forms → FORMALITIES; 'OTHERS REQUIREMENTS' (problem-solution explanation request + amendment procedure) → OTHER. Skip any numbered PART-II header that has no substantive observation text under it (empty template headers are common). The examiner's inventive-step observation often uses a 'Five-Step Analysis' (person skilled in the art, common general knowledge, inventive concept, key difference, obviousness) — keep it as one INVENTIVE_STEP objection. Quote the examiner verbatim in examinerText; list affected claims and cited document labels. If genuinely ambiguous, use OTHER and explain.",
+      "OA_CLAIM_CHART": "Build a feature chart for the affected claims against the cited document. Split each claim into numbered features. For each feature × document: DISCLOSED (with verbatim quoted passage + location), NOT_DISCLOSED, or AMBIGUOUS (with the closest passage). Quotes must be exact substrings of the provided document text.",
+      "OA_ARGUE": {
+        "NOVELTY": "Draft the novelty reply for this objection following the argumentSkeleton. Use only the claim chart's NOT_DISCLOSED features as distinctions. Every quotation must be an exact substring of the cited document. Formal-respectful Indian prosecution register; address the Learned Controller.",
+        "INVENTIVE_STEP": "Draft the inventive-step reply following the TECHNICAL_ADVANCE_IN doctrine steps in order. Engage the examiner's actual combination; never invent motivations the examiner did not state. Cite only authorities from the whitelist.",
+        "ELIGIBILITY": "Draft the s.3 reply per the matched subType guidance. For 3(k), argue technical effect/contribution per the CRI Guidelines 2025 anchored to specification paragraphs; for 3(d), rely on the efficacy data provided — if none is provided, flag that data is required rather than asserting it exists."
+      },
+      "OA_DRAFT_SECTION": {
+        "preliminarySubmissions": "Draft brief preliminary submissions: acknowledge the FER, summarize the invention in 2-3 sentences from the specification, list the amendments filed herewith, and reserve the right to be heard. No substantive argument here.",
+        "objectionWiseReply": "Assemble the objection-wise reply strictly in FER numbering order, inserting the approved per-objection arguments. Each objection gets a heading using the objectionHeading phrase. Do not add, drop or reorder objections.",
+        "conclusionAndPrayer": "Close with the prayer and hearingRequest phrases, adapted to the matter's facts. One paragraph each."
+      }
+    }
   }
 }

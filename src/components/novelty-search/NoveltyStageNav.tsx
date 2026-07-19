@@ -81,9 +81,9 @@ const STAGE_CONFIGS: StageConfig[] = [
 
 function stageCircleClasses(status: StageStatus, isCurrent: boolean) {
   if (status === 'completed') return 'border-emerald-500 bg-emerald-500 text-white'
-  if (status === 'in_progress') return 'border-indigo-500 bg-white text-indigo-600 ring-4 ring-indigo-100'
+  if (status === 'in_progress') return 'border-ai-blue-500 bg-white text-ai-blue-600 ring-4 ring-ai-blue-100'
   if (status === 'failed') return 'border-rose-500 bg-rose-500 text-white'
-  if (isCurrent) return 'border-indigo-500 bg-indigo-600 text-white'
+  if (isCurrent) return 'border-ai-blue-500 bg-ai-blue-600 text-white'
   if (status === 'blocked') return 'border-slate-200 bg-slate-100 text-slate-400'
   return 'border-slate-300 bg-white text-slate-500'
 }
@@ -138,7 +138,7 @@ export default function NoveltyStageNav({
       <div className="border-b border-slate-200 p-4">
         <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between gap-3'}`}>
           <div className={`flex min-w-0 items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
-            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-ai-blue-600 text-white">
               <Search className="h-4 w-4" />
             </div>
             {!collapsed && (
@@ -171,7 +171,7 @@ export default function NoveltyStageNav({
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
               <div
-                className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+                className="h-full rounded-full bg-ai-blue-500 transition-all duration-300"
                 style={{ width: `${overallProgress}%` }}
               />
             </div>
@@ -215,7 +215,7 @@ export default function NoveltyStageNav({
                     collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5'
                   } ${
                     isCurrent
-                      ? 'border-indigo-200 bg-indigo-50'
+                      ? 'border-ai-blue-200 bg-ai-blue-50'
                       : 'border-transparent hover:bg-slate-50'
                   } ${isFailed ? 'ring-1 ring-rose-200' : ''}`}
                 >
@@ -233,7 +233,7 @@ export default function NoveltyStageNav({
                             isFailed
                               ? 'text-rose-700'
                               : isCurrent
-                                ? 'text-indigo-700'
+                                ? 'text-ai-blue-700'
                                 : status === 'completed'
                                   ? 'text-slate-900'
                                   : 'text-slate-700'
@@ -250,7 +250,7 @@ export default function NoveltyStageNav({
                           className={`inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border text-xs transition-colors ${
                             isFailed
                               ? 'border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100'
-                              : 'border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-50'
+                              : 'border-ai-blue-200 bg-white text-ai-blue-600 hover:bg-ai-blue-50'
                           }`}
                           title={isFailed ? 'Retry stage' : 'Run stage'}
                           role="button"

@@ -165,6 +165,7 @@ export function isValidTaskCode(code: string): code is import('./types').TaskCod
     'LLM3_DIAGRAM',
     'LLM4_NOVELTY_SCREEN',
     'LLM5_NOVELTY_ASSESS',
+    'LLM7_ADVANCED_MANUAL_SEARCH',
   ]
   return validCodes.includes(code)
 }

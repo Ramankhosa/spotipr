@@ -1,0 +1,426 @@
+. /Ref.No /  /Application No/ 202541122810                                /Date of Dispatch/Email: 23-01-2026
+
+ ,/To
+L D DAVAR&CO,
+L. S. DAVAR & CO. Patent and Trademarks Attorney, Globsyn Crystals, Tower 1, 2nd Floor, Block EP, Plot No. 11
+& 12, Saltlake, Sector V, Kolkata 700 091, India. F-1/2, Okhla Industrial Area, Phase-I, New Delhi-110020, India.
+Email : kolkatapatent@lsdavar.in,docketing@lsdavar.in
+
+:   , 1970   12  13    , 2003     
+Subject: Examination report under sections 12 & 13 of the Patents Act, 1970 and the Patents Rules, 2003.
+
+1.         ( ,   , 2003 ( )   24-(8)     
+     )             08-12-2025            
+
+          (,            )     
+
+            
+   Please find enclosed herewith an Examination Report ( i.e. a first statement of objections as specified in Rule
+   24-C(8) of The Patents Rules, 2003 (as amended) ) in respect of above-mentioned application. This report is
+   issued with reference to a request for examination dated 08-12-2025.The last date for filing a response to the
+   Examination Report (i.e. a period to comply with all the requirements raised in this examination report) is six
+   months from the date on which the first statement of objections is issued to the Applicant.
+
+2.              , 2003 ( )   24-(10)  
+
+                1970   21(1)         
+
+   
+   The instant application shall be deemed to have been abandoned under Section 21(1) of The Patents Act, 1970,
+   unless all the requirements raised in this report are complied with in the period as specified in Rule 24-C(10) of
+   The Patents Rules, 2003 (as amended).
+
+3.     , 2003   24-(11)          
+   Your attention is also invited to the provisions of Rule 24-C(11) of the Patents Rules 2003.
+
+4.                
+   You are advised to file the reply at the earliest for early disposal.
+
+5.               ()          ,    
+         ,     24(5)   24(10)  ,     ,   
+          
+   The applicant is hereby advised to submit a reply to the objections communicated through this First Examination
+   Report (FER) preferably within three months from the date of its issuance, thereby enabling this office to
+   process the application within a period of six months as per Rule 24B(5) or Rule 24C(10), as the case may be.
+
+                                                                                                    Meena J
+                                                                           / Controller of Patents
+
+ /Enclosed:  /As above
+ :          
+NOTE: This is an electronically generated report.
+
+           
+All communications should be sent to the Controller of Patents at the above mentioned address.
+                        THE PATENT OFFICE
+
+                           /Examination Report
+
+   /Application Number                                       202541122810
+
+    /Date of Filing                                          05-12-2025
+
+    /Date of Priority                                        --
+
+         / PCT International Application No.                 --
+& Date
+
+ /Applicant                                                  Indian Institute of Technology
+                                                             Hyderabad
+
+          /Request for Examination No. & Date E2025408639508-12-2025
+
+   /Date of Publication                                      02-01-2026
+
+       ,     ,    ,          /
+This examination report consists of four parts, namely summary of the report, detailed
+technical report, formal requirements and documents on record.
+
+ -1:   
+PART-I: SUMMARY OF THE REPORT
+
+. .                                                   /Claim Numbers         /Remarks
+/Sl.  /Requirements under the Act
+No.                                                                         /Yes
+                                                                            /No
+                                 /Novelty          /Claims: 1-10            /Yes
+                                                   /Claims:                 /No
+       2(1)()                                      /Claims:                 /Yes
+1.   /Invention u/s    / Inventive step            /Claims: 1-10            /No
+                                                   /Claims: 1-10            /Yes
+      2(1)(j)                                      /Claims:                d, e
+                                   /Industrial                              /No
+                                Applicability                               /Yes
+                                                                            /No
+       3   -  ( ,  3(-) /Non-                      /Claims: 1-10
+2. patentability u/s 3                             /Claims:                 /Yes
+                                                                            /No
+      (if yes, specify section3(a-p))                                       /Yes
+                                                                            /No
+3.     10 (5)       /Unity of invention  /Claims: 1-10
+
+      u/s 10 (5)                                   /Claims:
+
+       10(4)       (/ 
+
+4. )/Sufficiency of disclosure u/s 10 (4)         no
+
+      (Specify Yes/No)
+
+                                  /   /Clarity /   /Claims:
+      [ 10(5)  10(4) ()] Conciseness               /Claims: 1-10
+5.    /Claims                                      /Claims:
+      [u/s 10(5) & 10(4) (c)]   /Definitive        /Claims: 1-10
+
+ ­II    
+PART-II: DETAILED TECHNICAL REPORT
+.       /A.List of documents cited:
+()    / (a). Patent Literature :
+
+       /No Document Cited
+
+                                                                                             Page 1 of 6
+       THE PATENT OFFICE
+
+()  -   /(b).Non-patent literature
+
+                                                                   
+
+                                                                 (
+
+. .        /Details of                                              )                                 
+  /            documents                     (//)                  /Relevant        /Relevant         /Claims of
+                                            /Publication date                      claims of cited  alleged invention
+Sl.no                                                          description (page
+                                                                and paragraph        document
+
+                                                               no.) of cited
+
+                                                               document
+
+       D1: Gill MR, Vallis KA.
+
+       Transition metal compounds as                            Abstract,
+                                                               description
+1      cancer radiosensitizers. 30/11/2018                                                          Claims 1-10
+
+       Chemical Society Reviews.
+
+       2019;48(2):540-57
+
+       D2: Shi C, Yuan Z, Liu T, Chan
+
+       L, Chen T, Zhao J. X-ray
+
+       sensitive selenium-containing Ru
+
+2             complexes sensitize  cells    21/04/2023          Abstract,                           Claims 1-10
+       nasopharyngeal carcinoma                                description
+
+       for radio/chemotherapy. Journal
+
+       of Materials Chemistry B.
+
+       2023;11(24):5607-18.
+
+       D3: Zhao Y, Zhang L, Li X, Shi
+
+       Y, Ding R, Teng M, Zhang P,
+
+       Cao C, Stang PJ. Self-
+
+       assembled ruthenium (II)
+
+3      metallacycles and metallacages       05/03/2019          Abstract,                           Claims 1-10
+       with imidazole-based ligands and                        description
+
+       their in vitro anticancer activity.
+
+       Proceedings of the National
+
+       Academy of Sciences. 2019 Mar
+
+       5;116(10):4090-8.
+
+       D4: Ouyang L, Lin H, Zhuang P,
+
+       Shao Y, Khosravifarsani M,
+
+       Guérin B, Zheng Y, Sanche L.
+
+4       DNA radiosensitization by           16/01/2023          Abstract,                           Claims 1-10
+       terpyridine-platinum: damage                            description
+
+       induced by 5 and 10 eV transient
+
+       anions. Nanoscale.
+
+       2023;15(7):3230-42.
+
+.           /B. Detailed observations on the requirements under the
+Act:
+
+(1).   / INVENTIVE STEP:
+
+(I)     ( )      ( )     ,     ( ) (1-10)   
+   
+Claim(s) (1-10) lack(s) inventive step, being obvious in view of teaching (s) of cited document(s) above under
+reference for the following reasons:
+
+The present invention relates to a ruthenium(II) arene­based coordination complex, namely [Ru(p-cymene)(1-
+(anthracen-9-yl)-1H-naphtho[2,3-d]imidazole)Cl], and a process for preparing the same, wherein the complex
+functions as a radiosensitizing antibacterial agent capable of enhancing radiation-induced cytotoxicity even at
+
+                                                                                                                                              Page 2 of 6
+                  THE PATENT OFFICE
+
+functions as a radiosensitizing antibacterial agent capable of enhancing radiation-induced cytotoxicity even at
+ultralow micro-CT-level doses and at higher therapeutic doses, including against the highly radioresistant
+bacterium Deinococcus radiodurans. In contrast, D1 discloses ruthenium-based metal complexes as
+radiosensitizers in general, emphasizing ROS generation and DNA damage mechanisms but without teaching
+the specific Ru­anthracene­naphthimidazole structure claimed; D2 teaches ruthenium complexes engineered for
+X-ray radiosensitization through ligand modification but does not disclose the claimed ligand framework; D3
+discloses Ru(II) p-cymene complexes with imidazole-type N-donor ligands and routine synthetic methods similar
+to the present process but lacks the anthracene-substituted naphthimidazole ligand and the claimed
+radiosensitizing use; and D4 teaches metal-based radiosensitizers employing extended aromatic DNA-
+intercalating ligands to enhance radiation-induced DNA damage, thereby providing design rationale but not the
+specific ruthenium complex of the present invention.
+
+Five-Step Analysis:
+
+Person skilled in the art: A person skilled in the art for the present invention is a skilled is Medicinal chemist.
+
+Common General Knowledge:
+
+It is observed that the subject matter of the present invention does not go beyond the common general
+knowledge of a person skilled in the art, namely a medicinal inorganic chemist, at the priority date, in view of prior
+art documents D1­D4. D1 clearly establishes that ruthenium-based coordination complexes are well-known
+radiosensitizers, functioning through enhancement of X-ray­induced reactive oxygen species (ROS) generation
+and DNA damage, and further teaches the routine use of aromatic ligands to improve biological interaction. D2
+specifically discloses ligand-engineered ruthenium complexes designed to enhance radiosensitization under X-
+ray irradiation, thereby rendering the concept of modifying Ru complexes to improve radiation response part of
+common general knowledge. D3 teaches Ru(II) p-cymene half-sandwich complexes coordinated with imidazole or
+N-donor aromatic ligands, along with their standard synthesis from dichloro(p-cymene)ruthenium(II) dimer under
+ambient conditions, which directly corresponds to the scaffold and process claimed in the present application. D4
+further establishes that the use of extended -conjugated aromatic ligands, including anthracene-like systems,
+for DNA intercalation and radiation-induced damage enhancement is a known and predictable design strategy in
+metal-based radiosensitizers. In view of the combined teachings of D1­D4, the selection of a Ru(II) p-cymene
+complex, the incorporation of an anthracene-substituted imidazole ligand for DNA binding, and the expectation of
+enhanced radiosensitization represent routine design choices and workshop modifications well within common
+general knowledge, rather than a technical advance involving any unexpected effect. Accordingly, the present
+invention merely applies known principles and established practices in the art and does not demonstrate any
+departure from common general knowledge.
+
+Inventive concept:
+
+The present application purports to provide a specific Ru(II) p-cymene coordination complex incorporating an
+anthracene-substituted naphthimidazole ligand that combines DNA intercalation and ruthenium-mediated ROS
+generation to achieve radiosensitization even at ultralow (micro-CT level) and therapeutic radiation doses,
+including against highly radio-resistant organisms, whereas prior arts D1­D4 disclose ruthenium-based
+radiosensitizers in general (D1, D2), Ru-p-cymene complexes with imidazole-type ligands and routine synthesis
+(D3), and the use of extended aromatic DNA-binding ligands to enhance radiation-induced DNA damage (D4)
+but do not disclose this specific structural combination and its claimed dual-dose radiosensitization effect.
+
+Key difference:
+
+The key difference of the present application over prior arts D1­D4 lies in the specific structural combination of a
+Ru(II) p-cymene core with an anthracene-substituted naphthimidazole ligand, claimed to provide dual-dose
+radiosensitization at both ultralow micro-CT and therapeutic radiation levels, whereas D1 and D2 disclose
+ruthenium radiosensitizers in general, D3 discloses Ru-p-cymene complexes with imidazole-type ligands and
+routine synthesis, and D4 teaches extended aromatic DNA-binding ligands for radiosensitization, but none
+individually disclose this exact complex or its asserted dual-range radiosensitizing effect.
+
+Obviousness:
+
+The subject matter of the present invention is considered obvious to a person skilled in the art in view of the
+combined teachings of prior art documents D1­D4 and common general knowledge at the priority date. D1
+clearly establishes that ruthenium-based coordination complexes are known radiosensitizers, functioning through
+
+                                                                                                                                              Page 3 of 6
+                  THE PATENT OFFICE
+
+enhancement of radiation-induced reactive oxygen species (ROS) generation and DNA damage, and further
+teaches that modification of ligands is a routine approach to optimise radiosensitizing efficiency. D2 specifically
+discloses engineered ruthenium complexes for X-ray radiosensitization, thereby providing motivation to further
+tailor Ru-based systems for improved radiation response. D3 discloses Ru(II) p-cymene half-sandwich
+complexes coordinated with imidazole or related N-donor aromatic ligands, prepared using standard ligand
+substitution reactions from dichloro(p-cymene)ruthenium(II) dimer under ambient conditions, which directly
+anticipates both the chemical scaffold and the process steps claimed in the present application. D4 further
+teaches that the incorporation of extended -conjugated aromatic ligands, such as anthracene-type systems, for
+DNA intercalation is a known and predictable strategy to enhance radiation-induced DNA damage in metal-
+based radiosensitizers. In light of these disclosures, the selection of a Ru(II) p-cymene core, the use of an
+imidazole-based ligand, the further substitution of the ligand with an anthracene moiety for DNA binding, and the
+expectation of enhanced radiosensitization represent routine design optimisations and workshop modifications
+that would be arrived at without the exercise of any inventive ingenuity. The alleged advantages relating to
+radiosensitization at ultralow and therapeutic radiation doses merely reflect the expected outcome of applying
+known principles and do not arise from any unexpected technical effect attributable to a novel structural feature.
+Accordingly, the present invention lacks inventive step and is obvious in view of D1 alone or at least in
+combination with D2, D3, and D4.
+
+Therefore, claims 1-10 filed in the present application lack an inventive step u/s 2(1)(ja) of The Patents Act,
+1970.
+
+(2).   /NON PATENTABILITY:
+
+(I)      3   (d, e )    () (1-10)          /
+Claim(s) (1-10) are statutorily non-patentable under the provision of clause ( d, e ) of Section 3 for the following
+reasons:
+
+The claimed ruthenium-based complex is considered non-patentable as the application is directed to a new use
+and/or property of a known class of ruthenium(II) coordination complexes. Prior art documents D1­D3 already
+disclose ruthenium arene complexes with aromatic N-donor ligands and their biological activities. The present
+application merely attributes an enhanced radiosensitizing and antibacterial effect, including activity at ultralow
+radiation doses, to a structurally obvious variant of known ruthenium complexes, without demonstrating any
+unexpected technical effect or enhanced therapeutic efficacy over the known substances. Accordingly, the claims
+fall within the scope of Section 3(d) of the Patents Act, 1970 .
+
+The subject matter of the present invention represents a mere admixture or aggregation of known components,
+namely a ruthenium(II) arene core and a known aromatic DNA-intercalating ligand (anthracene-based imidazole),
+each independently known in the prior art D1­D4 to exhibit radiosensitizing or biological activity. The
+specification does not establish any synergistic effect arising specifically from the combination of these known
+components beyond the expected additive effects of ruthenium-mediated ROS generation and ligand-based
+DNA intercalation. Therefore, the claimed invention is excluded from patentability under Section 3(e) of the
+Patents Act, 1970.
+
+Therefore, the invention does not fulfill the requirements of inventive step or enhanced efficacy under Sections
+3(d) and 3(e) is not patentable under the Patents Act, 1970.
+
+(3).    /SUFFICIENCY OF DISCLOSURE:
+
+(I)                      
+The complete specification does not fully and particularly describe the invention and its operation and the method
+by which it is to be performed in respect of:
+
+The complete specification of the present invention does not sufficiently and clearly describe the invention and
+the manner in which it is to be performed as required under Section 10(4) of the Patents Act, 1970. The
+specification broadly asserts that the claimed ruthenium-based complex acts as an effective radiosensitizer at
+
+                                                                                                                                              Page 4 of 6
+                  THE PATENT OFFICE
+
+both ultralow micro-CT level doses and higher therapeutic radiation doses; however, it fails to adequately
+disclose essential experimental parameters, including reproducible radiation conditions, quantitative dose
+­response data, controls, statistical analysis, and comparative examples demonstrating enhanced efficacy over
+known ruthenium complexes disclosed in the prior art. Further, the mechanism of radiosensitization is described
+only in generic terms of ROS generation and DNA damage, without providing enabling experimental evidence or
+protocols to allow a person skilled in the art to reliably achieve the claimed dual-dose radiosensitization across
+the full scope of the claims. In the absence of sufficient working examples and clear guidance linking structural
+features of the claimed complex to the asserted technical effect, the specification is considered insufficient and
+non-enabling, and thus does not comply with the requirements of Section 10(4) of the Patents Act, 1970.
+
+(4).      /CLARITY AND CONCISENESS:
+
+(I) () 1-10         .
+Claim(s) 1-10 are not clearly worded in respect of:
+
+The claims of the present invention are not clearly and distinctly defined as required under Section 10(5) of the
+Patents Act, 1970. The expressions such as "effective radiosensitizing agent," "ultralow radiation doses," "dual-
+range efficacy," and "significant biological response" are vague, subjective, and relative in nature, and no clear
+technical boundaries or measurable parameters are provided to define the scope of the claims. Further, the
+claims do not clearly distinguish between structural features of the ruthenium-based complex and its intended use
+or functional effects, thereby rendering the scope of protection uncertain. The lack of precise definitions for
+radiation dose ranges, experimental conditions, and the extent of radiosensitization makes it unclear as to what
+exactly falls within or outside the claimed invention, resulting in ambiguity for both the public and enforcement
+authorities. Accordingly, the claims fail to comply with the clarity and definiteness requirements of Section 10(5)
+of the Patents Act, 1970.
+
+(5).  /DEFINITIVENESS:
+
+(I) ()1-10             () 
+Claim(s) 1-10 do not sufficiently define the invention for the reasons as follows:
+
+The claims of the present invention lack definitiveness as required under Section 10(5) of the Patents Act, 1970,
+as they do not precisely define the scope of the invention. In particular, the claims rely heavily on functional and
+result-oriented expressions such as "radiosensitizing agent," "antibacterial agent," and "enhances radiation-
+induced cytotoxicity," without clearly limiting the invention by specific structural features or objectively verifiable
+technical parameters. Additionally, essential aspects such as the exact radiation dose ranges, conditions under
+which radiosensitization is achieved, and the extent of the antibacterial effect are not clearly delineated in the
+claims, resulting in uncertainty as to the boundaries of the monopoly sought. The absence of clear, concrete, and
+measurable claim limitations renders the claims indefinite and open-ended, thereby failing to meet the statutory
+requirement of Section 10(5) of the Patents Act, 1970.
+
+ ­ III:     /PART-III: FORMAL REQUIREMENTS
+
+  /Objections    /Remarks
+
+                       1. Applicant did not submit form 3 which need to be furnished within Six months from the
+
+                       date of filing of the said application under clause(b) of sub section(1) of section 8 and rule
+
+                       12(1A) of Indian Patent Act. So, it should be filed in the prescribed manner
+Statement & Under
+Taking (Form 3 2. The time within which the applicant for a patent shall keep the Controller informed of the
+
+                                            Page 5 of 6
+              THE PATENT OFFICE
+
+Details)      details in respect of other applications filed in any country in the undertaking to be given
+              by him under clause (b) of the sub-section (1) of section 8 shall be three months from the
+              date of issuance of first statement of objections under rule 12(2) of the Indian Patent
+              Rules.
+
+-IV:     /PART-IV: DOCUMENTS ON RECORD
+
+               
+The examination report has been prepared based on the following documents:
+
+     /            /Docket                    /Entry Number Description
+ Docket Date         Number
+                             1-New Application For Patent With Provisional /Complete
+05 Dec 2025          126998  Specification
+                             FORM 28
+05 Dec 2025          126998  12-Request For Early Publication - Form 9
+08 Dec 2025          127582  Request for Expedited examination
+08 Dec 2025          127608  11-Mention Of Inventor As Such In A Patent - Form 8
+09 Dec 2025          128074
+
+    /Name of the Examiner: SHRADDHA RATHOR
+
+   /Name of the Controller: Meena J
+Controller's Email: jmeena.ipo@nic.in
+
+ :            / Note: Last date for filing response to the Examination Report:
+23-07-2026
+
+                                                                                      Page 6 of 6
+

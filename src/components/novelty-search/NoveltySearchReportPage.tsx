@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '../ui/button';
@@ -322,10 +322,10 @@ export default function NoveltySearchReportPage({
         `}</style>
 
         {/* Title Page */}
-        <div className="title-page avoid-break mb-8 pb-8 border-b-2 border-gray-300">
-          <h1 className="text-4xl font-bold text-center mb-4 text-gray-900">NOVELTY SEARCH REPORT</h1>
-          <h2 className="text-2xl font-semibold text-center mb-6 text-gray-700">{title}</h2>
-          <div className="text-center space-y-2 text-gray-600">
+        <div className="title-page avoid-break mb-8 pb-8 border-b-2 border-paper-400">
+          <h1 className="text-4xl font-bold text-center mb-4 text-ai-graphite-900">NOVELTY SEARCH REPORT</h1>
+          <h2 className="text-2xl font-semibold text-center mb-6 text-ai-graphite-700">{title}</h2>
+          <div className="text-center space-y-2 text-ai-graphite-600">
             <p>Search ID: {searchId}</p>
             <p>Generated: {new Date().toLocaleString()}</p>
             <p>Jurisdiction: {searchData?.jurisdiction || 'IN'}</p>
@@ -334,21 +334,21 @@ export default function NoveltySearchReportPage({
 
         {/* Stage 0 â€” Idea & Key Features */}
         <div className="section page-break avoid-break mb-8">
-          <div className="section-header bg-blue-600 text-white p-3 mb-4">
+          <div className="section-header bg-ai-blue-600 text-white p-3 mb-4">
             <h2 className="text-xl font-bold">STAGE 0 â€” IDEA & KEY FEATURES</h2>
           </div>
           
           {stage0?.searchQuery && (
             <div className="mb-4">
-              <h3 className="font-bold text-sm mb-2 text-gray-700">Search Query</h3>
-              <p className="text-sm text-gray-800">{stage0.searchQuery}</p>
+              <h3 className="font-bold text-sm mb-2 text-ai-graphite-700">Search Query</h3>
+              <p className="text-sm text-ai-graphite-800">{stage0.searchQuery}</p>
             </div>
           )}
 
           {Array.isArray(stage0?.inventionFeatures) && stage0.inventionFeatures.length > 0 && (
             <div>
-              <h3 className="font-bold text-sm mb-2 text-gray-700">Key Features</h3>
-              <ol className="list-decimal list-inside space-y-1 text-sm text-gray-800">
+              <h3 className="font-bold text-sm mb-2 text-ai-graphite-700">Key Features</h3>
+              <ol className="list-decimal list-inside space-y-1 text-sm text-ai-graphite-800">
                 {stage0.inventionFeatures.map((f: string, idx: number) => (
                   <li key={idx} className="mb-1">{f}</li>
                 ))}
@@ -359,23 +359,23 @@ export default function NoveltySearchReportPage({
 
         {/* Stage 1 â€” Prior Art Search Overview */}
         <div className="section page-break avoid-break mb-8">
-          <div className="section-header bg-blue-700 text-white p-3 mb-4">
+          <div className="section-header bg-ai-blue-700 text-white p-3 mb-4">
             <h2 className="text-xl font-bold">STAGE 1 â€” PRIOR ART SEARCH OVERVIEW</h2>
           </div>
 
-          <div className="mb-4 text-sm text-gray-700">
+          <div className="mb-4 text-sm text-ai-graphite-700">
             <p>Total patent database results: {pqai.length}</p>
             <p>Patents shortlisted for detailed analysis: {shortlistedCount}</p>
           </div>
 
           {patentsToShow.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full border-collapse border border-gray-300 text-xs">
+              <table className="w-full border-collapse border border-paper-400 text-xs">
                 <thead>
-                  <tr className="bg-gray-200">
-                    <th className="border border-gray-300 p-2 text-left font-bold">Patent Number</th>
-                    <th className="border border-gray-300 p-2 text-center font-bold">Relevance</th>
-                    <th className="border border-gray-300 p-2 text-left font-bold">Title</th>
+                  <tr className="bg-paper-300">
+                    <th className="border border-paper-400 p-2 text-left font-bold">Patent Number</th>
+                    <th className="border border-paper-400 p-2 text-center font-bold">Relevance</th>
+                    <th className="border border-paper-400 p-2 text-left font-bold">Title</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -389,10 +389,10 @@ export default function NoveltySearchReportPage({
                       const relevance = formatRelevance(r.relevanceScore || r.score || r.relevance);
                       
                       return (
-                        <tr key={idx} className={idx % 2 === 1 ? 'bg-gray-50' : ''}>
-                          <td className="border border-gray-300 p-2 align-top">{pn}</td>
-                          <td className="border border-gray-300 p-2 text-center align-top">{relevance}</td>
-                          <td className="border border-gray-300 p-2 align-top">{title}</td>
+                        <tr key={idx} className={idx % 2 === 1 ? 'bg-paper-100' : ''}>
+                          <td className="border border-paper-400 p-2 align-top">{pn}</td>
+                          <td className="border border-paper-400 p-2 text-center align-top">{relevance}</td>
+                          <td className="border border-paper-400 p-2 align-top">{title}</td>
                         </tr>
                       );
                     })}
@@ -405,7 +405,7 @@ export default function NoveltySearchReportPage({
         {/* Stage 1 â€” Prior Art Details */}
         {patentsToShow.length > 0 && (
           <div className="section page-break avoid-break mb-8">
-            <div className="section-header bg-blue-700 text-white p-3 mb-4">
+            <div className="section-header bg-ai-blue-700 text-white p-3 mb-4">
               <h2 className="text-xl font-bold">STAGE 1 â€” PRIOR ART DETAILS</h2>
             </div>
 
@@ -438,52 +438,52 @@ export default function NoveltySearchReportPage({
                 return (
                   <div key={idx} className="mb-6 avoid-break">
                     {/* Reference Header */}
-                    <div className="bg-blue-700 text-white p-2 mb-2">
+                    <div className="bg-ai-blue-700 text-white p-2 mb-2">
                       <h3 className="font-bold text-sm">Reference {idx + 1}: {pnFull}</h3>
                     </div>
 
                     {/* Two-column table */}
-                    <table className="w-full border-collapse border border-gray-300 text-xs mb-4">
+                    <table className="w-full border-collapse border border-paper-400 text-xs mb-4">
                       <tbody>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4">Publication No:</td>
-                          <td className="border border-gray-300 p-2">{pnFull}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4">Publication No:</td>
+                          <td className="border border-paper-400 p-2">{pnFull}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Publication Date:</td>
-                          <td className="border border-gray-300 p-2">{pubDate}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Publication Date:</td>
+                          <td className="border border-paper-400 p-2">{pubDate}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Application No:</td>
-                          <td className="border border-gray-300 p-2">{appNo}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Application No:</td>
+                          <td className="border border-paper-400 p-2">{appNo}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Application Date:</td>
-                          <td className="border border-gray-300 p-2">{appDate}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Application Date:</td>
+                          <td className="border border-paper-400 p-2">{appDate}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Priority No:</td>
-                          <td className="border border-gray-300 p-2">{priorityNo}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Priority No:</td>
+                          <td className="border border-paper-400 p-2">{priorityNo}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Priority Date:</td>
-                          <td className="border border-gray-300 p-2">{priorityDate}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Priority Date:</td>
+                          <td className="border border-paper-400 p-2">{priorityDate}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top">Inventor(s):</td>
-                          <td className="border border-gray-300 p-2">{inventors}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top">Inventor(s):</td>
+                          <td className="border border-paper-400 p-2">{inventors}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Family Member(s):</td>
-                          <td className="border border-gray-300 p-2">{familyMembers}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Family Member(s):</td>
+                          <td className="border border-paper-400 p-2">{familyMembers}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top">Title:</td>
-                          <td className="border border-gray-300 p-2">{title}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top">Title:</td>
+                          <td className="border border-paper-400 p-2">{title}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top">Technical Disclosure:</td>
-                          <td className="border border-gray-300 p-2 text-justify">{abstract || 'Citation disclosure reviewed.'}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top">Technical Disclosure:</td>
+                          <td className="border border-paper-400 p-2 text-justify">{abstract || 'Citation disclosure reviewed.'}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -496,7 +496,7 @@ export default function NoveltySearchReportPage({
         {/* Stage 3.5a â€” Patent-wise Feature Comparison Matrix */}
         {featureMaps.length > 0 && features.length > 0 && (
           <div className="section page-break avoid-break mb-8">
-            <div className="section-header bg-blue-500 text-white p-3 mb-4">
+            <div className="section-header bg-ai-blue-500 text-white p-3 mb-4">
               <h2 className="text-xl font-bold">PATENT-WISE FEATURE COMPARISON MATRIX</h2>
             </div>
 
@@ -526,14 +526,14 @@ export default function NoveltySearchReportPage({
                 console.log(`Matrix showing ${matrixPatentNumbers.length} patents:`, matrixPatentNumbers);
                 
                 return (
-                  <table className="w-full border-collapse border border-gray-300 text-xs">
+                  <table className="w-full border-collapse border border-paper-400 text-xs">
                     <thead>
-                      <tr className="bg-gray-200">
-                        <th className="border border-gray-300 p-2 text-left font-bold">Feature</th>
+                      <tr className="bg-paper-300">
+                        <th className="border border-paper-400 p-2 text-left font-bold">Feature</th>
                         {featureMaps.map((pm: any, c: number) => {
                           const pn = String(pm.pn || pm.publicationNumber || pm.publication_number || 'PN');
                           return (
-                            <th key={c} className="border border-gray-300 p-1 text-center font-bold text-[10px]">
+                            <th key={c} className="border border-paper-400 p-1 text-center font-bold text-[10px]">
                               {pn.length > 12 ? pn.substring(0, 10) + '..' : pn}
                             </th>
                           );
@@ -542,18 +542,18 @@ export default function NoveltySearchReportPage({
                     </thead>
                     <tbody>
                       {features.map((feature: string, r: number) => (
-                        <tr key={r} className={r % 2 === 0 ? 'bg-gray-50' : ''}>
-                          <td className="border border-gray-300 p-2 align-top text-[10px]">{feature}</td>
+                        <tr key={r} className={r % 2 === 0 ? 'bg-paper-100' : ''}>
+                          <td className="border border-paper-400 p-2 align-top text-[10px]">{feature}</td>
                           {featureMaps.map((pm: any, c: number) => {
                             const status = getStatus(pm, feature);
                             const bgColor = 
                               status === 'P' ? 'bg-green-500' :
                               status === 'Pt' ? 'bg-yellow-500' :
-                              status === 'A' ? 'bg-slate-500' : 'bg-gray-200';
+                              status === 'A' ? 'bg-slate-500' : 'bg-paper-300';
                             const textColor = (status === 'A' || status === 'P') ? 'text-white' : 'text-black';
                             
                             return (
-                              <td key={c} className={`border border-gray-300 p-1 text-center ${bgColor} ${textColor} font-bold`}>
+                              <td key={c} className={`border border-paper-400 p-1 text-center ${bgColor} ${textColor} font-bold`}>
                                 {status}
                               </td>
                             );
@@ -571,7 +571,7 @@ export default function NoveltySearchReportPage({
         {/* Stage 3.5 â€” Prior Art Patent Details (Patents Analyzed for Feature Comparison) */}
         {featureMaps.length > 0 && (
           <div className="section page-break avoid-break mb-8">
-            <div className="section-header bg-blue-500 text-white p-3 mb-4">
+            <div className="section-header bg-ai-blue-500 text-white p-3 mb-4">
               <h2 className="text-xl font-bold">STAGE 3.5 â€” PRIOR ART PATENT DETAILS</h2>
               <p className="text-sm mt-1 opacity-90">Patents analyzed for feature-by-feature comparison</p>
             </div>
@@ -952,7 +952,7 @@ export default function NoveltySearchReportPage({
                 return (
                   <div key={idx} className="mb-6 avoid-break">
                     {/* Blue Header with Coverage Info */}
-                    <div className="bg-blue-600 text-white p-3 mb-2">
+                    <div className="bg-ai-blue-600 text-white p-3 mb-2">
                       <div className="flex items-center justify-between">
                         <div>
                           <h3 className="font-bold text-sm">Patent {idx + 1}: {pnFull}</h3>
@@ -970,83 +970,83 @@ export default function NoveltySearchReportPage({
                     </div>
 
                     {/* Two-column table */}
-                    <table className="w-full border-collapse border border-gray-300 text-xs mb-4">
+                    <table className="w-full border-collapse border border-paper-400 text-xs mb-4">
                       <tbody>
                         {/* Publication No and Date in one row */}
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50" style={{ width: '20%' }}>Publication No:</td>
-                          <td className="border border-gray-300 p-2" style={{ width: '30%' }}>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100" style={{ width: '20%' }}>Publication No:</td>
+                          <td className="border border-paper-400 p-2" style={{ width: '30%' }}>
                             {pnFull}
                             {link && (
-                              <a href={link} target="_blank" rel="noopener noreferrer" className="ml-2 text-blue-600 hover:underline text-[10px]">
+                              <a href={link} target="_blank" rel="noopener noreferrer" className="ml-2 text-ai-blue-600 hover:underline text-[10px]">
                                 [View Patent]
                               </a>
                             )}
                           </td>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50" style={{ width: '20%' }}>Publication Date:</td>
-                          <td className="border border-gray-300 p-2" style={{ width: '30%' }}>{pubDate}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100" style={{ width: '20%' }}>Publication Date:</td>
+                          <td className="border border-paper-400 p-2" style={{ width: '30%' }}>{pubDate}</td>
                         </tr>
                         {/* Application No and Date in one row */}
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Application No:</td>
-                          <td className="border border-gray-300 p-2">{appNo}</td>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Application Date:</td>
-                          <td className="border border-gray-300 p-2">{appDate}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Application No:</td>
+                          <td className="border border-paper-400 p-2">{appNo}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Application Date:</td>
+                          <td className="border border-paper-400 p-2">{appDate}</td>
                         </tr>
                         {/* Priority No and Date in one row */}
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Priority No:</td>
-                          <td className="border border-gray-300 p-2">{priorityNo}</td>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50">Priority Date:</td>
-                          <td className="border border-gray-300 p-2">{priorityDate}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Priority No:</td>
+                          <td className="border border-paper-400 p-2">{priorityNo}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100">Priority Date:</td>
+                          <td className="border border-paper-400 p-2">{priorityDate}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Inventor(s):</td>
-                          <td className="border border-gray-300 p-2 align-top" colSpan={2}>{inventors}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top" colSpan={2}>Inventor(s):</td>
+                          <td className="border border-paper-400 p-2 align-top" colSpan={2}>{inventors}</td>
                         </tr>
                         {assignees !== 'â€”' && (
                           <tr>
-                            <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Assignee(s):</td>
-                            <td className="border border-gray-300 p-2 align-top" colSpan={2}>{assignees}</td>
+                            <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top" colSpan={2}>Assignee(s):</td>
+                            <td className="border border-paper-400 p-2 align-top" colSpan={2}>{assignees}</td>
                           </tr>
                         )}
                         {cpcCodesStr !== 'â€”' && (
                           <tr>
-                            <td className="border border-gray-300 p-2 font-bold bg-gray-50" colSpan={2}>CPC Codes:</td>
-                            <td className="border border-gray-300 p-2" colSpan={2}>{cpcCodesStr}</td>
+                            <td className="border border-paper-400 p-2 font-bold bg-paper-100" colSpan={2}>CPC Codes:</td>
+                            <td className="border border-paper-400 p-2" colSpan={2}>{cpcCodesStr}</td>
                           </tr>
                         )}
                         {ipcCodesStr !== 'â€”' && (
                           <tr>
-                            <td className="border border-gray-300 p-2 font-bold bg-gray-50" colSpan={2}>IPC Codes:</td>
-                            <td className="border border-gray-300 p-2" colSpan={2}>{ipcCodesStr}</td>
+                            <td className="border border-paper-400 p-2 font-bold bg-paper-100" colSpan={2}>IPC Codes:</td>
+                            <td className="border border-paper-400 p-2" colSpan={2}>{ipcCodesStr}</td>
                           </tr>
                         )}
                         {relevanceStr !== 'â€”' && (
                           <tr>
-                            <td className="border border-gray-300 p-2 font-bold bg-gray-50" colSpan={2}>Relevance Score:</td>
-                            <td className="border border-gray-300 p-2" colSpan={2}>{relevanceStr}</td>
+                            <td className="border border-paper-400 p-2 font-bold bg-paper-100" colSpan={2}>Relevance Score:</td>
+                            <td className="border border-paper-400 p-2" colSpan={2}>{relevanceStr}</td>
                           </tr>
                         )}
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50" colSpan={2}>Family Member(s):</td>
-                          <td className="border border-gray-300 p-2" colSpan={2}>{familyMembers}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100" colSpan={2}>Family Member(s):</td>
+                          <td className="border border-paper-400 p-2" colSpan={2}>{familyMembers}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Title:</td>
-                          <td className="border border-gray-300 p-2 align-top" colSpan={2}>{title}</td>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top" colSpan={2}>Title:</td>
+                          <td className="border border-paper-400 p-2 align-top" colSpan={2}>{title}</td>
                         </tr>
                         <tr>
-                          <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Technical Disclosure:</td>
-                          <td className="border border-gray-300 p-2 text-justify align-top" colSpan={2}>
+                          <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top" colSpan={2}>Technical Disclosure:</td>
+                          <td className="border border-paper-400 p-2 text-justify align-top" colSpan={2}>
                             {abstract && abstract.length > 0 ? abstract : 'Citation disclosure reviewed.'}
                           </td>
                         </tr>
                         {/* Feature Coverage Summary */}
                         {totalFeatures > 0 && (
                           <tr>
-                            <td className="border border-gray-300 p-2 font-bold bg-gray-50 align-top" colSpan={2}>Feature Coverage:</td>
-                            <td className="border border-gray-300 p-2 align-top" colSpan={2}>
+                            <td className="border border-paper-400 p-2 font-bold bg-paper-100 align-top" colSpan={2}>Feature Coverage:</td>
+                            <td className="border border-paper-400 p-2 align-top" colSpan={2}>
                               <div className="space-y-1">
                                 <div className="flex items-center gap-2">
                                   <span className="w-3 h-3 bg-green-500 inline-block"></span>
@@ -1060,7 +1060,7 @@ export default function NoveltySearchReportPage({
                                   <span className="w-3 h-3 bg-slate-500 inline-block"></span>
                                   <span className="text-xs">Absent: {absentCount} feature{absentCount !== 1 ? 's' : ''}</span>
                                 </div>
-                                <div className="mt-2 pt-2 border-t border-gray-200">
+                                <div className="mt-2 pt-2 border-t border-paper-300">
                                   <span className="text-xs font-semibold">Overall Coverage Score: {coverageScore}%</span>
                                 </div>
                               </div>
@@ -1078,25 +1078,25 @@ export default function NoveltySearchReportPage({
 
         {/* Stage 4 â€” Final Concluding Remarks */}
         <div className="section page-break avoid-break mb-8">
-          <div className="section-header bg-blue-600 text-white p-3 mb-4">
+          <div className="section-header bg-ai-blue-600 text-white p-3 mb-4">
             <h2 className="text-xl font-bold">STAGE 4 â€” FINAL CONCLUDING REMARKS</h2>
           </div>
 
           {/* Executive Summary */}
           {(executiveSummary.summary || executiveSummary.text) && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Executive Summary:</td>
-                    <td className="border border-gray-300 p-2 text-justify">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Executive Summary:</td>
+                    <td className="border border-paper-400 p-2 text-justify">
                       {executiveSummary.summary || executiveSummary.text || 'No summary provided.'}
                     </td>
                   </tr>
                   {(executiveSummary.novelty_score || executiveSummary.confidence) && (
                     <tr>
-                      <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4">Novelty Score:</td>
-                      <td className="border border-gray-300 p-2">
+                      <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4">Novelty Score:</td>
+                      <td className="border border-paper-400 p-2">
                         {executiveSummary.novelty_score || 'â€”'} {executiveSummary.confidence ? `â€¢ Confidence: ${executiveSummary.confidence}` : ''}
                       </td>
                     </tr>
@@ -1109,11 +1109,11 @@ export default function NoveltySearchReportPage({
           {/* Overall Novelty Assessment */}
           {(concludingRemarks.overall_novelty_assessment || stage4?.decision) && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4">Overall Novelty Assessment:</td>
-                    <td className="border border-gray-300 p-2">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4">Overall Novelty Assessment:</td>
+                    <td className="border border-paper-400 p-2">
                       {concludingRemarks.overall_novelty_assessment || stage4.decision || 'Novelty Assessment'}
                     </td>
                   </tr>
@@ -1125,11 +1125,11 @@ export default function NoveltySearchReportPage({
           {/* Why Novelty Exists */}
           {(concludingRemarks.why_novelty_exists || executiveSummary.summary || executiveSummary.text || structuredNarrative.verdict) && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Why Novelty Exists:</td>
-                    <td className="border border-gray-300 p-2 text-justify">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Why Novelty Exists:</td>
+                    <td className="border border-paper-400 p-2 text-justify">
                       {concludingRemarks.why_novelty_exists || 
                        executiveSummary.summary || 
                        executiveSummary.text ||
@@ -1145,11 +1145,11 @@ export default function NoveltySearchReportPage({
           {/* Key Strengths */}
           {Array.isArray(concludingRemarks.key_strengths) && concludingRemarks.key_strengths.length > 0 && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Key Strengths:</td>
-                    <td className="border border-gray-300 p-2">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Key Strengths:</td>
+                    <td className="border border-paper-400 p-2">
                       <ul className="list-disc list-inside space-y-1">
                         {concludingRemarks.key_strengths.map((s: string, i: number) => (
                           <li key={i}>{s}</li>
@@ -1165,11 +1165,11 @@ export default function NoveltySearchReportPage({
           {/* Key Risks */}
           {Array.isArray(concludingRemarks.key_risks) && concludingRemarks.key_risks.length > 0 && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Key Risks:</td>
-                    <td className="border border-gray-300 p-2">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Key Risks:</td>
+                    <td className="border border-paper-400 p-2">
                       <ul className="list-disc list-inside space-y-1">
                         {concludingRemarks.key_risks.map((s: string, i: number) => (
                           <li key={i}>{s}</li>
@@ -1185,11 +1185,11 @@ export default function NoveltySearchReportPage({
           {/* Strategic Recommendations */}
           {Array.isArray(concludingRemarks.strategic_recommendations) && concludingRemarks.strategic_recommendations.length > 0 && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Strategic Recommendations:</td>
-                    <td className="border border-gray-300 p-2">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Strategic Recommendations:</td>
+                    <td className="border border-paper-400 p-2">
                       <ul className="list-disc list-inside space-y-1">
                         {concludingRemarks.strategic_recommendations.map((s: string, i: number) => (
                           <li key={i}>{s}</li>
@@ -1205,11 +1205,11 @@ export default function NoveltySearchReportPage({
           {/* Filing Advice */}
           {concludingRemarks.filing_advice && (
             <div className="mb-3 avoid-break">
-              <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+              <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                 <tbody>
                   <tr>
-                    <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Filing Advice:</td>
-                    <td className="border border-gray-300 p-2 text-justify">
+                    <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Filing Advice:</td>
+                    <td className="border border-paper-400 p-2 text-justify">
                       {concludingRemarks.filing_advice}
                     </td>
                   </tr>
@@ -1223,11 +1223,11 @@ export default function NoveltySearchReportPage({
             <>
               {structuredNarrative.integration && (
                 <div className="mb-3 avoid-break">
-                  <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+                  <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                     <tbody>
                       <tr>
-                        <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Integration Analysis:</td>
-                        <td className="border border-gray-300 p-2 text-justify">{structuredNarrative.integration}</td>
+                        <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Integration Analysis:</td>
+                        <td className="border border-paper-400 p-2 text-justify">{structuredNarrative.integration}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1235,11 +1235,11 @@ export default function NoveltySearchReportPage({
               )}
               {structuredNarrative.feature_insights && (
                 <div className="mb-3 avoid-break">
-                  <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+                  <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                     <tbody>
                       <tr>
-                        <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Feature Insights:</td>
-                        <td className="border border-gray-300 p-2 text-justify">{structuredNarrative.feature_insights}</td>
+                        <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Feature Insights:</td>
+                        <td className="border border-paper-400 p-2 text-justify">{structuredNarrative.feature_insights}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1247,11 +1247,11 @@ export default function NoveltySearchReportPage({
               )}
               {structuredNarrative.verdict && (
                 <div className="mb-3 avoid-break">
-                  <table className="w-full border-collapse border border-gray-300 text-xs mb-2">
+                  <table className="w-full border-collapse border border-paper-400 text-xs mb-2">
                     <tbody>
                       <tr>
-                        <td className="border border-gray-300 p-2 font-bold bg-gray-50 w-1/4 align-top">Verdict:</td>
-                        <td className="border border-gray-300 p-2 text-justify">{structuredNarrative.verdict}</td>
+                        <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4 align-top">Verdict:</td>
+                        <td className="border border-paper-400 p-2 text-justify">{structuredNarrative.verdict}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1262,7 +1262,7 @@ export default function NoveltySearchReportPage({
         </div>
 
         {/* Footer */}
-        <div className="mt-8 pt-4 border-t border-gray-300 text-xs text-gray-500 text-center">
+        <div className="mt-8 pt-4 border-t border-paper-400 text-xs text-ai-graphite-500 text-center">
           <p>This report is AI-assisted; verify cited prior art and consult a registered patent attorney for legal conclusions.</p>
           <p className="mt-2">Generated by AI Patent Assistant</p>
         </div>

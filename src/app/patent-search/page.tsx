@@ -471,6 +471,17 @@ export default function PatentSearchPage() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto max-w-7xl px-6 py-8">
+        <a
+          href="/prior-art-studio"
+          className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 hover:bg-emerald-100"
+        >
+          <Sparkles className="h-4 w-4 shrink-0 text-emerald-700" />
+          <span>
+            <b>Try Prior-Art Studio</b> — the new search workspace: AI-drafted queries you approve term by term, a counted
+            recall funnel, keyboard triage, and a one-click search report.
+          </span>
+          <span className="ml-auto font-semibold text-emerald-700">Open →</span>
+        </a>
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Patent Search</h1>
@@ -1114,7 +1125,7 @@ function ResultsPanel({
                     {Math.round((result.relevanceScore || 0) * 100)}%
                   </div>
                 </div>
-                <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
+                <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-ai-blue-700 hover:underline">
                   {result.title}
                 </a>
                 {abstract && (

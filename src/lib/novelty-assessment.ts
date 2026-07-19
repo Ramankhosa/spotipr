@@ -59,6 +59,27 @@ JSON OUTPUT:
   "suggestions": "how to achieve novelty if needed"
 }}`;
 
+/**
+ * Fill the prompt's `Claims:` line, or drop the line entirely when the corpus has no
+ * claims text for the reference.
+ *
+ * Claims coverage is partial by design (see local-patent-claims-service), so absence
+ * carries no signal about the patent. Substituting a placeholder like "Claims not
+ * available" invites the model to reason about — and report on — a gap in our data
+ * rather than the invention. Omitting the line leaves the assessment on the abstract,
+ * exactly as if claims were never part of the comparison.
+ */
+function applyClaimsToPrompt(prompt: string, claims: unknown): string {
+  const text = typeof claims === 'string'
+    ? claims.trim()
+    : claims && typeof claims === 'object' && Object.keys(claims).length
+      ? JSON.stringify(claims, null, 2)
+      : '';
+  return text
+    ? prompt.replace(/\{patent_claims\}/g, text)
+    : prompt.replace(/\n *Claims: \{patent_claims\}/g, '');
+}
+
 export interface NoveltyAssessmentRequest {
   patentId: string;
   runId?: string; // Optional link to prior art run
@@ -463,14 +484,16 @@ Abstract: ${patent.abstract}`)
         const detailedData = await this.fetchPatentDetails(patent!.publicationNumber);
 
         // Build prompt for detailed analysis
-        const prompt = NOVELTY_DETAILED_PROMPT
-          .replace('{title}', request.inventionSummary.title)
-          .replace('{problem}', request.inventionSummary.problem)
-          .replace('{solution}', request.inventionSummary.solution)
-          .replace('{patent_number}', patent!.publicationNumber)
-          .replace('{patent_title}', detailedData.title || patent!.title)
-          .replace('{patent_abstract}', detailedData.abstract || patent!.abstract)
-          .replace('{patent_claims}', JSON.stringify(detailedData.claims || {}, null, 2));
+        const prompt = applyClaimsToPrompt(
+          NOVELTY_DETAILED_PROMPT
+            .replace('{title}', request.inventionSummary.title)
+            .replace('{problem}', request.inventionSummary.problem)
+            .replace('{solution}', request.inventionSummary.solution)
+            .replace('{patent_number}', patent!.publicationNumber)
+            .replace('{patent_title}', detailedData.title || patent!.title)
+            .replace('{patent_abstract}', detailedData.abstract || patent!.abstract),
+          detailedData.claims
+        );
 
         // Execute LLM call with admin-configured model via stage
         const llmRequest = {
@@ -1018,14 +1041,16 @@ Relevance: ${patent.relevance}%`;
         const patentDetails = await this.fetchPatentDetails(publicationNumber);
 
         // Create detailed analysis prompt
-        const detailedPrompt = NOVELTY_DETAILED_PROMPT
-          .replace(/{title}/g, request.inventionSummary.title)
-          .replace(/{problem}/g, request.inventionSummary.problem)
-          .replace(/{solution}/g, request.inventionSummary.solution)
-          .replace(/{patent_number}/g, publicationNumber)
-          .replace(/{patent_title}/g, patentDetails.title || 'Unknown Title')
-          .replace(/{patent_abstract}/g, patentDetails.abstract || 'Abstract not available')
-          .replace(/{patent_claims}/g, patentDetails.claims || 'Claims not available');
+        const detailedPrompt = applyClaimsToPrompt(
+          NOVELTY_DETAILED_PROMPT
+            .replace(/{title}/g, request.inventionSummary.title)
+            .replace(/{problem}/g, request.inventionSummary.problem)
+            .replace(/{solution}/g, request.inventionSummary.solution)
+            .replace(/{patent_number}/g, publicationNumber)
+            .replace(/{patent_title}/g, patentDetails.title || 'Unknown Title')
+            .replace(/{patent_abstract}/g, patentDetails.abstract || 'Abstract not available'),
+          patentDetails.claims
+        );
 
         // Call LLM for detailed analysis with admin-configured model
         const llmResult = await llmGateway.executeLLMOperation(

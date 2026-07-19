@@ -11,9 +11,13 @@ export type PatentSearchProviderId =
   | string
 
 export type PatentSearchSourceMode =
+  // Current default: search the stored corpus, scoped by the user's country selection.
+  | 'LOCAL_CORPUS'
   | 'INDIAN_ONLY'
   | 'AUSTRALIA_ONLY'
   | 'EPO_ONLY'
+  // Legacy modes retained so saved search configs keep resolving. PQAI is disabled, so
+  // the PQAI_* modes now resolve to the local corpus lane (see resolveProviderIds).
   | 'PQAI_ONLY'
   | 'PQAI_PLUS_INDIAN'
   | 'PQAI_PLUS_AUSTRALIA'
@@ -68,6 +72,12 @@ export interface PatentSearchFilters {
   ipcCodes?: string[]
   applicants?: string[]
   inventors?: string[]
+  /**
+   * Two-letter authority codes (US, EP, WO, IN, ...) restricting the local corpus to
+   * those patent offices. Empty/omitted searches every country. Legacy spellings are
+   * reconciled by expandCountrySelection() in ./patent-countries.
+   */
+  countries?: string[]
   filingDateFrom?: string
   filingDateTo?: string
   publicationDateFrom?: string
@@ -137,6 +147,8 @@ export interface PatentSearchRequest {
   requestHeaders?: Record<string, string>
   skipTrigramSearch?: boolean
   disableLinkedProviderExpansion?: boolean
+  /** Suppress the live-API fallback that runs when the local corpus returns nothing. */
+  disableProviderFallback?: boolean
   strictSemantic?: boolean
   maxSemanticQueryWords?: number
   suppressSensitiveLogging?: boolean
@@ -155,6 +167,12 @@ export interface PatentResultScores {
   bestFeatureVector?: number
   featureCoverage?: number
   rerank?: number
+  /**
+   * The fused retrieval score before reranking, normalised against the best hit in
+   * its own result set. Kept for diagnostics and calibration only — it is relative,
+   * so it is not comparable across searches and must not be thresholded on.
+   */
+  preRerankRelevance?: number
   aiRelevance?: number
 }
 
@@ -235,6 +253,17 @@ export interface PatentSearchDiagnostics {
   candidateResultCount: number
   providerCandidateCount: number
   providerContributionCounts: Partial<Record<PatentSearchProviderId, number>>
+  /** Corpus providers dispatched first. */
+  primaryProviderIds?: PatentSearchProviderId[]
+  /** Live provider APIs dispatched only because the corpus returned nothing. */
+  fallbackProviderIds?: PatentSearchProviderId[]
+  usedFallbackProviders?: boolean
+  /** Whether Voyage reranking reordered the candidate pool. */
+  rerankApplied?: boolean
+  /** Absolute rerank score floor in effect (0 = disabled). */
+  minRerankScore?: number
+  /** Candidates discarded for scoring below that floor. */
+  droppedBelowFloor?: number
 }
 
 export interface PatentSearchResponse {

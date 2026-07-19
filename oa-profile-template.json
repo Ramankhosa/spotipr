@@ -1,0 +1,128 @@
+{
+  "_readme": [
+    "Office Action Studio — jurisdiction profile template.",
+    "This block goes inside a country profile JSON as the top-level key 'officeActionProfile'",
+    "(next to meta/structure/rules/prompts — see country-profile-template.json).",
+    "Validated by src/lib/office-action/oa-profile-schema.ts; readiness gates activation.",
+    "Canonical objection codes: NOVELTY, INVENTIVE_STEP, ELIGIBILITY, CLARITY, SUFFICIENCY,",
+    "UNITY, ADDED_MATTER, DOUBLE_PATENTING, PROCEDURAL_DISCLOSURE, FORMALITIES, OTHER.",
+    "Periods are ISO-8601 subsets: P6M, P15D, P2Y. Prosecution models: PER_REPORT",
+    "(IN/US/CA/EP-style per-report clocks), ACCEPTANCE_CLOCK (AU/NZ 12-month window),",
+    "HYBRID (UK per-report clocks inside a compliance ceiling).",
+    "Reference implementation: Countries/IN.json. Facts per office: OFFICE_ACTION_WESTERN_JURISDICTIONS.md."
+  ],
+  "officeActionProfile": {
+    "profileVersion": "1.0",
+    "meta": {
+      "code": "XX",
+      "office": "Name of the patent office",
+      "moduleLabel": "Office Action Response",
+      "languages": ["en"],
+      "lawVersion": "Governing act + rules edition this profile encodes",
+      "reviewedOn": "2026-01-01",
+      "status": "draft"
+    },
+    "instruments": [
+      {
+        "id": "OA_FIRST",
+        "label": "First examination report / office action",
+        "detectionHints": ["LITERAL PHRASES that identify this document type in uploads"],
+        "extractFields": ["applicationNumber", "dateOfReport", "citedDocuments"]
+      }
+    ],
+    "timeline": {
+      "deadlines": [
+        {
+          "id": "first_reply",
+          "instrument": "OA_FIRST",
+          "trigger": "dateOfReport",
+          "period": "P6M",
+          "what": "Reply to the report",
+          "basis": "Rule/section reference",
+          "extension": {
+            "period": "P3M",
+            "form": "Extension form name",
+            "feePerMonth": { "standard": 0 },
+            "requestWindow": "P9M",
+            "note": "When/how the extension may be requested"
+          },
+          "consequence": { "type": "DEEMED_ABANDONED", "basis": "Section reference", "revivable": false }
+        }
+      ]
+    },
+    "prosecution": {
+      "model": "PER_REPORT",
+      "counters": [],
+      "note": "Describe the report → reply → hearing/allowance flow in one line"
+    },
+    "objections": [
+      {
+        "canonical": "NOVELTY",
+        "localLabel": "Local name of the objection",
+        "legalBasis": ["Statute/article"],
+        "citationDriven": true,
+        "track": "SUBSTANTIVE",
+        "detectionHints": ["examiner phrasing that identifies this objection type"],
+        "strategies": ["DISTINGUISH_ART", "AMEND_CLAIMS", "BOTH"],
+        "argumentSkeleton": "Ordered instructions the argument generator must follow for this objection type",
+        "caseLawWhitelist": [
+          { "name": "Case name", "citation": "Reporter cite", "point": "The single proposition it stands for" }
+        ]
+      },
+      {
+        "canonical": "INVENTIVE_STEP",
+        "legalBasis": ["Statute/article"],
+        "citationDriven": true,
+        "doctrine": "DOCTRINE_KEY"
+      }
+    ],
+    "doctrines": {
+      "DOCTRINE_KEY": {
+        "steps": ["Ordered argumentation framework, e.g. problem-solution or Graham/KSR steps"],
+        "styleNotes": "Register/wording constraints",
+        "leadingCases": []
+      }
+    },
+    "amendments": {
+      "legalBasis": ["Statute/article"],
+      "scopeRule": "The added-matter / scope constraint, stated verbatim — powers the amendment guard",
+      "basisRequired": true,
+      "voluntaryForm": { "form": "Form name", "requiredForOaReply": false },
+      "format": {
+        "markedCopy": true,
+        "cleanCopy": true,
+        "markStyle": "underline-strikethrough",
+        "statusIdentifiers": [],
+        "note": "e.g. US 37 CFR 1.121 closed status-identifier set goes in statusIdentifiers"
+      }
+    },
+    "citations": {
+      "labels": "D1, D2, …",
+      "patentNumberFormats": ["Regex sources for cited publication numbers"],
+      "nplAllowed": true
+    },
+    "response": {
+      "skeleton": ["addressBlock", "preliminarySubmissions", "objectionWiseReply", "amendedClaimsMarked", "amendedClaimsClean", "conclusionAndPrayer", "signatureBlock"],
+      "tone": "formal-respectful",
+      "phrases": {
+        "opening": "Opening sentence template with {placeholders}",
+        "prayer": "Closing request template"
+      },
+      "export": { "formats": ["docx", "pdf"] }
+    },
+    "hearing": {
+      "available": false,
+      "trigger": "",
+      "writtenSubmissionsAfter": "P15D",
+      "adjournment": { "requestBefore": "P3D", "max": 2, "eachUpTo": "P30D", "basis": "" },
+      "guidance": ""
+    },
+    "prompts": {
+      "OA_PARSE": "Jurisdiction overlay for the document parser",
+      "OA_CLASSIFY": "Jurisdiction overlay for the objection classifier — REQUIRED for readiness",
+      "OA_CLAIM_CHART": "Jurisdiction overlay for claim charting",
+      "OA_ARGUE": { "NOVELTY": "Per-objection argument overlays keyed by canonical code" },
+      "OA_DRAFT_SECTION": { "objectionWiseReply": "Per-skeleton-section drafting overlays — REQUIRED for readiness" }
+    }
+  }
+}

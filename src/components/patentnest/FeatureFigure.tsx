@@ -17,6 +17,14 @@ import {
 } from './figures'
 import { IdeationJourneyFig } from './ideation-figures'
 import { NoveltyJourneyFig } from './novelty-figures'
+import {
+  BatchStoryFig,
+  PersonaStoryFig,
+  ReviewStoryFig,
+  RefineStoryFig,
+  OfficesStoryFig,
+  PriorArtStoryFig,
+} from './story-figures'
 
 export default function FeatureFigure({ spec, compact = false }: { spec: FigSpec; compact?: boolean }) {
   switch (spec.kind) {
@@ -26,6 +34,21 @@ export default function FeatureFigure({ spec, compact = false }: { spec: FigSpec
       return <IdeationJourneyFig />
     case 'noveltyJourney':
       return <NoveltyJourneyFig />
+    case 'story':
+      switch (spec.variant) {
+        case 'batch':
+          return <BatchStoryFig />
+        case 'personas':
+          return <PersonaStoryFig />
+        case 'review':
+          return <ReviewStoryFig />
+        case 'refine':
+          return <RefineStoryFig />
+        case 'offices':
+          return <OfficesStoryFig />
+        case 'priorArt':
+          return <PriorArtStoryFig />
+      }
     case 'pipeline':
       return <PipelineFig stages={spec.stages} loopback={spec.loopback} compact={compact} />
     case 'matrix':

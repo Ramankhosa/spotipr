@@ -8,6 +8,7 @@ export type FigSpec =
   | { kind: 'spark' }
   | { kind: 'journey' }
   | { kind: 'noveltyJourney' }
+  | { kind: 'story'; variant: 'batch' | 'personas' | 'review' | 'refine' | 'offices' | 'priorArt' }
   | { kind: 'pipeline'; stages: string[]; loopback?: { from: number; to: number; label: string } }
   | { kind: 'matrix' }
   | { kind: 'fanout'; branches: string[]; sourceLabel?: string; stacked?: boolean }
@@ -226,7 +227,7 @@ export const FEATURES: Feature[] = [
         'Drafting that has already read the prior art — references searched, verdict-gated, and cited before a single section is written.',
       size: 'md',
     },
-    fig: { kind: 'pipeline', stages: ['claims', 'search', 'verdict', 'draft'] },
+    fig: { kind: 'story', variant: 'priorArt' },
     hero: {
       headline: 'The draft that did its reading.',
       lede: 'Inside the automated drafting pipeline, prior-art review is a first-class stage — not an afterthought. Before any specification section is written, the pipeline searches patent corpora, judges each candidate’s threat to your novelty, and selects the references your draft must be written against.',
@@ -288,7 +289,7 @@ export const FEATURES: Feature[] = [
         'One disclosure, drafted for USPTO, EPO, India, PCT and more in a single automated run — each office’s sections, headings, and formatting.',
       size: 'lg',
     },
-    fig: { kind: 'fanout', branches: ['USPTO', 'EPO', 'India', 'PCT'], sourceLabel: 'one disclosure' },
+    fig: { kind: 'story', variant: 'offices' },
     hero: {
       headline: 'Twelve patent offices. One disclosure.',
       lede: 'Select your target offices and the pipeline drafts a separate, office-correct application for each in a single automated run — the right sections in the right order, the right headings, the right formatting, even the right figure language.',
@@ -350,12 +351,7 @@ export const FEATURES: Feature[] = [
         'Upload a spreadsheet of inventions or a folder of disclosure documents — background workers draft them all, into one reviewed ZIP.',
       size: 'md',
     },
-    fig: {
-      kind: 'fanout',
-      branches: ['draft 01', 'draft 02', 'draft 03'],
-      sourceLabel: 'one upload',
-      stacked: true,
-    },
+    fig: { kind: 'story', variant: 'batch' },
     hero: {
       headline: 'A portfolio, not a patent.',
       lede: 'Batch mode takes an entire pipeline of inventions — a spreadsheet of ideas or a folder of disclosure documents — and drafts them unattended: queued, processed by background workers, tracked live, and delivered as a reviewed, downloadable package.',
@@ -417,7 +413,7 @@ export const FEATURES: Feature[] = [
         'Teach the AI your drafting voice from real samples — per section, per jurisdiction — and every draft comes out sounding like your practice.',
       size: 'md',
     },
-    fig: { kind: 'style' },
+    fig: { kind: 'story', variant: 'personas' },
     hero: {
       headline: 'Your voice, at machine speed.',
       lede: 'A writing persona captures how you draft — the vocabulary, sentence structure, and formatting of your practice — from samples you paste in, section by section. Select it when drafting and the AI mimics your style in every generated section, without ever copying your content.',
@@ -541,7 +537,7 @@ export const FEATURES: Feature[] = [
         'Scope-controlled claim generation, prior-art-driven refinement, antecedent-basis checks — then a freeze that anchors the whole draft.',
       size: 'md',
     },
-    fig: { kind: 'refine', checks: ['antecedent basis', 'dependent form', 'claim scope'] },
+    fig: { kind: 'story', variant: 'refine' },
     hero: {
       headline: 'Claims are the patent. Treat them that way.',
       lede: 'Everything else in an application exists to support the claims. The studio generates them with deliberate scope control, refines them against the actual prior art, validates their structure — and then freezes them, so nothing downstream can quietly drift away from what you claim.',
@@ -603,11 +599,7 @@ export const FEATURES: Feature[] = [
         'An examiner-style pass over the whole draft — issues with surgical one-click fixes, and a hard rule: claims and figures are never touched.',
       size: 'md',
     },
-    fig: {
-      kind: 'pipeline',
-      stages: ['draft', 'review', 'fix'],
-      loopback: { from: 2, to: 1, label: 're-review' },
-    },
+    fig: { kind: 'story', variant: 'review' },
     hero: {
       headline: 'Reviewed like an examiner would.',
       lede: 'Before anything ships, an AI review reads the draft the way a senior examiner will: are the claims supported by the description, do the figures match the text, is every component explained, does each section respect its office’s limits? Every issue arrives with a fix you can apply in one click.',

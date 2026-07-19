@@ -720,7 +720,9 @@ export class LLMGateway {
       IDEATION_EXPAND: 'IDEATION',
       IDEATION_OBVIOUSNESS_FILTER: 'IDEATION',
       IDEATION_GENERATE: 'IDEATION',
-      IDEATION_NOVELTY: 'IDEATION'
+      IDEATION_NOVELTY: 'IDEATION',
+      LLM7_ADVANCED_MANUAL_SEARCH: 'NOVELTY_SEARCH', // Prior-Art Studio query generator (novelty quota)
+      LLM8_OA_RESPONSE: 'OFFICE_ACTION_RESPONSE' // Office Action Studio pipeline stages
     }
     return taskToFeatureMap[taskCode]
   }

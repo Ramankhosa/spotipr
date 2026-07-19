@@ -6,10 +6,17 @@ import type {
   PatentSearchResponse,
 } from './types'
 import { createPatentSearchQueryPlan } from './query-planner'
-import { getPatentSearchProvider, listPatentSearchProviders, resolveProviderIds } from './provider-registry'
+import {
+  getPatentSearchProvider,
+  listPatentSearchProviders,
+  resolveFallbackProviderIds,
+  resolveProviderIds,
+} from './provider-registry'
 import { canonicalPatentResultKey, clampLimit, uniqueStrings } from './utils'
 import { compactLogDetails } from './provider-runtime'
 import { isVoyageRerankerEnabled, rerankItems } from '@/lib/voyage-reranker-service'
+import { getSettings } from '@/lib/settings/settings-service'
+import { getProviderAccessGates } from '@/lib/settings/provider-access-service'
 
 function logSearchEvent(event: string, details: Record<string, unknown>) {
   console.info('[PatentSearch]', JSON.stringify(compactLogDetails({ event, ...details })))
@@ -208,11 +215,21 @@ export class PatentSearchOrchestrator {
     const limit = clampLimit(input.limit, 20, 100)
     const candidateLimit = Math.max(limit, clampLimit(input.candidateLimit ?? limit, limit, 300))
     const queryPlan = await createPatentSearchQueryPlan(input)
+    // Runtime tuning + admin provider gates, resolved once so the whole search runs
+    // under one consistent configuration. Both fail open to code defaults.
+    const [settings, accessGates] = await Promise.all([
+      getSettings().catch(() => ({} as Record<string, number | boolean>)),
+      getProviderAccessGates().catch(() => ({
+        disabled: new Set<PatentSearchProviderId>(),
+        fallbackBlocked: new Set<PatentSearchProviderId>(),
+      })),
+    ])
     const providerIds = resolveProviderIds({
       providerIds: input.providerIds,
       sourceMode: input.sourceMode,
       jurisdictions: input.jurisdictions,
       disableLinkedProviderExpansion: input.disableLinkedProviderExpansion,
+      adminDisabled: accessGates.disabled,
     })
     const warnings = [...queryPlan.warnings]
     const providerStats: PatentSearchProviderStats[] = []
@@ -240,76 +257,105 @@ export class PatentSearchOrchestrator {
       }
     }
 
-    await Promise.all(providerIds.map(async providerId => {
-      const provider = getPatentSearchProvider(providerId)
-      if (!provider) {
-        providerStats.push({
-          providerId,
-          label: String(providerId),
-          enabled: false,
-          requested: true,
-          resultCount: 0,
-          error: 'Provider is not registered.',
-        })
-        warnings.push(`Provider ${providerId} is not registered.`)
-        return
-      }
-      if (!provider.enabled) {
-        providerStats.push({
-          providerId,
-          label: provider.label,
-          enabled: false,
-          requested: true,
-          resultCount: 0,
-          error: 'Provider is not enabled.',
-        })
-        warnings.push(`${provider.label} is planned but not enabled yet.`)
-        return
-      }
+    const runProviders = async (ids: PatentSearchProviderId[], lane: 'primary' | 'fallback') => {
+      await Promise.all(ids.map(async providerId => {
+        const provider = getPatentSearchProvider(providerId)
+        if (!provider) {
+          providerStats.push({
+            providerId,
+            label: String(providerId),
+            enabled: false,
+            requested: true,
+            resultCount: 0,
+            error: 'Provider is not registered.',
+          })
+          warnings.push(`Provider ${providerId} is not registered.`)
+          return
+        }
+        if (!provider.enabled) {
+          providerStats.push({
+            providerId,
+            label: provider.label,
+            enabled: false,
+            requested: true,
+            resultCount: 0,
+            error: 'Provider is not enabled.',
+          })
+          // A disabled fallback is expected (missing optional credentials), not a
+          // problem the user needs to be told about.
+          if (lane === 'primary') warnings.push(`${provider.label} is planned but not enabled yet.`)
+          return
+        }
 
-      try {
-        const startedAt = Date.now()
-        logSearchEvent('provider_started', {
-          providerId,
-          label: provider.label,
-          query: suppressSensitiveLogging ? undefined : queryPlan.searchQuery,
-          requestedLimit: candidateLimit,
+        try {
+          const startedAt = Date.now()
+          logSearchEvent('provider_started', {
+            providerId,
+            label: provider.label,
+            lane,
+            query: suppressSensitiveLogging ? undefined : queryPlan.searchQuery,
+            requestedLimit: candidateLimit,
+          })
+          const results = await provider.search({
+            ...input,
+            limit: candidateLimit,
+            candidateLimit,
+            queryPlan,
+          })
+          logSearchEvent('provider_completed', {
+            providerId,
+            label: provider.label,
+            lane,
+            resultCount: results.length,
+            durationMs: Date.now() - startedAt,
+            results: suppressSensitiveLogging ? undefined : results.map(resultLogSummary),
+          })
+          providerStats.push({
+            providerId,
+            label: provider.label,
+            enabled: true,
+            requested: true,
+            resultCount: results.length,
+          })
+          providerResults.push({ providerId, results })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          logSearchEvent('provider_failed', { providerId, label: provider.label, lane, error: message })
+          providerStats.push({
+            providerId,
+            label: provider.label,
+            enabled: provider.enabled,
+            requested: true,
+            resultCount: 0,
+            error: message,
+          })
+          warnings.push(`${provider.label} search failed: ${message}`)
+        }
+      }))
+    }
+
+    await runProviders(providerIds, 'primary')
+
+    // Local-corpus-first: the stored corpus answers almost every search on its own.
+    // Live provider APIs are metered and slow, so they only run when the corpus came
+    // back completely empty — a genuinely unindexed technology area, or a country
+    // filter narrower than our coverage.
+    const primaryResultCount = providerResults.reduce((count, entry) => count + entry.results.length, 0)
+    let usedFallbackProviders: PatentSearchProviderId[] = []
+    if (primaryResultCount === 0 && input.disableProviderFallback !== true) {
+      usedFallbackProviders = resolveFallbackProviderIds({
+        jurisdictions: input.jurisdictions,
+        alreadySearched: providerIds,
+        fallbackBlocked: accessGates.fallbackBlocked,
+      })
+      if (usedFallbackProviders.length) {
+        logSearchEvent('fallback_dispatch', {
+          reason: 'local_corpus_returned_no_results',
+          providerIds: usedFallbackProviders,
         })
-        const results = await provider.search({
-          ...input,
-          limit: candidateLimit,
-          candidateLimit,
-          queryPlan,
-        })
-        logSearchEvent('provider_completed', {
-          providerId,
-          label: provider.label,
-          resultCount: results.length,
-          durationMs: Date.now() - startedAt,
-          results: suppressSensitiveLogging ? undefined : results.map(resultLogSummary),
-        })
-        providerStats.push({
-          providerId,
-          label: provider.label,
-          enabled: true,
-          requested: true,
-          resultCount: results.length,
-        })
-        providerResults.push({ providerId, results })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        logSearchEvent('provider_failed', { providerId, label: provider.label, error: message })
-        providerStats.push({
-          providerId,
-          label: provider.label,
-          enabled: provider.enabled,
-          requested: true,
-          resultCount: 0,
-          error: message,
-        })
-        warnings.push(`${provider.label} search failed: ${message}`)
+        await runProviders(usedFallbackProviders, 'fallback')
       }
-    }))
+    }
 
     // Live PQAI/EPO searches persist their normalized results into the matching
     // local corpus. Because providers run concurrently, an empty corpus search
@@ -363,7 +409,11 @@ export class PatentSearchOrchestrator {
       }
     }
 
-    providerResults.sort((a, b) => providerIds.indexOf(a.providerId) - providerIds.indexOf(b.providerId))
+    // Primary (corpus) providers keep their configured order and rank ahead of any
+    // fallback provider that ran, which matters for the per-source promotion in
+    // mergeProviderResults.
+    const providerOrder = [...providerIds, ...usedFallbackProviders]
+    providerResults.sort((a, b) => providerOrder.indexOf(a.providerId) - providerOrder.indexOf(b.providerId))
     let candidateResults = mergeProviderResults(providerResults, candidateLimit)
 
     // Second-stage reranking: the binary-embedding recall lane (Google corpus) and the
@@ -371,8 +421,14 @@ export class PatentSearchOrchestrator {
     // cosine). The Voyage reranker re-scores query -> title+abstract for the whole merged
     // pool, producing one comparable ordering and recovering the precision binary trades
     // away. Gated by NOVELTY_RERANK_ENABLED + VOYAGE_API_KEY; failure keeps the merge order.
+    const rerankEnabled = settings['rerank.enabled'] !== false && isVoyageRerankerEnabled()
+    const minRerankScore = typeof settings['rerank.minScore'] === 'number'
+      ? Math.max(0, Math.min(1, settings['rerank.minScore'] as number))
+      : 0
     const rerankQuery = String(queryPlan.searchQuery || input.query || '').trim()
-    if (isVoyageRerankerEnabled() && rerankQuery && candidateResults.length > 1) {
+    let rerankApplied = false
+    let droppedBelowFloor = 0
+    if (rerankEnabled && rerankQuery && candidateResults.length > 1) {
       const rerankStartedAt = Date.now()
       try {
         const scored = await rerankItems(
@@ -383,15 +439,57 @@ export class PatentSearchOrchestrator {
           })),
         )
         if (scored.length) {
+          rerankApplied = true
           candidateResults = scored.map(entry => ({
             ...entry.item,
             rerankScore: entry.relevanceScore,
-            scores: { ...(entry.item.scores || {}), rerank: entry.relevanceScore },
+            // The pre-rerank relevanceScore is normalised against the best hit in its
+            // own result set, so the top result always scored ~0.99 regardless of how
+            // good it actually was, and it did not reflect the rerank ordering the
+            // list is now sorted by. The Voyage score is absolute and comparable
+            // across searches, so it becomes the score of record.
+            relevanceScore: Number(entry.relevanceScore.toFixed(3)),
+            scores: {
+              ...(entry.item.scores || {}),
+              rerank: entry.relevanceScore,
+              // Keep the fused retrieval score for diagnostics and calibration.
+              preRerankRelevance: entry.item.relevanceScore ?? undefined,
+            },
           }))
+
+          // Absolute cutoff. Without it the corpus always fills the candidate quota,
+          // so a search with no genuinely close prior art looked identical to one
+          // with plenty. A floor lets the pipeline legitimately return fewer — or no
+          // — candidates. 0 disables it and preserves the old top-N behaviour.
+          if (minRerankScore > 0) {
+            const beforeFloor = candidateResults.length
+            candidateResults = candidateResults.filter(
+              result => (result.rerankScore ?? 0) >= minRerankScore
+            )
+            droppedBelowFloor = beforeFloor - candidateResults.length
+            if (droppedBelowFloor > 0) {
+              logSearchEvent('rerank_floor_applied', {
+                minRerankScore,
+                dropped: droppedBelowFloor,
+                remaining: candidateResults.length,
+              })
+            }
+            if (!candidateResults.length) {
+              warnings.push(
+                `No prior art scored above the ${minRerankScore} relevance threshold.`
+              )
+            }
+          }
+
           logSearchEvent('rerank_completed', {
             candidateCount: candidateResults.length,
             durationMs: Date.now() - rerankStartedAt,
             topScore: scored[0]?.relevanceScore,
+            medianScore: scored.length
+              ? scored[Math.floor(scored.length / 2)]?.relevanceScore
+              : undefined,
+            minRerankScore,
+            droppedBelowFloor,
           })
         }
       } catch (error) {
@@ -402,7 +500,7 @@ export class PatentSearchOrchestrator {
     }
 
     const results = candidateResults.slice(0, limit)
-    const providerContributionCounts = Object.fromEntries(providerIds.map(providerId => [
+    const providerContributionCounts = Object.fromEntries(providerOrder.map(providerId => [
       providerId,
       candidateResults.filter(result => (result.sourceProviders || [result.sourceProvider]).includes(providerId)).length,
     ])) as Partial<Record<PatentSearchProviderId, number>>
@@ -429,6 +527,12 @@ export class PatentSearchOrchestrator {
         candidateResultCount: candidateResults.length,
         providerCandidateCount: providerResults.reduce((count, providerResult) => count + providerResult.results.length, 0),
         providerContributionCounts,
+        primaryProviderIds: providerIds,
+        fallbackProviderIds: usedFallbackProviders,
+        usedFallbackProviders: usedFallbackProviders.length > 0,
+        rerankApplied,
+        minRerankScore,
+        droppedBelowFloor,
       },
     }
   }

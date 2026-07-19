@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExtractedPatentRecord } from '@/lib/patent-corpus-extractor'
 
+// patent-corpus-service resolves its embedding provider from env at import time, and
+// the default is now Voyage. The OpenAI key-routing tests below are specifically about
+// the legacy OpenAI path, so pin that model before the module is imported.
+// The Voyage defaults are asserted separately in patent-corpus-embedding-config.test.ts.
+vi.hoisted(() => {
+  process.env.PATENT_CORPUS_EMBEDDING_MODEL = 'text-embedding-3-small'
+})
+
 const mocks = vi.hoisted(() => ({
   prisma: {
     $queryRaw: vi.fn(),

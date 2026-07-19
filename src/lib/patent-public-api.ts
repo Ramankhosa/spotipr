@@ -131,6 +131,24 @@ export function assertPatentPublicApiEnabled() {
   }
 }
 
+/**
+ * Coverage manifest returned with every search response so callers know
+ * exactly what was searched — corpus, jurisdiction, size, and how much of it
+ * is semantically indexed. Backed by the cached corpus coverage stats.
+ */
+export async function getPublicSearchCoverage() {
+  const readiness = await getPatentApiReadiness()
+  return {
+    corpus: 'indian-patent-journal',
+    description: 'Indian patent corpus sourced from IP India Patent Journal publications.',
+    jurisdiction: 'IN',
+    documents: readiness.indianCorpus.totalPatents,
+    semanticCoveragePercent: readiness.indianCorpus.coveragePercent,
+    searchMode: 'hybrid-semantic-text',
+    embeddingModel: readiness.embeddingModel,
+  }
+}
+
 export async function assertPatentSearchReady() {
   assertPatentPublicApiEnabled()
   const readiness = await getPatentApiReadiness()

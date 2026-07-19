@@ -310,7 +310,7 @@ function AutoResizeTextarea({
         requestAnimationFrame(resize);
       }}
       style={{ minHeight, maxHeight, ...(props.style || {}) }}
-      className={`w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-5 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 ${className}`}
+      className={`w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-5 outline-none transition-colors placeholder:text-slate-400 focus:border-ai-blue-500 focus:ring-2 focus:ring-ai-blue-500/20 ${className}`}
     />
   );
 }
@@ -1724,7 +1724,7 @@ export default function NoveltySearchWorkflow({
           }}
           className={`flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
             activeSearchPath === 'manual'
-              ? 'bg-indigo-600 text-white'
+              ? 'bg-ai-blue-600 text-white'
               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
           }`}
         >
@@ -1741,7 +1741,7 @@ export default function NoveltySearchWorkflow({
           }}
           className={`flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
             activeSearchPath === 'intelligent'
-              ? 'bg-indigo-600 text-white'
+              ? 'bg-ai-blue-600 text-white'
               : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
           }`}
         >
@@ -1771,7 +1771,7 @@ export default function NoveltySearchWorkflow({
           value={manualSearchFields[field]}
           onChange={(event) => updateManualSearchField(field, event.target.value)}
           placeholder={placeholder}
-          className="h-[38px] rounded-lg border-slate-200 bg-white text-sm focus:border-indigo-500 focus:ring-indigo-500/20"
+          className="h-[38px] rounded-lg border-slate-200 bg-white text-sm focus:border-ai-blue-500 focus:ring-ai-blue-500/20"
         />
       )}
     </div>
@@ -1787,7 +1787,7 @@ export default function NoveltySearchWorkflow({
       return (
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardContent className="flex items-center gap-3 py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+            <Loader2 className="h-5 w-5 animate-spin text-ai-blue-600" />
             <div>
               <div className="text-sm font-medium text-slate-900">Searching patent records</div>
               <div className="text-xs text-slate-500">Manual mode uses exact filters and disables LLM expansion.</div>
@@ -1832,7 +1832,7 @@ export default function NoveltySearchWorkflow({
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-3">
                 <div className="text-xs font-medium uppercase text-slate-500">Provider hits</div>
-                <div className="mt-1 text-2xl font-semibold text-indigo-600">{totalProviderResults}</div>
+                <div className="mt-1 text-2xl font-semibold text-ai-blue-600">{totalProviderResults}</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-3">
                 <div className="text-xs font-medium uppercase text-slate-500">Matched fields</div>
@@ -1850,7 +1850,7 @@ export default function NoveltySearchWorkflow({
                       <div className="font-medium text-slate-800">{displayPatentProviderLabel(stat.label || stat.providerId)}</div>
                       {stat.error && <div className="text-xs text-rose-600">{displayInternationalPatentText(stat.error)}</div>}
                     </div>
-                    <Badge variant="outline" className={stat.requested ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500'}>
+                    <Badge variant="outline" className={stat.requested ? 'border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700' : 'border-slate-200 bg-white text-slate-500'}>
                       {stat.resultCount || 0} results
                     </Badge>
                   </div>
@@ -1917,7 +1917,7 @@ export default function NoveltySearchWorkflow({
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <a href={href} target="_blank" rel="noreferrer" className="font-semibold text-indigo-700 hover:underline">
+                          <a href={href} target="_blank" rel="noreferrer" className="font-semibold text-ai-blue-700 hover:underline">
                             {patentNumber}
                           </a>
                           {displayPatentProviderLabels(sourceProviders).map((provider: string) => (
@@ -1928,7 +1928,7 @@ export default function NoveltySearchWorkflow({
                         </div>
                         <h3 className="mt-1 line-clamp-2 text-sm font-medium text-slate-900">{title}</h3>
                       </div>
-                      <Badge variant="outline" className="w-fit border-indigo-200 bg-indigo-50 text-indigo-700">
+                      <Badge variant="outline" className="w-fit border-ai-blue-200 bg-ai-blue-50 text-ai-blue-700">
                         {Math.round(relevanceScore * 100)}% match
                       </Badge>
                     </div>
@@ -2021,7 +2021,7 @@ export default function NoveltySearchWorkflow({
                     searchSourceMode: sourceModeForJurisdiction(jurisdiction)
                   }));
                 }}
-                className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-ai-blue-500 focus:ring-2 focus:ring-ai-blue-500/20"
               >
                 <option value="IN">India (IN)</option>
                 <option value="US">United States (US)</option>
@@ -2037,7 +2037,7 @@ export default function NoveltySearchWorkflow({
                 id="manualSource"
                 value={formData.searchSourceMode}
                 onChange={(event) => setFormData(prev => ({ ...prev, searchSourceMode: event.target.value as NoveltySearchSourceMode }))}
-                className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                className="h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-ai-blue-500 focus:ring-2 focus:ring-ai-blue-500/20"
               >
                 <option value="PQAI_PLUS_INDIAN">India + international patents</option>
                 <option value="PQAI_PLUS_AUSTRALIA">Australia + international patents</option>
@@ -2067,7 +2067,7 @@ export default function NoveltySearchWorkflow({
                   key={chip.field}
                   type="button"
                   onClick={() => updateManualSearchField(chip.field, '')}
-                  className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                  className="inline-flex items-center gap-1 rounded-full border border-ai-blue-200 bg-ai-blue-50 px-2.5 py-1 text-xs font-medium text-ai-blue-700 hover:bg-ai-blue-100"
                 >
                   <span>{chip.label}: {chip.value}</span>
                   <X className="h-3 w-3" />
@@ -2117,7 +2117,7 @@ export default function NoveltySearchWorkflow({
             type="button"
             onClick={runManualPatentSearch}
             disabled={manualSearchState.isLoading || !manualSearchHasCriteria}
-            className="h-11 w-full rounded-lg bg-indigo-600 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+            className="h-11 w-full rounded-lg bg-ai-blue-600 text-sm font-medium text-white shadow-sm hover:bg-ai-blue-700 disabled:opacity-50"
           >
             {manualSearchState.isLoading ? (
               <>
@@ -2164,13 +2164,13 @@ export default function NoveltySearchWorkflow({
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
-              className="rounded-lg border border-indigo-200 bg-indigo-50 p-4"
+              className="rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-4"
             >
               <div className="flex items-center gap-3">
-                <FileText className="h-5 w-5 text-indigo-600" />
+                <FileText className="h-5 w-5 text-ai-blue-600" />
                 <div>
-                  <p className="text-sm font-medium text-indigo-900">Loaded from Idea Bank</p>
-                  <p className="text-xs text-indigo-700">The title and description have been pre-filled from your reserved idea.</p>
+                  <p className="text-sm font-medium text-ai-blue-900">Loaded from Idea Bank</p>
+                  <p className="text-xs text-ai-blue-700">The title and description have been pre-filled from your reserved idea.</p>
                 </div>
               </div>
             </motion.div>
@@ -2180,7 +2180,7 @@ export default function NoveltySearchWorkflow({
             <div className="space-y-2">
               <Label className="text-sm font-medium text-slate-700">Project</Label>
               <div className="flex min-h-[72px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-indigo-600 ring-1 ring-slate-200">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-ai-blue-600 ring-1 ring-slate-200">
                   <FolderOpen className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -2190,7 +2190,7 @@ export default function NoveltySearchWorkflow({
                   </div>
                 </div>
                 {selectedProject?.name === 'Default Project' && (
-                  <Badge variant="secondary" className="border-indigo-200 bg-indigo-50 text-xs font-medium text-indigo-700">Default</Badge>
+                  <Badge variant="secondary" className="border-ai-blue-200 bg-ai-blue-50 text-xs font-medium text-ai-blue-700">Default</Badge>
                 )}
               </div>
             </div>
@@ -2209,7 +2209,7 @@ export default function NoveltySearchWorkflow({
                   value={formData.title}
                   onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
                   placeholder="Enter a clear, concise title for your invention"
-                  className="h-11 rounded-lg border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                  className="h-11 rounded-lg border-slate-200 focus:border-ai-blue-500 focus:ring-ai-blue-500/20"
                 />
               </div>
 
@@ -2221,7 +2221,7 @@ export default function NoveltySearchWorkflow({
                   onChange={(e) => setFormData(prev => ({ ...prev, inventionDescription: e.target.value }))}
                   placeholder="Describe the problem, core mechanism, operating steps, and key technical features."
                   rows={8}
-                  className="rounded-lg border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20 resize-none"
+                  className="rounded-lg border-slate-200 focus:border-ai-blue-500 focus:ring-ai-blue-500/20 resize-none"
                 />
               </div>
 
@@ -2233,10 +2233,10 @@ export default function NoveltySearchWorkflow({
                   accept=".txt,.md,.markdown,.csv,.tsv,.xlsx,.doc,.docx,.pdf"
                   onChange={handleFileUpload}
                   disabled={isFileProcessing}
-                  className="block w-full text-sm text-slate-500 file:mr-4 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:opacity-50"
+                  className="block w-full text-sm text-slate-500 file:mr-4 file:rounded-lg file:border-0 file:bg-ai-blue-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-ai-blue-700 hover:file:bg-ai-blue-100 disabled:opacity-50"
                 />
                 <p className="text-xs text-slate-500">Text-based PDF, DOC/DOCX, spreadsheet, CSV, Markdown, or TXT. Upload replaces the description text.</p>
-                {isFileProcessing && <p className="text-xs text-indigo-600">Extracting readable text...</p>}
+                {isFileProcessing && <p className="text-xs text-ai-blue-600">Extracting readable text...</p>}
                 {uploadedFileName && <p className="text-xs text-emerald-600">Extracted text from {uploadedFileName}.</p>}
               </div>
             </div>
@@ -2261,7 +2261,7 @@ export default function NoveltySearchWorkflow({
                         searchSourceMode: sourceModeForJurisdiction(jurisdiction)
                       }));
                     }}
-                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-ai-blue-500 focus:ring-2 focus:ring-ai-blue-500/20"
                 >
                   <option value="IN">India (IN)</option>
                   <option value="US">United States (US)</option>
@@ -2278,7 +2278,7 @@ export default function NoveltySearchWorkflow({
                 id="searchSource"
                 value={formData.searchSourceMode}
                 onChange={(e) => setFormData(prev => ({ ...prev, searchSourceMode: e.target.value as NoveltySearchSourceMode }))}
-                className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition-colors focus:border-ai-blue-500 focus:ring-2 focus:ring-ai-blue-500/20"
               >
                 <option value="PQAI_PLUS_INDIAN">India + international patents</option>
                 <option value="PQAI_PLUS_AUSTRALIA">Australia + international patents</option>
@@ -2323,7 +2323,7 @@ export default function NoveltySearchWorkflow({
             <Button
               onClick={startNoveltySearch}
               disabled={searchState.isLoading}
-              className="h-12 w-full rounded-lg bg-indigo-600 text-base font-medium text-white shadow-sm hover:bg-indigo-700"
+              className="h-12 w-full rounded-lg bg-ai-blue-600 text-base font-medium text-white shadow-sm hover:bg-ai-blue-700"
             >
               {searchState.isLoading ? (
                 <>
@@ -2340,9 +2340,9 @@ export default function NoveltySearchWorkflow({
             </Button>
           </motion.div>
           {searchState.isLoading && !searchState.searchId && (
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
+            <div className="rounded-xl border border-ai-blue-100 bg-ai-blue-50/70 p-4">
               <div className="flex items-start gap-3">
-                <div className="mt-0.5 rounded-lg bg-white p-2 text-indigo-600 shadow-sm">
+                <div className="mt-0.5 rounded-lg bg-white p-2 text-ai-blue-600 shadow-sm">
                   <Loader2 className="h-4 w-4 animate-spin" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -2350,7 +2350,7 @@ export default function NoveltySearchWorkflow({
                     <div className="text-sm font-semibold text-slate-900">
                       {QUERY_PLANNING_STAGES[queryPlanningStageIndex]?.label || 'Preparing search plan'}
                     </div>
-                    <div className="text-xs font-medium text-indigo-700">
+                    <div className="text-xs font-medium text-ai-blue-700">
                       {Math.round(((queryPlanningStageIndex + 1) / QUERY_PLANNING_STAGES.length) * 100)}%
                     </div>
                   </div>
@@ -2359,7 +2359,7 @@ export default function NoveltySearchWorkflow({
                   </p>
                   <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white">
                     <div
-                      className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                      className="h-full rounded-full bg-ai-blue-600 transition-all duration-500"
                       style={{ width: `${Math.round(((queryPlanningStageIndex + 1) / QUERY_PLANNING_STAGES.length) * 100)}%` }}
                     />
                   </div>
@@ -2390,7 +2390,7 @@ export default function NoveltySearchWorkflow({
         >
           {/* Status Card */}
           <Card className="overflow-hidden border border-slate-200 bg-white shadow-sm">
-            <div className="h-1 bg-indigo-500" />
+            <div className="h-1 bg-ai-blue-500" />
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -2399,7 +2399,7 @@ export default function NoveltySearchWorkflow({
                       ? 'bg-emerald-500'
                       : searchState.status === NoveltySearchStatus.FAILED
                       ? 'bg-rose-500'
-                      : 'bg-indigo-600'
+                      : 'bg-ai-blue-600'
                   }`}>
                     {searchState.status === NoveltySearchStatus.COMPLETED ? (
                       <CheckCircle className="h-5 w-5 text-white" />
@@ -2430,7 +2430,7 @@ export default function NoveltySearchWorkflow({
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : searchState.status === NoveltySearchStatus.FAILED
                         ? 'bg-rose-50 text-rose-700 border-rose-200'
-                        : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                        : 'bg-ai-blue-50 text-ai-blue-700 border-ai-blue-200'
                     }`}
                   >
                     {currentStageInfo.progress}% Complete
@@ -2452,7 +2452,7 @@ export default function NoveltySearchWorkflow({
                   <div className="p-4">
                     <div className="flex items-center gap-4">
                       <div className="flex-shrink-0">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ai-blue-50 text-ai-blue-600">
                           <Loader2 className="h-5 w-5 animate-spin" />
                         </div>
                       </div>
@@ -2467,7 +2467,7 @@ export default function NoveltySearchWorkflow({
                         </div>
                         <div className="mt-3 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                           <motion.div
-                            className="h-full rounded-full bg-indigo-500"
+                            className="h-full rounded-full bg-ai-blue-500"
                             initial={{ width: hasLiveProgress ? '6%' : '0%' }}
                             animate={{ width: hasLiveProgress ? `${progressWidth}%` : '100%' }}
                             transition={hasLiveProgress ? { duration: 0.35, ease: 'easeOut' } : { duration: 10, ease: 'linear' }}
@@ -2578,7 +2578,7 @@ export default function NoveltySearchWorkflow({
                   <div className="space-y-2 mb-4">
                     {editedFeatures.map((feature: string, idx: number) => (
                       <div key={idx} className="flex items-center gap-2 rounded-lg border bg-slate-50 p-3">
-                        <span className="text-xs font-mono bg-indigo-100 text-indigo-700 px-2 py-1 rounded-lg">{idx + 1}</span>
+                        <span className="text-xs font-mono bg-ai-blue-100 text-ai-blue-700 px-2 py-1 rounded-lg">{idx + 1}</span>
                         {editingFeatureIndex === idx ? (
                           <Input
                             value={feature}
@@ -2689,7 +2689,7 @@ export default function NoveltySearchWorkflow({
                     <div className="space-y-2 max-h-64 overflow-y-auto">
                       {Array.isArray(s0.inventionFeatures) && s0.inventionFeatures.map((feature: string, idx: number) => (
                         <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border">
-                          <span className="text-xs font-mono bg-indigo-100 text-indigo-700 px-2 py-1 rounded">{idx + 1}</span>
+                          <span className="text-xs font-mono bg-ai-blue-100 text-ai-blue-700 px-2 py-1 rounded">{idx + 1}</span>
                           <span className="text-sm text-slate-700">{feature}</span>
                         </div>
                       ))}
@@ -2704,7 +2704,7 @@ export default function NoveltySearchWorkflow({
                         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Title</div>
                         <div className="flex flex-wrap gap-2">
                           {(s0.epoTitleKeywords || []).map((keyword: string, index: number) => (
-                            <span key={index} className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-700">{keyword}</span>
+                            <span key={index} className="rounded-full bg-ai-blue-50 px-3 py-1 text-xs text-ai-blue-700">{keyword}</span>
                           ))}
                         </div>
                       </div>
@@ -2738,7 +2738,7 @@ export default function NoveltySearchWorkflow({
                   <div className="flex justify-end">
                     <Button
                       size="sm"
-                      className="rounded-lg bg-indigo-600 hover:bg-indigo-700"
+                      className="rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700"
                       disabled={isAutoRunning}
                       onClick={markStage0Approved}
                     >
@@ -2747,11 +2747,11 @@ export default function NoveltySearchWorkflow({
                     </Button>
                   </div>
                 ) : !hasStage1Results ? (
-                  <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4">
+                  <div className="rounded-lg border border-ai-blue-100 bg-ai-blue-50 p-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                       <div>
-                        <div className="text-sm font-semibold text-indigo-950">Choose execution mode</div>
-                        <div className="mt-1 text-xs leading-5 text-indigo-800">
+                        <div className="text-sm font-semibold text-ai-blue-950">Choose execution mode</div>
+                        <div className="mt-1 text-xs leading-5 text-ai-blue-800">
                           Run every remaining stage automatically, or continue manually and trigger each stage yourself.
                         </div>
                       </div>
@@ -2760,7 +2760,7 @@ export default function NoveltySearchWorkflow({
                           type="button"
                           variant="outline"
                           size="sm"
-                          className="rounded-lg border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50"
+                          className="rounded-lg border-ai-blue-200 bg-white text-ai-blue-700 hover:bg-ai-blue-50"
                           disabled={isAutoRunning}
                           onClick={() => {
                             setAutoMode(false);
@@ -2772,7 +2772,7 @@ export default function NoveltySearchWorkflow({
                         <Button
                           type="button"
                           size="sm"
-                          className="rounded-lg bg-indigo-600 hover:bg-indigo-700"
+                          className="rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700"
                           disabled={isAutoRunning}
                           onClick={async () => {
                             setAutoMode(true);
@@ -2813,7 +2813,7 @@ export default function NoveltySearchWorkflow({
               Search selected patent nationalities first. These returned records are shown separately before any LLM relevance analysis.
             </p>
             {canRunCurrent && selectedStageTab === '2' && (
-              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700">
                 <Search className="w-4 h-4 mr-2" />
                 Search Patents
               </Button>
@@ -2859,7 +2859,7 @@ export default function NoveltySearchWorkflow({
               Execute the patent search to find relevant prior art from the selected patent nationality coverage.
             </p>
             {canRunCurrent && selectedStageTab === '2' && (
-              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700">
                 <Search className="w-4 h-4 mr-2" />
                 Search Patents
               </Button>
@@ -2884,13 +2884,13 @@ export default function NoveltySearchWorkflow({
               {unreviewedCount > 0 ? ` · ${unreviewedCount} unreviewed` : ''}
             </div>
             {hasGate && stage1Container.hasMoreCandidates && (
-              <Button onClick={handleReviewMoreCandidates} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
+              <Button onClick={handleReviewMoreCandidates} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
                 <Search className="w-4 h-4 mr-2" />
                 Review More Candidates
               </Button>
             )}
             {!hasGate && hasCandidatePool && canRunCurrent && selectedStageTab === '2' && (
-              <Button onClick={() => executeStage('1.5')} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
+              <Button onClick={() => executeStage('1.5')} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700" disabled={Boolean(activeExecutionStage) || searchState.isLoading}>
                 <Search className="w-4 h-4 mr-2" />
                 Run AI Relevance
               </Button>
@@ -2916,14 +2916,14 @@ export default function NoveltySearchWorkflow({
       if (key === 'sort') return value !== DEFAULT_STAGE1_RESULT_FILTERS.sort;
       return typeof value === 'string' && value.trim().length > 0;
     });
-    const selectClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20';
+    const selectClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-colors focus:border-ai-blue-500 focus:ring-2 focus:ring-ai-blue-500/20';
 
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ai-blue-600">
                 <Search className="h-5 w-5 text-white" />
               </div>
               <div>
@@ -2944,22 +2944,22 @@ export default function NoveltySearchWorkflow({
                 <div className="text-xs font-medium text-slate-500">At Least 70% Search Score</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                <div className="text-3xl font-bold text-indigo-600">{avgRelevance.toFixed(0)}%</div>
+                <div className="text-3xl font-bold text-ai-blue-600">{avgRelevance.toFixed(0)}%</div>
                 <div className="text-xs font-medium text-slate-500">Avg Search Score</div>
               </div>
             </div>
 
-            <div className="mb-6 flex flex-col gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mb-6 flex flex-col gap-3 rounded-lg border border-ai-blue-100 bg-ai-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <div className="text-sm font-semibold text-indigo-950">Next: Relevance Analysis</div>
-                <div className="text-xs text-indigo-800">
+                <div className="text-sm font-semibold text-ai-blue-950">Next: Relevance Analysis</div>
+                <div className="text-xs text-ai-blue-800">
                   Review these returned patents, then run the LLM relevance gate to separate direct, component, borderline, and rejected records.
                 </div>
               </div>
               <Button
                 type="button"
                 size="sm"
-                className="w-fit rounded-lg bg-indigo-600 hover:bg-indigo-700"
+                className="w-fit rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700"
                 onClick={() => setSelectedStageTab('3')}
               >
                 Relevance Analysis
@@ -2977,7 +2977,7 @@ export default function NoveltySearchWorkflow({
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {Array.isArray(queryPlan.inventionFeatures) && queryPlan.inventionFeatures.slice(0, 6).map((feature: string) => (
-                        <Badge key={feature} variant="outline" className="border-indigo-200 bg-indigo-50 text-[11px] text-indigo-700">
+                        <Badge key={feature} variant="outline" className="border-ai-blue-200 bg-ai-blue-50 text-[11px] text-ai-blue-700">
                           {feature}
                         </Badge>
                       ))}
@@ -3191,15 +3191,15 @@ export default function NoveltySearchWorkflow({
                     className="rounded-lg border border-slate-200 bg-white p-4 transition-colors hover:bg-slate-50"
                   >
                     <div className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-semibold flex-shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-ai-blue-100 text-ai-blue-700 flex items-center justify-center text-sm font-semibold flex-shrink-0">
                         {originalIndex + 1}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-2">
-                          <a className="font-medium text-indigo-700 hover:underline text-sm" target="_blank" rel="noreferrer" href={href}>
+                          <a className="font-medium text-ai-blue-700 hover:underline text-sm" target="_blank" rel="noreferrer" href={href}>
                             {title}
                           </a>
-                          <Badge variant="outline" className="text-xs bg-indigo-50 text-indigo-700 border-indigo-200 flex-shrink-0">
+                          <Badge variant="outline" className="text-xs bg-ai-blue-50 text-ai-blue-700 border-ai-blue-200 flex-shrink-0">
                             {Math.round(relevanceScore)}%
                           </Badge>
                         </div>
@@ -3312,7 +3312,7 @@ export default function NoveltySearchWorkflow({
               Run AI relevance filtering to categorize patents by their relevance to your invention.
             </p>
             {canRunCurrent && selectedStageTab === '3' && (
-              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700">
                 <Zap className="w-4 h-4 mr-2" />
                 Run LLM Relevance
               </Button>
@@ -3374,7 +3374,7 @@ export default function NoveltySearchWorkflow({
                 <div className="text-xs font-medium text-slate-500">Direct</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                <div className="text-3xl font-bold text-sky-600">{cmp}</div>
+                <div className="text-3xl font-bold text-ai-blue-600">{cmp}</div>
                 <div className="text-xs font-medium text-slate-500">Component</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
@@ -3386,7 +3386,7 @@ export default function NoveltySearchWorkflow({
                 <div className="text-xs font-medium text-slate-500">Rejected</div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4 text-center">
-                <div className="text-3xl font-bold text-indigo-600">{total}</div>
+                <div className="text-3xl font-bold text-ai-blue-600">{total}</div>
                 <div className="text-xs font-medium text-slate-500">Total</div>
               </div>
             </div>
@@ -3411,12 +3411,12 @@ export default function NoveltySearchWorkflow({
               </div>
               <div>
                 <div className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-sky-500" />
+                  <div className="w-2 h-2 rounded-full bg-ai-blue-500" />
                   Component / Feature-Level Patents
                 </div>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {Array.isArray(aiRel.component) && aiRel.component.slice(0, 10).map((pn: string, i: number) => (
-                    <div key={i} className="text-xs text-slate-700 p-2 bg-sky-50 rounded">{pn}</div>
+                    <div key={i} className="text-xs text-slate-700 p-2 bg-ai-blue-50 rounded">{pn}</div>
                   ))}
                 </div>
               </div>
@@ -3450,7 +3450,7 @@ export default function NoveltySearchWorkflow({
               Run Deep Analysis to map features against prior art and generate per-patent threat remarks.
             </p>
             {canRunCurrent && selectedStageTab === '4' && (
-              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700">
                 <FileText className="w-4 h-4 mr-2" />
                 Run Deep Analysis
               </Button>
@@ -3467,7 +3467,7 @@ export default function NoveltySearchWorkflow({
             type="button"
             onClick={() => setDeepAnalysisView('matrix')}
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              deepAnalysisView === 'matrix' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+              deepAnalysisView === 'matrix' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
             }`}
           >
             Feature Matrix
@@ -3476,7 +3476,7 @@ export default function NoveltySearchWorkflow({
             type="button"
             onClick={() => setDeepAnalysisView('remarks')}
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              deepAnalysisView === 'remarks' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+              deepAnalysisView === 'remarks' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
             }`}
           >
             Patent Remarks
@@ -3619,7 +3619,7 @@ export default function NoveltySearchWorkflow({
         <Card className="border border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ai-blue-600">
                 <FileText className="h-5 w-5 text-white" />
               </div>
               <div>
@@ -3679,9 +3679,9 @@ export default function NoveltySearchWorkflow({
                       {fullyCoveredFeatures.length > 0 ? fullyCoveredFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No fully covered features found.</div>}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-                    <div className="text-sm font-semibold text-indigo-950">Still unique</div>
-                    <div className="mt-2 space-y-1 text-xs text-indigo-900">
+                  <div className="rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-3">
+                    <div className="text-sm font-semibold text-ai-blue-950">Still unique</div>
+                    <div className="mt-2 space-y-1 text-xs text-ai-blue-900">
                       {uniqueFeatures.length > 0 ? uniqueFeatures.map(feature => <div key={feature} className="line-clamp-2">{feature}</div>) : <div>No unique feature signal yet.</div>}
                     </div>
                   </div>
@@ -3720,7 +3720,7 @@ export default function NoveltySearchWorkflow({
                         {visibleFeatures.map((f: string, idx: number) => (
                           <th key={idx} className="px-2 py-3 text-left font-medium text-slate-700 border-b border-slate-200 min-w-[120px] max-w-[160px]">
                             <div className="flex items-start gap-1">
-                              <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-700">
+                              <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-ai-blue-100 text-[10px] font-bold text-ai-blue-700">
                                 {idx + 1}
                               </span>
                               <span className="text-xs leading-tight break-words line-clamp-2" title={f}>{f}</span>
@@ -3750,7 +3750,7 @@ export default function NoveltySearchWorkflow({
                           <tr key={rowIdx} className="hover:bg-slate-50/50 transition-colors">
                             <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-3 py-3 align-top">
                               <div className="flex items-start gap-2">
-                                <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold flex-shrink-0">
+                                <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-ai-blue-100 text-ai-blue-700 text-xs font-bold flex-shrink-0">
                                   {rowIdx + 1}
                                 </span>
                                 <div>
@@ -3893,7 +3893,7 @@ export default function NoveltySearchWorkflow({
                     .map((p: any, idx: number) => (
                       <div key={p.pn || idx} className="rounded-lg border bg-slate-50 p-3">
                         <div className="flex items-start gap-2">
-                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-bold flex-shrink-0">
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-ai-blue-600 text-white text-xs font-bold flex-shrink-0">
                             {idx + 1}
                           </span>
                           <div className="flex-1">
@@ -3976,7 +3976,7 @@ export default function NoveltySearchWorkflow({
           <CardHeader className="pb-3 border-b">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ai-blue-600">
                   <FileText className="h-5 w-5 text-white" />
                 </div>
                 <div className="min-w-0">
@@ -4045,7 +4045,7 @@ export default function NoveltySearchWorkflow({
                                 href={`https://patents.google.com/patent/${(patent.pn || '').replace(/\s+/g, '')}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="font-mono text-sm font-semibold text-slate-900 hover:text-indigo-600 transition-colors"
+                                className="font-mono text-sm font-semibold text-slate-900 hover:text-ai-blue-600 transition-colors"
                               >
                                 {patent.pn || 'Unknown PN'}
                               </a>
@@ -4076,7 +4076,7 @@ export default function NoveltySearchWorkflow({
                       {/* Detailed Analysis Section */}
                       {(relevantParts.length > 0 || irrelevantParts.length > 0 || noveltyComparison || comparisonRows.length > 0) && (
                         <details className="group">
-                          <summary className="cursor-pointer text-xs font-medium text-indigo-600 hover:text-indigo-700 flex items-center gap-1.5 select-none">
+                          <summary className="cursor-pointer text-xs font-medium text-ai-blue-600 hover:text-ai-blue-700 flex items-center gap-1.5 select-none">
                             <span>View Detailed Analysis</span>
                             <svg className="w-3.5 h-3.5 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -4126,8 +4126,8 @@ export default function NoveltySearchWorkflow({
 
                             {/* Novelty Comparison */}
                             {noveltyComparison && (
-                              <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-3">
-                                <div className="flex items-center gap-2 text-xs font-medium text-blue-700 mb-2">
+                              <div className="rounded-lg border border-ai-blue-100 bg-ai-blue-50/30 p-3">
+                                <div className="flex items-center gap-2 text-xs font-medium text-ai-blue-700 mb-2">
                                   <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                                     <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
                                     <path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd" />
@@ -4157,7 +4157,7 @@ export default function NoveltySearchWorkflow({
                                       const professionalRemark = cleanReviewText(row.professional_remark || row.crisp_remark) || crispRemarkForStatus(status);
                                       return (
                                         <tr key={`${row.feature || rowIndex}-${rowIndex}`}>
-                                          <td className="px-3 py-2 align-top font-semibold text-indigo-700">{row.feature_id || `KF${rowIndex + 1}`}</td>
+                                          <td className="px-3 py-2 align-top font-semibold text-ai-blue-700">{row.feature_id || `KF${rowIndex + 1}`}</td>
                                           <td className="px-3 py-2 align-top text-slate-700">{row.feature}</td>
                                           <td className="px-3 py-2 align-top text-slate-700">
                                             <div>{row.patent_disclosure || '-'}</div>
@@ -4227,7 +4227,7 @@ export default function NoveltySearchWorkflow({
               Generate the final novelty assessment report with comprehensive analysis and recommendations.
             </p>
             {canRunCurrent && selectedStageTab === '5' && (
-              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-indigo-600 hover:bg-indigo-700">
+              <Button onClick={handleRunCurrent} className="mt-6 rounded-lg bg-ai-blue-600 hover:bg-ai-blue-700">
                 <FileText className="w-4 h-4 mr-2" />
                 Generate Report
               </Button>
@@ -4441,7 +4441,7 @@ export default function NoveltySearchWorkflow({
                 <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Feature</div>
                 <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
                   {selectedEvidence.featureId && (
-                    <div className="mb-1 text-xs font-semibold text-indigo-600">{selectedEvidence.featureId}</div>
+                    <div className="mb-1 text-xs font-semibold text-ai-blue-600">{selectedEvidence.featureId}</div>
                   )}
                   {selectedEvidence.feature}
                 </div>
@@ -4480,7 +4480,7 @@ export default function NoveltySearchWorkflow({
               {(selectedEvidence.professionalRemark || selectedEvidence.crispRemark) && (
                 <section>
                   <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Professional Remark</div>
-                  <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
+                  <div className="mt-2 rounded-lg border border-ai-blue-100 bg-ai-blue-50 p-3 text-sm leading-6 text-ai-blue-950">
                     {selectedEvidence.professionalRemark || selectedEvidence.crispRemark}
                   </div>
                 </section>
@@ -4492,7 +4492,7 @@ export default function NoveltySearchWorkflow({
                     href={selectedEvidence.link}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-700"
+                    className="inline-flex items-center gap-2 text-sm font-medium text-ai-blue-600 hover:text-ai-blue-700"
                   >
                     <ExternalLink className="h-4 w-4" />
                     View patent

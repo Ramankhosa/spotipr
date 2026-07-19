@@ -13,7 +13,11 @@ import {
 import type { NormalizedPatentResult } from '@/lib/patent-search/types'
 
 export const PATENT_CORPUS_UPLOAD_ROOT = path.join(process.cwd(), 'uploads', 'patent-corpus')
-export const PATENT_CORPUS_EMBEDDING_MODEL = process.env.PATENT_CORPUS_EMBEDDING_MODEL || 'text-embedding-3-small'
+// Voyage is the corpus default: the ~45M-row Google Patents corpus is embedded with
+// voyage-3.5-lite @ 512 dims / binary (see scripts/google-patents-import/RUNBOOK.md).
+// Setting PATENT_CORPUS_EMBEDDING_MODEL=text-embedding-3-small reverts to the legacy
+// OpenAI vectors, which only cover the Indian corpus.
+export const PATENT_CORPUS_EMBEDDING_MODEL = process.env.PATENT_CORPUS_EMBEDDING_MODEL || 'voyage-3.5-lite'
 // Voyage models (voyage-3-lite / voyage-3.5-lite) are served from api.voyageai.com;
 // OpenAI text-embedding-3-* default to 1536. Two compression axes stack (Voyage):
 //   - MRL / output_dimension: 2048 / 1024 (native 3.5-lite) / 512 / 256

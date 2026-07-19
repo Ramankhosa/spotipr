@@ -145,7 +145,8 @@ async function getPlanQuotaLimits(tenantId: string, serviceType: ServiceType): P
     PERSONA_SYNC: 'PERSONA_SYNC',
     DIAGRAM_GENERATION: 'DIAGRAM_GENERATION',
     PATENT_REVIEW: 'PATENT_DRAFTING', // review shares drafting quota feature
-    IDEATION: 'IDEATION'
+    IDEATION: 'IDEATION',
+    OFFICE_ACTION_RESPONSE: 'OFFICE_ACTION_RESPONSE'
   }
   
   const tenantPlan = await prisma.tenantPlan.findFirst({

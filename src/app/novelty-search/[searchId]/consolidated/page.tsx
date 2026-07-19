@@ -61,7 +61,7 @@ export default function ConsolidatedNoveltyReportPage() {
   if (isLoading || isAuthLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <Loader2 className="h-8 w-8 animate-spin text-ai-graphite-400" />
       </div>
     );
   }
@@ -72,9 +72,9 @@ export default function ConsolidatedNoveltyReportPage() {
         <div className="text-center">
           <p className="text-red-600 mb-4">Error: {error}</p>
           {!user ? (
-            <a href={`/login?redirect=${encodeURIComponent(`/novelty-search/${searchId}/consolidated`)}`} className="text-blue-600 hover:underline">Sign in to view report</a>
+            <a href={`/login?redirect=${encodeURIComponent(`/novelty-search/${searchId}/consolidated`)}`} className="text-ai-blue-600 hover:underline">Sign in to view report</a>
           ) : (
-            <a href="/dashboard" className="text-blue-600 hover:underline">Return to Dashboard</a>
+            <a href="/dashboard" className="text-ai-blue-600 hover:underline">Return to Dashboard</a>
           )}
         </div>
       </div>
@@ -84,13 +84,13 @@ export default function ConsolidatedNoveltyReportPage() {
   if (!searchData) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-gray-600">No search data found</p>
+        <p className="text-ai-graphite-600">No search data found</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-6 px-4">
+    <div className="min-h-screen bg-paper-100 py-6 px-4">
       <div className="max-w-7xl mx-auto">
         <ConsolidatedNoveltyReport
           searchId={searchId}

@@ -17,6 +17,7 @@
 
 import { prisma } from './prisma'
 import { isNonApplicableHeading, hasJurisdictionLanguage } from './multi-jurisdiction-service'
+import { computeOaReadiness, type OaReadiness } from './office-action/oa-profile-schema'
 
 export interface ReadinessCheck {
   id: string
@@ -190,6 +191,29 @@ export async function computeCountryReadiness(countryCode: string): Promise<Coun
   const code = countryCode.toUpperCase()
   const data = await loadReadinessData(code)
   return computeChecks(code, data)
+}
+
+/**
+ * Office Action Studio readiness — separate from drafting readiness so a
+ * country can be drafting-ready, OA-ready, or both. Pure checks live in
+ * office-action/oa-profile-schema; this wrapper just loads the profile row.
+ */
+export async function computeCountryOaReadiness(countryCode: string): Promise<OaReadiness & { countryCode: string }> {
+  const code = countryCode.toUpperCase()
+  const profile = await prisma.countryProfile.findUnique({
+    where: { countryCode: code },
+    select: { profileData: true }
+  })
+  const block = (profile?.profileData as any)?.officeActionProfile
+  return { countryCode: code, ...computeOaReadiness(block) }
+}
+
+export async function computeAllCountriesOaReadiness(): Promise<Array<OaReadiness & { countryCode: string }>> {
+  const profiles = await prisma.countryProfile.findMany({ select: { countryCode: true, profileData: true } })
+  return profiles.map(p => ({
+    countryCode: p.countryCode,
+    ...computeOaReadiness((p.profileData as any)?.officeActionProfile)
+  }))
 }
 
 /**

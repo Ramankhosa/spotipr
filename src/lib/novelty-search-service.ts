@@ -9,7 +9,7 @@ import { checkServiceAccess } from './org-access-service';
 import { sendEmail } from './mailer';
 import crypto from 'crypto';
 import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchConceptGroup, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
-import { fetchGooglePatentsClaims, googlePatentsClaimsEnabled } from '@/lib/google-patents-claims-service';
+import { fetchLocalPatentClaims } from '@/lib/local-patent-claims-service';
 import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
   literatureSearchService,
@@ -463,7 +463,7 @@ export const PR_35A_FEATURE_MAPPING_BATCH_PROMPT_V3 = `You are a skeptical novel
 
 INPUTS
 FEATURES: {invention_features} (array of strings; copy each feature verbatim)
-REFERENCES: {patent_batch} (repeated blocks with reference ID, type, title, abstract, source metadata, and optional retrieval hints)
+REFERENCES: {patent_batch} (repeated blocks with reference ID, type, title, abstract, an optional claims excerpt, source metadata, and optional retrieval hints)
 
 TASK
 For each patent PN, classify EVERY feature EXACTLY ONCE:
@@ -473,12 +473,13 @@ For each patent PN, classify EVERY feature EXACTLY ONCE:
 - Unknown: the text is too thin, generic, unclear, or unavailable to assess.
 
 NOVELTY EVIDENCE RULES
-- Use only the supplied reference data fields. Do not assume claims, full text, or missing details.
+- Use only the supplied reference data fields. Do not assume full text, drawings, or details that were not supplied.
+- A claims excerpt is supplied for some references and not others. When one is supplied, prefer claim language as evidence: claims define the protected scope and are stronger support than abstract wording. When none is supplied, map the feature from the title and abstract and say nothing about claims.
 - Retrieval hints are candidate-discovery signals only. They are not evidence.
 - Use Retrieval hints to focus review, but Present/Partial still require support in the supplied patent data.
 - Treat synonyms and paraphrases as matches only when they implement the same mechanism.
 - Generic mentions of field-common parts do not satisfy a feature unless the full interaction is disclosed. Field-common parts include, by domain: engineering (processor, sensor, controller, module, server, network, circuit); chemical/materials (composition, compound, polymer, coating, excipient, carrier, solvent); biological (sequence, vector, construct, antibody, assay, marker).
-- Present/Partial require a verbatim quote <= 18 words and a field of "title" or "abstract".
+- Present/Partial require a verbatim quote <= 18 words and a field of "title", "abstract", or "claims". Use "claims" only when a claims excerpt was supplied for that reference, and only when the quote is copied from it.
 - Present requires the same mechanism, structure, process step, data flow, material relationship, or control relationship as the feature. Shared field words or broad application similarity are not enough.
 - For chemical, pharmaceutical, materials, or biological inventions, a matching named compound class, mechanism of action, biological target, material relationship, or formulation relationship in the supplied patent data may support Present or Partial even without an exact structural quote, provided the technical relationship matches the feature.
 - Title-only support may identify relevance, but it should not be treated as a strong/direct feature mapping unless the title itself expressly states the complete mechanism.
@@ -494,8 +495,8 @@ OUTPUT JSON SHAPE:
       "pn": "string",
       "link": "https://patents.google.com/patent/<pn>",
       "coverage": {"present":0,"partial":0,"absent":0},
-      "present": [{"feature":"<copy from FEATURES>","quote":"verbatim quote","field":"title|abstract","confidence":0.0}],
-      "partial": [{"feature":"<copy from FEATURES>","quote":"verbatim quote","field":"title|abstract","confidence":0.0}],
+      "present": [{"feature":"<copy from FEATURES>","quote":"verbatim quote","field":"title|abstract|claims","confidence":0.0}],
+      "partial": [{"feature":"<copy from FEATURES>","quote":"verbatim quote","field":"title|abstract|claims","confidence":0.0}],
       "absent": [{"feature":"<copy from FEATURES>","reason":"short reason"}],
       "unknown": [{"feature":"<copy from FEATURES>","reason":"weak or unavailable evidence"}]
     }
@@ -4108,7 +4109,11 @@ RESPONSE:`;
           inventionText: searchRun?.inventionDescription || '',
           filters: stage1Filters,
           providerIds,
-          jurisdictions: [jurisdiction],
+          // Country scope drives which live providers are eligible if the corpus comes
+          // back empty; fall back to the run's jurisdiction when no countries are set.
+          jurisdictions: Array.isArray(stage1Filters?.countries) && stage1Filters.countries.length
+            ? stage1Filters.countries
+            : [jurisdiction],
           sourceMode,
           llmExpansion: false,
           queryPlan: stage0QueryPlan,
@@ -5507,12 +5512,13 @@ RESPONSE:`;
     const normalizedPatents = adaptiveMode === 'off'
       ? normalizedPatentsUnordered
       : this.orderAdaptiveCandidates(normalizedPatentsUnordered, stage0Data, screeningClusters, batchSize);
-    // Claims-aware deep analysis (flag-gated): hydrate English claims text for the
-    // strongest candidates from the BigQuery claims staging table so the mapping can
-    // cite claim language instead of relying on the abstract alone. US publications
-    // only — the public dataset carries no non-US full text.
-    const claimsTopN = Math.max(0, Math.min(20, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '0') || 0));
-    if (claimsTopN > 0 && googlePatentsClaimsEnabled()) {
+    // Claims-aware deep analysis: hydrate claims text for the primary candidates from
+    // the local corpus so the mapping can cite claim language — claims define the
+    // protected scope and are stronger evidence than abstract wording. Coverage is
+    // partial (see local-patent-claims-service); references without claims are mapped
+    // on title/abstract alone and are not distinguished anywhere downstream.
+    const claimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '12') || 12));
+    if (claimsTopN > 0) {
       await this.hydrateClaimsForTopCandidates(normalizedPatents, claimsTopN);
     }
     const concurrency = Math.max(1, Math.min(NOVELTY_LLM_MAX_CONCURRENCY, Math.trunc(config.consolidatedAnalysis?.concurrency || NOVELTY_LLM_CONCURRENCY)));
@@ -6606,6 +6612,14 @@ RESPONSE:`;
 
       // Normalize and canonicalize selected patents
       const normalizedPatents = this.normalizePatentsForFeatureMappingV2(selectedPatents, selectedCount);
+
+      // Same claims hydration as the consolidated path: this legacy route only runs when
+      // consolidated analysis fails, and a fallback must not silently produce weaker
+      // evidence than the primary route it stands in for.
+      const stage35aClaimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '12') || 12));
+      if (stage35aClaimsTopN > 0) {
+        await this.hydrateClaimsForTopCandidates(normalizedPatents, stage35aClaimsTopN);
+      }
 
       // Process in batches with concurrency
       const batchSize = config.stage35a.batchSize;
@@ -9727,9 +9741,10 @@ ${candidatesText}`;
     return normalized;
   }
 
-  // Fetch English claims text for the strongest candidates (BigQuery claims staging
-  // table; US publications only) and attach a bounded excerpt to each normalized
-  // patent so the consolidated prompt and evidence verification can use it.
+  // Attach claims text from the local corpus to the primary candidates so the
+  // consolidated prompt and evidence verification can quote claim language. Only the
+  // top-N are hydrated: claims are long, and the references that actually drive the
+  // novelty conclusion are the highest-ranked ones.
   private async hydrateClaimsForTopCandidates(normalizedPatents: any[], topN: number) {
     const maxChars = Math.max(1000, Number(process.env.NOVELTY_CLAIMS_MAX_CHARS || '6000') || 6000);
     const targets = normalizedPatents
@@ -9737,7 +9752,11 @@ ${candidatesText}`;
       .filter(patent => patent && patent.referenceType !== 'paper' && !patent.claimsText);
     if (!targets.length) return;
     try {
-      const claims = await fetchGooglePatentsClaims(targets.map(patent => String(patent.canonicalPn || '')));
+      // Look up on the raw publication number (indexed) rather than the kind-stripped
+      // canonical form, then key the result map back by canonical PN.
+      const claims = await fetchLocalPatentClaims(targets.map(patent => String(
+        patent.publicationNumber || patent.publication_number || patent.pn || patent.canonicalPn || ''
+      )));
       let hydrated = 0;
       for (const patent of targets) {
         const text = claims.get(String(patent.canonicalPn || ''));
@@ -9782,14 +9801,17 @@ ${candidatesText}`;
         return { success: true, featureMaps: cached };
       }
 
-      // Format patent batch for prompt
+      // Format patent batch for prompt. The claims line is emitted only when the corpus
+      // actually holds claims for that reference — never as a placeholder — so a
+      // reference without claims is indistinguishable from one that never had a claims
+      // field, and the model cannot report on gaps in our data.
       const patentBatchText = batch.map((patent, idx) => `
 Reference ${idx + 1}:
 Reference ID: ${patent.canonicalPn}
 Type: ${patent.referenceType === 'paper' ? 'Scholarly paper' : 'Patent'}
 Title: ${patent.title}
 Abstract: ${patent.abstract}
-${patent.referenceType === 'paper' ? `Authors: ${(patent.authors || []).join(', ')}\nYear/Venue: ${patent.year || ''} ${patent.venue || ''}\nDOI/URL: ${patent.doi || patent.sourceUrl || patent.link || ''}\nSource: ${(patent.sourceProviders || [patent.sourceProvider]).filter(Boolean).join(', ')}` : ''}
+${patent.claimsText ? `Claims (excerpt): ${String(patent.claimsText).replace(/\s+/g, ' ').trim()}\n` : ''}${patent.referenceType === 'paper' ? `Authors: ${(patent.authors || []).join(', ')}\nYear/Venue: ${patent.year || ''} ${patent.venue || ''}\nDOI/URL: ${patent.doi || patent.sourceUrl || patent.link || ''}\nSource: ${(patent.sourceProviders || [patent.sourceProvider]).filter(Boolean).join(', ')}` : ''}
 Retrieval hints: ${this.formatRetrievalHints(patent) || 'none'}
 ---
       `).join('\n');

@@ -1185,6 +1185,7 @@ async function main() {
     { code: 'DRAFT_REVIEW', displayName: 'AI Review & Fix', featureCode: 'PATENT_DRAFTING', sortOrder: 25, description: 'AI-powered patent review' },
 
     // === NOVELTY SEARCH STAGES (uses separate NOVELTY_SEARCH quota, not PRIOR_ART_SEARCH) ===
+    { code: 'ADVANCED_MANUAL_SEARCH_QUERY_GENERATOR', displayName: 'Advanced Manual Search Query Generator', featureCode: 'NOVELTY_SEARCH', sortOrder: 0, description: 'Prior-Art Studio: draft the query canvas (concept blocks, synonyms, CPCs, claim elements) from an invention description' },
     { code: 'NOVELTY_QUERY_GENERATION', displayName: 'Query Generation', featureCode: 'NOVELTY_SEARCH', sortOrder: 1, description: 'Generate search queries from idea' },
     { code: 'NOVELTY_PATENT_SEARCH', displayName: 'Patent Search', featureCode: 'NOVELTY_SEARCH', sortOrder: 2, description: 'Search patent databases' },
     { code: 'NOVELTY_RELEVANCE_SCORING', displayName: 'Relevance Scoring', featureCode: 'NOVELTY_SEARCH', sortOrder: 3, description: 'Score patent relevance' },
@@ -1211,7 +1212,17 @@ async function main() {
     { code: 'IDEATION_EXPAND', displayName: 'Dimension Expansion', featureCode: 'IDEATION', sortOrder: 4, description: 'Expands dimension nodes with specific options based on the invention context' },
     { code: 'IDEATION_OBVIOUSNESS_FILTER', displayName: 'Obviousness Filter (Stage 3.5)', featureCode: 'IDEATION', sortOrder: 5, description: 'Scores selected dimensions for novelty before generation, suggests wildcards for obvious combinations' },
     { code: 'IDEATION_GENERATE', displayName: 'Idea Frame Generation', featureCode: 'IDEATION', sortOrder: 6, description: 'Generates structured invention ideas (IdeaFrames) from selected components, dimensions, and operators with inventive logic' },
-    { code: 'IDEATION_NOVELTY', displayName: 'Novelty Assessment', featureCode: 'IDEATION', sortOrder: 7, description: 'Analyzes search results to assess novelty, provides mutation instructions for weak ideas' }
+    { code: 'IDEATION_NOVELTY', displayName: 'Novelty Assessment', featureCode: 'IDEATION', sortOrder: 7, description: 'Analyzes search results to assess novelty, provides mutation instructions for weak ideas' },
+
+    // Office Action Studio (FER / OA response) stages — jurisdiction behavior comes from
+    // CountryProfile.officeActionProfile; these are the LLM stages the pipeline invokes.
+    { code: 'OA_INTAKE_PARSE', displayName: 'FER/OA Intake Parsing', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 1, description: 'Extract application metadata, numbered objections (verbatim) and cited documents from an examination report' },
+    { code: 'OA_OBJECTION_CLASSIFY', displayName: 'Objection Classification', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 2, description: 'Classify each objection into canonical codes mapped to local statute via the jurisdiction profile' },
+    { code: 'OA_CITATION_ANALYSIS', displayName: 'Citation & Claim Chart Analysis', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 3, description: 'Build feature-by-feature claim charts and pinpoint the passages the examiner relied on in cited documents' },
+    { code: 'OA_STRATEGY', displayName: 'Response Strategy & Amendment Basis', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 4, description: 'Assess each objection and propose argue/amend strategy with specification basis for amendments' },
+    { code: 'OA_ARGUMENT', displayName: 'Objection Argument Drafting', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 5, description: 'Draft the per-objection argument following the jurisdiction doctrine framework' },
+    { code: 'OA_DRAFT_SECTION', displayName: 'Response Section Assembly', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 6, description: 'Assemble the response letter sections from the profile skeleton (preliminary submissions, objection-wise reply, prayer)' },
+    { code: 'OA_COMPLIANCE_REVIEW', displayName: 'Compliance Review', featureCode: 'OFFICE_ACTION_RESPONSE', sortOrder: 7, description: 'Final review of the assembled response for coverage, quote fidelity and amendment basis before export' }
   ];
 
   try {
@@ -1289,6 +1300,7 @@ async function main() {
     'DRAFT_ANNEXURE_CROSS_REFERENCE':     { maxTokensIn: 30000,  maxTokensOut: 10000 },
     'DRAFT_REVIEW':                       { maxTokensIn: 100000, maxTokensOut: 16000 },  // Needs full patent context
     // Novelty search stages - HIGH LIMITS for analysis
+    'ADVANCED_MANUAL_SEARCH_QUERY_GENERATOR': { maxTokensIn: 20000, maxTokensOut: 8000 },
     'NOVELTY_QUERY_GENERATION':           { maxTokensIn: 20000,  maxTokensOut: 8000 },
     'NOVELTY_RELEVANCE_SCORING':          { maxTokensIn: 40000,  maxTokensOut: 8000 },
     'NOVELTY_CONSOLIDATED_ANALYSIS':      { maxTokensIn: 80000,  maxTokensOut: 16000 },
@@ -1312,6 +1324,14 @@ async function main() {
     'IDEATION_OBVIOUSNESS_FILTER':        { maxTokensIn: 30000,  maxTokensOut: 8192 },
     'IDEATION_GENERATE':                  { maxTokensIn: 40000,  maxTokensOut: 16000 },  // Heavy generation
     'IDEATION_NOVELTY':                   { maxTokensIn: 50000,  maxTokensOut: 16000 },  // Complex analysis
+    // Office Action Studio stages
+    'OA_INTAKE_PARSE':                    { maxTokensIn: 60000,  maxTokensOut: 16000 },  // Full FER text in
+    'OA_OBJECTION_CLASSIFY':              { maxTokensIn: 40000,  maxTokensOut: 12000 },
+    'OA_CITATION_ANALYSIS':               { maxTokensIn: 100000, maxTokensOut: 16000 },  // Claims + cited full text
+    'OA_STRATEGY':                        { maxTokensIn: 60000,  maxTokensOut: 16000 },
+    'OA_ARGUMENT':                        { maxTokensIn: 60000,  maxTokensOut: 16000 },
+    'OA_DRAFT_SECTION':                   { maxTokensIn: 80000,  maxTokensOut: 16000 },
+    'OA_COMPLIANCE_REVIEW':               { maxTokensIn: 100000, maxTokensOut: 12000 },
   };
 
   // ============================================================================
@@ -1351,6 +1371,7 @@ async function main() {
       'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-3.1-flash-lite',
       'DRAFT_REVIEW':                       'gemini-3.5-flash',       // Major: use 3.5 Flash
       // Novelty search stages
+      'ADVANCED_MANUAL_SEARCH_QUERY_GENERATOR': 'gemini-2.5-flash-lite',
       'NOVELTY_QUERY_GENERATION':           'gemini-2.5-flash-lite',
       'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
       'NOVELTY_CONSOLIDATED_ANALYSIS':      'gemini-2.5-flash-lite',
@@ -1374,6 +1395,14 @@ async function main() {
       'IDEATION_OBVIOUSNESS_FILTER':        'gemini-2.5-pro',         // Novelty assessment
       'IDEATION_GENERATE':                  'gemini-2.5-pro',         // Creative idea generation
       'IDEATION_NOVELTY':                   'gemini-2.5-pro',         // Complex analysis
+      // Office Action Studio stages — cost-effective Gemini 3.x; reasoning model for argument
+      'OA_INTAKE_PARSE':                    'gemini-3.1-flash-lite',
+      'OA_OBJECTION_CLASSIFY':              'gemini-3.5-flash',       // Accuracy matters for classification
+      'OA_CITATION_ANALYSIS':              'gemini-3.5-flash',
+      'OA_STRATEGY':                        'gemini-3.5-flash',
+      'OA_ARGUMENT':                        'gpt-5.6-terra-thinking',  // reasoning model for legal argument
+      'OA_DRAFT_SECTION':                   'gemini-3.5-flash',
+      'OA_COMPLIANCE_REVIEW':               'gemini-3.1-flash-lite',
     },
 
     // =========================================================================
@@ -1408,6 +1437,7 @@ async function main() {
       'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gemini-3.5-flash',
       'DRAFT_REVIEW':                       'claude-sonnet-5',
       // Novelty search stages
+      'ADVANCED_MANUAL_SEARCH_QUERY_GENERATOR': 'gpt-5-mini',
       'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
       'NOVELTY_RELEVANCE_SCORING':          'gemini-2.5-flash-lite',
       'NOVELTY_CONSOLIDATED_ANALYSIS':      'gemini-2.5-pro',
@@ -1431,6 +1461,14 @@ async function main() {
       'IDEATION_OBVIOUSNESS_FILTER':        'gpt-5',                  // Novelty assessment
       'IDEATION_GENERATE':                  'gpt-5',                  // Creative idea generation
       'IDEATION_NOVELTY':                   'gpt-5',                  // Complex analysis
+      // Office Action Studio stages — balanced; strong reasoning for argument/strategy
+      'OA_INTAKE_PARSE':                    'gemini-3.1-pro-preview',
+      'OA_OBJECTION_CLASSIFY':              'gpt-5.6-terra',
+      'OA_CITATION_ANALYSIS':              'gemini-3.1-pro-preview',
+      'OA_STRATEGY':                        'gpt-5.6-sol-thinking',
+      'OA_ARGUMENT':                        'gpt-5.6-sol-thinking',    // legal argument — reasoning model
+      'OA_DRAFT_SECTION':                   'claude-sonnet-5',
+      'OA_COMPLIANCE_REVIEW':               'gpt-5.6-terra',
     },
 
     // =========================================================================
@@ -1465,6 +1503,7 @@ async function main() {
       'DRAFT_ANNEXURE_CROSS_REFERENCE':     'gpt-5.6-luna',
       'DRAFT_REVIEW':                       'gpt-5.6-sol',
       // Novelty search stages
+      'ADVANCED_MANUAL_SEARCH_QUERY_GENERATOR': 'gpt-5-mini',
       'NOVELTY_QUERY_GENERATION':           'gpt-5-mini',
       'NOVELTY_RELEVANCE_SCORING':          'gpt-5-nano',
       'NOVELTY_CONSOLIDATED_ANALYSIS':      'gpt-5',
@@ -1488,6 +1527,14 @@ async function main() {
       'IDEATION_OBVIOUSNESS_FILTER':        'gpt-5',                  // Novelty assessment
       'IDEATION_GENERATE':                  'gpt-5.1',                // Creative idea generation - best model
       'IDEATION_NOVELTY':                   'gpt-5.1',                // Complex analysis - best model
+      // Office Action Studio stages — flagship models on argument/strategy/drafting
+      'OA_INTAKE_PARSE':                    'gpt-5.6-terra',
+      'OA_OBJECTION_CLASSIFY':              'gpt-5.6-sol',
+      'OA_CITATION_ANALYSIS':              'gpt-5',
+      'OA_STRATEGY':                        'claude-opus-4-8-thinking',
+      'OA_ARGUMENT':                        'claude-opus-4-8-thinking',  // legal argument — crown jewel
+      'OA_DRAFT_SECTION':                   'claude-opus-4-8',
+      'OA_COMPLIANCE_REVIEW':               'gpt-5.6-sol',
     }
   };
 

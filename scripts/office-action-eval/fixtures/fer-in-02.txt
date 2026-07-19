@@ -1,0 +1,380 @@
+. /Ref.No /  /Application No/ 202541118981                                /Date of Dispatch/Email: 10-02-2026
+
+ ,/To
+MS. GIRIJA,
+V.GIRIJA C-802, NCC Urban MayFair Doddaballapur Main Road Yelahanka, Bengaluru-560064
+Email : girijasram@gmail.com,girijav@ipaatentiti.com
+
+:   , 1970   12  13    , 2003     
+Subject: Examination report under sections 12 & 13 of the Patents Act, 1970 and the Patents Rules, 2003.
+
+1.         ( ,   , 2003 ( )   24-(8)     
+     )             02-12-2025            
+
+          (,            )     
+
+            
+   Please find enclosed herewith an Examination Report ( i.e. a first statement of objections as specified in Rule
+   24-C(8) of The Patents Rules, 2003 (as amended) ) in respect of above-mentioned application. This report is
+   issued with reference to a request for examination dated 02-12-2025.The last date for filing a response to the
+   Examination Report (i.e. a period to comply with all the requirements raised in this examination report) is six
+   months from the date on which the first statement of objections is issued to the Applicant.
+
+2.             , 2003 ( )   24-(10)  
+
+                1970   21(1)         
+
+   
+   The instant application shall be deemed to have been abandoned under Section 21(1) of The Patents Act, 1970,
+   unless all the requirements raised in this report are complied with in the period as specified in Rule 24-C(10) of
+   The Patents Rules, 2003 (as amended).
+
+3.     , 2003   24-(11)          
+   Your attention is also invited to the provisions of Rule 24-C(11) of the Patents Rules 2003.
+
+4.                
+   You are advised to file the reply at the earliest for early disposal.
+
+5.               ()          ,    
+         ,     24(5)   24(10)  ,     ,   
+          
+   The applicant is hereby advised to submit a reply to the objections communicated through this First Examination
+   Report (FER) preferably within three months from the date of its issuance, thereby enabling this office to
+   process the application within a period of six months as per Rule 24B(5) or Rule 24C(10), as the case may be.
+
+                                                                                                    Bimi G B
+                                                                           / Controller of Patents
+
+ /Enclosed:  /As above
+
+ :          
+NOTE: This is an electronically generated report.
+
+           
+All communications should be sent to the Controller of Patents at the above mentioned address.
+                       THE PATENT OFFICE
+
+                          /Examination Report
+
+   /Application Number                                          202541118981
+
+    /Date of Filing                                             28-11-2025
+
+    /Date of Priority                                           --
+
+         / PCT International Application                        --
+No. & Date
+
+ /Applicant                                                     Tamil Nadu Agricultural University
+                                                                (T NAU)
+
+          /Request for Examination No. & Date E2025408493202-12-2025
+
+   /Date of Publication                                         19-12-2025
+
+       ,     ,    ,          /
+This examination report consists of four parts, namely summary of the report, detailed
+technical report, formal requirements and documents on record.
+
+ -1:   
+PART-I: SUMMARY OF THE REPORT
+
+. .                                                   /Claim Numbers                  /Remarks
+/Sl.  /Requirements under the Act
+No.                                                /Claims:                          /Yes
+                                                   /Claims: 1-9
+       2(1)()                                                                        /No
+1.   /Invention u/s    / Inventive step            /Claims: 1-9
+                                                   /Claims:                          /Yes
+      2(1)(j)                                      /Claims:                         3(d)
+                                                   /Claims: 9                        /No
+       3   -  ( ,  3(-) /Non-                      /Claims:                          /Yes
+2. patentability u/s 3                             /Claims: 1                        /No
+                                                                                     /Yes
+      (if yes, specify section3(a-p))                                                /No
+
+                                  /   /Clarity /
+      [ 10(5)  10(4) ()] Conciseness
+3.    /Claims
+      [u/s 10(5) & 10(4) (c)]   /Definitive
+
+ ­II    
+PART-II: DETAILED TECHNICAL REPORT
+
+.       /A.List of documents cited:
+
+()    / (a). Patent Literature :
+
+                                             
+
+. .                                         (                                          
+                       (//) /                   ) /                  /                 /Claims of
+/     /Details of      Publication date
+                                         Relevant description   Relevant claims of   alleged invention
+Sl.no documents                          (page and paragraph     cited document
+
+                                              no.) of cited
+
+                                                  document
+
+1 CN102659866A         12/09/2012                   <p>Whole                        1, 4
+                                                  document</p>
+
+                                                                                          Page 1 of 5
+      THE PATENT OFFICE
+
+()  -   /(b).Non-patent literature
+
+                                                                       
+
+                                                                    
+
+. .                                                                  (                                 
+  /     /Details of documents                       (//)            ) /Relevant                        
+
+Sl.no                                                /Publication    description     /Relevant       /Claims of
+                                                         date         (page and    claims of cited     alleged
+                                                                   paragraph no.)                     invention
+                                                                                     document
+
+                                                                   of cited
+
+                                                                   document
+
+   Kaczynski P, Lozowicka B. A novel
+
+   approach for fast and simple determination
+
+   pyrrolizidine alkaloids in herbs by                                <p>Whole                      1, 6, 8, and 9,
+                                                                   document</p>                      and claim 7
+1  ultrasound-assisted dispersive  solid phase      05/08/2020     <p>&nbsp;</p>
+       extraction method coupled   to liquid                                                           partially
+
+   chromatography-tandem mass
+
+   spectrometry. J Pharm Biomed Anal. 2020
+
+   Aug 5;187:113351. doi: 10.1016/j.jpba.202
+
+   Tarkowská, D. (2020). A Fast and Reliable
+
+   UHPLC­MS/MS-Based Method for
+
+2  Screening Selected Pharmacologically             18/07/2020       <p>Whole                       1, 9
+       Significant Natural Plant Indole                            document</p>
+
+   Alkaloids. Molecules, 25(14), 3274.
+
+   https://doi.org/10.3390/molecules25143274
+
+   Sarraf, M., Beig-babaei, A. & Naji-Tabasi,
+
+   S. Application of QuEChERS method for                                                            1, 7, and 8,
+                                                                                                    and partially
+3  extraction of functional compounds. SN           22/10/2020       <p>Whole
+          Appl. Sci. 2, 1858 (2020).                               document</p>                       claim 9
+
+   https://doi.org/10.1007/s42452-020-03639-
+
+   5
+
+   Kowalczyk E, Kwiatek K. Use of a New
+
+   LC-MS Method for The Determination of                                                              partially
+                                                                                                    claims 1, 8,
+4  Pyrrolizidine Alkaloids in Feeds. J  Vet   Res.  24/10/2018       <p>Whole
+         2018 Oct 24;62(2):183-191.     doi:                       document</p>                        and 9
+
+   10.2478/jvetres-2018-0028. PMID:
+
+   30364865; PMCID: PMC6200292.
+
+.           /B. Detailed observations on the requirements under the
+Act:
+
+(1).   / INVENTIVE STEP:
+
+(I)     ( )      ( )     ,     ( ) (1-9)    
+  
+Claim(s) (1-9) lack(s) inventive step, being obvious in view of teaching (s) of cited document(s) above under
+reference for the following reasons:
+
+Current patent application relates to a process for extracting and measuring the indole alkaloid cadambine from
+the bark of the Kadamba tree. The method involves a series of steps including freeze-drying fresh bark tissues,
+powdering the material, and extracting the compound using a solvent mixture of aqueous ammonia and methanol.
+The invention facilitates accurate quantification via UHPLC-MS/MS using a cadambine reference standard.
+
+D1: Kaczyski P, Lozowicka B. A novel approach for fast and simple determination pyrrolizidine alkaloids in herbs
+
+                                                                                                                                              Page 2 of 5
+                  THE PATENT OFFICE
+
+by ultrasound-assisted dispersive solid phase extraction method coupled to liquid chromatography-tandem mass
+spectrometry. J Pharm Biomed Anal. 2020 Aug 5;187:113351. doi: 10.1016/j.jpba.2020.113351. Epub 2020 May
+5. PMID: 32388321.
+
+D2: Tarkowská, D. (2020). A Fast and Reliable UHPLC­MS/MS-Based Method for Screening Selected
+Pharmacologically Significant Natural Plant Indole Alkaloids. Molecules, 25(14), 3274.
+https://doi.org/10.3390/molecules25143274
+
+D3: Sarraf, M., Beig-babaei, A. & Naji-Tabasi, S. Application of QuEChERS method for extraction of functional
+compounds. SN Appl. Sci. 2, 1858 (2020). https://doi.org/10.1007/s42452-020-03639-5
+
+D4: Kowalczyk E, Kwiatek K. Use of a New LC-MS Method for The Determination of Pyrrolizidine Alkaloids in
+Feeds. J Vet Res. 2018 Oct 24;62(2):183-191. doi: 10.2478/jvetres-2018-0028. PMID: 30364865; PMCID:
+PMC6200292.
+
+D5: CN102659866A
+
+D1 is the closest prior art.
+
+D1 discloses an ultrasound-assisted QuEChERS-dSPE method for the extraction and quantification of
+pyrrolizidine alkaloids from plant matrices, followed by LC-MS/MS analysis. D1 teaches sonication-based
+extraction of alkaloids from plant material and a dispersive solid-phase clean-up using the exact combination of
+C18, PSA, and GCB sorbents together with MgSO to remove pigments as well as polar and non-polar
+interferences. The method further includes vortexing and centrifugation during clean-up and quantitative LC-
+MS/MS analysis in MRM mode using external standards, achieving high recoveries (61-128%) with good
+precision (RSD <15%). D1 anticipates the technical features of claims 1, 6, 8, and 9, and partially anticipates
+claim 7 as the same sorbents are used.
+
+D1 differs from the present application in that it is directed to pyrrolizidine alkaloids in herbs rather than
+cadambine from Neolamarckia cadamba bark, employs acetonitrile instead of ammonia-methanol, omits freeze-
+drying of fresh bark, does not specify the 2:2:1 sorbent ratio.
+
+D2 describes a UHPLC-MS/MS method for indole alkaloids employing alkaline methanol (0.25% NHOH),
+vibration milling, sonication, and cation-exchange SPE clean-up. D2 discloses extraction of indole alkaloids,
+including from bark matrices. D2 is using methanol containing an alkaline modifier that is functionally equivalent
+to aqueous ammonia, assisted by homogenization/vibration followed by sonication. The method includes solid-
+phase extraction to remove matrix interferences and quantitative UHPLC-MS/MS analysis. D2 anticipates the
+technical features of claim 1 and claims 9.
+
+D2 differs from the present application in that it uses cation-exchange SPE cartridges instead of the claimed
+C18/PSA/GCB combination in a 2:2:1 ratio, does not employ freeze-drying of fresh bark, lacks the specified
+vortexing parameters of 2400-2600 rpm, and is applied to indole alkaloids other than cadambine from
+Neolamarckia cadamba bark.
+
+D3 provides a general review of QuEChERS methodologies applied to the extraction of functional plant
+compounds, including alkaloids. D3 discloses the use of QuEChERS clean-up employing the same sorbent
+combination of C18, PSA, and GCB, along with vortexing and centrifugation steps to remove pigments and both
+polar and non-polar impurities. D3 anticipates the technical features of claims 1, 7, and 8, and partially claim 9.
+
+D3 differs from the present application in that it is a general methodological review rather than a specific
+analytical process for cadambine, employs acetonitrile-based extraction, lacks freeze-drying and sonication steps,
+and is not directed to Neolamarckia cadamba bark.
+
+D4 discloses an LC-MS/MS method for pyrrolizidine alkaloids using dispersive solid-phase extraction with PSA
+sorbent and MgSO. D4 teaches vortexing or shaking and centrifugation during clean-up, followed by
+quantitative LC-MS/MS analysis. D4 partially anticipates claims 1, 8, and 9, insofar as PSA-based dSPE clean-
+up, centrifugation, and LC-MS/MS quantification are concerned.
+
+D4 differs from the present application in that it relies solely on PSA, uses acidified methanol or acetonitrile,
+omits freeze-drying and sonication, lacks the claimed sorbent ratio and vortexing parameters, and is directed to
+
+                                                                                                                                              Page 3 of 5
+                  THE PATENT OFFICE
+
+pyrrolizidine alkaloids in feed matrices rather than cadambine from Neolamarckia cadamba bark.
+
+D5 discloses a method for preparing cadambine from Neolamarckia cadamba using alkaline methanol and
+supercritical CO extraction. D5 teaches the use of ammonia-basified methanol (pH 8-10) to extract cadambine
+in its free-base form, achieving high purity and recovery (95-98.8%). D5 anticipates the technical features of
+claim 1 and claim 4.
+
+D5 differs from the present application in that it employs lengthy soaking and supercritical CO extraction rather
+than vortexing and sonication, omits freeze-drying and QuEChERS clean-up, lacks the specific ammonia
+concentration and operational parameters, and relates to a preparative extraction process rather than an
+analytical UHPLC-MS/MS method.
+
+Based on the collective teachings of prior art documents D1­D5, the present invention lacks an inventive step
+under Section 2(1)(ja) of the Indian Patents Act. D1 establishes a complete QuEChERS-dSPE framework for
+alkaloid extraction and LC-MS/MS quantification using the same C18/PSA/GCB sorbent combination with
+sonication, vortexing, centrifugation, and high analytical recovery, thereby disclosing the core analytical workflow.
+D2 further teaches the use of alkaline methanol and sonication for efficient extraction of indole alkaloids from
+bark matrices with UHPLC-MS/MS quantification, rendering the substitution of ammonia-modified methanol and
+bark substrates obvious. D3 reinforces the routine and well-established nature of QuEChERS clean-up using
+the identical sorbents for plant alkaloids, while D4 confirms that PSA-based dSPE with LC-MS/MS
+quantification is standard practice for alkaloid analysis. D5 specifically discloses alkaline methanolic extraction of
+cadambine from Neolamarckia cadamba, thereby providing direct motivation to apply known analytical
+QuEChERS-LC-MS/MS techniques to cadambine. In view of these teachings, a person skilled in the art, faced
+with the problem of developing an analytical method for cadambine from Neolamarckia cadamba bark, would
+have been motivated to combine the alkaline methanol extraction of D5 with the routine QuEChERS-dSPE and
+LC-MS/MS methodologies of D1-D4, arriving at the claimed process without the exercise of any inventive
+ingenuity. The claimed features therefore represent a mere aggregation and optimization of known techniques,
+lacking any technical advancement or unexpected effect, and consequently do not involve an inventive step.
+
+(2).   /NON PATENTABILITY:
+
+(I)      3   (3(d) )    () (1-9)          /
+Claim(s) (1-9) are statutorily non-patentable under the provision of clause ( 3(d) ) of Section 3 for the following
+reasons:
+
+Claims 1-9 of the present patent application are objected to under Section 3(d) of the Indian Patents Act, 1970,
+as they merely claim the use of known processes and known reagents for extraction and quantification of
+alkaloids without demonstrating any enhancement of known efficacy. The prior art documents D1­D4 already
+disclose established QuEChERS/dSPE-based workflows employing sonication, vortexing, centrifugation, and
+LC-MS/MS or UHPLC-MS/MS analysis for alkaloids using substantially similar sorbents (C18, PSA, GCB) and
+analytical conditions, while D5 specifically discloses alkaline methanolic extraction of cadambine from
+Neolamarckia cadamba. The present application merely applies these known techniques to the same compound
+or closely related alkaloids, with routine modifications such as selection of solvent strength, sorbent ratios, and
+operational parameters, which amount only to optimization of known processes.
+
+The present application merely apply known alkaloid extraction and analysis processes disclosed in D1-D5 to
+cadambine, without demonstrating any enhanced efficacy or technical advancement, the reported recoveries and
+parameters being routine optimizations of known methods.
+
+(3).    /SUFFICIENCY OF DISCLOSURE:
+
+(4).      /CLARITY AND CONCISENESS:
+(I) () 9         .
+
+                                     Page 4 of 5
+                  THE PATENT OFFICE
+
+Claim(s) 9 are not clearly worded in respect of:
+Minor ambiguities like UHPLC-MS/MS vs. LC-MS/MS used interchangeably without clarification in complete
+specification.
+
+(5).  /DEFINITIVENESS:
+
+(I) ()1             () 
+Claim(s) 1 do not sufficiently define the invention for the reasons as follows:
+
+The phrase "adding a combination of sorbents" in claim 1 does not specify whether it is absolute quantity, weight
+range, or ratio.
+
+ ­ III:     /PART-III: FORMAL REQUIREMENTS
+
+  /Objections                            /Remarks
+
+                                   If the invention as claimed is based on any biological material obtained from
+NBA Approval/Registration India, then necessary approval/ registration as applicable shall be obtained
+
+                                   from NBA as per section 6 of Biodiversity Act.
+
+-IV:     /PART-IV: DOCUMENTS ON RECORD
+
+               
+The examination report has been prepared based on the following documents:
+
+     /            /Docket                    /Entry Number Description
+ Docket Date         Number
+                             1-New Application For Patent With Provisional /Complete
+28 Nov 2025          123733  Specification
+                             FORM 28
+28 Nov 2025          123733  3-Statement & Undertaking - Form 3
+01 Dec 2025          124187  5-Declaration As To Inventorship - Form 5
+01 Dec 2025          124187  11-Mention Of Inventor As Such In A Patent - Form 8
+01 Dec 2025          124187  12-Request For Early Publication - Form 9
+01 Dec 2025          124274  Request for Expedited examination
+02 Dec 2025          124658
+
+    /Name of the Examiner: SARFRAJ AHMAD SIDDIQUI
+
+   /Name of the Controller: Bimi G B
+Controller's Email: bimigb.ipo@nic.in
+
+ :            / Note: Last date for filing response to the Examination Report:
+10-08-2026
+
+                                                                                      Page 5 of 5
+

@@ -49,7 +49,7 @@ export default function NoveltyFloatingButtons({
             onClick={() => onRunCurrent()}
             disabled={disabled || isRunning}
             className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[12rem] ${
-              isFailed ? 'bg-rose-600 hover:bg-rose-700' : 'bg-indigo-600 hover:bg-indigo-700'
+              isFailed ? 'bg-rose-600 hover:bg-rose-700' : 'bg-ai-blue-600 hover:bg-ai-blue-700'
             }`}
           >
             {isRunning ? (

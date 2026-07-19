@@ -2,18 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, CheckCircle2, FileText, FolderOpen, History, ListChecks, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarRange, ChevronDown, CheckCircle2, Database, FileText, FolderOpen, Globe2, History, ListChecks, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+import {
+  DEFAULT_PATENT_COUNTRY_CODES,
+  listPatentCountries,
+} from '@/lib/patent-search/patent-countries'
 
 type Project = { id: string; name: string }
 type MatterGroup = { id: string; name: string; referenceCode?: string | null; client: { id: string; name: string } }
 type SearchPath = 'automatic' | 'manual'
-type ProviderInfo = {
-  id: string
-  label: string
-  enabled: boolean
-  jurisdictions?: string[]
-}
 type Stage0Review = {
   searchQuery: string
   inventionFeatures: string[]
@@ -142,27 +140,15 @@ function splitValues(value: string) {
   return value.split(/[,;\n]/).map(item => item.trim()).filter(Boolean)
 }
 
-// Providers hidden from the UI for now. They are excluded from the source picker
-// and never auto-selected, so they are neither shown nor queried until re-enabled.
-const HIDDEN_PROVIDER_IDS = new Set(['google-patents-bigquery'])
+// Retrieval always runs against the stored corpus — ~45M Google Patents records plus
+// the IPIndia corpus — searched with Voyage embeddings and reranking. Users pick
+// countries, not data sources; live provider APIs are a server-side fallback that only
+// fires when the corpus returns nothing, so there is no source picker to expose.
+const LOCAL_CORPUS_PROVIDER_IDS = ['google-patents-corpus', 'indian-corpus']
 
-function defaultProviderIds(providers: ProviderInfo[]) {
-  const defaultIds = new Set(['indian-corpus', 'pqai-corpus', 'pqai', 'google-patents'])
-  const ids = providers
-    .filter(provider => provider.enabled && !HIDDEN_PROVIDER_IDS.has(provider.id) && defaultIds.has(provider.id))
-    .map(provider => provider.id)
-  return ids.length ? ids : providers.filter(provider => provider.enabled && !HIDDEN_PROVIDER_IDS.has(provider.id)).slice(0, 1).map(provider => provider.id)
-}
-
-function sourceModeFromProviders(providerIds: string[]) {
-  if (providerIds.includes('indian-corpus') && providerIds.some(id => id.includes('epo'))) return 'PQAI_PLUS_INDIAN_EPO'
-  if (providerIds.includes('indian-corpus') && providerIds.some(id => id === 'pqai' || id === 'pqai-corpus')) return 'PQAI_PLUS_INDIAN'
-  if (providerIds.some(id => id.includes('epo')) && providerIds.some(id => id === 'pqai' || id === 'pqai-corpus')) return 'PQAI_PLUS_EPO'
-  if (providerIds.some(id => id.includes('epo'))) return 'EPO_ONLY'
-  if (providerIds.includes('ip-australia')) return 'AUSTRALIA_ONLY'
-  if (providerIds.includes('indian-corpus')) return 'INDIAN_ONLY'
-  return 'PQAI_ONLY'
-}
+const PATENT_COUNTRIES = listPatentCountries()
+const PRIMARY_COUNTRIES = PATENT_COUNTRIES.filter(country => country.primary)
+const SECONDARY_COUNTRIES = PATENT_COUNTRIES.filter(country => !country.primary)
 
 function listText(value: unknown, limit = 4) {
   if (!value) return ''
@@ -222,8 +208,16 @@ export default function NoveltySearchSubmission(props: {
   // Two-step automatic flow: describe the invention, then review the plan on a
   // dedicated screen before approving. 'review' is only meaningful when `review` is set.
   const [view, setView] = useState<'setup' | 'review'>('setup')
-  const [providers, setProviders] = useState<ProviderInfo[]>([])
-  const [selectedProviderIds, setSelectedProviderIds] = useState<string[]>([])
+  // Fixed, not stateful: the corpus lane is the only primary source. Live provider APIs
+  // are chosen server-side as a fallback when the corpus returns nothing.
+  const selectedProviderIds = LOCAL_CORPUS_PROVIDER_IDS
+  const [selectedCountries, setSelectedCountries] = useState<string[]>(DEFAULT_PATENT_COUNTRY_CODES)
+  const [showAllCountries, setShowAllCountries] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [filingFrom, setFilingFrom] = useState('')
+  const [filingTo, setFilingTo] = useState('')
+  const [publicationFrom, setPublicationFrom] = useState('')
+  const [publicationTo, setPublicationTo] = useState('')
   const [projects, setProjects] = useState<Project[]>([])
   const [groups, setGroups] = useState<MatterGroup[]>([])
   const [review, setReview] = useState<Stage0Review | null>(null)
@@ -263,17 +257,15 @@ export default function NoveltySearchSubmission(props: {
   const [isManualSearching, setIsManualSearching] = useState(false)
 
   useEffect(() => {
+    // The provider list is no longer fetched: retrieval always runs against the local
+    // corpus and users choose countries, not sources, so there is nothing to populate.
     Promise.all([
       authFetch('/api/projects').then(response => response.ok ? response.json() : { projects: [] }),
       authFetch('/api/novelty-search/groups').then(response => response.ok ? response.json() : { groups: [] }),
-      authFetch('/api/patent-search/advanced').then(response => response.ok ? response.json() : { providers: [] }),
-    ]).then(([projectData, groupData, providerData]) => {
+    ]).then(([projectData, groupData]) => {
       const nextProjects = projectData.projects || []
       setProjects(nextProjects)
       setGroups(groupData.groups || [])
-      const nextProviders = Array.isArray(providerData.providers) ? providerData.providers : []
-      setProviders(nextProviders)
-      setSelectedProviderIds(current => current.length ? current : defaultProviderIds(nextProviders))
       if (!props.initialProjectId && nextProjects.length) {
         setProjectId(nextProjects.find((project: Project) => project.name === 'Default Project')?.id || nextProjects[0].id)
       }
@@ -293,28 +285,30 @@ export default function NoveltySearchSubmission(props: {
     return () => window.clearInterval(interval)
   }, [isPreparing])
 
-  const sourceMode = sourceModeFromProviders(selectedProviderIds)
-  const usesEpoSearch = selectedProviderIds.some(id => id.includes('epo'))
-  const selectedProvidersEnabled = selectedProviderIds.length > 0
-  const hasSelectedSources = selectedProvidersEnabled || (includePapers && paperSources.length > 0)
-  const selectableProviders = useMemo(() => {
-    const storedEpo = providers.find(provider => provider.id === 'epo-ops-corpus')
-    return providers
-      .filter(provider => provider.id !== 'epo-ops-corpus' && !HIDDEN_PROVIDER_IDS.has(provider.id))
-      .map(provider => provider.id === 'epo-ops'
-        ? {
-            ...provider,
-            enabled: provider.enabled || Boolean(storedEpo?.enabled),
-            label: 'European patents',
-          }
-        : { ...provider, label: displayPatentNationality(provider.id || provider.label) })
-  }, [providers])
+  const sourceMode = 'LOCAL_CORPUS'
+  // European keyword fields only matter when the EPO provider is in play, which is now
+  // a server-side fallback rather than a user choice.
+  const usesEpoSearch = false
+  const hasSelectedSources = selectedCountries.length > 0 || (includePapers && paperSources.length > 0)
+  const dateFilters = useMemo(() => ({
+    ...(filingFrom ? { filingDateFrom: filingFrom } : {}),
+    ...(filingTo ? { filingDateTo: filingTo } : {}),
+    ...(publicationFrom ? { publicationDateFrom: publicationFrom } : {}),
+    ...(publicationTo ? { publicationDateTo: publicationTo } : {}),
+  }), [filingFrom, filingTo, publicationFrom, publicationTo])
+  const hasDateFilters = Object.keys(dateFilters).length > 0
   const searchSourceConfig = {
     mode: sourceMode,
     providerIds: selectedProviderIds,
     searchMode: 'intelligent' as const,
     llmExpansion: true,
-    includePatents: selectedProviderIds.length > 0,
+    includePatents: selectedCountries.length > 0,
+    // Country and date scope ride along as corpus filters; the retrieval SQL applies
+    // them, so a narrowed search never pays for candidates it will discard.
+    filters: {
+      countries: selectedCountries,
+      ...dateFilters,
+    },
     includePapers,
     paperSources,
     paperSearchQuery: editedPaperSearchQuery.trim() || undefined,
@@ -327,13 +321,16 @@ export default function NoveltySearchSubmission(props: {
       minCitations: Math.max(0, Number(paperMinCitations) || 0),
     },
   }
-  const selectedSourceLabels = useMemo(() => {
-    const labels = selectedProviderIds
-      .filter(id => !HIDDEN_PROVIDER_IDS.has(id))
-      .map(id => displayPatentNationality(id))
-    if (includePapers && paperSources.length) labels.push('Scholarly papers')
-    return Array.from(new Set(labels.filter(Boolean)))
-  }, [selectedProviderIds, includePapers, paperSources])
+  const allCountriesSelected = selectedCountries.length === PATENT_COUNTRIES.length
+  const countryScopeLabel = useMemo(() => {
+    if (!selectedCountries.length) return 'No countries selected'
+    if (allCountriesSelected) return 'All countries'
+    const names = selectedCountries
+      .map(code => PATENT_COUNTRIES.find(country => country.code === code)?.name)
+      .filter(Boolean) as string[]
+    if (names.length <= 3) return names.join(', ')
+    return `${names.slice(0, 3).join(', ')} +${names.length - 3} more`
+  }, [selectedCountries, allCountriesSelected])
 
   const preparationStage = queryPreparationStages[preparationStageIndex] || queryPreparationStages[0]
   // Approach but never claim 100% until the request actually returns, so the bar
@@ -546,13 +543,35 @@ export default function NoveltySearchSubmission(props: {
     else setNewEpoAbstractKeyword('')
   }
 
-  const toggleProvider = (providerId: string) => {
-    setSelectedProviderIds(current => {
-      const next = current.includes(providerId)
-        ? current.filter(id => id !== providerId)
-        : [...current, providerId]
-      return next
-    })
+  // Changing scope invalidates the generated plan, so the user re-approves rather than
+  // silently running an approved query against a different corpus slice.
+  const toggleCountry = (code: string) => {
+    setSelectedCountries(current => current.includes(code)
+      ? current.filter(value => value !== code)
+      : [...current, code])
+    setReview(null)
+  }
+
+  const selectAllCountries = () => {
+    setSelectedCountries(PATENT_COUNTRIES.map(country => country.code))
+    setReview(null)
+  }
+
+  const selectMajorCountries = () => {
+    setSelectedCountries(DEFAULT_PATENT_COUNTRY_CODES)
+    setReview(null)
+  }
+
+  const clearCountries = () => {
+    setSelectedCountries([])
+    setReview(null)
+  }
+
+  const clearDateFilters = () => {
+    setFilingFrom('')
+    setFilingTo('')
+    setPublicationFrom('')
+    setPublicationTo('')
     setReview(null)
   }
 
@@ -565,8 +584,8 @@ export default function NoveltySearchSubmission(props: {
       setError('Enter at least one manual patent search field.')
       return
     }
-    if (!selectedProvidersEnabled) {
-      setError('Select at least one patent nationality.')
+    if (!selectedCountries.length) {
+      setError('Select at least one patent office.')
       return
     }
     setIsManualSearching(true)
@@ -578,9 +597,9 @@ export default function NoveltySearchSubmission(props: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           searchMode: 'manual',
-          filters: manualFilters,
+          filters: { ...manualFilters, countries: selectedCountries },
           providerIds: selectedProviderIds,
-          jurisdictions: [jurisdiction],
+          jurisdictions: selectedCountries,
           sourceMode,
           llmExpansion: false,
           limit: 50,
@@ -598,45 +617,154 @@ export default function NoveltySearchSubmission(props: {
     }
   }
 
+  const renderCountryChip = (country: { code: string; name: string; kind: string }) => {
+    const checked = selectedCountries.includes(country.code)
+    const disabled = isPreparing || isSubmitting || isManualSearching
+    return (
+      <button
+        key={country.code}
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => toggleCountry(country.code)}
+        className={`group flex min-h-11 items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500/40 ${
+          checked
+            ? 'border-ai-blue-300 bg-ai-blue-50 text-ai-blue-900'
+            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+        }`}
+      >
+        <span
+          aria-hidden
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+            checked ? 'border-ai-blue-600 bg-ai-blue-600 text-white' : 'border-slate-300 bg-white'
+          }`}
+        >
+          {checked && <CheckCircle2 className="h-3.5 w-3.5" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{country.name}</span>
+        </span>
+        <span className={`shrink-0 font-mono text-[11px] ${checked ? 'text-ai-blue-600' : 'text-slate-400'}`}>
+          {country.code}
+        </span>
+      </button>
+    )
+  }
+
   const renderSourceSelection = (showLiterature = true) => (
-    <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
-      <div>
-        <div className="text-sm font-semibold text-slate-900">Patent Nationality</div>
-        <div className="mt-1 text-xs text-slate-500">Choose the patent jurisdictions to include. Each selection searches every configured retrieval path for that nationality.</div>
+    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ai-blue-50 text-ai-blue-600">
+            <Globe2 className="h-5 w-5" />
+          </span>
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Patent offices to search</div>
+            <p className="mt-1 max-w-prose text-xs leading-5 text-slate-500">
+              Searched against our stored patent corpus using semantic embeddings and reranking.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 text-xs font-medium">
+          <button type="button" onClick={selectMajorCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Major offices</button>
+          <button type="button" onClick={selectAllCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Select all</button>
+          <button type="button" onClick={clearCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Clear</button>
+        </div>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {selectableProviders.map(provider => {
-          const checked = selectedProviderIds.includes(provider.id)
-          return (
-            <label key={provider.id} className={`flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2 text-sm ${provider.enabled ? 'border-slate-200 bg-white text-slate-800' : 'border-slate-200 bg-slate-100 text-slate-400'}`}>
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={!provider.enabled || isPreparing || isSubmitting || isManualSearching}
-                onChange={() => toggleProvider(provider.id)}
-                className="h-4 w-4"
-              />
-              <span className="flex-1">
-                <span className="font-medium">{provider.label}</span>
-                {!provider.enabled && <span className="ml-2 text-xs">not configured</span>}
-              </span>
-            </label>
-          )
-        })}
+
+      <div role="group" aria-label="Patent offices" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {PRIMARY_COUNTRIES.map(renderCountryChip)}
       </div>
-      {!providers.length && <div className="text-xs text-slate-500">Loading available patent nationalities...</div>}
-      {providers.length > 0 && !selectedProvidersEnabled && !includePapers && <div className="text-xs font-medium text-red-600">Select at least one patent nationality or enable scholarly papers.</div>}
+
+      {showAllCountries && (
+        <div role="group" aria-label="Additional patent offices" className="grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-3">
+          {SECONDARY_COUNTRIES.map(renderCountryChip)}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setShowAllCountries(current => !current)}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-ai-blue-700 transition-colors hover:text-ai-blue-800"
+        >
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAllCountries ? 'rotate-180' : ''}`} />
+          {showAllCountries ? 'Show fewer offices' : `Show ${SECONDARY_COUNTRIES.length} more offices`}
+        </button>
+        <span className="text-xs text-slate-500">
+          {selectedCountries.length} of {PATENT_COUNTRIES.length} selected
+        </span>
+      </div>
+
+      {!selectedCountries.length && !includePapers && (
+        <p className="text-xs font-medium text-red-600">Select at least one patent office, or enable scholarly papers below.</p>
+      )}
+
       {showLiterature && (
-        <div className="space-y-4 border-t border-slate-200 pt-4">
-          <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800">
+        <div className="space-y-3 border-t border-slate-200 pt-4">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen(current => !current)}
+            aria-expanded={advancedOpen}
+            className="flex w-full items-center justify-between gap-3 rounded-xl px-1 py-1 text-left transition-colors hover:bg-slate-50"
+          >
+            <span className="flex items-center gap-2.5">
+              <SlidersHorizontal className="h-4 w-4 text-slate-500" />
+              <span className="text-sm font-medium text-slate-800">Advanced options</span>
+              {hasDateFilters && (
+                <span className="inline-flex items-center rounded-full bg-ai-blue-50 px-2 py-0.5 text-[11px] font-semibold text-ai-blue-700">
+                  Date filtered
+                </span>
+              )}
+            </span>
+            <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {advancedOpen && (
+            <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <CalendarRange className="h-4 w-4 text-slate-500" />
+                  <span className="text-sm font-medium text-slate-800">Patent date range</span>
+                </div>
+                {hasDateFilters && (
+                  <button type="button" onClick={clearDateFilters} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-800">
+                    <X className="h-3 w-3" /> Clear dates
+                  </button>
+                )}
+              </div>
+              <p className="text-xs leading-5 text-slate-500">
+                Restrict prior art by filing or publication date. Leave blank to search the full corpus.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <label className="text-xs font-medium text-slate-600">Filed from
+                  <input type="date" value={filingFrom} onChange={event => { setFilingFrom(event.target.value); setReview(null) }} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-ai-blue-400 focus:ring-2 focus:ring-ai-blue-500/15" />
+                </label>
+                <label className="text-xs font-medium text-slate-600">Filed to
+                  <input type="date" value={filingTo} onChange={event => { setFilingTo(event.target.value); setReview(null) }} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-ai-blue-400 focus:ring-2 focus:ring-ai-blue-500/15" />
+                </label>
+                <label className="text-xs font-medium text-slate-600">Published from
+                  <input type="date" value={publicationFrom} onChange={event => { setPublicationFrom(event.target.value); setReview(null) }} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-ai-blue-400 focus:ring-2 focus:ring-ai-blue-500/15" />
+                </label>
+                <label className="text-xs font-medium text-slate-600">Published to
+                  <input type="date" value={publicationTo} onChange={event => { setPublicationTo(event.target.value); setReview(null) }} className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-ai-blue-400 focus:ring-2 focus:ring-ai-blue-500/15" />
+                </label>
+              </div>
+            </div>
+          )}
+          <label className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors ${includePapers ? 'border-ai-blue-300 bg-ai-blue-50 text-ai-blue-900' : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50'}`}>
             <input
               type="checkbox"
               checked={includePapers}
               disabled={isPreparing || isSubmitting}
               onChange={event => { setIncludePapers(event.target.checked); setReview(null) }}
-              className="h-4 w-4"
+              className="h-4 w-4 accent-ai-blue-600"
             />
-            <span><span className="font-medium">Scholarly Papers</span><span className="ml-2 text-xs text-slate-500">search academic publications as prior art</span></span>
+            <span className="flex-1">
+              <span className="font-medium">Scholarly papers</span>
+              <span className="ml-2 text-xs text-slate-500">also search academic publications as prior art</span>
+            </span>
           </label>
           {includePapers && (
             <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4">
@@ -690,7 +818,7 @@ export default function NoveltySearchSubmission(props: {
           onChange={event => updateManualField(field, event.target.value)}
           rows={2}
           placeholder={placeholder}
-          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900 outline-none focus:border-indigo-500"
+          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900 outline-none focus:border-ai-blue-500"
         />
       ) : (
         <input
@@ -698,7 +826,7 @@ export default function NoveltySearchSubmission(props: {
           onChange={event => updateManualField(field, event.target.value)}
           placeholder={placeholder}
           type={field.endsWith('From') || field.endsWith('To') ? 'date' : 'text'}
-          className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-indigo-500"
+          className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-ai-blue-500"
         />
       )}
     </label>
@@ -732,8 +860,8 @@ export default function NoveltySearchSubmission(props: {
           <button
             type="button"
             onClick={() => void runManualSearch()}
-            disabled={isManualSearching || !manualHasCriteria || !selectedProvidersEnabled}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            disabled={isManualSearching || !manualHasCriteria || !selectedCountries.length}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ai-blue-600 px-5 text-sm font-medium text-white hover:bg-ai-blue-700 disabled:opacity-50"
           >
             {isManualSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             {isManualSearching ? 'Searching patents...' : 'Search Patents'}
@@ -792,7 +920,7 @@ export default function NoveltySearchSubmission(props: {
                         </div>
                       )}
                     </div>
-                    <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-indigo-700 hover:underline">
+                    <a href={result.link || undefined} target="_blank" rel="noreferrer" className="mt-1 block text-sm font-semibold text-ai-blue-700 hover:underline">
                       {result.title}
                     </a>
                     {abstract && (
@@ -844,7 +972,7 @@ export default function NoveltySearchSubmission(props: {
               setSearchPath('automatic')
               setError('')
             }}
-            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'automatic' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'automatic' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
           >
             <Search className="h-4 w-4" />
             Automatic Search
@@ -857,7 +985,7 @@ export default function NoveltySearchSubmission(props: {
               setSearchPath('manual')
               setError('')
             }}
-            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'manual' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'manual' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
           >
             <SlidersHorizontal className="h-4 w-4" />
             Manual Search
@@ -877,12 +1005,12 @@ export default function NoveltySearchSubmission(props: {
           ].map((step, index) => (
             <li key={step.n} className="flex flex-1 items-center gap-3 last:flex-none">
               <div className="flex items-center gap-2.5">
-                <span className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ring-1 transition-colors ${step.done ? 'bg-indigo-600 text-white ring-indigo-600' : step.active ? 'bg-white text-indigo-700 ring-indigo-500' : 'bg-white text-slate-400 ring-slate-200'}`}>
+                <span className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ring-1 transition-colors ${step.done ? 'bg-ai-blue-600 text-white ring-ai-blue-600' : step.active ? 'bg-white text-ai-blue-700 ring-ai-blue-500' : 'bg-white text-slate-400 ring-slate-200'}`}>
                   {step.done ? <CheckCircle2 className="h-4 w-4" /> : step.n}
                 </span>
                 <span className={`text-sm font-medium ${step.done || step.active ? 'text-slate-900' : 'text-slate-400'}`}>{step.label}</span>
               </div>
-              {index === 0 && <span className={`hidden h-px flex-1 sm:block ${view === 'review' || !!review ? 'bg-indigo-300' : 'bg-slate-200'}`} />}
+              {index === 0 && <span className={`hidden h-px flex-1 sm:block ${view === 'review' || !!review ? 'bg-ai-blue-300' : 'bg-slate-200'}`} />}
             </li>
           ))}
         </ol>
@@ -891,8 +1019,8 @@ export default function NoveltySearchSubmission(props: {
           <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
             <div className="mx-auto max-w-xl text-center">
               <div className="relative mx-auto flex h-16 w-16 items-center justify-center">
-                <span className="absolute inset-0 animate-ping rounded-full bg-indigo-400/30" />
-                <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg">
+                <span className="absolute inset-0 animate-ping rounded-full bg-ai-blue-400/30" />
+                <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-ai-blue-500 to-violet-600 text-white shadow-lg">
                   <Sparkles className="h-7 w-7" />
                 </span>
               </div>
@@ -902,18 +1030,18 @@ export default function NoveltySearchSubmission(props: {
               <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-left">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                    <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
+                    <Loader2 className="h-4 w-4 animate-spin text-ai-blue-600" />
                     {preparationStage.label}
                   </div>
-                  <div className="text-xs font-semibold text-indigo-700">{preparationProgress}%</div>
+                  <div className="text-xs font-semibold text-ai-blue-700">{preparationProgress}%</div>
                 </div>
                 <p className="mt-1.5 pl-6 text-sm leading-5 text-slate-600">{preparationStage.detail}</p>
                 <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200">
-                  <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-700 ease-out" style={{ width: `${preparationProgress}%` }} />
+                  <div className="h-full rounded-full bg-gradient-to-r from-ai-blue-500 to-violet-500 transition-all duration-700 ease-out" style={{ width: `${preparationProgress}%` }} />
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {queryPreparationStages.map((stage, index) => (
-                    <div key={stage.label} className={`h-1.5 flex-1 rounded-full transition-colors ${index <= preparationStageIndex ? 'bg-indigo-500' : 'bg-slate-200'}`} />
+                    <div key={stage.label} className={`h-1.5 flex-1 rounded-full transition-colors ${index <= preparationStageIndex ? 'bg-ai-blue-500' : 'bg-slate-200'}`} />
                   ))}
                 </div>
               </div>
@@ -938,7 +1066,7 @@ export default function NoveltySearchSubmission(props: {
               <option value="">Ungrouped</option>
               {groups.map(group => <option key={group.id} value={group.id}>{group.client.name} — {group.name}{group.referenceCode ? ` (${group.referenceCode})` : ''}</option>)}
             </select>
-            <button type="button" onClick={() => router.push('/novelty-search/history?createGroup=1')} className="text-xs font-medium text-blue-600 hover:underline">Create a client matter group</button>
+            <button type="button" onClick={() => router.push('/novelty-search/history?createGroup=1')} className="text-xs font-medium text-ai-blue-600 hover:underline">Create a client matter group</button>
           </label>
         </div>
 
@@ -952,16 +1080,36 @@ export default function NoveltySearchSubmission(props: {
           <textarea value={description} onChange={event => { setDescription(event.target.value); setReview(null) }} disabled={isPreparing || isSubmitting} rows={10} className="w-full rounded-lg border border-slate-300 px-3 py-3 font-normal leading-6 disabled:bg-slate-50" placeholder="Describe the problem, core mechanism, operating steps, and key technical features." />
         </label>
 
-        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 transition-colors focus-within:border-ai-blue-400 focus-within:bg-white">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <Upload className="h-5 w-5 text-slate-500" />
-              <div><div className="text-sm font-medium text-slate-800">Upload disclosure</div><div className="text-xs text-slate-500">Extracted text replaces the description above. Maximum 5 MB.</div></div>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-slate-200">
+                <Upload className="h-4 w-4" />
+              </span>
+              <div>
+                <div className="text-sm font-medium text-slate-800">Upload a disclosure instead</div>
+                <div className="text-xs text-slate-500">PDF, DOC/DOCX, spreadsheet, Markdown, CSV or TXT — up to 5 MB.</div>
+              </div>
             </div>
-            <input ref={fileRef} type="file" disabled={isExtracting || isPreparing || isSubmitting} onChange={event => event.target.files?.[0] && void extractFile(event.target.files[0])} className="max-w-xs text-sm" />
+            <input
+              ref={fileRef}
+              type="file"
+              aria-label="Upload invention disclosure"
+              disabled={isExtracting || isPreparing || isSubmitting}
+              onChange={event => event.target.files?.[0] && void extractFile(event.target.files[0])}
+              className="max-w-xs text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-300 disabled:opacity-50"
+            />
           </div>
-          {isExtracting && <p className="mt-2 text-xs text-blue-600">Extracting readable text…</p>}
-          {uploadedName && <p className="mt-2 text-xs text-emerald-700">Loaded {uploadedName}</p>}
+          {isExtracting && (
+            <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-ai-blue-700">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Extracting readable text…
+            </p>
+          )}
+          {uploadedName && !isExtracting && (
+            <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" /> Loaded {uploadedName} — text placed in the description above.
+            </p>
+          )}
         </div>
 
         {renderSourceSelection()}
@@ -971,7 +1119,7 @@ export default function NoveltySearchSubmission(props: {
             type="button"
             onClick={review ? () => setView('review') : () => void prepareReview()}
             disabled={isExtracting || !hasSelectedSources || !title.trim() || !description.trim()}
-            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-5 font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-50"
+            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-ai-blue-600 px-5 font-medium text-white shadow-sm transition-colors hover:bg-ai-blue-700 disabled:opacity-50"
           >
             {review ? <>Continue to Review <ArrowRight className="h-5 w-5" /></> : <><Sparkles className="h-5 w-5" /> Generate Search Query & Features</>}
           </button>
@@ -987,41 +1135,65 @@ export default function NoveltySearchSubmission(props: {
 
         {!isPreparing && view === 'review' && review && (
           <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-5">
-              <div className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm"><Sparkles className="h-5 w-5" /></span>
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Review your search plan</h2>
-                  <p className="mt-1 text-sm text-slate-600">These terms drive prior-art retrieval and the feature-by-feature comparison. Edit anything, then approve.</p>
-                  {selectedSourceLabels.length > 0 && (
-                    <div className="mt-2.5 flex flex-wrap gap-1.5">
-                      {selectedSourceLabels.map(label => (
-                        <span key={label} className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600">{label}</span>
-                      ))}
-                    </div>
-                  )}
-                </div>
+            <div className="flex items-start gap-3 border-b border-slate-100 pb-5">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-ai-blue-500 to-violet-600 text-white shadow-sm"><Sparkles className="h-5 w-5" /></span>
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold text-slate-900">Review your search plan</h2>
+                <p className="mt-1 max-w-prose text-sm text-slate-600">These terms drive prior-art retrieval and the feature-by-feature comparison. Edit anything, then approve.</p>
               </div>
             </div>
 
+            {/* What this plan will actually search — the scope chosen on the previous
+                step, restated here so approval is an informed decision. */}
+            <dl className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                  <Database className="h-3.5 w-3.5" /> Corpus
+                </dt>
+                <dd className="mt-1 text-sm font-medium text-slate-900">Stored patent corpus</dd>
+                <dd className="mt-0.5 text-xs text-slate-500">Semantic retrieval + reranking</dd>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                  <Globe2 className="h-3.5 w-3.5" /> Offices
+                </dt>
+                <dd className="mt-1 text-sm font-medium text-slate-900">{selectedCountries.length} selected</dd>
+                <dd className="mt-0.5 truncate text-xs text-slate-500" title={countryScopeLabel}>{countryScopeLabel}</dd>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                  <CalendarRange className="h-3.5 w-3.5" /> Date range
+                </dt>
+                <dd className="mt-1 text-sm font-medium text-slate-900">{hasDateFilters ? 'Filtered' : 'All dates'}</dd>
+                <dd className="mt-0.5 text-xs text-slate-500">
+                  {hasDateFilters
+                    ? [
+                        filingFrom || filingTo ? `Filed ${filingFrom || '…'} → ${filingTo || '…'}` : '',
+                        publicationFrom || publicationTo ? `Published ${publicationFrom || '…'} → ${publicationTo || '…'}` : '',
+                      ].filter(Boolean).join(' · ')
+                    : 'Full corpus history'}
+                </dd>
+              </div>
+            </dl>
+
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Search className="h-4 w-4 text-indigo-600" />
+                <Search className="h-4 w-4 text-ai-blue-600" />
                 <span className="text-sm font-semibold text-slate-900">Patent search query</span>
               </div>
-              <p className="text-xs text-slate-500">The exact query string sent to the patent databases.</p>
-              <textarea value={editedSearchQuery} onChange={event => setEditedSearchQuery(event.target.value)} rows={3} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[13px] leading-6 text-slate-800 outline-none transition-colors focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-500/15" />
+              <p className="text-xs text-slate-500">The concept query used for semantic retrieval across the selected offices.</p>
+              <textarea value={editedSearchQuery} onChange={event => setEditedSearchQuery(event.target.value)} rows={3} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[13px] leading-6 text-slate-800 outline-none transition-colors focus:border-ai-blue-400 focus:bg-white focus:ring-2 focus:ring-ai-blue-500/15" />
             </div>
 
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <ListChecks className="h-4 w-4 text-indigo-600" />
+                <ListChecks className="h-4 w-4 text-ai-blue-600" />
                 <span className="text-sm font-semibold text-slate-900">Key invention features</span>
-                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">{editedFeatures.length}</span>
+                <span className="rounded-full bg-ai-blue-50 px-2 py-0.5 text-xs font-semibold text-ai-blue-700">{editedFeatures.length}</span>
               </div>
               {editedFeatures.map((feature, index) => (
-                <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-500/10">
-                  <span className="mt-0.5 flex h-7 shrink-0 items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 px-2 text-xs font-semibold text-white shadow-sm">KF{index + 1}</span>
+                <div key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 transition-colors focus-within:border-ai-blue-300 focus-within:ring-2 focus-within:ring-ai-blue-500/10">
+                  <span className="mt-0.5 flex h-7 shrink-0 items-center rounded-lg bg-gradient-to-br from-ai-blue-500 to-violet-600 px-2 text-xs font-semibold text-white shadow-sm">KF{index + 1}</span>
                   <textarea value={feature} onChange={event => updateFeature(index, event.target.value)} rows={2} className="min-h-11 flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm leading-5 text-slate-800 outline-none" />
                   <button type="button" onClick={() => setEditedFeatures(current => current.filter((_, featureIndex) => featureIndex !== index))} aria-label={`Remove feature ${index + 1}`} className="mt-0.5 rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600">
                     <Trash2 className="h-4 w-4" />
@@ -1029,7 +1201,7 @@ export default function NoveltySearchSubmission(props: {
                 </div>
               ))}
               <div className="flex gap-2">
-                <input value={newFeature} onChange={event => setNewFeature(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFeature() } }} className="h-11 flex-1 rounded-xl border border-dashed border-slate-300 bg-white px-3 text-sm outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/15" placeholder="Add another technical feature…" />
+                <input value={newFeature} onChange={event => setNewFeature(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFeature() } }} className="h-11 flex-1 rounded-xl border border-dashed border-slate-300 bg-white px-3 text-sm outline-none transition-colors focus:border-ai-blue-400 focus:ring-2 focus:ring-ai-blue-500/15" placeholder="Add another technical feature…" />
                 <button type="button" onClick={addFeature} className="inline-flex h-11 items-center gap-1 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"><Plus className="h-4 w-4" /> Add</button>
               </div>
             </div>

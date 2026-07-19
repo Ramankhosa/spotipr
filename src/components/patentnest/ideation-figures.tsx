@@ -1,60 +1,48 @@
 'use client'
 
 // The inventor's journey, as one living figure: a seed idea expands into a
-// colorful mind map (dimensions → assumption-breaking moves), the user selects
-// two moves, the combine tray runs, an idea is generated — and flows straight
+// mind map (dimensions → assumption-breaking moves), the user selects two
+// moves, the combine tray runs, an idea is generated — and flows straight
 // into the novelty pipeline. Used on the homepage ideation card and the
-// ideation detail page. Choreographed with staggered delays on scroll-in;
-// selections keep a gentle pulse and pipeline dashes keep drifting so the
-// figure stays alive. Reduced motion renders the completed state.
+// ideation detail page. Same patent-figure vocabulary as figures.tsx: paper
+// fills, ink line work, brass ceremony, lamp green reserved for the user's
+// chosen path. Choreographed with staggered delays on scroll-in; selections
+// keep a gentle pulse and pipeline dashes keep drifting so the figure stays
+// alive. Reduced motion renders the completed state.
 
 import { motion, useReducedMotion } from 'framer-motion'
 import { useFig, FlowLine, FigLabel } from './figures'
-import { BLUE, BRASS, INK, LAMP, PAPER, SOFT, VIOLET, WAX } from '@/lib/patentnest/palette'
+import { BRASS, INK, LAMP, PAPER, SOFT } from '@/lib/patentnest/palette'
 
 const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }
 const VIEW = { once: true, margin: '-60px' } as const
 
-// The colorful-but-calm palette: deep stroke (from the central palette) plus a
-// light local tint per branch family (tints are derivations of the strokes —
-// refresh them if the palette changes).
-const HUES = {
-  green: { stroke: LAMP, tint: '#e3ecdd' },
-  blue: { stroke: BLUE, tint: '#e1e9f2' },
-  coral: { stroke: WAX, tint: '#f6e3dd' },
-  violet: { stroke: VIOLET, tint: '#e9e4f4' },
-}
-
-type Hue = keyof typeof HUES
-
 function NodePill({
-  x, y, w = 68, h = 20, label, hue, delay, small = false,
+  x, y, w = 68, h = 20, label, delay, small = false,
 }: {
-  x: number; y: number; w?: number; h?: number; label: string; hue: Hue; delay: number; small?: boolean
+  x: number; y: number; w?: number; h?: number; label: string; delay: number; small?: boolean
 }) {
   const f = useFig()
-  const c = HUES[hue]
   return (
     <g>
       <motion.rect x={x} y={y - h / 2} width={w} height={h} rx={h / 2}
-        fill={c.tint} stroke={c.stroke} strokeWidth="1.2" {...f.pop(delay)} />
+        fill={PAPER} stroke={INK} strokeWidth={small ? 1 : 1.2} {...f.pop(delay)} />
       <motion.text x={x + w / 2} y={y + (small ? 2.2 : 2.6)} textAnchor="middle"
-        fontSize={small ? 5.6 : 6.4} letterSpacing="0.06em" fill={c.stroke} style={mono} {...f.fade(delay + 0.08)}>
+        fontSize={small ? 5.6 : 6.4} letterSpacing="0.06em" fill={INK} style={mono} {...f.fade(delay + 0.08)}>
         {label}
       </motion.text>
     </g>
   )
 }
 
-function SelectionRing({ x, y, w = 58, h = 16, hue, delay }: {
-  x: number; y: number; w?: number; h?: number; hue: Hue; delay: number
+function SelectionRing({ x, y, w = 58, h = 16, delay }: {
+  x: number; y: number; w?: number; h?: number; delay: number
 }) {
   const reduce = useReducedMotion()
-  const c = HUES[hue]
   return (
     <g>
       <motion.rect x={x - 3} y={y - h / 2 - 3} width={w + 6} height={h + 6} rx={(h + 6) / 2}
-        fill="none" stroke={c.stroke} strokeWidth="1.4"
+        fill="none" stroke={LAMP} strokeWidth="1.4"
         initial={{ opacity: reduce ? 0.9 : 0, scale: reduce ? 1 : 0.9 }}
         whileInView={reduce ? { opacity: 0.9 } : { opacity: [0, 1, 0.55, 1], scale: 1 }}
         viewport={VIEW}
@@ -64,14 +52,14 @@ function SelectionRing({ x, y, w = 58, h = 16, hue, delay }: {
         }}
       />
       {/* the "chosen" check */}
-      <motion.circle cx={x + w + 4} cy={y - h / 2 - 4} r={5} fill={c.stroke}
+      <motion.circle cx={x + w + 4} cy={y - h / 2 - 4} r={5} fill={LAMP}
         initial={{ opacity: 0, scale: reduce ? 1 : 0.5 }}
         whileInView={{ opacity: 1, scale: 1 }}
         viewport={VIEW}
         transition={{ delay: reduce ? 0 : delay + 0.15, duration: 0.3 }}
       />
       <motion.path d={`M ${x + w + 1.6} ${y - h / 2 - 4} l 1.6 1.8 l 3.2 -3.6`}
-        fill="none" stroke="#fff" strokeWidth="1.1" strokeLinecap="round"
+        fill="none" stroke={PAPER} strokeWidth="1.1" strokeLinecap="round"
         initial={{ opacity: 0 }}
         whileInView={{ opacity: 1 }}
         viewport={VIEW}
@@ -85,11 +73,11 @@ export function IdeationJourneyFig() {
   const f = useFig()
   const reduce = useReducedMotion()
 
-  const dims: { y: number; label: string; hue: Hue }[] = [
-    { y: 32, label: 'STRUCTURE', hue: 'green' },
-    { y: 80, label: 'SENSING', hue: 'blue' },
-    { y: 128, label: 'TIMING', hue: 'coral' },
-    { y: 176, label: 'MATERIAL', hue: 'violet' },
+  const dims: { y: number; label: string }[] = [
+    { y: 32, label: 'STRUCTURE' },
+    { y: 80, label: 'SENSING' },
+    { y: 128, label: 'TIMING' },
+    { y: 176, label: 'MATERIAL' },
   ]
 
   return (
@@ -97,7 +85,7 @@ export function IdeationJourneyFig() {
       aria-label="A seed idea expands into a mind map of dimensions and assumption-breaking moves; two selected moves are combined into a generated idea, which flows into the novelty pipeline">
 
       {/* the seed */}
-      <motion.circle cx={36} cy={104} r={11} fill="#f1e8cf" stroke={BRASS} strokeWidth="1.5" {...f.pop(0)} />
+      <motion.circle cx={36} cy={104} r={11} fill={PAPER} stroke={BRASS} strokeWidth="1.5" {...f.pop(0)} />
       <motion.circle cx={36} cy={104} r={3.5} fill={BRASS} {...f.pop(0.15)} />
       <FigLabel x={36} y={128} size={6.4}>seed</FigLabel>
 
@@ -108,39 +96,39 @@ export function IdeationJourneyFig() {
         <g key={d.label}>
           <motion.path
             d={`M 76 ${d.y} L 104 ${d.y}`}
-            fill="none" stroke={HUES[d.hue].stroke} strokeWidth="1.2"
+            fill="none" stroke={SOFT} strokeWidth="1.1"
             {...f.draw(0.5 + i * 0.1, 0.3)}
           />
-          <NodePill x={104} y={d.y} label={d.label} hue={d.hue} delay={0.6 + i * 0.1} />
+          <NodePill x={104} y={d.y} label={d.label} delay={0.6 + i * 0.1} />
         </g>
       ))}
       <FigLabel x={138} y={208} size={6.4}>dimensions</FigLabel>
 
       {/* level 2 — assumption-breaking moves (orthogonal buses from two dims) */}
-      <motion.path d="M 172 32 L 191 32" fill="none" stroke={HUES.green.stroke} strokeWidth="1" opacity={0.7} {...f.draw(1.1, 0.25)} />
-      <motion.path d="M 191 16 L 191 44" fill="none" stroke={HUES.green.stroke} strokeWidth="1" opacity={0.7} {...f.draw(1.2, 0.25)} />
-      <motion.path d="M 172 128 L 191 128" fill="none" stroke={HUES.coral.stroke} strokeWidth="1" opacity={0.7} {...f.draw(1.3, 0.25)} />
-      <motion.path d="M 191 112 L 191 140" fill="none" stroke={HUES.coral.stroke} strokeWidth="1" opacity={0.7} {...f.draw(1.4, 0.25)} />
+      <motion.path d="M 172 32 L 191 32" fill="none" stroke={SOFT} strokeWidth="1" {...f.draw(1.1, 0.25)} />
+      <motion.path d="M 191 16 L 191 44" fill="none" stroke={SOFT} strokeWidth="1" {...f.draw(1.2, 0.25)} />
+      <motion.path d="M 172 128 L 191 128" fill="none" stroke={SOFT} strokeWidth="1" {...f.draw(1.3, 0.25)} />
+      <motion.path d="M 191 112 L 191 140" fill="none" stroke={SOFT} strokeWidth="1" {...f.draw(1.4, 0.25)} />
       {([
-        { y: 16, label: 'INVERT', hue: 'green' as Hue, d: 1.25 },
-        { y: 44, label: 'DECOUPLE', hue: 'green' as Hue, d: 1.35 },
-        { y: 112, label: 'RELOCATE', hue: 'coral' as Hue, d: 1.45 },
-        { y: 140, label: 'REPLACE', hue: 'coral' as Hue, d: 1.55 },
+        { y: 16, label: 'INVERT', d: 1.25 },
+        { y: 44, label: 'DECOUPLE', d: 1.35 },
+        { y: 112, label: 'RELOCATE', d: 1.45 },
+        { y: 140, label: 'REPLACE', d: 1.55 },
       ]).map((m) => (
         <g key={m.label}>
           <motion.path
             d={`M 191 ${m.y} L 210 ${m.y}`}
-            fill="none" stroke={HUES[m.hue].stroke} strokeWidth="1" opacity={0.7}
+            fill="none" stroke={SOFT} strokeWidth="1"
             {...f.draw(m.d, 0.25)}
           />
-          <NodePill x={210} y={m.y} w={58} h={16} label={m.label} hue={m.hue} delay={m.d + 0.12} small />
+          <NodePill x={210} y={m.y} w={58} h={16} label={m.label} delay={m.d + 0.12} small />
         </g>
       ))}
       <FigLabel x={239} y={208} size={6.4}>moves · you choose</FigLabel>
 
-      {/* the user selects two moves */}
-      <SelectionRing x={210} y={44} hue="green" delay={1.95} />
-      <SelectionRing x={210} y={112} hue="coral" delay={2.15} />
+      {/* the user selects two moves — lamp green marks the chosen path */}
+      <SelectionRing x={210} y={44} delay={1.95} />
+      <SelectionRing x={210} y={112} delay={2.15} />
 
       {/* selected moves flow into the combine tray */}
       <FlowLine d="M 271 44 L 283 44 L 283 78 L 296 78" delay={2.5} />
@@ -151,8 +139,8 @@ export function IdeationJourneyFig() {
       <motion.text x={325} y={82} textAnchor="middle" fontSize="6" letterSpacing="0.08em" fill={INK} style={mono} {...f.fade(2.75)}>
         COMBINE
       </motion.text>
-      <motion.circle cx={317} cy={92} r={3.4} fill={HUES.green.stroke} {...f.pop(2.85)} />
-      <motion.circle cx={333} cy={92} r={3.4} fill={HUES.coral.stroke} {...f.pop(2.95)} />
+      <motion.circle cx={317} cy={92} r={3.4} fill={LAMP} {...f.pop(2.85)} />
+      <motion.circle cx={333} cy={92} r={3.4} fill="none" stroke={LAMP} strokeWidth="1.3" {...f.pop(2.95)} />
       <FigLabel x={325} y={114} size={5.6}>intent · divergent</FigLabel>
 
       {/* run → the generated idea */}
@@ -181,9 +169,9 @@ export function IdeationJourneyFig() {
       ))}
       {/* assessed pulse */}
       {reduce ? (
-        <circle cx={404} cy={140} r={3.5} fill={HUES.green.stroke} />
+        <circle cx={404} cy={140} r={3.5} fill={LAMP} />
       ) : (
-        <motion.circle cx={404} cy={140} r={3.5} fill={HUES.green.stroke}
+        <motion.circle cx={404} cy={140} r={3.5} fill={LAMP}
           initial={{ opacity: 0 }}
           whileInView={{ opacity: [0.4, 1, 0.4] }}
           viewport={VIEW}
