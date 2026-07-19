@@ -80,11 +80,31 @@ describe('selectReviewedPriorArtDecisions', () => {
 })
 
 describe('batch prior-art source policy', () => {
-  it('uses stored corpora first and Google only as fallback', () => {
-    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).toEqual(['pqai-corpus', 'epo-ops-corpus', 'indian-corpus'])
-    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).not.toContain('pqai')
-    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).not.toContain('epo-ops')
-    expect([...BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS]).toEqual(['google-patents'])
+  it('searches the stored corpora only, with the Google Patents corpus in the lane', () => {
+    // The Google corpus (~29.8M family-representative vectors) is the primary
+    // source. It was previously absent from this list entirely, so the lane was
+    // effectively epo-ops-corpus + the small Indian corpus.
+    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).toEqual([
+      'google-patents-corpus',
+      'indian-corpus',
+      'epo-ops-corpus',
+    ])
+  })
+
+  it('never dispatches a live provider API from the batch lane', () => {
+    // 'google-patents' is live SerpAPI; 'pqai' is retired. Neither the primary
+    // lane nor the fallback may reach a metered external API — an empty
+    // prior-art result is a reportable finding, not a reason to spend.
+    const liveProviderIds = ['pqai', 'google-patents', 'epo-ops', 'ip-australia', 'patentsview', 'google-patents-bigquery']
+    for (const liveId of liveProviderIds) {
+      expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).not.toContain(liveId)
+      expect([...BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS]).not.toContain(liveId)
+    }
+    expect([...BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS]).toEqual([])
+  })
+
+  it('excludes the retired PQAI corpus', () => {
+    expect([...BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS]).not.toContain('pqai-corpus')
   })
 })
 

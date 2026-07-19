@@ -449,6 +449,7 @@ export default function IdeaEntryStage({ session, patent, onComplete, onRefresh 
       mode={allowRefine ? 'enhance' : 'preserve'}
       title={title}
       disclosureLength={rawIdea.length}
+      disclosureText={rawIdea}
       startedAt={stage0StartedAt}
       status={stage0OverlayStatus || 'running'}
       errorMessage={stage0OverlayError}

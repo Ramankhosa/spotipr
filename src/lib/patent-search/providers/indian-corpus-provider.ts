@@ -84,7 +84,7 @@ async function resolveRetrievalTuning(): Promise<RetrievalTuning> {
       return typeof value === 'number' && Number.isFinite(value) ? value : fallback
     }
     return {
-      maxVectorQueries: Math.max(1, num('retrieval.maxVectorQueries', 4)),
+      maxVectorQueries: Math.max(1, num('retrieval.maxVectorQueries', 9)),
       textCandidateCap: Math.max(200, num('retrieval.textCandidateCap', 1600)),
       trigramCandidateCap: Math.max(100, num('retrieval.trigramCandidateCap', 900)),
       metadataCandidateCap: Math.max(100, num('retrieval.metadataCandidateCap', 600)),
@@ -94,7 +94,7 @@ async function resolveRetrievalTuning(): Promise<RetrievalTuning> {
   } catch {
     // Settings are a tuning convenience, never a dependency of search.
     return {
-      maxVectorQueries: 4,
+      maxVectorQueries: 9,
       textCandidateCap: 1600,
       trigramCandidateCap: 900,
       metadataCandidateCap: 600,
@@ -490,6 +490,19 @@ function trimRetrievalText(value: unknown, maxWords = 36) {
   return normalizeWhitespace(value).split(/\s+/).filter(Boolean).slice(0, maxWords).join(' ')
 }
 
+// How many ANN probes run at once. Each is an independent IVFFlat scan (~200ms on
+// the ~30M-vector corpus), so serial execution made the probe count the dominant
+// cost of a search and forced maxVectorQueries down to 4.
+//
+// Why 3 and not more: each probe runs inside queryRawWithStatementTimeout, i.e. a
+// prisma.$transaction, so it holds one pooled connection for its duration. The
+// pool defaults to num_cpus*2+1 and is shared by every concurrent request, so this
+// value multiplies connection usage per in-flight search. 3 is the sweet spot —
+// for a full 9-probe plan it needs ceil(9/3) = 3 waves, exactly the same
+// wall-clock as 4 would (ceil(9/4) = 3), at 25% less pool pressure.
+// Raise only alongside an explicit connection_limit on DATABASE_URL.
+const VECTOR_PROBE_CONCURRENCY = Math.max(1, Number(process.env.PATENT_SEARCH_VECTOR_PROBE_CONCURRENCY || '3') || 3)
+
 function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number) {
   if (query.type === 'concept' || query.type === 'semantic') return Math.max(60, Math.min(140, safeLimit))
   if (query.type === 'feature_pair') return 0
@@ -879,15 +892,27 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           durationMs: Date.now() - embeddingStartedAt,
         })
         vectorStage = 'postgres_vector_query'
-        for (let queryIndex = 0; queryIndex < vectorRetrievalQueries.length; queryIndex += 1) {
+        // Probes are independent ANN scans, so they run concurrently rather than
+        // in a queue. Serially, N probes cost N x ~200ms, which is what forced
+        // maxVectorQueries down to 4 and silently dropped the more specific
+        // feature queries. Results are merged in ORIGINAL query order below so
+        // rank assignment stays byte-identical to the previous serial behaviour.
+        const probeOutcomes: Array<{
+          retrievalQuery: LocalRetrievalQuery
+          rows: any[]
+          durationMs: number
+          error?: unknown
+        } | null> = new Array(vectorRetrievalQueries.length).fill(null)
+
+        const runProbe = async (queryIndex: number) => {
           const retrievalQuery = vectorRetrievalQueries[queryIndex]
           const vector = vectors[queryIndex]
           if (!vector) {
-            logEmbeddingSearch('warn', 'query_vector_missing', { traceId, queryIndex, queryType: retrievalQuery.type })
-            continue
+            logEmbeddingSearch('warn', 'query_vector_missing', { traceId, queryIndex, queryType: retrievalQuery.type }, true)
+            return
           }
           const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
-          if (limit <= 0) continue
+          if (limit <= 0) return
           const vectorLiteral = corpusEmbeddingToLiteral(vector)
           const queryStartedAt = Date.now()
           const vectorRows = await runQuery<any>(Prisma.sql`
@@ -904,17 +929,72 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             ORDER BY ${EMBEDDING_COLUMN_SQL} ${EMBEDDING_DISTANCE_OP_SQL} ${vectorLiteral}${EMBEDDING_CAST_SQL}
             LIMIT ${limit}
           `)
+          probeOutcomes[queryIndex] = {
+            retrievalQuery,
+            rows: vectorRows,
+            durationMs: Date.now() - queryStartedAt,
+          }
+        }
+
+        // Bounded concurrency: enough to collapse the wall-clock cost, low enough
+        // not to flood the connection pool or the IVFFlat scans with parallel work.
+        const probeStartedAt = Date.now()
+        for (let start = 0; start < vectorRetrievalQueries.length; start += VECTOR_PROBE_CONCURRENCY) {
+          const batch = vectorRetrievalQueries
+            .slice(start, start + VECTOR_PROBE_CONCURRENCY)
+            .map((_, offset) => start + offset)
+          const settled = await Promise.allSettled(batch.map(index => runProbe(index)))
+          settled.forEach((outcome, offset) => {
+            if (outcome.status === 'rejected') {
+              const queryIndex = batch[offset]
+              probeOutcomes[queryIndex] = {
+                retrievalQuery: vectorRetrievalQueries[queryIndex],
+                rows: [],
+                durationMs: 0,
+                error: outcome.reason,
+              }
+            }
+          })
+        }
+
+        // Merge in original query order so vectorRank and weighting are identical
+        // to the previous serial implementation.
+        let probeFailures = 0
+        probeOutcomes.forEach((outcome, queryIndex) => {
+          if (!outcome) return
+          if (outcome.error) {
+            probeFailures += 1
+            logOptionalSearchError('vector_probe', outcome.error, {
+              traceId,
+              queryIndex,
+              queryType: outcome.retrievalQuery.type,
+            })
+            return
+          }
           vectorQueriesCompleted += 1
-          vectorRowsTotal += vectorRows.length
+          vectorRowsTotal += outcome.rows.length
           logEmbeddingSearch('info', 'vector_query_completed', {
             traceId,
             queryIndex,
-            queryType: retrievalQuery.type,
-            requestedLimit: limit,
-            resultCount: vectorRows.length,
-            durationMs: Date.now() - queryStartedAt,
+            queryType: outcome.retrievalQuery.type,
+            resultCount: outcome.rows.length,
+            durationMs: outcome.durationMs,
           })
-          vectorRows.forEach((row, index) => merge(row, 'vectorRank', index + 1, retrievalQuery.weight, retrievalQuery))
+          outcome.rows.forEach((row, index) =>
+            merge(row, 'vectorRank', index + 1, outcome.retrievalQuery.weight, outcome.retrievalQuery))
+        })
+        logEmbeddingSearch('info', 'vector_probes_completed', {
+          traceId,
+          probeCount: vectorRetrievalQueries.length,
+          concurrency: VECTOR_PROBE_CONCURRENCY,
+          succeeded: vectorQueriesCompleted,
+          failed: probeFailures,
+          wallClockMs: Date.now() - probeStartedAt,
+        })
+        // Every probe failing is a lane failure, not a partial degradation — let
+        // the outer handler report vector_search_failed as it did before.
+        if (probeFailures > 0 && vectorQueriesCompleted === 0) {
+          throw probeOutcomes.find(outcome => outcome?.error)?.error
         }
 
         if (vectorRowsTotal === 0) {

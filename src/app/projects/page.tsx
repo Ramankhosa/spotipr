@@ -94,7 +94,7 @@ export default function ProjectsPage() {
 
       {/* Header */}
       <header className="relative z-10 bg-white/80 backdrop-blur-md border-b border-slate-200/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
             <div className="flex items-center space-x-4">
               <Link 
@@ -128,7 +128,7 @@ export default function ProjectsPage() {
         </div>
       </header>
 
-      <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      <main className="relative z-10 max-w-[1800px] mx-auto py-8 px-4 sm:px-6 lg:px-8">
         {/* Create Project Section - Hero Card */}
         <motion.div 
           initial={{ opacity: 0, y: 20 }}

@@ -294,7 +294,7 @@ export default function ServiceControlPage() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-cyan-400">🎛️ Service Control Center</h1>
             <p className="text-slate-400 text-sm mt-1">
@@ -317,7 +317,7 @@ export default function ServiceControlPage() {
 
       {/* Tab Navigation */}
       <div className="bg-slate-800 border-b border-slate-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8">
           <nav className="flex space-x-8">
             {[
               { id: 'overview', label: '📊 Overview', icon: '📊' },
@@ -341,7 +341,7 @@ export default function ServiceControlPage() {
         </div>
       </div>
 
-      <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+      <main className="max-w-[1800px] mx-auto py-6 px-4 sm:px-6 lg:px-8">
         {/* Alerts */}
         {error && (
           <div className="mb-6 bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg">

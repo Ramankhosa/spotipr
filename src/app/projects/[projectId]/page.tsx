@@ -219,7 +219,7 @@ export default function ProjectDashboardPage() {
 
       {/* Header */}
       <header className="relative z-10 bg-white/80 backdrop-blur-md border-b border-slate-200/60">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <Link 
@@ -267,7 +267,7 @@ export default function ProjectDashboardPage() {
         </div>
       </header>
 
-      <main className="relative z-10 max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      <main className="relative z-10 max-w-[1800px] mx-auto py-8 px-4 sm:px-6 lg:px-8">
         
         {/* Primary Actions */}
         <motion.div

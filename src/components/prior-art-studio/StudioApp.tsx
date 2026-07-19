@@ -480,7 +480,7 @@ export function StudioApp() {
 
   if (!active) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-10">
+      <div className="mx-auto max-w-5xl px-6 py-10">
         {showOnboarding && <OnboardingCoach onClose={closeOnboarding} />}
         <div className="mb-6 flex items-center gap-3">
           <h1 className="text-2xl font-bold text-foreground">Prior-Art Studio</h1>
@@ -602,7 +602,7 @@ export function StudioApp() {
   )
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6">
+    <div className="mx-auto max-w-[1800px] px-4 py-6 lg:px-6">
       {showOnboarding && <OnboardingCoach onClose={closeOnboarding} />}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -726,7 +726,7 @@ export function StudioApp() {
       )}
 
       {mode === 'quick' ? (
-        <div className="mx-auto max-w-3xl space-y-4">
+        <div className="mx-auto max-w-4xl space-y-4">
           {seedCard}
           {active.plan.blocks.length > 0 && (
             <div className="rounded-xl border border-border bg-background p-4">

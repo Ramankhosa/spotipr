@@ -470,18 +470,7 @@ export default function PatentSearchPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-7xl px-6 py-8">
-        <a
-          href="/prior-art-studio"
-          className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 hover:bg-emerald-100"
-        >
-          <Sparkles className="h-4 w-4 shrink-0 text-emerald-700" />
-          <span>
-            <b>Try Prior-Art Studio</b> — the new search workspace: AI-drafted queries you approve term by term, a counted
-            recall funnel, keyboard triage, and a one-click search report.
-          </span>
-          <span className="ml-auto font-semibold text-emerald-700">Open →</span>
-        </a>
+      <div className="mx-auto max-w-[1800px] px-6 py-8">
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Patent Search</h1>
@@ -504,6 +493,18 @@ export default function PatentSearchPage() {
               <SlidersHorizontal className="h-4 w-4" />
               Manual Search
             </button>
+            {/* The third mode lives on its own page — same corpus, far more control. */}
+            <a
+              href="/prior-art-studio"
+              className="inline-flex items-center gap-2 rounded px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+              title="AI-drafted queries you approve term by term, a counted recall funnel, keyboard triage, and a one-click search report"
+            >
+              <Sparkles className="h-4 w-4" />
+              Advanced Search Studio
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800">
+                New
+              </span>
+            </a>
           </div>
         </div>
 

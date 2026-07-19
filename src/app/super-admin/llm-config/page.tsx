@@ -415,7 +415,7 @@ export default function LLMConfigPage() {
     <div className="min-h-screen bg-slate-900 text-white">
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center">
             <div>
               <h1 className="text-2xl font-bold text-white">LLM Model Configuration</h1>
@@ -446,7 +446,7 @@ export default function LLMConfigPage() {
 
       {/* Tabs */}
       <div className="bg-slate-800 border-b border-slate-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8">
           <nav className="flex gap-1">
             {[
               { id: 'overview', label: 'Overview' },
@@ -472,7 +472,7 @@ export default function LLMConfigPage() {
 
       {/* Alerts */}
       {error && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 mt-4">
           <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded-lg">
             {error}
             <button onClick={() => setError(null)} className="float-right">&times;</button>
@@ -480,7 +480,7 @@ export default function LLMConfigPage() {
         </div>
       )}
       {success && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 mt-4">
           <div className="bg-green-900/50 border border-green-500 text-green-200 px-4 py-3 rounded-lg">
             {success}
             <button onClick={() => setSuccess(null)} className="float-right">&times;</button>
@@ -489,7 +489,7 @@ export default function LLMConfigPage() {
       )}
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Overview Tab */}
         {activeTab === 'overview' && (
           <div className="space-y-6">

@@ -4,6 +4,10 @@ import React, { useEffect, useMemo, useState, Fragment, useRef, memo } from 'rea
 import { Popover, Transition } from '@headlessui/react'
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/20/solid'
 import { getAuthoritativeClaims } from '@/lib/claims-context'
+// Pure data module (zero imports) — safe in a client component. Do NOT import
+// from patent-search/index or the providers here: those reach prisma and the
+// corpus service, which drags the server graph into the browser bundle.
+import { PATENT_COUNTRIES } from '@/lib/patent-search/patent-countries'
 
 interface RelatedArtStageProps {
   session: {
@@ -148,6 +152,11 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [customQuery, setCustomQuery] = useState('')
   const [showCustomQuery, setShowCustomQuery] = useState(false)
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
+  // Corpus scope filters. Empty countries = search every country (no restriction).
+  const [filterCountries, setFilterCountries] = useState<string[]>([])
+  const [publicationDateTo, setPublicationDateTo] = useState('')
+  const [filingDateFrom, setFilingDateFrom] = useState('')
+  const [filingDateTo, setFilingDateTo] = useState('')
   const [includeIndianPatents, setIncludeIndianPatents] = useState(true)
   const [includeInternationalPatents, setIncludeInternationalPatents] = useState(true)
   const [includeGooglePatents, setIncludeGooglePatents] = useState(false)
@@ -1226,6 +1235,14 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
         afterDate: afterDate || undefined,
         providerIds: selectedProviderIds,
         searchPrecision,
+        // Corpus scope from Advanced Settings. Omitted keys are simply absent
+        // filters; the route validates country codes and drops inverted ranges.
+        filters: {
+          ...(filterCountries.length ? { countries: filterCountries } : {}),
+          ...(publicationDateTo ? { publicationDateTo } : {}),
+          ...(filingDateFrom ? { filingDateFrom } : {}),
+          ...(filingDateTo ? { filingDateTo } : {}),
+        },
         queryPlan: {
           googlePatentKeywords,
           epoTitleKeywords,
@@ -1823,7 +1840,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-ai-blue-50/30">
       {/* ============= HEADER WITH PROGRESS STEPS ============= */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-paper-300 shadow-sm">
-        <div className="max-w-6xl mx-auto px-6 py-4">
+        <div className="max-w-[1800px] mx-auto px-6 py-4">
           {/* Title */}
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -1941,7 +1958,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       </div>
 
       {/* ============= MAIN CONTENT AREA ============= */}
-      <div className="max-w-6xl mx-auto px-6 py-8">
+      <div className="max-w-[1800px] mx-auto px-6 py-8">
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
             <span className="text-red-500 text-xl">⚠️</span>
@@ -2115,6 +2132,86 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                   
                   {showAdvancedSettings && (
                     <div className="mt-4 grid md:grid-cols-2 gap-4 p-4 bg-paper-100 rounded-xl">
+                      {/* Corpus scope — applied as filters on the stored corpus,
+                          so these narrow what is searched, not just what is shown. */}
+                      <div className="md:col-span-2">
+                        <div className="flex items-baseline justify-between mb-1">
+                          <label className="block text-sm font-medium text-ai-graphite-700">
+                            Patent offices
+                          </label>
+                          <span className="text-xs text-ai-graphite-500">
+                            {filterCountries.length === 0
+                              ? 'All countries'
+                              : `${filterCountries.length} selected`}
+                          </span>
+                        </div>
+                        <p className="text-xs text-ai-graphite-500 mb-2">
+                          Leave empty to search every country in the corpus. Selecting offices narrows the search — it does not re-rank.
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto p-2 bg-white border border-paper-400 rounded-lg">
+                          {PATENT_COUNTRIES.map(country => {
+                            const selected = filterCountries.includes(country.code)
+                            return (
+                              <button
+                                key={country.code}
+                                type="button"
+                                aria-pressed={selected}
+                                title={country.name}
+                                onClick={() => setFilterCountries(prev =>
+                                  prev.includes(country.code)
+                                    ? prev.filter(code => code !== country.code)
+                                    : [...prev, country.code]
+                                )}
+                                className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors ${
+                                  selected
+                                    ? 'bg-ai-blue-600 text-white border-ai-blue-600'
+                                    : 'bg-white text-ai-graphite-700 border-paper-400 hover:border-ai-blue-400'
+                                }`}
+                              >
+                                {country.code}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {filterCountries.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setFilterCountries([])}
+                            className="mt-2 text-xs text-ai-blue-600 hover:text-ai-blue-700"
+                          >
+                            Clear selection (search all countries)
+                          </button>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Published before</label>
+                        <input
+                          type="date"
+                          value={publicationDateTo}
+                          onChange={(e) => setPublicationDateTo(e.target.value)}
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Filed after</label>
+                        <input
+                          type="date"
+                          value={filingDateFrom}
+                          onChange={(e) => setFilingDateFrom(e.target.value)}
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Filed before</label>
+                        <input
+                          type="date"
+                          value={filingDateTo}
+                          onChange={(e) => setFilingDateTo(e.target.value)}
+                          className="w-full border border-paper-400 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+
                       <div>
                         <label className="block text-sm font-medium text-ai-graphite-700 mb-1">Results Limit</label>
                         <select

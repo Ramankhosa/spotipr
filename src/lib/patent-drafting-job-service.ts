@@ -10,8 +10,17 @@ import { renderPlantUml } from '@/lib/plantuml-renderer'
 
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
 const DEFAULT_JURISDICTION = 'IN'
-export const BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS = ['pqai-corpus', 'epo-ops-corpus', 'indian-corpus'] as const
-export const BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS = ['google-patents'] as const
+// Stored-corpus only. Previously ['pqai-corpus','epo-ops-corpus','indian-corpus'],
+// which omitted the Google Patents corpus entirely — pqai is retired and stripped
+// by the registry, so the primary lane was effectively epo-ops-corpus + the ~39k
+// Indian rows. That came back empty often enough that the batch routinely fell
+// through to the LIVE SerpAPI 'google-patents' provider: metered per call, and
+// strictly worse than the 29.8M-vector local corpus it was skipping.
+export const BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS = ['google-patents-corpus', 'indian-corpus', 'epo-ops-corpus'] as const
+// Empty stays empty. An empty prior-art result is a reportable finding, not a
+// reason to spend on a live API — and after the corpus cutover "zero results"
+// is far more often a timed-out lane than a genuinely unindexed area.
+export const BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS = [] as const
 const BATCH_PRIOR_ART_LIMIT = 10
 
 const DRAFTING_ACTION_STAGE_LABELS: Record<string, string> = {
@@ -1183,8 +1192,11 @@ async function runBatchPriorArtSearchAndReview(params: {
   let searchResult = await runSearch(BATCH_PRIOR_ART_PRIMARY_PROVIDER_IDS)
   let rawResults = Array.isArray(searchResult.json?.results) ? searchResult.json.results : []
   let providerStats = Array.isArray(searchResult.json?.providerStats) ? searchResult.json.providerStats : []
+  // Live-API fallback retired: the stored corpus is the only prior-art lane.
+  // Kept as a guarded branch (rather than deleted) so re-enabling is a one-line
+  // change to BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS if that is ever wanted.
   let googleFallbackUsed = false
-  if (!rawResults.length) {
+  if (!rawResults.length && BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS.length) {
     googleFallbackUsed = true
     searchResult = await runSearch(BATCH_PRIOR_ART_FALLBACK_PROVIDER_IDS, true)
     rawResults = Array.isArray(searchResult.json?.results) ? searchResult.json.results : []

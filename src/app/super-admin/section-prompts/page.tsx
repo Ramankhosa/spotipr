@@ -144,7 +144,7 @@ export default function SuperAdminSectionPromptsPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       {/* Header */}
       <div className="bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-6">
+        <div className="max-w-[1800px] mx-auto px-6 py-6">
           <div className="flex justify-between items-start">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">
@@ -170,7 +170,7 @@ export default function SuperAdminSectionPromptsPage() {
 
       {/* Hierarchy Explainer */}
       {showHierarchy && (
-        <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className="max-w-[1800px] mx-auto px-6 py-4">
           <div className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-xl p-1">
             <div className="bg-white rounded-lg p-6">
               <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
@@ -282,7 +282,7 @@ export default function SuperAdminSectionPromptsPage() {
       )}
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      <div className="max-w-[1800px] mx-auto px-6 py-6">
         <div className="grid grid-cols-12 gap-6">
           
           {/* Country Sidebar */}

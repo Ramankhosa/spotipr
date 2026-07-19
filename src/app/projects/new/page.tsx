@@ -75,7 +75,7 @@ export default function NewProjectPage() {
     <div className="min-h-screen bg-gradient-to-br from-[#FAFAFB] to-[#F2F4F7]">
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-[#E5E7EB]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
             <div className="flex items-center space-x-4">
               <Link href="/projects" className="text-[#64748B] hover:text-[#475569] transition-colors">

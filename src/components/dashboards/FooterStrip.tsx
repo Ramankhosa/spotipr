@@ -53,7 +53,7 @@ export default function FooterStrip({ careModeEnabled = true, onCareModeToggle }
 
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md border-t border-white/20 px-6 py-3 z-40">
-      <div className="max-w-7xl mx-auto flex items-center justify-between text-sm">
+      <div className="max-w-[1800px] mx-auto flex items-center justify-between text-sm">
         {/* Left side - Status indicators */}
         <div className="flex items-center space-x-6">
           <div className="flex items-center space-x-2">

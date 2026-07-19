@@ -76,10 +76,13 @@ export const SETTINGS: SettingDefinition[] = [
     key: 'retrieval.maxVectorQueries',
     label: 'Vector queries per search',
     description:
-      'How many of the planned retrieval queries (one concept query plus per-feature queries) are executed as vector searches. Each is a separate ANN scan, so this trades recall against latency.',
+      'How many of the planned retrieval queries (one concept query plus per-feature queries) are executed as vector searches. Both novelty and drafting plan one concept query plus up to eight feature queries, so 9 covers a full plan. Probes run concurrently (see PATENT_SEARCH_VECTOR_PROBE_CONCURRENCY), so raising this costs far less latency than it used to.',
     category: 'retrieval',
     type: 'int',
-    default: envNumber('PATENT_SEARCH_MAX_VECTOR_QUERIES', 4),
+    // Was 4, which silently dropped feature queries 4-8 — the specific,
+    // distinguishing limitations — leaving searches dominated by the broad
+    // concept query. Safe to raise now that probes no longer run serially.
+    default: envNumber('PATENT_SEARCH_MAX_VECTOR_QUERIES', 9),
     min: 1,
     max: 12,
     envVar: 'PATENT_SEARCH_MAX_VECTOR_QUERIES',

@@ -1622,7 +1622,7 @@ export class NoveltySearchService extends BasePatentService {
     stage15: {
       thresholds: { high: 0.7, medium: 0.45 },
       borderlineQuota: 5,
-      maxCandidates: 120,
+      maxCandidates: 80,
       batchSize: 15,
       concurrency: NOVELTY_LLM_CONCURRENCY,
       timeoutMs: 90000,
@@ -1653,15 +1653,15 @@ export class NoveltySearchService extends BasePatentService {
     },
     consolidatedAnalysis: {
       enabled: true,
-      maxCandidates: 60,
+      maxCandidates: 40,
       batchSize: 8,
       concurrency: NOVELTY_LLM_CONCURRENCY,
-      maxPatentsForAttorneyReport: 60
+      maxPatentsForAttorneyReport: 40
     },
     adaptiveAnalysis: {
       mode: 'observe',
       gateCeiling: 180,
-      deepAnalysisCeiling: 60,
+      deepAnalysisCeiling: 40,
       confirmationBatches: 1,
       screeningConfidenceThreshold: 0.75,
       importantCoverageThreshold: 0.90,
@@ -5517,7 +5517,7 @@ RESPONSE:`;
     // protected scope and are stronger evidence than abstract wording. Coverage is
     // partial (see local-patent-claims-service); references without claims are mapped
     // on title/abstract alone and are not distinguished anywhere downstream.
-    const claimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '12') || 12));
+    const claimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '6') || 6));
     if (claimsTopN > 0) {
       await this.hydrateClaimsForTopCandidates(normalizedPatents, claimsTopN);
     }
@@ -6616,7 +6616,7 @@ RESPONSE:`;
       // Same claims hydration as the consolidated path: this legacy route only runs when
       // consolidated analysis fails, and a fallback must not silently produce weaker
       // evidence than the primary route it stands in for.
-      const stage35aClaimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '12') || 12));
+      const stage35aClaimsTopN = Math.max(0, Math.min(40, Number(process.env.NOVELTY_CLAIMS_TOP_REFS || '6') || 6));
       if (stage35aClaimsTopN > 0) {
         await this.hydrateClaimsForTopCandidates(normalizedPatents, stage35aClaimsTopN);
       }
@@ -9289,30 +9289,45 @@ OUTPUT JSON:
         basePrompt += `\n\nNOTE_TO_MODEL: No prior art with intersecting features (Present/Partial) was found in Stage 3.5. Generate the report focusing on Stage 0 features, mapped-differentiation rationale, and explain that no overlapping evidence was identified.`;
       }
 
-      // If Stage 3.5c (or 3.5a/3.5b) produced per-patent remarks, replace prompt with lightweight remarks-based prompt
-      try {
-        const stage4Any: any = aggregationResult as any;
-        const perRemarks: any[] = Array.isArray(stage4Any?.per_patent_remarks) ? stage4Any.per_patent_remarks : [];
-        if (perRemarks.length > 0) {
-          const metrics = {
-            novelty_score: aggRes.novelty_score,
-            decision: aggRes.decision,
-            confidence: aggRes.confidence,
-            closest_mapped_references: (aggRes as any).closest_mapped_references || [],
-            distributed_component_risks: (aggRes as any).distributed_component_risks || [],
-            potential_differentiators: this.getPotentialDifferentiatorsFromAggregation(aggRes)
-          } as any;
-          basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
-            + "\ninvention_features=" + JSON.stringify(stage0Data.inventionFeatures || [])
-            + "\nper_patent_remarks=" + JSON.stringify(perRemarks)
-            + "\nsearch_metadata=" + JSON.stringify(enhancedReportInputs.search_metadata)
-            + "\nmetrics=" + JSON.stringify(metrics);
-        }
-      } catch {}
+      // Stage 4 prompt is built below using filtered + trimmed remarks (Tier 1 optimization)
 
-      const stage4RemarksForPrompt: any[] = Array.isArray((aggregationResult as any)?.per_patent_remarks)
+      const allRemarks: any[] = Array.isArray((aggregationResult as any)?.per_patent_remarks)
         ? (aggregationResult as any).per_patent_remarks
         : [];
+
+      // Filter per_patent_remarks to only the top patents selected by greedy coverage
+      // (typically 5-6) + any remaining with novelty_threat 'high'. The full set of 60
+      // patents caused prompt payloads >300K tokens; the tail patents never appear in the
+      // final report and just waste context.
+      const selectedPNs = new Set(selectedPatents.map(p => p.patentNumber));
+      const stage4RemarksForPrompt = allRemarks.filter(r => {
+        const pn = r.pn || r.patent_number || '';
+        return selectedPNs.has(pn) || r.novelty_threat === 'high';
+      }).slice(0, Math.max(10, selectedPatents.length + 4));
+
+      // Strip verbose/redundant fields from comparison_rows before serializing:
+      // - user_invention_disclosure repeats the user's own text per feature per patent
+      // - detailedAnalysis duplicates what comparison_rows already encode
+      const trimmedRemarks = stage4RemarksForPrompt.map((remark: any) => {
+        const { detailedAnalysis, ...rest } = remark;
+        const rows = Array.isArray(rest.comparison_rows) ? rest.comparison_rows.map((row: any) => {
+          const { user_invention_disclosure, crisp_remark, attorney_remark, novelty_impact, claim_review_note, ...kept } = row;
+          return kept;
+        }) : rest.comparison_rows;
+        return { ...rest, comparison_rows: rows };
+      });
+
+      // Build a lightweight summary of ALL studied patents (including those not in the
+      // detailed remarks) so the report can reference the full corpus of work.
+      const studiedPatentsSummary = allRemarks
+        .filter(r => !selectedPNs.has(r.pn || r.patent_number || ''))
+        .map((r: any) => ({
+          pn: r.pn || r.patent_number,
+          title: r.title || '',
+          relevance: r.relevance || 'low',
+          novelty_threat: r.novelty_threat || 'none',
+        }));
+
       const reportMetrics = {
         novelty_score: aggRes.novelty_score,
         decision: aggRes.decision,
@@ -9320,14 +9335,16 @@ OUTPUT JSON:
         closest_mapped_references: (aggRes as any).closest_mapped_references || [],
         distributed_component_risks: (aggRes as any).distributed_component_risks || [],
         potential_differentiators: this.getPotentialDifferentiatorsFromAggregation(aggRes),
-        coverage_summary: (aggRes as any).feature_coverage_summary || null
+        coverage_summary: (aggRes as any).feature_coverage_summary || null,
+        total_patents_studied: allRemarks.length,
+        patents_in_detail: stage4RemarksForPrompt.length
       };
       basePrompt = STAGE4_REPORT_PROMPT_FROM_REMARKS_V3
         + "\ninvention_features=" + JSON.stringify(stage0Data.inventionFeatures || [])
-        + "\nper_patent_remarks=" + JSON.stringify(stage4RemarksForPrompt)
+        + "\nper_patent_remarks=" + JSON.stringify(trimmedRemarks)
         + "\nsearch_metadata=" + JSON.stringify(enhancedReportInputs.search_metadata)
         + "\nmetrics=" + JSON.stringify(reportMetrics)
-        + "\nsupporting_patent_details=" + JSON.stringify(enhancedReportInputs.patent_details);
+        + "\nadditional_patents_studied=" + JSON.stringify(studiedPatentsSummary);
       if (stage4RemarksForPrompt.length === 0) {
         basePrompt += "\nNOTE_TO_MODEL: No per-patent remarks were available. Produce a Requires Full-Text Review report and explain that novelty cannot be inferred from unmapped analysis.";
       }
@@ -9746,7 +9763,7 @@ ${candidatesText}`;
   // top-N are hydrated: claims are long, and the references that actually drive the
   // novelty conclusion are the highest-ranked ones.
   private async hydrateClaimsForTopCandidates(normalizedPatents: any[], topN: number) {
-    const maxChars = Math.max(1000, Number(process.env.NOVELTY_CLAIMS_MAX_CHARS || '6000') || 6000);
+    const maxChars = Math.max(1000, Number(process.env.NOVELTY_CLAIMS_MAX_CHARS || '3000') || 3000);
     const targets = normalizedPatents
       .slice(0, Math.max(0, topN))
       .filter(patent => patent && patent.referenceType !== 'paper' && !patent.claimsText);

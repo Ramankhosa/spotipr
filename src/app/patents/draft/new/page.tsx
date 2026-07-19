@@ -815,7 +815,7 @@ function NewPatentDraftPageContent() {
   if (projects.length === 0) {
     return (
       <div className="min-h-screen bg-paper-100">
-        <div className="max-w-3xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
           <Link
             href="/dashboard"
             className="inline-flex items-center text-ai-graphite-600 hover:text-ai-graphite-900 mb-4"
@@ -849,6 +849,7 @@ function NewPatentDraftPageContent() {
         mode={allowRefine ? 'enhance' : 'preserve'}
         title={patentTitle}
         disclosureLength={rawIdea.length}
+        disclosureText={rawIdea}
         startedAt={stage0StartedAt}
         status={stage0OverlayStatus || 'running'}
         errorMessage={stage0OverlayError}
@@ -860,7 +861,7 @@ function NewPatentDraftPageContent() {
           setIsCreating(false)
         }}
       />
-      <div className="max-w-3xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-8">
           <Link

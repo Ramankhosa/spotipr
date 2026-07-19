@@ -2285,7 +2285,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="p-8 max-w-7xl mx-auto space-y-8"
+      className="p-8 max-w-[1800px] mx-auto space-y-8"
     >
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>

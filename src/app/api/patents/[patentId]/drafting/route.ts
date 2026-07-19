@@ -23,6 +23,7 @@ import {
   type PatentSearchConceptGroup,
   type PatentSearchSourceMode
 } from '@/lib/patent-search';
+import { getPatentCountry, normalizeCountryCode } from '@/lib/patent-search/patent-countries';
 import {
   RelatedArtReviewRequestSchema,
   buildRelatedArtClaimsContext,
@@ -1567,6 +1568,54 @@ function normalizeRelatedArtQueryPlanOverride(value: unknown): Partial<PatentSea
   }
 }
 
+// Recall pool handed to the reranker before the top `limit` are returned. Matches
+// the orchestrator's clamp ceiling (300) so we use the full width available.
+const RELATED_ART_CANDIDATE_LIMIT = 300
+
+/**
+ * Corpus filters the prior-art stage's Advanced Settings panel may supply.
+ * Deliberately a narrow allow-list: the corpus supports many more fields
+ * (applicants, inventors, claim counts, ...), but only these are surfaced, and
+ * anything else in the payload is ignored rather than passed through.
+ *
+ * Country codes are validated against the corpus country table — an unknown code
+ * would otherwise silently match nothing and look like "no prior art exists".
+ */
+function normalizeRelatedArtAdvancedFilters(value: unknown): PatentSearchFilters {
+  if (!value || typeof value !== 'object') return {}
+  const raw = value as Record<string, unknown>
+  const filters: PatentSearchFilters = {}
+
+  const countries = Array.isArray(raw.countries)
+    ? Array.from(new Set(
+        raw.countries
+          .map(code => normalizeCountryCode(code))
+          .filter((code): code is string => Boolean(code) && Boolean(getPatentCountry(code)))
+      ))
+    : []
+  // Empty selection means "every country" — omit the filter entirely rather than
+  // sending [], which buildCountryCondition would treat as no restriction anyway.
+  if (countries.length) filters.countries = countries
+
+  for (const key of ['publicationDateFrom', 'publicationDateTo', 'filingDateFrom', 'filingDateTo'] as const) {
+    const date = normalizeRelatedArtDateText(raw[key])
+    if (date) filters[key] = date
+  }
+
+  // Guard inverted ranges: silently returning nothing is the failure mode this
+  // codebase is trying to stamp out, so drop the bound rather than honour it.
+  if (filters.publicationDateFrom && filters.publicationDateTo &&
+      filters.publicationDateFrom > filters.publicationDateTo) {
+    delete filters.publicationDateTo
+  }
+  if (filters.filingDateFrom && filters.filingDateTo &&
+      filters.filingDateFrom > filters.filingDateTo) {
+    delete filters.filingDateTo
+  }
+
+  return filters
+}
+
 function buildRelatedArtRetrievalQueries(searchQuery: string, inventionFeatures: string[]): PatentRetrievalQuery[] {
   const queries: PatentRetrievalQuery[] = []
   const seen = new Set<string>()
@@ -1632,13 +1681,29 @@ function normalizeRelatedArtSourceMode(value: unknown): PatentSearchSourceMode {
     : 'PQAI_PLUS_INDIAN'
 }
 
+// Stored-corpus providers only. This used to cast whatever strings arrived in the
+// request body straight to PatentSearchProviderId, so a client could name
+// 'epo-ops' / 'patentsview' / 'google-patents' and reach a live, metered API.
+// (PQAI was already stripped by the registry; these were not.) Anything outside
+// the allow-list is dropped, and an all-invalid selection returns undefined so
+// resolveProviderIds falls back to LOCAL_CORPUS_PROVIDER_IDS.
+const ALLOWED_RELATED_ART_PROVIDER_IDS = new Set<PatentSearchProviderId>([
+  'google-patents-corpus',
+  'indian-corpus',
+  'epo-ops-corpus',
+])
+
 function normalizeRelatedArtProviderIds(value: unknown): PatentSearchProviderId[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const providerIds = Array.from(new Set(
+  const requested = Array.from(new Set(
     value
       .map(item => String(item || '').trim())
       .filter(Boolean)
   )) as PatentSearchProviderId[]
+  const providerIds = requested.filter(id => ALLOWED_RELATED_ART_PROVIDER_IDS.has(id))
+  if (requested.length && !providerIds.length) {
+    console.warn('[Drafting] All requested prior-art providers were outside the stored-corpus allow-list; using the corpus default.', { requested })
+  }
   return providerIds.length ? providerIds : undefined
 }
 
@@ -8261,7 +8326,13 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
   const disableLinkedProviderExpansion = (data as any)?.disableLinkedProviderExpansion === true
   const batchPriorArtPolicy = typeof (data as any)?.batchPriorArtPolicy === 'string' ? (data as any).batchPriorArtPolicy : undefined
   const publicationDateFrom = normalizeRelatedArtDateText(afterDate)
-  const filters: PatentSearchFilters = publicationDateFrom ? { publicationDateFrom } : {}
+  // `afterDate` is the legacy single-field control; the advanced panel can now
+  // supply the full corpus filter set (countries + both date ranges). Explicit
+  // advanced values win over the legacy field when both are present.
+  const filters: PatentSearchFilters = {
+    ...(publicationDateFrom ? { publicationDateFrom } : {}),
+    ...normalizeRelatedArtAdvancedFilters((data as any)?.filters),
+  }
   const queryPlanOverride = normalizeRelatedArtQueryPlanOverride({
     ...((data as any)?.queryPlan || {}),
     ...((data as any)?.searchPrecision ? { searchPrecision: (data as any).searchPrecision } : {}),
@@ -8298,9 +8369,22 @@ async function handleRelatedArtSearchFromProviders(user: any, patentId: string, 
       llmExpansion: false,
       queryPlan,
       limit: safeLimit,
+      // Retrieve wide, return narrow. Without this, candidateLimit defaults to
+      // `limit` (10 for the batch lane), so the ANN lane pulled 10 rows out of
+      // ~29.8M vectors and the cross-encoder reranker was handed 10 documents —
+      // i.e. it had nothing to choose between. The reranker's value is re-scoring
+      // a broad recall pool down to the best few, so give it one. Clamped to 300
+      // by the orchestrator; `limit` still governs what the caller receives.
+      candidateLimit: RELATED_ART_CANDIDATE_LIMIT,
       requestHeaders,
       skipTrigramSearch,
       disableLinkedProviderExpansion,
+      // Prior art comes from the stored corpus only (google-patents-corpus +
+      // indian-corpus). Without this the orchestrator dispatches live epo-ops /
+      // ip-australia / patentsview / google-patents-bigquery whenever the corpus
+      // returns zero — and post-cutover "zero" is usually a timed-out lane, not a
+      // genuine miss, so a degraded search silently became a metered API spend.
+      disableProviderFallback: true,
     })
   } catch (error) {
     console.error('Drafting related art provider search failed:', error)

@@ -125,7 +125,7 @@ export default function AdminDiscountsPage() {
 
   return (
     <div className="min-h-screen bg-ai-graphite-950 p-6">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-[1800px] mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>

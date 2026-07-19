@@ -935,7 +935,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="px-6 py-8 max-w-[1400px] mx-auto">
+    <div className="px-6 py-8 max-w-[1800px] mx-auto">
       {/* ---- Page Header ---- */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">

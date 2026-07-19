@@ -13,6 +13,7 @@ import {
   Sparkles,
   Plus,
   Search,
+  ScanSearch,
   Lightbulb,
   FileText,
   History,
@@ -157,7 +158,7 @@ export default function UserDashboard() {
       {/* Subtle Background Grid */}
       <div className="absolute inset-0 pointer-events-none opacity-30" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
 
-      <main className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 relative z-10">
+      <main className="max-w-[1800px] mx-auto py-8 px-4 sm:px-6 lg:px-8 relative z-10">
 
         {/* Greeting + AI command bar */}
         <div className="mb-10">
@@ -270,7 +271,7 @@ export default function UserDashboard() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15, duration: 0.5 }}
-          className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-10"
+          className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-10"
         >
           <button
             onClick={() => router.push('/patents/draft/new')}
@@ -306,6 +307,22 @@ export default function UserDashboard() {
               <History className="h-3.5 w-3.5" /> Search History
             </button>
           </div>
+
+          <button
+            onClick={() => router.push('/prior-art-studio')}
+            className="group flex flex-col items-start p-4 bg-card border border-border rounded-xl hover:border-primary/50 hover:shadow-md transition-all duration-200"
+          >
+            <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600 mb-3 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+              <ScanSearch className="w-5 h-5" />
+            </div>
+            <span className="flex items-center gap-1.5 font-semibold text-foreground">
+              Advanced Search Studio
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-800">
+                New
+              </span>
+            </span>
+            <span className="text-xs text-muted-foreground mt-1">Search 45M patents, your way</span>
+          </button>
 
           <button
             onClick={() => router.push('/idea-bank')}

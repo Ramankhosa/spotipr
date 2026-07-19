@@ -93,7 +93,7 @@ export default function NoveltySearchPage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3 text-sm text-slate-500 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-[1800px] items-center gap-2 px-4 py-3 text-sm text-slate-500 sm:px-6 lg:px-8">
           <button type="button" onClick={() => router.push('/dashboard')} className="hover:text-slate-900">
             Dashboard
           </button>

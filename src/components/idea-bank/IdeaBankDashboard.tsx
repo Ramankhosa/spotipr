@@ -475,7 +475,7 @@ export default function IdeaBankDashboard() {
 
   return (
     <div className="min-h-full bg-slate-50/50 text-slate-900 font-sans">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-[1800px] mx-auto">
         {/* Header */}
         <div className="mb-12">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">

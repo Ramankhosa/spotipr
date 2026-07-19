@@ -4310,7 +4310,7 @@ export default function NoveltySearchWorkflow({
           </div>
           )}
 
-          <div className={`mx-auto w-full px-3 py-5 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-6xl' : selectedStageTab === '2' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+          <div className={`mx-auto w-full px-3 py-5 sm:px-6 lg:px-8 ${activeSearchPath === 'manual' ? 'max-w-[1800px]' : selectedStageTab === '2' ? 'max-w-[1800px]' : 'max-w-[1800px]'}`}>
             {renderSearchPathTabs()}
             <motion.div
               initial={{ opacity: 0, y: -12 }}

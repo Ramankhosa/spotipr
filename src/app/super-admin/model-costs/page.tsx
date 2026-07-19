@@ -141,7 +141,7 @@ export default function ModelCostsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">LLM Model Cost Configuration</h1>
             <p className="text-gray-600 mt-1 text-sm">
@@ -161,7 +161,7 @@ export default function ModelCostsPage() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto py-6 sm:px-6 lg:px-8 space-y-6">
+      <main className="max-w-[1800px] mx-auto py-6 sm:px-6 lg:px-8 space-y-6">
         {/* Form */}
         <div className="bg-white p-6 rounded-lg shadow border">
           <h2 className="text-lg font-semibold mb-4">Add / Update Model Cost</h2>

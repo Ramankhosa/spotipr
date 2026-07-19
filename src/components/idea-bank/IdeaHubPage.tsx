@@ -50,7 +50,7 @@ export default function IdeaHubPage() {
     <div className="fixed inset-0 z-50 bg-gradient-to-br from-slate-50 via-white to-slate-100 overflow-hidden">
       {/* Header with Tab Navigation */}
       <div className="sticky top-0 z-40 backdrop-blur-xl bg-white/90 border-b border-slate-200/50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-3">
+        <div className="max-w-[1800px] mx-auto px-6 py-3">
           <div className="flex items-center justify-between">
             {/* Back to Home + Logo/Title */}
             <div className="flex items-center gap-4">

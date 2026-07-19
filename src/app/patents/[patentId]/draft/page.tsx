@@ -803,7 +803,7 @@ export default function PatentDraftingPage() {
         </header>
 
         {/* Main Content - Maximized Writing Space */}
-        <main className="w-full max-w-[1600px] mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <main className="w-full mx-auto py-6 px-4 sm:px-6 lg:px-8">
           {navNotice && (
             <div className="max-w-[98%] mx-auto mb-3">
               <div className="flex items-start gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">

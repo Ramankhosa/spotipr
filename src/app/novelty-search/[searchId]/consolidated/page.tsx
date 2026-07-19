@@ -91,7 +91,7 @@ export default function ConsolidatedNoveltyReportPage() {
 
   return (
     <div className="min-h-screen bg-paper-100 py-6 px-4">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-[1800px] mx-auto">
         <ConsolidatedNoveltyReport
           searchId={searchId}
           searchData={searchData.results || searchData}

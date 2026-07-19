@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, CalendarRange, ChevronDown, CheckCircle2, Database, FileText, FolderOpen, Globe2, History, ListChecks, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUpRight, CalendarRange, ChevronDown, CheckCircle2, Database, FileText, FlaskConical, FolderOpen, Globe2, History, ListChecks, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import {
   DEFAULT_PATENT_COUNTRY_CODES,
@@ -963,35 +963,64 @@ export default function NoveltySearchSubmission(props: {
       </div>
 
       <div className="mb-5 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-        <div className="grid gap-1 sm:grid-cols-2" role="tablist" aria-label="Novelty search mode">
+        <div className="grid gap-1 sm:grid-cols-3">
+          {/* Automatic and Manual swap panels in place, so they are real tabs. The
+              Studio is a different page, so it sits outside the tablist — announcing a
+              navigation link as a tab would promise a panel that never appears. */}
+          <div className="contents" role="tablist" aria-label="Novelty search mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={searchPath === 'automatic'}
+              onClick={() => {
+                setSearchPath('automatic')
+                setError('')
+              }}
+              className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${searchPath === 'automatic' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+            >
+              <Search className="h-4 w-4" />
+              Automatic Search
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={searchPath === 'manual'}
+              onClick={() => {
+                setSearchPath('manual')
+                setError('')
+              }}
+              className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${searchPath === 'manual' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              Manual Search
+            </button>
+          </div>
           <button
             type="button"
-            role="tab"
-            aria-selected={searchPath === 'automatic'}
-            onClick={() => {
-              setSearchPath('automatic')
-              setError('')
-            }}
-            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'automatic' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+            onClick={() => router.push('/prior-art-studio')}
+            className="group inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ai-blue-500/40"
           >
-            <Search className="h-4 w-4" />
-            Automatic Search
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={searchPath === 'manual'}
-            onClick={() => {
-              setSearchPath('manual')
-              setError('')
-            }}
-            className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-sm font-medium ${searchPath === 'manual' ? 'bg-ai-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
-          >
-            <SlidersHorizontal className="h-4 w-4" />
-            Manual Search
+            <FlaskConical className="h-4 w-4" />
+            Prior-Art Studio
+            <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+              Advanced
+            </span>
+            <ArrowUpRight className="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
           </button>
         </div>
       </div>
+
+      <p className="-mt-2 mb-5 px-1 text-xs text-slate-500">
+        Automatic builds the search plan for you. Manual runs fielded queries directly.{' '}
+        <button
+          type="button"
+          onClick={() => router.push('/prior-art-studio')}
+          className="font-medium text-ai-blue-700 underline-offset-2 hover:underline"
+        >
+          Prior-Art Studio
+        </button>{' '}
+        is the advanced workspace — approve queries term by term, triage results, and compile a search report.
+      </p>
 
       {error && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
