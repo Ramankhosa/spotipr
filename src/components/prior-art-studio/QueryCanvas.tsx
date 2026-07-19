@@ -11,10 +11,10 @@ import type { StudioBlock, StudioBlockMode, StudioPlan } from '@/lib/prior-art-s
 
 const MODE_HELP: Record<StudioBlockMode, string> = {
   MATCH:
-    'MATCH narrows: at least one of these words must literally appear in the document’s title or abstract. Across the worldwide corpus it is applied to what the meaning lane retrieves, so MATCH sharpens precision — pair it with at least one EXPAND block to do the reaching.',
+    'MATCH is a HARD REQUIREMENT: a document is discarded unless one of these words literally appears in its title or abstract. Only titles and abstracts are searchable (~150 words), so each extra MATCH block sharply increases the chance of getting nothing back. Use it for at most one block, and only for a term of art you are certain will appear verbatim.',
   EXPAND:
-    'EXPAND widens: this concept is matched by meaning, so documents using completely different wording are still found. This is what actually reaches across the 45M-document corpus.',
-  BOTH: 'BOTH contributes the concept to the meaning search and still requires the words literally — precise, but it can only narrow what the meaning lane found.',
+    'EXPAND widens: this concept is matched by meaning, so documents using completely different wording are still found. This is what actually reaches across the 45M-document corpus, and it can never remove a document.',
+  BOTH: 'BOTH widens too: the words are searched literally AND the concept by meaning, and matching documents rank higher — but nothing is required, so no document is discarded for missing these terms. This is the safe choice when you want the words to count without risking an empty result.',
 }
 
 const MODE_ORDER: StudioBlockMode[] = ['MATCH', 'EXPAND', 'BOTH']
@@ -26,16 +26,25 @@ interface QueryCanvasProps {
 }
 
 function modeClasses(mode: StudioBlockMode, active: boolean): string {
-  if (!active) return 'text-muted-foreground hover:text-foreground'
-  if (mode === 'EXPAND') return 'bg-blue-600 text-white'
-  if (mode === 'BOTH') return 'bg-amber-700 text-white'
-  return 'bg-foreground text-background'
+  if (!active) return 'text-muted-foreground hover:bg-muted hover:text-foreground'
+  if (mode === 'EXPAND') return 'bg-blue-600 text-white shadow-sm'
+  if (mode === 'BOTH') return 'bg-brass-600 text-white shadow-sm'
+  // MATCH is the only mode that can remove documents — give it the strongest,
+  // most "stop"-like weight so its cost is visible before it is chosen.
+  return 'bg-foreground text-background shadow-sm'
 }
 
 function blockAccent(mode: StudioBlockMode): string {
-  if (mode === 'EXPAND') return 'border-l-4 border-l-blue-500'
-  if (mode === 'BOTH') return 'border-l-4 border-l-amber-600'
-  return 'border-l-4 border-l-foreground/60'
+  if (mode === 'EXPAND') return 'border-l-[3px] border-l-blue-500'
+  if (mode === 'BOTH') return 'border-l-[3px] border-l-brass-500'
+  return 'border-l-[3px] border-l-foreground'
+}
+
+/** One-word statement of what this mode does to the result set. */
+const MODE_EFFECT: Record<StudioBlockMode, { label: string; classes: string }> = {
+  MATCH: { label: 'gates', classes: 'bg-foreground/10 text-foreground' },
+  EXPAND: { label: 'widens', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' },
+  BOTH: { label: 'widens', classes: 'bg-brass-100 text-brass-800 dark:bg-brass-950/50 dark:text-brass-300' },
 }
 
 export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
@@ -91,10 +100,10 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
         >
           <Sparkles className="h-3 w-3" aria-hidden />
           {term.text}
-          <button type="button" aria-label={`Accept suggestion ${term.text}`} className="ml-0.5 rounded-full p-0.5 hover:bg-blue-100 dark:hover:bg-blue-900" onClick={onAccept} disabled={disabled}>
+          <button type="button" aria-label={`Accept suggestion ${term.text}`} className="ml-0.5 rounded-full p-1 hover:bg-blue-100 dark:hover:bg-blue-900 sm:p-0.5" onClick={onAccept} disabled={disabled}>
             <Check className="h-3 w-3" />
           </button>
-          <button type="button" aria-label={`Reject suggestion ${term.text}`} className="rounded-full p-0.5 hover:bg-blue-100 dark:hover:bg-blue-900" onClick={onRemove} disabled={disabled}>
+          <button type="button" aria-label={`Reject suggestion ${term.text}`} className="rounded-full p-1 hover:bg-blue-100 dark:hover:bg-blue-900 sm:p-0.5" onClick={onRemove} disabled={disabled}>
             <X className="h-3 w-3" />
           </button>
         </span>
@@ -103,7 +112,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
     return (
       <span key={key} className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-0.5 text-xs text-foreground">
         {term.text}
-        <button type="button" aria-label={`Remove ${term.text}`} className="rounded-full p-0.5 text-muted-foreground hover:text-destructive" onClick={onRemove} disabled={disabled}>
+        <button type="button" aria-label={`Remove ${term.text}`} className="rounded-full p-1 text-muted-foreground hover:text-destructive sm:p-0.5" onClick={onRemove} disabled={disabled}>
           <X className="h-3 w-3" />
         </button>
       </span>
@@ -112,18 +121,25 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
 
   const renderBlock = (block: StudioBlock, index: number) => (
     <div key={block.id}>
-      {index > 0 && <div className="my-1.5 text-center font-mono text-[10px] tracking-[0.3em] text-amber-700/70">AND</div>}
-      <div className={`rounded-lg border border-border bg-card p-2.5 ${blockAccent(block.mode)}`}>
+      {index > 0 && <div className="my-2 flex items-center gap-2" aria-hidden>
+          <span className="h-px flex-1 bg-border" />
+          <span className="font-mono text-[9px] font-bold tracking-[0.3em] text-muted-foreground">AND</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>}
+      <div className={`rounded-lg border border-border bg-card p-3 shadow-sm transition-shadow hover:shadow ${blockAccent(block.mode)}`}>
         <div className="mb-1.5 flex items-center gap-2">
-          <span className="text-xs font-semibold text-foreground">{block.label}</span>
+          <span className="text-[13px] font-semibold text-foreground">{block.label}</span>
+          <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${MODE_EFFECT[block.mode].classes}`}>
+            {MODE_EFFECT[block.mode].label}
+          </span>
           <Hint title={`${block.mode} block`} text={MODE_HELP[block.mode]} />
-          <div className="ml-auto inline-flex overflow-hidden rounded-md border border-border" role="group" aria-label={`${block.label} matching mode`}>
+          <div className="ml-auto inline-flex overflow-hidden rounded-md border border-border bg-background" role="group" aria-label={`${block.label} matching mode`}>
             {MODE_ORDER.map(mode => (
               <button
                 key={mode}
                 type="button"
                 disabled={disabled}
-                className={`px-2 py-0.5 text-[10px] font-semibold ${modeClasses(mode, block.mode === mode)}`}
+                className={`px-2.5 py-1 text-[10px] font-bold tracking-wide transition-colors ${modeClasses(mode, block.mode === mode)}`}
                 onClick={() =>
                   update(draft => {
                     const b = draft.blocks.find(x => x.id === block.id)
@@ -198,7 +214,7 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Query canvas</span>
+        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Query canvas</span>
         <Hint
           title="How the canvas works"
           text="Each box is one concept of the invention; the boxes are AND-ed together. Words inside a box are alternatives (OR). Dashed blue chips are AI suggestions — they do nothing until you accept them, so you stay in full control of the query."

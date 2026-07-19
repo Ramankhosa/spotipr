@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   ArrowLeft,
   ClipboardCopy,
   HelpCircle,
@@ -107,9 +108,21 @@ export function StudioApp() {
 
   const [drafting, setDrafting] = useState(false)
   const [running, setRunning] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const [reportLoading, setReportLoading] = useState(false)
   const [pinning, setPinning] = useState(false)
   const savingRef = useRef(false)
+
+  // Elapsed-seconds ticker for the deep-search progress narrative.
+  useEffect(() => {
+    if (!running) {
+      setElapsed(0)
+      return
+    }
+    const startedAt = Date.now()
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
+    return () => clearInterval(timer)
+  }, [running])
 
   // ------------------------------------------------------------------ setup
   useEffect(() => {
@@ -291,7 +304,15 @@ export function StudioApp() {
         ),
         ...t,
       ])
-      if (data.run.warnings.length) toast({ title: 'Run finished with notes', description: data.run.warnings[0] })
+      if (data.run.families.length === 0) {
+        toast({
+          title: 'Search returned no documents',
+          description: data.run.warnings[0] || 'See the explanation above the results.',
+          variant: 'error',
+        })
+      } else if (data.run.warnings.length) {
+        toast({ title: 'Run finished with notes', description: data.run.warnings[0] })
+      }
     } catch (err) {
       toast({ title: 'Run failed', description: err instanceof Error ? err.message : String(err), variant: 'error' })
     } finally {
@@ -475,15 +496,15 @@ export function StudioApp() {
   }, [active, visibleFamilies, cursor, docStates, setDocState, mainTab])
 
   // ----------------------------------------------------------------- render
-  if (authLoading) return <div className="p-10 text-sm text-muted-foreground">Loading Prior-Art Studio…</div>
-  if (!user) return <div className="p-10 text-sm text-muted-foreground">Please log in to use Prior-Art Studio.</div>
+  if (authLoading) return <div className="p-10 text-sm text-muted-foreground">Loading Advanced Search Studio…</div>
+  if (!user) return <div className="p-10 text-sm text-muted-foreground">Please log in to use Advanced Search Studio.</div>
 
   if (!active) {
     return (
       <div className="mx-auto max-w-5xl px-6 py-10">
         {showOnboarding && <OnboardingCoach onClose={closeOnboarding} />}
         <div className="mb-6 flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-foreground">Prior-Art Studio</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Advanced Search Studio</h1>
           <button type="button" className="text-muted-foreground hover:text-foreground" title="Show the 30-second introduction again" onClick={() => setShowOnboarding(true)}>
             <HelpCircle className="h-4 w-4" />
           </button>
@@ -524,9 +545,11 @@ export function StudioApp() {
   }
 
   const seedCard = (
-    <div className="rounded-xl border border-border bg-card p-4">
+    <div className="rounded-xl border border-border bg-gradient-to-b from-card to-paper-100/70 p-4 shadow-sm dark:to-card">
       <div className="mb-2 flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-primary" />
+        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-lamp-100 text-lamp-700 dark:bg-lamp-900/60 dark:text-lamp-300">
+          <Sparkles className="h-3.5 w-3.5" />
+        </span>
         <span className="text-sm font-semibold text-foreground">Describe the invention</span>
         <Hint
           title="This replaces hours of query writing"
@@ -538,14 +561,14 @@ export function StudioApp() {
         onChange={e => setDisclosure(e.target.value)}
         rows={mode === 'quick' ? 5 : 3}
         placeholder="e.g. A surgical screwdriver for bone screws with a clutch that slips at a preset torque, clicks audibly, re-engages by itself, and has a one-piece sterilizable housing…"
-        className="w-full resize-y rounded-lg border border-border bg-background p-3 text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring"
+        className="w-full resize-y rounded-lg border border-border bg-background p-3 text-sm leading-relaxed text-foreground shadow-inner transition-colors placeholder:text-muted-foreground/60 focus:border-lamp-500 focus:outline-none focus:ring-2 focus:ring-lamp-500/30"
       />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={draft}
           disabled={drafting || running}
-          className="inline-flex items-center gap-1.5 rounded-md border border-blue-300 bg-blue-50 px-3.5 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+          className="inline-flex items-center gap-1.5 rounded-md border border-blue-300 bg-blue-50 px-3.5 py-2 text-sm font-semibold text-blue-700 shadow-sm transition-all hover:bg-blue-100 hover:shadow disabled:opacity-50 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
         >
           {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {drafting ? 'Drafting your search…' : active.plan.blocks.length ? 'Re-draft from description' : 'Draft my search'}
@@ -555,8 +578,72 @@ export function StudioApp() {
     </div>
   )
 
+  // Paced narrative for the deep search. The stages mirror the real pipeline
+  // order; an attorney who reads them learns what the engine actually does.
+  const DEEP_STAGES: Array<[number, string]> = [
+    [0, 'Compiling your plan and embedding its concepts…'],
+    [3, 'Casting meaning probes across 29.8M patent-family vectors…'],
+    [10, 'Retrieving candidates from the Indian and worldwide corpora…'],
+    [18, 'Collapsing duplicate filings into families…'],
+    [24, 'Applying your MATCH requirements and exclusions, word by word…'],
+    [30, 'Reranking the strongest candidates…'],
+    [38, 'Scoring claim elements against the shortlist…'],
+    [48, 'Still working — deep searches over 45M documents can take up to a minute. Thorough beats fast.'],
+  ]
+  const currentStage = DEEP_STAGES.reduce((acc, [at, msg]) => (elapsed >= at ? msg : acc), DEEP_STAGES[0][1])
+
+  const progressCard = running ? (
+    <div className="rounded-xl border border-lamp-300 bg-lamp-50/70 p-4 shadow-sm dark:border-lamp-800 dark:bg-lamp-950/30" role="status" aria-live="polite">
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-lamp-600 text-white dark:bg-lamp-500 dark:text-lamp-950">
+          <Loader2 className="h-4.5 w-4.5 animate-spin" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground">Deep search in progress · {elapsed}s</p>
+          <p className="mt-0.5 text-[13px] text-muted-foreground">{currentStage}</p>
+        </div>
+      </div>
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-lamp-200/70 dark:bg-lamp-900">
+        <div
+          className="h-full rounded-full bg-lamp-600 transition-all duration-1000 dark:bg-lamp-400"
+          style={{ width: `${Math.min(94, 8 + elapsed * 1.6)}%` }}
+        />
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Searching both corpora with full probe budgets — every gate will be counted when it lands.
+      </p>
+    </div>
+  ) : null
+
   const resultsPane = (
     <div className="space-y-3">
+      {progressCard}
+      {run && run.warnings.length > 0 && (
+        <div
+          className={`rounded-lg border p-3 text-xs ${
+            run.families.length === 0
+              ? 'border-red-400 bg-red-50 dark:border-red-800 dark:bg-red-950/30'
+              : 'border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/25'
+          }`}
+          role="status"
+        >
+          <div className="mb-1 flex items-center gap-1.5 font-semibold text-foreground">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            {run.families.length === 0 ? 'This search presented no documents' : 'This run needs your attention'}
+          </div>
+          <ul className="space-y-1 text-muted-foreground">
+            {run.warnings.map((warning, i) => (
+              <li key={i}>• {warning}</li>
+            ))}
+          </ul>
+          {run.families.length === 0 && (
+            <p className="mt-2 text-muted-foreground">
+              Nothing here says anything about the state of the art — the search did not complete. Adjust the canvas
+              (usually: switch a MATCH block to BOTH) and run again.
+            </p>
+          )}
+        </div>
+      )}
       {run && (
         <ResultsFilterBar
           filters={filters}
@@ -578,6 +665,7 @@ export function StudioApp() {
         />
       )}
       {run ? (
+        <div className={running ? 'pointer-events-none opacity-50 transition-opacity' : 'transition-opacity'}>
         <ResultsList
           families={visibleFamilies}
           totalCount={allFamilies.length}
@@ -591,99 +679,150 @@ export function StudioApp() {
           openFamilyKey={readerFamily?.familyKey}
           saturation={saturation}
         />
+        </div>
       ) : (
-        <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {active.plan.blocks.length
-            ? 'The canvas is ready. Press Run search to fill the funnel and get your first ranked, family-grouped results.'
-            : 'Describe the invention and press “Draft my search” — or add concept blocks by hand if you prefer to build the query yourself.'}
+        <div className="flex flex-col items-center rounded-xl border border-dashed border-border bg-card/50 px-8 py-14 text-center">
+          <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-lamp-100 text-lamp-700 dark:bg-lamp-900/60 dark:text-lamp-300">
+            {active.plan.blocks.length ? <Play className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />}
+          </span>
+          <p className="text-sm font-semibold text-foreground">
+            {active.plan.blocks.length ? 'Ready to search' : 'Start with the invention'}
+          </p>
+          <p className="mt-1 max-w-md text-sm text-muted-foreground">
+            {active.plan.blocks.length
+              ? 'Press Run search to fill the funnel and get your first ranked, family-grouped results.'
+              : 'Describe it above and press “Draft my search” — or add concept blocks by hand if you prefer to build the query yourself.'}
+          </p>
         </div>
       )}
     </div>
   )
 
   return (
-    <div className="mx-auto max-w-[1800px] px-4 py-6 lg:px-6">
+    // Full-height workspace: header and funnel stay put, the panes scroll.
+    // A triage tool must keep its instruments visible while the list moves.
+    <div className="flex min-h-[calc(100vh-4rem)] flex-col bg-paper-200/60 dark:bg-background lg:h-[calc(100vh-4rem)] lg:overflow-hidden">
       {showOnboarding && <OnboardingCoach onClose={closeOnboarding} />}
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={() => {
-            setActive(null)
-            setRun(null)
-            api<{ sessions: SessionSummary[] }>('/sessions').then(d => setSessions(d.sessions)).catch(() => {})
-          }}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" /> Sessions
-        </button>
-        <input
-          defaultValue={active.title}
-          key={active.id + active.title}
-          onBlur={e => saveTitle(e.target.value.trim())}
-          onKeyDown={e => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-          }}
-          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-base font-bold text-foreground hover:border-border focus:border-border focus:outline-none"
-          aria-label="Search title"
-        />
-        <span className="font-mono text-[10px] text-muted-foreground">plan v{active.planVersion}</span>
-        <div className="inline-flex overflow-hidden rounded-md border border-border" role="group" aria-label="Layout density">
-          {(['quick', 'studio'] as const).map(m => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => switchMode(m)}
-              className={`px-3 py-1 text-xs font-semibold capitalize ${mode === m ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:text-foreground'}`}
-            >
-              {m}
-            </button>
-          ))}
-          <Hint
-            className="mx-1 self-center"
-            title="Quick vs Studio"
-            text="Quick is a single guided column — describe, approve, run, review. Studio adds the canvas rail, the element grid and the evidence trail. Same engine, same session — switch anytime."
-          />
-        </div>
-        <button type="button" title="Keyboard shortcuts (?)" onClick={() => setShowKeys(v => !v)} className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground">
-          <Keyboard className="h-4 w-4" />
-        </button>
-        <button type="button" title="Show the introduction again" onClick={() => setShowOnboarding(true)} className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground">
-          <HelpCircle className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={execute}
-          disabled={running || drafting}
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          title="Execute the plan on the canvas against the corpus"
-        >
-          {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-          {running ? 'Searching…' : 'Run search'}
-        </button>
-      </div>
+      {/* ---- command bar -------------------------------------------------- */}
+      <header className="shrink-0 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 lg:px-6">
+          <button
+            type="button"
+            onClick={() => {
+              setActive(null)
+              setRun(null)
+              api<{ sessions: SessionSummary[] }>('/sessions').then(d => setSessions(d.sessions)).catch(() => {})
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span className="hidden sm:inline">Sessions</span>
+          </button>
 
-      {showKeys && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-          <span className="font-semibold text-foreground">Keys:</span>
-          {[
-            ['j / k', 'move'],
-            ['1', 'relevant'],
-            ['2', 'maybe'],
-            ['3', 'not relevant'],
-            ['x', 'exclude family'],
-            ['Enter', 'read document'],
-            ['o', 'open on Google Patents'],
-            ['?', 'toggle this bar'],
-          ].map(([key, label]) => (
-            <span key={key}>
-              <kbd className="rounded border border-border bg-background px-1 font-mono text-[10px]">{key}</kbd> {label}
+          <div className="h-5 w-px bg-border" aria-hidden />
+
+          <div className="flex min-w-0 flex-1 items-baseline gap-2.5">
+            <input
+              defaultValue={active.title}
+              key={active.id + active.title}
+              onBlur={e => saveTitle(e.target.value.trim())}
+              onKeyDown={e => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              }}
+              className="min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-2 py-1 text-[17px] font-semibold tracking-tight text-foreground transition-colors hover:border-border focus:border-border focus:bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+              aria-label="Search title"
+            />
+            <span className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">
+              v{active.planVersion}
             </span>
-          ))}
-        </div>
-      )}
+          </div>
 
-      <div className="mb-4">
+          <div className="inline-flex items-center gap-1 rounded-lg bg-muted p-0.5" role="group" aria-label="Layout density">
+            {(['quick', 'studio'] as const).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => switchMode(m)}
+                className={`rounded-md px-2.5 py-1 text-xs font-semibold capitalize transition-all ${
+                  mode === m ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+            <Hint
+              className="mx-0.5 self-center"
+              title="Quick vs Studio"
+              text="Quick is a single guided column — describe, approve, run, review. Studio adds the canvas rail, the element grid and the evidence trail. Same engine, same session — switch anytime."
+            />
+          </div>
+
+          <button
+            type="button"
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            onClick={() => setShowKeys(v => !v)}
+            className={`hidden rounded-md p-1.5 transition-colors sm:block ${showKeys ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+          >
+            <Keyboard className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            title="Show the introduction again"
+            aria-label="Show the introduction"
+            onClick={() => setShowOnboarding(true)}
+            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={downloadReport}
+            disabled={reportLoading}
+            title="Compile the search report (DOCX)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+          >
+            {reportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScrollText className="h-3.5 w-3.5" />}
+            <span className="hidden md:inline">Report</span>
+          </button>
+          <button
+            type="button"
+            onClick={execute}
+            disabled={running || drafting}
+            className="inline-flex items-center gap-1.5 rounded-md bg-lamp-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-lamp-700 hover:shadow disabled:opacity-50 dark:bg-lamp-500 dark:hover:bg-lamp-400 dark:text-lamp-950"
+            title="Execute the plan on the canvas against the corpus"
+          >
+            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {running ? `Deep search · ${elapsed}s` : 'Run search'}
+          </button>
+        </div>
+
+        {showKeys && (
+          <div className="hidden flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground sm:flex lg:px-6">
+            {[
+              ['j / k', 'move'],
+              ['1', 'relevant'],
+              ['2', 'maybe'],
+              ['3', 'not relevant'],
+              ['x', 'exclude family'],
+              ['Enter', 'read document'],
+              ['o', 'open on Google Patents'],
+              ['?', 'hide this bar'],
+            ].map(([key, label]) => (
+              <span key={key} className="inline-flex items-center gap-1.5">
+                <kbd className="rounded border border-border border-b-2 bg-card px-1.5 py-0.5 font-mono text-[10px] text-foreground">
+                  {key}
+                </kbd>
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
+      </header>
+
+      {/* ---- instruments -------------------------------------------------- */}
+      <div className="shrink-0 border-b border-border bg-card/60 px-4 py-2.5 lg:px-6">
         <GatesFunnel
           counts={run?.gateCounts || null}
           detail={run?.gateDetail}
@@ -693,6 +832,8 @@ export function StudioApp() {
         />
       </div>
 
+      {/* ---- scrolling workspace ------------------------------------------ */}
+      <div className="flex-1 px-3 py-4 sm:px-4 lg:min-h-0 lg:overflow-hidden lg:px-6">
       {/* Steering is never hidden: if it influences ranking, it is on screen. */}
       {active.plan.steer?.enabled && active.plan.steer.publicationNumbers.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-[11px] dark:border-blue-800 dark:bg-blue-950/30">
@@ -726,28 +867,24 @@ export function StudioApp() {
       )}
 
       {mode === 'quick' ? (
-        <div className="mx-auto max-w-4xl space-y-4">
+        <div className="mx-auto max-w-4xl space-y-4 lg:h-full lg:overflow-y-auto lg:pr-1">
           {seedCard}
           {active.plan.blocks.length > 0 && (
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
               <QueryCanvas plan={active.plan} disabled={drafting || running} onChange={savePlan} />
             </div>
           )}
           {resultsPane}
-          <div className="flex justify-end">
-            <button type="button" onClick={downloadReport} disabled={reportLoading} className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
-              {reportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScrollText className="h-3.5 w-3.5" />} Compile search report (DOCX)
-            </button>
-          </div>
         </div>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-          <div className="space-y-4">
+        <div className="grid gap-5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(340px,26%)_1fr]">
+          {/* left rail — the plan, scrolls independently */}
+          <div className="space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
             {seedCard}
-            <div className="rounded-xl border border-border bg-background p-4">
+            <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
               <QueryCanvas plan={active.plan} disabled={drafting || running} onChange={savePlan} />
             </div>
-            <div className="rounded-lg border border-border bg-card p-3">
+            <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
               <div className="mb-1.5 flex items-center gap-2">
                 <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Query line</span>
                 <Hint
@@ -771,52 +908,67 @@ export function StudioApp() {
             </div>
           </div>
 
-          <div className="min-w-0 space-y-4">
-            <div className="flex items-center gap-1 border-b border-border" role="tablist" aria-label="Workspace">
+          {/* right pane — the work surface, scrolls independently */}
+          <div className="flex min-w-0 flex-col lg:min-h-0">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border" role="tablist" aria-label="Workspace">
               {([
-                ['results', `Results${run ? ` · ${visibleFamilies.length}` : ''}`],
-                ['grid', `Element grid${active.plan.elements.length ? ` · ${active.plan.elements.length}` : ''}`],
-                ['trail', `Trail · ${trail.length}`],
-              ] as const).map(([tab, label]) => (
+                ['results', 'Results', run ? visibleFamilies.length : null],
+                ['grid', 'Element grid', active.plan.elements.length || null],
+                ['trail', 'Trail', trail.length || null],
+              ] as const).map(([tab, label, count]) => (
                 <button
                   key={tab}
                   type="button"
                   role="tab"
                   aria-selected={mainTab === tab}
                   onClick={() => setMainTab(tab as MainTab)}
-                  className={`-mb-px border-b-2 px-3 py-2 text-xs font-semibold ${
-                    mainTab === tab ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+                  className={`-mb-px flex items-center gap-1.5 border-b-2 px-3.5 py-2.5 text-[13px] font-semibold transition-colors ${
+                    mainTab === tab
+                      ? 'border-lamp-600 text-foreground dark:border-lamp-400'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
                   }`}
                 >
                   {label}
+                  {count !== null && (
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${
+                        mainTab === tab ? 'bg-lamp-100 text-lamp-800 dark:bg-lamp-900 dark:text-lamp-200' : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  )}
                 </button>
               ))}
               {theories.length > 0 && (
-                <span className="ml-auto rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                <span className="ml-auto mr-1 rounded-full bg-lamp-100 px-2.5 py-1 text-[10px] font-bold text-lamp-800 dark:bg-lamp-900/60 dark:text-lamp-200">
                   {theories.length} pinned {theories.length === 1 ? 'theory' : 'theories'}
                 </span>
               )}
             </div>
 
-            {mainTab === 'results' && resultsPane}
-            {mainTab === 'grid' && (
-              <ElementGrid
-                elements={active.plan.elements}
-                families={allFamilies}
-                theories={theories}
-                onPinTheory={pinTheory}
-                onRemoveTheory={removeTheory}
-                onOpenDocument={family => {
-                  setReaderFamily(family)
-                  setMainTab('results')
-                }}
-                pinning={pinning}
-              />
-            )}
-            {mainTab === 'trail' && <TrailPanel entries={trail} onDownloadReport={downloadReport} reportLoading={reportLoading} />}
+            <div className="pt-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+              {mainTab === 'results' && resultsPane}
+              {mainTab === 'grid' && (
+                <ElementGrid
+                  elements={active.plan.elements}
+                  families={allFamilies}
+                  theories={theories}
+                  onPinTheory={pinTheory}
+                  onRemoveTheory={removeTheory}
+                  onOpenDocument={family => {
+                    setReaderFamily(family)
+                    setMainTab('results')
+                  }}
+                  pinning={pinning}
+                />
+              )}
+              {mainTab === 'trail' && <TrailPanel entries={trail} onDownloadReport={downloadReport} reportLoading={reportLoading} />}
+            </div>
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

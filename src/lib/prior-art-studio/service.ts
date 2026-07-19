@@ -126,9 +126,17 @@ Decompose the invention below into a search plan. Respond with ONLY a JSON objec
 }
 
 Rules:
-- 3 to 6 blocks, one per independent concept of the invention; AND-ing the blocks should describe the invention.
+- 3 to 6 blocks, one per independent concept of the invention; together the blocks should describe the invention.
 - Include patentese variants attorneys would miss (e.g. "fastener" -> "fastening means", "elongate member").
-- Suggest MATCH for precise terms of art, EXPAND for concepts phrased many ways, BOTH when unsure.
+- Mode meanings, and they matter a great deal:
+    MATCH  = HARD REQUIREMENT. A document is discarded unless its title/abstract literally contains one
+             of these terms. Only search index is title+abstract (~150 words), so every extra MATCH block
+             multiplies the chance of returning nothing. Use MATCH for AT MOST ONE block — the single
+             most unambiguous, certain-to-appear term of art. Prefer zero MATCH blocks over a risky one.
+    EXPAND = meaning-based only. Widens the search. Safe.
+    BOTH   = the terms widen the search AND boost ranking, but require nothing. Safe.
+  Default to BOTH or EXPAND. Never use MATCH for invented or descriptive phrases (e.g. "goal state
+  machine", "user-configurable goals") — those do not appear verbatim in real patent abstracts.
 - CPC codes must be real; 2-4 suggestions with honest one-line definitions.
 - Do not invent facts about the invention beyond the disclosure.
 
@@ -370,13 +378,18 @@ async function estimateFilterCount(plan: StudioPlan): Promise<number | null> {
 // ---------------------------------------------------------------------------
 
 /**
- * MATCH groups: one array of alternatives per MATCH/BOTH block. A document
- * satisfies the literal requirement when it contains at least one alternative
- * from EVERY group (AND of ORs) — the same semantics the canvas shows.
+ * The literal requirement: one array of alternatives per **MATCH** block.
+ *
+ * ONLY `MATCH` gates. `BOTH` used to be included here, which made it a hard
+ * AND-ed requirement while the canvas and the report both rendered it as
+ * `((terms) OR CAST(concept))` — an OR. A user setting four of five blocks to
+ * MATCH/BOTH therefore had to find a patent whose ~150-word abstract literally
+ * contained a term from all four groups, and every retrieved document was
+ * discarded. `BOTH` now widens (feeds both lanes) and requires nothing.
  */
 function matchGroups(plan: StudioPlan): string[][] {
   return plan.blocks
-    .filter(block => block.mode !== 'EXPAND')
+    .filter(block => block.mode === 'MATCH')
     .map(block =>
       activeTerms(block.terms)
         .map(term => term.toLowerCase().replace(/\*/g, '').trim())
@@ -385,51 +398,65 @@ function matchGroups(plan: StudioPlan): string[][] {
     .filter(group => group.length > 0)
 }
 
-function documentText(result: NormalizedPatentResult): string {
-  return `${result.title || ''} ${result.abstract || ''} ${result.snippet || ''}`.toLowerCase()
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Word-boundary term test.
+ *
+ * Raw `text.includes(term)` matched substrings: the abbreviation "BLE" matched
+ * inside "wearable", "portable", "cable", "flexible" — so in a wearables corpus
+ * that group passed unconditionally and enforced nothing, while four-word
+ * phrases in the same filter were near-impossible to satisfy. The filter was
+ * simultaneously too loose and too strict because it had no token boundaries.
+ */
+function containsTerm(text: string, term: string): boolean {
+  if (!term) return false
+  // \b is unreliable next to non-word chars (hyphens, slashes) common in
+  // patentese, so anchor on "not a word character" instead.
+  const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(term)}([^a-z0-9]|$)`, 'i')
+  return pattern.test(text)
 }
 
 function satisfiesMatch(text: string, groups: string[][]): boolean {
-  return groups.every(group => group.some(term => text.includes(term)))
+  return groups.every(group => group.some(term => containsTerm(text, term)))
+}
+
+/** Terms the attorney excluded, applied here rather than as a SQL ILIKE. */
+function excludedTerms(plan: StudioPlan): string[] {
+  return activeTerms(plan.notTerms)
+    .map(t => t.toLowerCase().trim())
+    .filter(t => t.length >= 3)
+}
+
+function isExcluded(text: string, terms: string[]): boolean {
+  return terms.some(term => containsTerm(text, term))
 }
 
 /**
- * Did Postgres' own full-text lane match this document?
+ * Lane attribution, computed from the document's own text rather than provider
+ * ranks — the keyword lane can time out or be unindexed for a corpus, and the
+ * overlap panel must stay truthful either way.
  *
- * Once the partial GIN index lands for the Google corpus, that lane indexes
- * FOUR fields — ragText (top_terms), title, abstract, abstractOriginal — while
- * the result payload we get back only carries title/abstract/snippet. So a
- * document legitimately matched on its top_terms would fail a naive re-check
- * here and be thrown away. If the database already matched it, that verdict
- * stands; we only apply our own literal test to documents the text lane never
- * judged (i.e. vector-lane hits).
+ * `literalVocabulary` is every literal term on the canvas (MATCH and BOTH), not
+ * just the gating ones: the question this answers is "would a keyword search
+ * have found this?", which BOTH terms contribute to even though they no longer
+ * gate.
  */
-function cameFromTextLane(result: NormalizedPatentResult): boolean {
-  return typeof result.textRank === 'number' || (result.scores?.text ?? 0) > 0
-}
-
-function passesMatchRequirement(result: NormalizedPatentResult, groups: string[][]): boolean {
-  if (!groups.length) return true
-  if (cameFromTextLane(result)) return true
-  return satisfiesMatch(documentText(result), groups)
-}
-
-/**
- * Lane attribution, computed here rather than taken from provider ranks.
- *
- * The provider's text lane is only index-backed for the Indian/PQAI corpora —
- * the full-text GIN indexes are PARTIAL (`WHERE corpusSources @> {indian-corpus}`),
- * so against the 45M-row Google corpus it degrades to a sequential scan and is
- * abandoned at the statement timeout. Deriving "did the words literally appear"
- * from the document text keeps the overlap panel truthful for every corpus.
- */
-function laneFor(result: NormalizedPatentResult, groups: string[][]): 'match' | 'cast' | 'both' | 'other' {
+function laneFor(
+  result: NormalizedPatentResult,
+  text: string,
+  literalVocabulary: string[]
+): 'match' | 'cast' | 'both' | 'other' {
   const hasVector =
     typeof result.vectorRank === 'number' ||
     (result.scores?.semantic ?? 0) > 0 ||
     (result.scores?.conceptVector ?? 0) > 0 ||
     (result.scores?.bestFeatureVector ?? 0) > 0
-  const hasText = cameFromTextLane(result) || (groups.length > 0 && satisfiesMatch(documentText(result), groups))
+  const hasText = literalVocabulary.length
+    ? literalVocabulary.some(term => containsTerm(text, term))
+    : typeof result.textRank === 'number' || (result.scores?.text ?? 0) > 0
 
   if (hasText && hasVector) return 'both'
   if (hasText) return 'match'
@@ -494,6 +521,10 @@ export async function runStudioPlan(input: {
       // is a real, reportable finding here — not something to paper over.
       disableProviderFallback: true,
       disableLinkedProviderExpansion: true,
+      // Attorneys accept 30-60s for a supervised deep search; the UI shows a
+      // staged progress narrative while this runs. Raises probe budgets and
+      // per-lane timeouts without touching the novelty pipeline's fast path.
+      deepSearch: true,
       // The trigram GIN indexes are partial (indian-corpus/pqai only), so this
       // lane is a full scan of 45M rows on the Google corpus — it fires only
       // when the pool is under-filled, which is exactly when a search is
@@ -526,46 +557,83 @@ export async function runStudioPlan(input: {
     )
   }
 
-  // MATCH as a counted filter.
+  // Fetch family AND the searchable text in one pass, BEFORE any filtering.
   //
-  // On the worldwide corpus the keyword lane cannot act as an independent
-  // recall gate (no full-text index covers those 45M rows), so recall comes
-  // from the vector lane and MATCH terms are enforced here, over what came
-  // back. The count is surfaced in the funnel so the narrowing is never
-  // invisible — and the semantics the canvas promises (every MATCH block must
-  // be satisfied) still hold for every document the attorney sees.
+  // The result payload carries only title/abstract/snippet, but the keyword
+  // index is built over title + abstract + abstractOriginal + ragText
+  // (top_terms). Judging literal presence from the payload alone would discard
+  // documents that legitimately contain a term in a field we simply hadn't
+  // fetched — so we read the same fields the index does.
+  const pubs = Array.from(
+    new Set([...pool, ...rankedRaw].map(r => r.publicationNumber).filter(Boolean))
+  )
+  const corpusRows = pubs.length
+    ? await prisma.localPatent.findMany({
+        where: { publicationNumber: { in: pubs } },
+        select: {
+          publicationNumber: true,
+          familyId: true,
+          title: true,
+          abstract: true,
+          abstractOriginal: true,
+          ragText: true,
+        },
+      })
+    : []
+  const familyByPub = new Map(corpusRows.map(r => [r.publicationNumber, r.familyId || null]))
+  const familyKeyOf = (pub: string) => familyByPub.get(pub) || pub
+  const textByPub = new Map(
+    corpusRows.map(r => [
+      r.publicationNumber,
+      `${r.title || ''} ${r.abstract || ''} ${r.abstractOriginal || ''} ${r.ragText || ''}`.toLowerCase(),
+    ])
+  )
+  /** Fall back to the payload for anything not in the local corpus. */
+  const searchTextFor = (result: NormalizedPatentResult): string =>
+    textByPub.get(result.publicationNumber) ||
+    `${result.title || ''} ${result.abstract || ''} ${result.snippet || ''}`.toLowerCase()
+
+  // MATCH as a counted filter, plus attorney exclusions.
+  //
+  // Only MATCH blocks gate. Exclusions are applied here rather than as a SQL
+  // `excludeTerms` filter, which the provider compiles into an unindexable
+  // ILIKE over fully-detoasted claims/description text on every lane.
   const groups = matchGroups(input.plan)
-  const ranked = groups.length ? rankedRaw.filter(result => passesMatchRequirement(result, groups)) : rankedRaw
-  const matchRemoved = rankedRaw.length - ranked.length
-  // If Postgres' text lane contributed at all, the keyword index is serving
-  // this corpus and MATCH is a true recall lane — not merely a post-filter.
-  const textLaneServed = rankedRaw.some(cameFromTextLane)
+  const notTerms = excludedTerms(input.plan)
+  const literalVocabulary = input.plan.blocks
+    .filter(b => b.mode !== 'EXPAND')
+    .flatMap(b => activeTerms(b.terms))
+    .map(t => t.toLowerCase().replace(/\*/g, '').trim())
+    .filter(t => t.length >= 3)
+
+  let excludedCount = 0
+  const ranked = rankedRaw.filter(result => {
+    const text = searchTextFor(result)
+    if (notTerms.length && isExcluded(text, notTerms)) {
+      excludedCount += 1
+      return false
+    }
+    return groups.length ? satisfiesMatch(text, groups) : true
+  })
+  const matchRemoved = rankedRaw.length - ranked.length - excludedCount
   const matchWarnings: string[] = []
   if (groups.length && ranked.length === 0 && rankedRaw.length > 0) {
     matchWarnings.push(
-      `Every one of the ${rankedRaw.length} retrieved documents was removed because it did not contain your MATCH terms literally. Switch a block to EXPAND, or loosen its wording.`
+      `All ${rankedRaw.length} retrieved documents were removed: none literally contained a term from every MATCH block. MATCH is a hard requirement — switch a block to BOTH or EXPAND so its terms widen the search instead of gating it.`
     )
   } else if (groups.length && matchRemoved > 0 && ranked.length < rankedRaw.length * 0.15) {
     matchWarnings.push(
-      `MATCH terms removed ${matchRemoved} of ${rankedRaw.length} retrieved documents. If that feels too aggressive, switch a block to EXPAND.`
+      `MATCH removed ${matchRemoved} of ${rankedRaw.length} retrieved documents. If that is too aggressive, switch a block from MATCH to BOTH.`
     )
   }
-
-  // Family lookup: results don't carry familyId; batch-fetch it once.
-  const pubs = Array.from(new Set(pool.map(r => r.publicationNumber).filter(Boolean)))
-  const familyRows = pubs.length
-    ? await prisma.localPatent.findMany({
-        where: { publicationNumber: { in: pubs } },
-        select: { publicationNumber: true, familyId: true },
-      })
-    : []
-  const familyByPub = new Map(familyRows.map(r => [r.publicationNumber, r.familyId || null]))
-  const familyKeyOf = (pub: string) => familyByPub.get(pub) || pub
+  if (excludedCount > 0) {
+    matchWarnings.push(`${excludedCount} document(s) were dropped by your exclusion terms.`)
+  }
 
   // Lane overlap across the recall pool (the recall-anxiety instrument).
   const lanes = { matchOnly: 0, castOnly: 0, both: 0 }
   for (const result of pool) {
-    const lane = laneFor(result, groups)
+    const lane = laneFor(result, searchTextFor(result), literalVocabulary)
     if (lane === 'match') lanes.matchOnly += 1
     else if (lane === 'cast') lanes.castOnly += 1
     else if (lane === 'both') lanes.both += 1
@@ -578,12 +646,12 @@ export async function runStudioPlan(input: {
     .flatMap(block => activeTerms(block.terms))
     .map(t => t.toLowerCase().replace(/\*/g, '').trim())
     .filter(t => t.length >= 3)
-  const castOnly = pool.filter(result => laneFor(result, groups) === 'cast')
+  const castOnly = pool.filter(result => laneFor(result, searchTextFor(result), literalVocabulary) === 'cast')
   let noSharedTerm = 0
   const harvest = new Map<string, number>()
   for (const result of castOnly) {
-    const text = `${result.title || ''} ${result.abstract || result.snippet || ''}`.toLowerCase()
-    if (!planTerms.some(term => text.includes(term))) {
+    const text = searchTextFor(result)
+    if (!planTerms.some(term => containsTerm(text, term))) {
       noSharedTerm += 1
       for (const word of harvestTerms(text)) {
         if (planTerms.some(term => word.includes(term) || term.includes(word))) continue
@@ -639,7 +707,7 @@ export async function runStudioPlan(input: {
           jurisdiction: result.jurisdiction,
         },
       ],
-      lane: laneFor(result, groups),
+      lane: laneFor(result, searchTextFor(result), literalVocabulary),
       rerankScore: result.rerankScore ?? result.scores?.rerank,
       hybridScore: result.hybridScore ?? result.scores?.hybrid,
       matchedFields: result.matchedFields?.slice(0, 8),
@@ -671,6 +739,7 @@ export async function runStudioPlan(input: {
 
   // Per-element evidence for the Element Grid, computed over the shown set only
   // (a direct scan of ~100 rows — precise, and it never touches the ANN index).
+  const elementWarnings: string[] = []
   if (input.plan.elements.length && families.length) {
     try {
       const graded = families.slice(0, ELEMENT_GRID_LIMIT)
@@ -682,9 +751,24 @@ export async function runStudioPlan(input: {
         const perDoc = cells[family.publicationNumber]
         if (perDoc) family.elementCells = perDoc
       }
+      const scoredCount = graded.filter(f => f.elementCells).length
+      if (scoredCount === 0) {
+        elementWarnings.push(
+          'Element evidence could not be computed for any document — the Element Grid is empty for this run, not "no teaching found".'
+        )
+      }
     } catch (error) {
-      console.warn('[PriorArtStudio] Element scoring failed (results still valid):', error)
+      console.warn('[PriorArtStudio] Element scoring failed:', error)
+      elementWarnings.push(
+        `Element evidence was not computed (${error instanceof Error ? error.message : 'scoring failed'}). The Element Grid is unavailable for this run — treat blank cells as "not assessed", not as "no teaching".`
+      )
     }
+  } else if (input.plan.elements.length && !families.length) {
+    // Silent skip previously: the grid rendered empty and the report printed
+    // "No references were shortlisted" as if it were a review outcome.
+    elementWarnings.push(
+      'Element evidence was not computed because no documents survived to be scored.'
+    )
   }
 
   // Without an embedding key the retrieval core skips the vector lane SILENTLY
@@ -708,7 +792,7 @@ export async function runStudioPlan(input: {
     filtersIsEstimate: true,
     recall: searchResponse.diagnostics?.providerCandidateCount ?? pool.length,
     matchRemoved,
-    matchMode: groups.length ? (textLaneServed ? 'lane' : 'filter') : 'none',
+    matchMode: groups.length ? 'filter' : 'none',
     families: poolFamilyKeys.size,
     shown: families.length,
     lanes,
@@ -718,6 +802,57 @@ export async function runStudioPlan(input: {
   }
 
   const durationMs = Date.now() - started
+
+  // ------------------------------------------------------------- telemetry
+  // One structured line per run, so `pm2 logs` carries the complete internal
+  // picture of every search — parseable by scripts/studio-log-health.ts.
+  // Alerts are the invariants whose silent violation caused real production
+  // incidents; they log at error level so they stand out in any log viewer.
+  const alertEvents: string[] = []
+  if (rankedRaw.length > 0 && families.length === 0) alertEvents.push('zero_results_after_filtering')
+  if (!semanticLaneRan) alertEvents.push('semantic_lane_skipped')
+  if (semanticLaneRan && pool.length > 0 && lanes.castOnly === 0 && lanes.both === 0) {
+    alertEvents.push('vector_lane_contributed_nothing')
+  }
+  if (foreignCount > 0) alertEvents.push('foreign_provider_results_dropped')
+  if (elementWarnings.length > 0) alertEvents.push('element_scoring_degraded')
+  for (const event of alertEvents) {
+    console.error(
+      '[StudioAlert]',
+      JSON.stringify({ event, sessionId: input.sessionId, planHash: compiled.planHash, planVersion: input.planVersion })
+    )
+  }
+  console.log(
+    '[StudioTelemetry]',
+    JSON.stringify({
+      event: 'studio_run_completed',
+      sessionId: input.sessionId,
+      planVersion: input.planVersion,
+      planHash: compiled.planHash,
+      durationMs,
+      retrieved: rankedRaw.length,
+      shown: families.length,
+      matchRemoved,
+      excludedCount,
+      families: poolFamilyKeys.size,
+      newFamilyCount,
+      lanes,
+      vocabularyGap,
+      semanticLaneRan,
+      steered: gateCounts.steered,
+      matchMode: gateCounts.matchMode,
+      elementsScored: families.filter(f => f.elementCells).length,
+      warningsCount:
+        compiled.warnings.length + laneWarnings.length + guardWarnings.length + matchWarnings.length + elementWarnings.length,
+      alerts: alertEvents,
+      providerStats: (searchResponse.providerStats || []).map(s => ({
+        providerId: s.providerId,
+        resultCount: s.resultCount,
+        error: s.error ? String(s.error).slice(0, 120) : undefined,
+      })),
+    })
+  )
+
   const storedFamilies = families.slice(0, STORED_FAMILY_LIMIT)
   const run = await prisma.priorArtStudioRun.create({
     data: {
@@ -727,7 +862,7 @@ export async function runStudioPlan(input: {
       planHash: compiled.planHash,
       gateCounts: gateCounts as unknown as Prisma.InputJsonValue,
       providerStats: searchResponse.providerStats as unknown as Prisma.InputJsonValue,
-      warnings: [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...(searchResponse.warnings || [])] as unknown as Prisma.InputJsonValue,
+      warnings: [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])] as unknown as Prisma.InputJsonValue,
       results: storedFamilies as unknown as Prisma.InputJsonValue,
       resultCount: ranked.length,
       familyCount: poolFamilyKeys.size,
@@ -752,7 +887,7 @@ export async function runStudioPlan(input: {
     gateCounts,
     gateDetail,
     families,
-    warnings: [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...(searchResponse.warnings || [])],
+    warnings: [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])],
     newFamilyCount,
     durationMs,
     booleanPreview: compiled.booleanPreview,

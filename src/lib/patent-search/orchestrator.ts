@@ -212,8 +212,10 @@ export class PatentSearchOrchestrator {
   }
 
   async search(input: PatentSearchRequest): Promise<PatentSearchResponse> {
-    const limit = clampLimit(input.limit, 20, 100)
-    const candidateLimit = Math.max(limit, clampLimit(input.candidateLimit ?? limit, limit, 300))
+    // deepSearch trades wall-clock for recall: a supervised attorney search can
+    // take 30-60s, so its ceilings are set by usefulness, not snappiness.
+    const limit = clampLimit(input.limit, 20, input.deepSearch ? 200 : 100)
+    const candidateLimit = Math.max(limit, clampLimit(input.candidateLimit ?? limit, limit, input.deepSearch ? 1200 : 300))
     const queryPlan = await createPatentSearchQueryPlan(input)
     // Runtime tuning + admin provider gates, resolved once so the whole search runs
     // under one consistent configuration. Both fail open to code defaults.

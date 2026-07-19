@@ -55,11 +55,47 @@ interface DocText {
   hasClaims: boolean
 }
 
-function verdictFor(combined: number, termCoverage: number): StudioElementVerdict {
-  if (combined >= 0.66 && termCoverage > 0) return 'STRONG'
-  if (combined >= 0.66) return 'PART' // strong semantic, zero literal support — never call it strong
-  if (combined >= 0.42) return 'PART'
-  if (combined >= 0.2) return 'WEAK'
+/**
+ * Absolute similarity floors, applied ALONGSIDE the within-run relative score.
+ *
+ * The relative score alone manufactures verdicts: min-max normalising over the
+ * graded set guarantees the best document scores 1.0 and the worst 0.0 whatever
+ * the absolute similarities are, so 40 wholly irrelevant documents still yield a
+ * full STRONG..NONE spread — and the grid would then nominate §102 anticipation
+ * candidates from noise. A document must clear a real similarity bar too.
+ *
+ * Binary Hamming similarity over 512 bits centres near 0.5 for unrelated text,
+ * so these are calibrated well above that floor. Tunable via env after eval.
+ */
+const ABS_SIM_STRONG = Number(process.env.PAS_ELEMENT_ABS_STRONG || '0.62') || 0.62
+const ABS_SIM_PART = Number(process.env.PAS_ELEMENT_ABS_PART || '0.56') || 0.56
+
+function verdictFor(
+  combined: number,
+  termCoverage: number,
+  absoluteSimilarity: number | undefined,
+  semanticAvailable: boolean
+): StudioElementVerdict {
+  // Literal-only mode: without embeddings the combined score is capped at 0.4,
+  // so a document containing every element term verbatim could never exceed
+  // WEAK. Judge on term coverage alone and let the caller flag the degradation.
+  if (!semanticAvailable) {
+    if (termCoverage >= 0.6) return 'STRONG'
+    if (termCoverage >= 0.3) return 'PART'
+    if (termCoverage > 0) return 'WEAK'
+    return 'NONE'
+  }
+
+  const clearsStrong = absoluteSimilarity === undefined || absoluteSimilarity >= ABS_SIM_STRONG
+  const clearsPart = absoluteSimilarity === undefined || absoluteSimilarity >= ABS_SIM_PART
+
+  // Strong literal coverage stands on its own even if the abstract embedding is
+  // a poor match — the words are right there and the attorney can check them.
+  if (termCoverage >= 0.6) return 'STRONG'
+  if (combined >= 0.66 && termCoverage > 0 && clearsStrong) return 'STRONG'
+  if (combined >= 0.66 && clearsPart) return 'PART' // strong semantic, no literal support
+  if (combined >= 0.42 && clearsPart) return 'PART'
+  if (combined >= 0.2 || termCoverage > 0) return 'WEAK'
   return 'NONE'
 }
 
@@ -177,6 +213,11 @@ export async function scoreElements(input: {
     }
   }
 
+  // If no element got semantic scores, the embedding step failed or was
+  // unavailable — verdicts must be judged on literal coverage alone and the
+  // caller must be told, not handed scores computed on a silently capped scale.
+  const semanticAvailable = semantic.size > 0
+
   // ---- 3. blend, normalising semantic signal within this candidate set ------
   for (const element of elements) {
     const terms = elementTerms(element.text)
@@ -214,7 +255,7 @@ export async function scoreElements(input: {
 
       if (!out[pub]) out[pub] = {}
       out[pub][element.id] = {
-        verdict: verdictFor(combined, termCoverage),
+        verdict: verdictFor(combined, termCoverage, rawSimilarity, semanticAvailable),
         matchedTerms,
         termCoverage: Number(termCoverage.toFixed(2)),
         similarity: rawSimilarity === undefined ? undefined : Number(rawSimilarity.toFixed(3)),

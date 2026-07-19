@@ -20,23 +20,47 @@ function quoteTerm(term: string): string {
   return /\s/.test(trimmed) ? `"${trimmed.replace(/"/g, '')}"` : trimmed
 }
 
+/** Blocks that act as a hard literal requirement. ONLY `MATCH` gates. */
+export function requiredBlocks(plan: StudioPlan) {
+  return plan.blocks.filter(block => block.mode === 'MATCH')
+}
+
+/** Blocks whose literal terms should widen keyword recall without gating. */
+function literalRecallBlocks(plan: StudioPlan) {
+  return plan.blocks.filter(block => block.mode !== 'EXPAND')
+}
+
 /**
- * Postgres websearch_to_tsquery syntax: space = AND, `OR` keyword, quoted
- * phrases, `-term` negation. MATCH/BOTH blocks become AND-ed OR-groups.
+ * The keyword lane's query — a RECALL query, deliberately not a gate.
+ *
+ * `websearch_to_tsquery` supports only: whitespace = AND, the `OR` keyword,
+ * "quoted phrases", and leading `-` for NOT. It silently DISCARDS parentheses
+ * and never raises a syntax error, and `&` binds tighter than `|`. An attempt
+ * to express "AND of OR-groups" as `(a OR b) (c OR d)` therefore collapses into
+ * `a OR (b AND c) OR d` — the opposite of the intent, catastrophically broad,
+ * and with any trailing `-negation` binding to the final alternative only.
+ *
+ * So we stop trying to express conjunction here. This emits a flat disjunction
+ * that maximises what the indexed keyword lane retrieves; the hard AND-of-groups
+ * requirement is enforced afterwards in `service.ts`, over text we fetch
+ * ourselves, where the semantics are exact and testable.
+ *
+ * Exclusions are NOT emitted here either: as `-term` tokens they bind to one
+ * alternative (inert), and routing them through the provider's `excludeTerms`
+ * filter compiles to an unindexable ILIKE over fully-detoasted claims and
+ * description text on every lane. They are applied post-retrieval instead.
  */
 function buildSearchQuery(plan: StudioPlan): { query: string; warnings: string[] } {
   const warnings: string[] = []
-  const groups: string[] = []
-  for (const block of plan.blocks) {
-    if (block.mode === 'EXPAND') continue
-    const terms = activeTerms(block.terms)
-    if (!terms.length) continue
-    const rendered = terms.map(quoteTerm).filter(Boolean)
-    groups.push(rendered.length > 1 ? `(${rendered.join(' OR ')})` : rendered[0])
+  const terms: string[] = []
+  for (const block of literalRecallBlocks(plan)) {
+    for (const term of activeTerms(block.terms)) {
+      const rendered = quoteTerm(term)
+      if (rendered && !terms.includes(rendered)) terms.push(rendered)
+    }
   }
-  const negations = activeTerms(plan.notTerms).map(t => `-${quoteTerm(t)}`)
-  const query = [...groups, ...negations].join(' ').trim()
-  if (!groups.length) {
+  const query = terms.join(' OR ').trim()
+  if (!terms.length) {
     const hasExpand = plan.blocks.some(b => b.mode !== 'MATCH' && activeTerms(b.terms).length)
     if (!hasExpand) warnings.push('No active terms on the canvas — accept or add at least one term before running.')
   }
@@ -110,25 +134,41 @@ function buildFilters(plan: StudioPlan): PatentSearchFilters {
   if (plan.filters.publicationDateTo) filters.publicationDateTo = plan.filters.publicationDateTo
   if (plan.filters.applicants?.length) filters.applicants = plan.filters.applicants
   if (plan.filters.inventors?.length) filters.inventors = plan.filters.inventors
-  const excluded = activeTerms(plan.notTerms)
-  if (excluded.length) filters.excludeTerms = excluded
+  // NOTE: excludeTerms is deliberately NOT forwarded. The provider compiles it
+  // to `NOT (<title||abstract||claimsText||descriptionText||rawText||…> ILIKE
+  // '%term%')` on EVERY lane — unindexable, and it detoasts megabytes of claims
+  // and description text per candidate row. That is what was timing the lanes
+  // out. Exclusions are applied post-retrieval in service.ts instead.
   return filters
 }
 
-/** Human-readable query line shown under the canvas and recorded in the trail/report. */
+/**
+ * Human-readable query line shown under the canvas and recorded in the report.
+ *
+ * This must describe what ACTUALLY executes, because it is presented to
+ * attorneys as "the query as run":
+ *   MATCH  — hard requirement, enforced after retrieval
+ *   BOTH   — feeds both lanes, requires nothing
+ *   EXPAND — meaning only
+ */
 export function renderBooleanPreview(plan: StudioPlan): string {
-  const parts: string[] = []
+  const required: string[] = []
+  const widening: string[] = []
   for (const block of plan.blocks) {
     const terms = activeTerms(block.terms)
     if (!terms.length) continue
     const group = terms.map(quoteTerm).join(' OR ')
-    if (block.mode === 'EXPAND') parts.push(`CAST(${block.label}: ${terms.join('; ')})`)
-    else if (block.mode === 'BOTH') parts.push(`((${group}) OR CAST(${block.label}))`)
-    else parts.push(`(${group})`)
+    if (block.mode === 'EXPAND') widening.push(`CAST(${block.label}: ${terms.join('; ')})`)
+    else if (block.mode === 'BOTH') widening.push(`((${group}) OR CAST(${block.label}))`)
+    else required.push(`(${group})`)
   }
   const cpc = activeCpcCodes(plan)
-  if (cpc.length) parts.push(`CPC:(${cpc.join(' OR ')})`)
-  const rendered = parts.join(' AND ')
+  if (cpc.length) required.push(`CPC:(${cpc.join(' OR ')})`)
+
+  const parts: string[] = []
+  if (required.length) parts.push(`REQUIRE ${required.join(' AND ')}`)
+  if (widening.length) parts.push(`WIDEN ${widening.join(' OR ')}`)
+  const rendered = parts.join('  ·  ')
   const negations = activeTerms(plan.notTerms)
   const negRendered = negations.length ? ` NOT (${negations.map(quoteTerm).join(' OR ')})` : ''
   const dates =

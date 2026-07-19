@@ -41,7 +41,7 @@ export function OnboardingCoach({ onClose }: OnboardingCoachProps) {
   const isLast = step === STEPS.length - 1
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Prior-Art Studio introduction">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Advanced Search Studio introduction">
       <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
         <div className="mb-4 flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -49,7 +49,7 @@ export function OnboardingCoach({ onClose }: OnboardingCoachProps) {
           </span>
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-              Prior-Art Studio · {step + 1} of {STEPS.length}
+              Advanced Search Studio · {step + 1} of {STEPS.length}
             </div>
             <h2 className="text-base font-bold text-foreground">{current.title}</h2>
           </div>

@@ -105,10 +105,18 @@ export function ResultsList({
 
   if (!families.length) {
     return (
-      <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-        {totalCount > 0
-          ? 'No results match these filters. Clear or loosen them to see the rest of the run.'
-          : 'No results yet — run the search to fill this list.'}
+      <div className="flex flex-col items-center rounded-xl border border-dashed border-border bg-card/50 px-8 py-12 text-center">
+        <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+          <Info className="h-5 w-5" />
+        </span>
+        <p className="text-sm font-semibold text-foreground">
+          {totalCount > 0 ? 'Nothing matches these filters' : 'No results yet'}
+        </p>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+          {totalCount > 0
+            ? `All ${totalCount} documents from this run are hidden by your current filters. Clear or loosen them to see the rest.`
+            : 'Run the search to fill this list.'}
+        </p>
       </div>
     )
   }
@@ -126,8 +134,10 @@ export function ResultsList({
               key={family.familyKey}
               data-index={index}
               onClick={() => onCursorChange(index)}
-              className={`rounded-lg border bg-card p-3 transition-shadow ${state.excluded ? 'opacity-45' : ''} ${
-                isCursor ? 'border-primary ring-1 ring-primary' : 'border-border'
+              className={`rounded-xl border bg-card p-3.5 shadow-sm transition-all ${state.excluded ? 'opacity-40' : ''} ${
+                isCursor
+                  ? 'border-lamp-500 ring-2 ring-lamp-500/25 shadow'
+                  : 'border-border hover:border-border hover:shadow'
               }`}
             >
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -137,12 +147,12 @@ export function ResultsList({
                     e.stopPropagation()
                     onOpenReader(family)
                   }}
-                  className="font-mono text-xs font-semibold text-blue-700 hover:underline dark:text-blue-400"
+                  className="rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-blue-700 transition-colors hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-900/50"
                   title="Open and read this document (Enter)"
                 >
                   {family.publicationNumber}
                 </button>
-                <span className="text-sm font-semibold text-foreground">{family.title}</span>
+                <span className="text-[14px] font-semibold leading-snug text-foreground">{family.title}</span>
                 <span className="text-[10px] text-muted-foreground">
                   {family.members.length > 1 ? `family of ${family.members.length} · ` : ''}
                   {family.applicants ? `${family.applicants} · ` : ''}
@@ -157,7 +167,7 @@ export function ResultsList({
               </div>
 
               {(family.snippet || family.abstract) && (
-                <p className={`mt-1 max-w-4xl text-xs leading-relaxed text-muted-foreground ${isOpen ? '' : 'line-clamp-2'}`}>
+                <p className={`mt-1.5 max-w-4xl text-[13px] leading-relaxed text-muted-foreground ${isOpen ? '' : 'line-clamp-2'}`}>
                   {family.snippet || family.abstract}
                 </p>
               )}
@@ -216,7 +226,7 @@ export function ResultsList({
                       key={tag}
                       type="button"
                       title={`${TAG_META[tag].label} (key ${TAG_META[tag].key})`}
-                      className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold ${
+                      className={`rounded-md border px-2 py-1.5 text-[10px] font-semibold sm:py-0.5 ${
                         state.tag === tag ? `${TAG_META[tag].classes} border-transparent` : 'border-border text-muted-foreground hover:text-foreground'
                       }`}
                       onClick={e => {
@@ -230,7 +240,7 @@ export function ResultsList({
                   <button
                     type="button"
                     title={state.excluded ? 'Restore family (key x)' : 'Exclude family (key x)'}
-                    className="rounded-md border border-border p-1 text-muted-foreground hover:text-foreground"
+                    className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground sm:p-1"
                     onClick={e => {
                       e.stopPropagation()
                       onExclude(family, !state.excluded)
@@ -256,7 +266,7 @@ export function ResultsList({
       </div>
 
       {saturation && saturation.reviewed > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-paper-50 px-3.5 py-2.5 text-[11px] text-muted-foreground shadow-sm dark:bg-card">
           <span className="font-semibold text-foreground">Have I searched enough?</span>
           <SaturationSpark saturation={saturation} />
           <span>

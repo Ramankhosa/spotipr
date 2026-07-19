@@ -59,26 +59,30 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
   const gapPct = counts?.vocabularyGap !== undefined ? Math.round(counts.vocabularyGap * 100) : null
 
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div className="rounded-xl border border-border bg-card shadow-sm">
       <div className="flex flex-wrap items-center gap-3 px-3 py-2">
         <div className="flex items-stretch overflow-x-auto" role="group" aria-label="Search funnel">
           {gates.map((gate, i) => {
             const isOpen = open && gate.clickable
             const body = (
               <>
-                <div className="flex items-center gap-1 text-[9.5px] uppercase tracking-wider text-muted-foreground">
+                <div className="flex items-center gap-1 text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                   {gate.label}
                   <Hint text={GATE_HELP[gate.label]} />
                   {gate.clickable && <ChevronDown className={`h-2.5 w-2.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />}
                 </div>
-                <div className="font-mono text-sm font-semibold tabular-nums text-foreground">{gate.value}</div>
+                <div className="font-mono text-[17px] font-semibold leading-tight tabular-nums text-foreground">{gate.value}</div>
               </>
             )
-            const className = `relative min-w-[92px] border border-border px-3 py-1 text-left ${
-              i === 0 ? 'rounded-l-md' : 'border-l-0'
-            } ${i === gates.length - 1 ? 'rounded-r-md' : ''} ${
-              isOpen ? 'bg-amber-50 dark:bg-amber-950/30' : gate.accent ? 'bg-blue-50 dark:bg-blue-950/30' : 'bg-background'
-            } ${running ? 'animate-pulse' : ''}`
+            const className = `relative min-w-[104px] border border-border px-3.5 py-2 text-left transition-colors ${
+              i === 0 ? 'rounded-l-lg' : 'border-l-0'
+            } ${i === gates.length - 1 ? 'rounded-r-lg' : ''} ${
+              isOpen
+                ? 'bg-brass-50 ring-1 ring-inset ring-brass-300 dark:bg-brass-950/40 dark:ring-brass-800'
+                : gate.accent
+                  ? 'bg-blue-50/70 dark:bg-blue-950/25'
+                  : 'bg-paper-50 dark:bg-background'
+            } ${gate.clickable ? 'cursor-pointer hover:bg-brass-50/70 dark:hover:bg-brass-950/25' : ''} ${running ? 'animate-pulse' : ''}`
 
             return gate.clickable ? (
               <button key={gate.label} type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className={className}>
@@ -112,7 +116,7 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
         )}
 
         {lanes && counts?.semanticLaneRan !== false && (
-          <div className="ml-auto flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] text-muted-foreground">
+          <div className="ml-auto flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-paper-50 px-3 py-2 text-[11px] text-muted-foreground dark:bg-background">
             <span>
               words-only <b className="font-mono text-foreground">{lanes.matchOnly.toLocaleString()}</b>
             </span>

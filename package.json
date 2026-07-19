@@ -12,6 +12,7 @@
     "oa:test": "tsx scripts/test-office-action-foundation.ts && tsx scripts/test-office-action-pipeline.ts && tsx scripts/test-office-action-intake.ts && tsx scripts/test-office-action-export.ts && tsx scripts/test-office-action-citations.ts",
     "oa:eval": "tsx scripts/office-action-eval/validate-real-fers.ts",
     "oa:worker": "tsx scripts/office-action-worker.ts",
+    "studio:log-health": "tsx scripts/studio-log-health.ts",
     "oa:test:worker": "tsx scripts/test-office-action-worker.ts",
     "oa:test:e2e": "tsx scripts/test-office-action-e2e.ts",
     "oa:sync-profile": "tsx scripts/sync-oa-profile.ts",

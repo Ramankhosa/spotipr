@@ -503,10 +503,17 @@ function trimRetrievalText(value: unknown, maxWords = 36) {
 // Raise only alongside an explicit connection_limit on DATABASE_URL.
 const VECTOR_PROBE_CONCURRENCY = Math.max(1, Number(process.env.PATENT_SEARCH_VECTOR_PROBE_CONCURRENCY || '3') || 3)
 
-function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number) {
-  if (query.type === 'concept' || query.type === 'semantic') return Math.max(60, Math.min(140, safeLimit))
+function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number, deep = false) {
+  if (query.type === 'concept' || query.type === 'semantic') {
+    return deep ? Math.max(120, Math.min(280, safeLimit)) : Math.max(60, Math.min(140, safeLimit))
+  }
   if (query.type === 'feature_pair') return 0
-  return Math.max(12, Math.min(24, Math.ceil(safeLimit / 8)))
+  // The fast path caps feature probes at 24 rows; with 8-9 probes that made
+  // "recall" a cap artifact (~200 docs) rather than a statement about the art.
+  // Deep search scales the per-probe budget with the requested candidate pool.
+  return deep
+    ? Math.max(40, Math.min(150, Math.ceil(safeLimit / 3)))
+    : Math.max(12, Math.min(24, Math.ceil(safeLimit / 8)))
 }
 
 function buildFallbackRetrievalQueries(
@@ -696,11 +703,15 @@ export class IndianCorpusProvider implements PatentSearchProvider {
   async search(request: PatentProviderSearchRequest): Promise<NormalizedPatentResult[]> {
     const searchStartedAt = Date.now()
     const tuning = await resolveRetrievalTuning()
-    const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = tuning.statementTimeoutMs) =>
+    const deep = request.deepSearch === true
+    // Deep searches may run each lane up to 30s: the attorney was told this is
+    // a deep search and shown live progress, so thorough beats fast here.
+    const laneTimeoutMs = deep ? Math.max(tuning.statementTimeoutMs, 30_000) : tuning.statementTimeoutMs
+    const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = laneTimeoutMs) =>
       queryRawWithStatementTimeout<T>(query, timeoutMs)
     const traceId = request.requestHeaders?.['x-request-id'] ||
       `patent-search-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const safeLimit = clampLimit(request.limit, 20, 300)
+    const safeLimit = clampLimit(request.limit, 20, deep ? 600 : 300)
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
     const filters = withExcludedTerms(queryPlan.fieldFilters || {}, queryPlan.excludedTerms || [])
@@ -911,7 +922,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
             logEmbeddingSearch('warn', 'query_vector_missing', { traceId, queryIndex, queryType: retrievalQuery.type }, true)
             return
           }
-          const limit = retrievalQueryLimit(retrievalQuery, safeLimit)
+          const limit = retrievalQueryLimit(retrievalQuery, safeLimit, deep)
           if (limit <= 0) return
           const vectorLiteral = corpusEmbeddingToLiteral(vector)
           const queryStartedAt = Date.now()

@@ -161,14 +161,14 @@ export function ResultsFilterBar({
   const jurisdictions = Array.from(new Set(families.map(jurisdictionOf))).sort()
 
   const chip = (active: boolean) =>
-    `rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+    `rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
       active
-        ? 'border-primary bg-primary/10 text-primary'
-        : 'border-border text-muted-foreground hover:text-foreground'
+        ? 'border-lamp-500 bg-lamp-50 text-lamp-700 dark:bg-lamp-950/50 dark:text-lamp-300'
+        : 'border-border text-muted-foreground hover:border-muted-foreground/40 hover:text-foreground'
     }`
 
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div className="rounded-xl border border-border bg-card shadow-sm">
       <div className="flex flex-wrap items-center gap-2 p-2.5">
         <div className="relative min-w-[190px] flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

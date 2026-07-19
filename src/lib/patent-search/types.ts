@@ -150,6 +150,13 @@ export interface PatentSearchRequest {
   /** Suppress the live-API fallback that runs when the local corpus returns nothing. */
   disableProviderFallback?: boolean
   strictSemantic?: boolean
+  /**
+   * Opt-in depth-over-speed budget (Prior-Art Studio). Raises the orchestrator
+   * result/candidate ceilings, per-probe vector limits and the per-lane
+   * statement timeout. Default off: the novelty pipeline and public API keep
+   * today's fast-path behaviour unchanged.
+   */
+  deepSearch?: boolean
   maxSemanticQueryWords?: number
   suppressSensitiveLogging?: boolean
 }
