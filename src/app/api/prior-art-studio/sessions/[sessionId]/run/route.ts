@@ -23,12 +23,14 @@ export async function POST(request: NextRequest, { params }: { params: { session
     const session = await getOwnedSession(params.sessionId, auth.user.id)
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
+    const body = await request.json().catch(() => ({}))
     const run = await runStudioPlan({
       sessionId: session.id,
       userId: auth.user.id,
       plan: session.plan as unknown as StudioPlan,
       planVersion: session.planVersion,
       requestHeaders: headersToRecord(request),
+      depth: body?.depth === 'fast' ? 'fast' : 'deep',
     })
     return NextResponse.json({ run })
   } catch (error) {

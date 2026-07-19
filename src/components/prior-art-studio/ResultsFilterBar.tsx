@@ -15,10 +15,16 @@ export type TagFilterValue = StudioDocTag | 'UNTAGGED'
 export type LaneFilterValue = 'match' | 'cast' | 'both' | 'other'
 export type ResultSort = 'rank' | 'dateDesc' | 'dateAsc' | 'title'
 
+export type MatchFilterValue = 'all' | 'meets' | 'misses'
+
 export interface ResultFilters {
   text: string
   tags: TagFilterValue[]
   lanes: LaneFilterValue[]
+  /** The MATCH lens: view all, only those meeting every MATCH block, or only those missing one. */
+  match: MatchFilterValue
+  /** NOT-term hits are hidden by default but always one click away — never deleted. */
+  showNotHits: boolean
   jurisdictions: string[]
   dateFrom: string
   dateTo: string
@@ -33,6 +39,8 @@ export const DEFAULT_RESULT_FILTERS: ResultFilters = {
   text: '',
   tags: [],
   lanes: [],
+  match: 'all',
+  showNotHits: false,
   jurisdictions: [],
   dateFrom: '',
   dateTo: '',
@@ -61,6 +69,8 @@ export function countActiveFilters(filters: ResultFilters): number {
   if (filters.cpc.trim()) n += 1
   if (filters.hideExcluded) n += 1
   if (filters.onlyNew) n += 1
+  if (filters.match !== 'all') n += 1
+  if (filters.showNotHits) n += 1
   return n
 }
 
@@ -78,6 +88,10 @@ export function applyResultFilters(
 
     if (filters.hideExcluded && state.excluded) return false
     if (filters.onlyNew && !family.isNew) return false
+
+    if (!filters.showNotHits && family.hitsNotTerm) return false
+    if (filters.match === 'meets' && family.meetsMatch === false) return false
+    if (filters.match === 'misses' && family.meetsMatch !== false) return false
 
     if (filters.tags.length) {
       const tagValue: TagFilterValue = state.tag ?? 'UNTAGGED'
@@ -197,6 +211,36 @@ export function ResultsFilterBar({
             text="Narrow to what you tagged — e.g. show only “Unreviewed” to pick up exactly where you stopped, or only “Maybe” to work the second pass."
           />
         </div>
+
+        {(() => {
+          const meets = families.filter(f => f.meetsMatch !== false).length
+          const misses = families.length - meets
+          const notCount = families.filter(f => f.hitsNotTerm).length
+          if (!misses && !notCount) return null
+          return (
+            <div className="flex items-center gap-1">
+              {misses > 0 && (
+                <>
+                  <button type="button" className={chip(filters.match === 'meets')} onClick={() => set({ match: filters.match === 'meets' ? 'all' : 'meets' })}>
+                    Meets MATCH · {meets}
+                  </button>
+                  <button type="button" className={chip(filters.match === 'misses')} onClick={() => set({ match: filters.match === 'misses' ? 'all' : 'misses' })}>
+                    Misses MATCH · {misses}
+                  </button>
+                </>
+              )}
+              {notCount > 0 && (
+                <button type="button" className={chip(filters.showNotHits)} onClick={() => set({ showNotHits: !filters.showNotHits })}>
+                  NOT hits · {notCount}
+                </button>
+              )}
+              <Hint
+                title="Nothing is ever removed"
+                text="Every retrieved document is here. “Misses MATCH” shows documents that lack one of your required literal terms — often the closest art in different words. “NOT hits” shows documents containing an excluded term, hidden by default but never deleted."
+              />
+            </div>
+          )
+        })()}
 
         <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
           Sort

@@ -110,6 +110,14 @@ export interface StudioResultFamily {
   matchedFields?: string[]
   matchReasons?: string[]
   isNew?: boolean
+  /**
+   * Does this document literally satisfy every MATCH block? NOTHING is removed
+   * on this basis — it is a classification the attorney filters by, because a
+   * document that misses your exact words may still be the closest art.
+   */
+  meetsMatch?: boolean
+  /** Contains one of the attorney's NOT terms. Flagged and hidden by default, never deleted. */
+  hitsNotTerm?: boolean
   /** Per-element evidence, keyed by element id. Present when the plan has elements. */
   elementCells?: Record<string, StudioElementCell>
 }
@@ -152,8 +160,12 @@ export interface StudioGateCounts {
   filters: number | null
   filtersIsEstimate: boolean
   recall: number
-  /** Documents removed because they lacked the literal MATCH terms. */
+  /** Documents that do NOT satisfy every MATCH block (still shown, filterable). */
   matchRemoved?: number
+  /** Documents that satisfy every MATCH block. */
+  matchSatisfied?: number
+  /** Documents containing a NOT term (flagged, hidden by default, never deleted). */
+  notHits?: number
   /** Whether MATCH ran as an index-backed recall lane or as a filter over retrieved candidates. */
   matchMode?: 'filter' | 'lane' | 'none'
   families: number
@@ -163,6 +175,8 @@ export interface StudioGateCounts {
   vocabularyGap?: number
   /** False when the embedding lane was skipped — lane counts are then meaningless. */
   semanticLaneRan?: boolean
+  /** Which budget this run used: deep (30-60s, full probes) or fast scan. */
+  depth?: 'deep' | 'fast'
   steered?: boolean
 }
 

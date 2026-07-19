@@ -98,7 +98,7 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   children.push(para(`Query: ${renderBooleanPreview(plan)}`))
   children.push(
     para(
-      'MATCH = hard requirement, a document is discarded unless it literally contains one of these terms. BOTH = the terms widen retrieval and boost ranking but require nothing. EXPAND = meaning-based only.',
+      'MATCH = required vocabulary: documents missing these terms are flagged "misses MATCH" and counted, but every retrieved document is presented. BOTH = the terms widen retrieval and boost ranking. EXPAND = meaning-based only.',
       { italics: true }
     )
   )
@@ -130,9 +130,11 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
     const presented = Array.isArray(run.results) ? (run.results as unknown[]).length : 0
     children.push(
       para(
-        `Run v${run.planVersion} (${run.planHash}) at ${run.createdAt.toISOString()} — retrieved ${counts.recall?.toLocaleString?.() ?? '?'}, presented for review ${presented}${
-          counts.matchRemoved ? `, ${counts.matchRemoved.toLocaleString()} removed by MATCH requirements` : ''
-        }${run.newFamilyCount ? `, +${run.newFamilyCount} new vs prior run` : ''}.${presented === 0 ? ' THIS RUN PRESENTED NOTHING.' : ''}`
+        `${counts.depth === 'fast' ? 'Fast scan' : 'Deep search'} v${run.planVersion} (${run.planHash}) at ${run.createdAt.toISOString()} — retrieved ${counts.recall?.toLocaleString?.() ?? '?'}, presented for review ${presented}${
+          typeof counts.matchSatisfied === 'number' && counts.matchRemoved
+            ? ` (${counts.matchSatisfied.toLocaleString()} meet every MATCH block, ${counts.matchRemoved.toLocaleString()} do not — ALL presented)`
+            : ''
+        }${counts.notHits ? `, ${counts.notHits} flagged by NOT terms (hidden by default, not deleted)` : ''}${run.newFamilyCount ? `, +${run.newFamilyCount} new vs prior run` : ''}.${presented === 0 ? ' THIS RUN PRESENTED NOTHING.' : ''}`
       )
     )
     children.push(

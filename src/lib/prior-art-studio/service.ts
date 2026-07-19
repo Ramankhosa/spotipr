@@ -23,9 +23,9 @@ import {
 
 export const ADVANCED_MANUAL_SEARCH_STAGE_CODE = 'ADVANCED_MANUAL_SEARCH_QUERY_GENERATOR'
 
-const RESULT_LIMIT = 120
+const RESULT_LIMIT = 200
 const CANDIDATE_LIMIT = 1000
-const STORED_FAMILY_LIMIT = 150
+const STORED_FAMILY_LIMIT = 200
 
 /**
  * The ONLY providers Prior-Art Studio may search: our own stored corpus.
@@ -129,10 +129,10 @@ Rules:
 - 3 to 6 blocks, one per independent concept of the invention; together the blocks should describe the invention.
 - Include patentese variants attorneys would miss (e.g. "fastener" -> "fastening means", "elongate member").
 - Mode meanings, and they matter a great deal:
-    MATCH  = HARD REQUIREMENT. A document is discarded unless its title/abstract literally contains one
-             of these terms. Only search index is title+abstract (~150 words), so every extra MATCH block
-             multiplies the chance of returning nothing. Use MATCH for AT MOST ONE block — the single
-             most unambiguous, certain-to-appear term of art. Prefer zero MATCH blocks over a risky one.
+    MATCH  = REQUIRED VOCABULARY. Documents missing these terms are flagged "misses MATCH" and the
+             attorney typically filters to the meets-set. Only title+abstract (~150 words) is searched,
+             so every extra MATCH block shrinks the meets-set sharply. Use MATCH for AT MOST ONE block —
+             the single most certain-to-appear term of art. Prefer zero MATCH blocks over a risky one.
     EXPAND = meaning-based only. Widens the search. Safe.
     BOTH   = the terms widen the search AND boost ranking, but require nothing. Safe.
   Default to BOTH or EXPAND. Never use MATCH for invented or descriptive phrases (e.g. "goal state
@@ -465,6 +465,12 @@ function laneFor(
 }
 
 const HARVEST_STOPWORDS = new Set([
+  // document-structure words that show up in every abstract and taught the
+  // harvest bar to suggest junk like "abstract" / "inventors" / "includes"
+  'abstract', 'title', 'inventor', 'inventors', 'applicant', 'applicants', 'classification', 'classifications',
+  'includes', 'included', 'including', 'discloses', 'disclosed', 'disclosure', 'describes', 'described',
+  'summary', 'background', 'field', 'figure', 'figures', 'embodiment', 'embodiments', 'preferred',
+  'improved', 'improvement', 'various', 'thereby', 'therefor', 'therefore', 'herein', 'wherein',
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'said', 'which', 'wherein', 'having', 'have',
   'are', 'was', 'were', 'being', 'been', 'configured', 'adapted', 'least', 'one', 'comprising', 'including',
   'plurality', 'first', 'second', 'third', 'each', 'such', 'when', 'while', 'thereof', 'therein', 'whereby',
@@ -497,7 +503,10 @@ export async function runStudioPlan(input: {
   plan: StudioPlan
   planVersion: number
   requestHeaders: Record<string, string>
+  /** 'deep' (default): full probe budgets, 30-60s. 'fast': the quick iterate loop. */
+  depth?: 'deep' | 'fast'
 }): Promise<StudioRunPayload> {
+  const depth: 'deep' | 'fast' = input.depth === 'fast' ? 'fast' : 'deep'
   const started = Date.now()
   const compiled = compileStudioPlan(input.plan)
   if (compiled.warnings.length && !compiled.queryPlan.searchQuery && !compiled.queryPlan.retrievalQueries) {
@@ -522,9 +531,9 @@ export async function runStudioPlan(input: {
       disableProviderFallback: true,
       disableLinkedProviderExpansion: true,
       // Attorneys accept 30-60s for a supervised deep search; the UI shows a
-      // staged progress narrative while this runs. Raises probe budgets and
-      // per-lane timeouts without touching the novelty pipeline's fast path.
-      deepSearch: true,
+      // staged progress narrative while this runs. Fast scans keep the 8s
+      // budgets for quick iteration while shaping the canvas.
+      deepSearch: depth === 'deep',
       // The trigram GIN indexes are partial (indian-corpus/pqai only), so this
       // lane is a full scan of 45M rows on the Google corpus — it fires only
       // when the pool is under-filled, which is exactly when a search is
@@ -606,28 +615,38 @@ export async function runStudioPlan(input: {
     .map(t => t.toLowerCase().replace(/\*/g, '').trim())
     .filter(t => t.length >= 3)
 
-  let excludedCount = 0
-  const ranked = rankedRaw.filter(result => {
+  // NOTHING retrieved is ever deleted. Every document is CLASSIFIED — does it
+  // satisfy the MATCH blocks? does it hit a NOT term? — and the attorney
+  // filters by those classifications in the UI. A document that misses your
+  // exact words may still be the closest art; hiding it was a design failure
+  // (a production run once showed 1 of 120 retrieved documents because of it).
+  const matchFlags = new Map<string, { meetsMatch: boolean; hitsNotTerm: boolean }>()
+  let matchSatisfied = 0
+  let notHits = 0
+  const ranked = rankedRaw
+  for (const result of ranked) {
     const text = searchTextFor(result)
-    if (notTerms.length && isExcluded(text, notTerms)) {
-      excludedCount += 1
-      return false
-    }
-    return groups.length ? satisfiesMatch(text, groups) : true
-  })
-  const matchRemoved = rankedRaw.length - ranked.length - excludedCount
+    const meetsMatch = groups.length ? satisfiesMatch(text, groups) : true
+    const hitsNotTerm = notTerms.length ? isExcluded(text, notTerms) : false
+    if (meetsMatch) matchSatisfied += 1
+    if (hitsNotTerm) notHits += 1
+    matchFlags.set(result.publicationNumber, { meetsMatch, hitsNotTerm })
+  }
+  const matchRemoved = ranked.length - matchSatisfied
   const matchWarnings: string[] = []
-  if (groups.length && ranked.length === 0 && rankedRaw.length > 0) {
+  if (groups.length && matchSatisfied === 0 && ranked.length > 0) {
     matchWarnings.push(
-      `All ${rankedRaw.length} retrieved documents were removed: none literally contained a term from every MATCH block. MATCH is a hard requirement — switch a block to BOTH or EXPAND so its terms widen the search instead of gating it.`
+      `None of the ${ranked.length} retrieved documents literally contains a term from every MATCH block — all are still shown below, flagged. Your MATCH wording may not be how these patents speak; consider switching a block to BOTH.`
     )
-  } else if (groups.length && matchRemoved > 0 && ranked.length < rankedRaw.length * 0.15) {
+  } else if (groups.length && matchSatisfied < ranked.length * 0.15 && ranked.length > 0) {
     matchWarnings.push(
-      `MATCH removed ${matchRemoved} of ${rankedRaw.length} retrieved documents. If that is too aggressive, switch a block from MATCH to BOTH.`
+      `Only ${matchSatisfied} of ${ranked.length} retrieved documents meet every MATCH block. All are shown — use the MATCH filter above the results to focus on either group.`
     )
   }
-  if (excludedCount > 0) {
-    matchWarnings.push(`${excludedCount} document(s) were dropped by your exclusion terms.`)
+  if (notHits > 0) {
+    matchWarnings.push(
+      `${notHits} document(s) contain one of your NOT terms. They are hidden by default but never deleted — a filter above the results shows them.`
+    )
   }
 
   // Lane overlap across the recall pool (the recall-anxiety instrument).
@@ -708,6 +727,8 @@ export async function runStudioPlan(input: {
         },
       ],
       lane: laneFor(result, searchTextFor(result), literalVocabulary),
+      meetsMatch: matchFlags.get(result.publicationNumber)?.meetsMatch ?? true,
+      hitsNotTerm: matchFlags.get(result.publicationNumber)?.hitsNotTerm ?? false,
       rerankScore: result.rerankScore ?? result.scores?.rerank,
       hybridScore: result.hybridScore ?? result.scores?.hybrid,
       matchedFields: result.matchedFields?.slice(0, 8),
@@ -792,12 +813,18 @@ export async function runStudioPlan(input: {
     filtersIsEstimate: true,
     recall: searchResponse.diagnostics?.providerCandidateCount ?? pool.length,
     matchRemoved,
+    matchSatisfied,
+    notHits,
     matchMode: groups.length ? 'filter' : 'none',
-    families: poolFamilyKeys.size,
+    // Families of the reviewable (ranked) set, so the funnel tells one story:
+    // Retrieved -> Families -> For review. The full recall pool's family count
+    // belongs to diagnostics, not the headline funnel.
+    families: familyOrder.length,
     shown: families.length,
     lanes,
     vocabularyGap,
     semanticLaneRan,
+    depth,
     steered: Boolean(input.plan.steer?.enabled && input.plan.steer.publicationNumbers.length),
   }
 
@@ -809,7 +836,7 @@ export async function runStudioPlan(input: {
   // Alerts are the invariants whose silent violation caused real production
   // incidents; they log at error level so they stand out in any log viewer.
   const alertEvents: string[] = []
-  if (rankedRaw.length > 0 && families.length === 0) alertEvents.push('zero_results_after_filtering')
+  if (rankedRaw.length > 0 && families.length === 0) alertEvents.push('zero_results_after_filtering') // now only reachable via a collapse bug — MATCH no longer deletes
   if (!semanticLaneRan) alertEvents.push('semantic_lane_skipped')
   if (semanticLaneRan && pool.length > 0 && lanes.castOnly === 0 && lanes.both === 0) {
     alertEvents.push('vector_lane_contributed_nothing')
@@ -826,14 +853,16 @@ export async function runStudioPlan(input: {
     '[StudioTelemetry]',
     JSON.stringify({
       event: 'studio_run_completed',
+      depth,
       sessionId: input.sessionId,
       planVersion: input.planVersion,
       planHash: compiled.planHash,
       durationMs,
       retrieved: rankedRaw.length,
       shown: families.length,
+      matchSatisfied,
       matchRemoved,
-      excludedCount,
+      notHits,
       families: poolFamilyKeys.size,
       newFamilyCount,
       lanes,
@@ -875,7 +904,7 @@ export async function runStudioPlan(input: {
     input.sessionId,
     'RUN',
     `user:${input.userId}`,
-    `Run v${input.planVersion} (${compiled.planHash}): ${gateCounts.recall.toLocaleString()} recall → ${gateCounts.families.toLocaleString()} families → ${families.length} shown${newFamilyCount ? ` (+${newFamilyCount} new)` : ''}`,
+    `${depth === 'deep' ? 'Deep search' : 'Fast scan'} v${input.planVersion} (${compiled.planHash}): ${gateCounts.recall.toLocaleString()} recall → ${gateCounts.families.toLocaleString()} families → ${families.length} shown${newFamilyCount ? ` (+${newFamilyCount} new)` : ''}`,
     { planHash: compiled.planHash, gateCounts, booleanPreview: compiled.booleanPreview } as unknown as Prisma.InputJsonValue
   )
 

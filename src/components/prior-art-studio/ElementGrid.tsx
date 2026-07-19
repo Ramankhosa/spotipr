@@ -89,8 +89,8 @@ export function ElementGrid({
   if (!elements.length) {
     return (
       <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-        No claim elements yet. Add them in the <b>Elements</b> tab of the canvas (or let the query generator draft them)
-        — the grid scores every result against each element.
+        No claim elements yet. Add them under <b>Invention elements</b> on the canvas (or let the query generator
+        draft them) — the grid scores every result against each element.
       </div>
     )
   }

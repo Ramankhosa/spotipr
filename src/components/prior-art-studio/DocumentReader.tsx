@@ -28,6 +28,7 @@ interface PatentDetail {
   kind?: string | null
   familyId?: string | null
   numberOfClaims?: number | null
+  numberOfPages?: number | null
   textTier?: 'claims' | 'description-snippet' | 'abstract'
 }
 
@@ -228,10 +229,13 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
             {[
               ['Applicants', applicantText(detail?.applicants) || family.applicants],
               ['Inventors', detail?.inventors?.join('; ')],
+              ['Country / kind', [detail?.country, detail?.kind].filter(Boolean).join(' · ')],
               ['Published', detail?.publicationDate ? String(detail.publicationDate).slice(0, 10) : family.publicationDate],
               ['Filed', detail?.filingDate ? String(detail.filingDate).slice(0, 10) : null],
               ['Application', detail?.applicationNumberRaw],
-              ['Classifications', (detail?.classifications || family.classifications)?.slice(0, 8).join(', ')],
+              ['Claims', detail?.numberOfClaims ? String(detail.numberOfClaims) : null],
+              ['Pages', detail?.numberOfPages ? String(detail.numberOfPages) : null],
+              ['Classifications', (detail?.classifications || family.classifications)?.slice(0, 12).join(', ')],
               ['Family', detail?.familyId],
             ]
               .filter(([, value]) => value)

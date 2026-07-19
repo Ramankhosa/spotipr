@@ -11,10 +11,10 @@ import type { StudioBlock, StudioBlockMode, StudioPlan } from '@/lib/prior-art-s
 
 const MODE_HELP: Record<StudioBlockMode, string> = {
   MATCH:
-    'MATCH is a HARD REQUIREMENT: a document is discarded unless one of these words literally appears in its title or abstract. Only titles and abstracts are searchable (~150 words), so each extra MATCH block sharply increases the chance of getting nothing back. Use it for at most one block, and only for a term of art you are certain will appear verbatim.',
+    'MATCH is your required-vocabulary lens. Documents missing every one of these terms are flagged as misses-MATCH and counted in the funnel — but nothing is hidden or deleted; you focus with one click using the pills above the results. Keep MATCH for terms of art you are certain appear verbatim in a ~150-word abstract, or the meets-set will be tiny.',
   EXPAND:
     'EXPAND widens: this concept is matched by meaning, so documents using completely different wording are still found. This is what actually reaches across the 45M-document corpus, and it can never remove a document.',
-  BOTH: 'BOTH widens too: the words are searched literally AND the concept by meaning, and matching documents rank higher — but nothing is required, so no document is discarded for missing these terms. This is the safe choice when you want the words to count without risking an empty result.',
+  BOTH: 'BOTH widens: the words are searched literally AND the concept by meaning, and matching documents rank higher — nothing is required and nothing gets flagged. The safe choice when you want the words to count.',
 }
 
 const MODE_ORDER: StudioBlockMode[] = ['MATCH', 'EXPAND', 'BOTH']
@@ -42,7 +42,7 @@ function blockAccent(mode: StudioBlockMode): string {
 
 /** One-word statement of what this mode does to the result set. */
 const MODE_EFFECT: Record<StudioBlockMode, { label: string; classes: string }> = {
-  MATCH: { label: 'gates', classes: 'bg-foreground/10 text-foreground' },
+  MATCH: { label: 'requires', classes: 'bg-foreground/10 text-foreground' },
   EXPAND: { label: 'widens', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' },
   BOTH: { label: 'widens', classes: 'bg-brass-100 text-brass-800 dark:bg-brass-950/50 dark:text-brass-300' },
 }
@@ -272,6 +272,80 @@ export function QueryCanvas({ plan, disabled, onChange }: QueryCanvasProps) {
             )
           })}
           {!plan.cpc.length && <span className="text-xs text-muted-foreground">None yet — the generator suggests these, or add via “term”.</span>}
+        </div>
+      </div>
+
+      {/* Invention elements — drive per-element probes, the strips and the grid */}
+      <div className="rounded-lg border border-border bg-card p-2.5 border-l-4 border-l-emerald-600/70">
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="text-xs font-semibold">Invention elements</span>
+          <Hint
+            title="What these do"
+            text="Each element is one essential feature of the invention, in a short sentence. They drive a dedicated meaning-probe per element, the E1/E2 evidence strips on every result, and the Element Grid analysis. Edit them freely — the next run re-scores everything."
+          />
+        </div>
+        <div className="space-y-1.5">
+          {plan.elements.map((element, i) => (
+            <div key={element.id} className="flex items-center gap-1.5">
+              <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[9px] font-bold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                E{i + 1}
+              </span>
+              <input
+                defaultValue={element.text}
+                key={element.id + element.text}
+                disabled={disabled}
+                onBlur={e => {
+                  const text = e.target.value.trim()
+                  if (!text || text === element.text) return
+                  update(draft => {
+                    const el = draft.elements.find(x => x.id === element.id)
+                    if (el) {
+                      el.text = text
+                      el.origin = 'user'
+                    }
+                    return `Edited element E${i + 1}`
+                  })
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+                className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-xs text-foreground transition-colors hover:border-border focus:border-border focus:bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                aria-label={`Element ${i + 1}`}
+              />
+              <button
+                type="button"
+                aria-label={`Remove element ${i + 1}`}
+                disabled={disabled}
+                className="rounded p-1 text-muted-foreground hover:text-destructive"
+                onClick={() =>
+                  update(draft => {
+                    draft.elements = draft.elements.filter(x => x.id !== element.id)
+                    return `Removed element E${i + 1}`
+                  })
+                }
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          {!plan.elements.length && (
+            <p className="text-xs text-muted-foreground">
+              None yet — the query generator drafts these from your description, or add them by hand.
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={disabled}
+            className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2.5 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() =>
+              update(draft => {
+                draft.elements.push({ id: `e${Date.now().toString(36)}`, text: 'New element — describe one essential feature', origin: 'user' })
+                return 'Added an element'
+              })
+            }
+          >
+            <Plus className="h-3 w-3" /> element
+          </button>
         </div>
       </div>
 

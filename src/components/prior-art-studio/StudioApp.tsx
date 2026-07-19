@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
+  Zap,
   ClipboardCopy,
   HelpCircle,
   Keyboard,
@@ -109,6 +110,7 @@ export function StudioApp() {
   const [drafting, setDrafting] = useState(false)
   const [running, setRunning] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [runDepth, setRunDepth] = useState<'deep' | 'fast'>('deep')
   const [reportLoading, setReportLoading] = useState(false)
   const [pinning, setPinning] = useState(false)
   const savingRef = useRef(false)
@@ -283,16 +285,17 @@ export function StudioApp() {
     }
   }
 
-  const execute = useCallback(async () => {
+  const execute = useCallback(async (depth: 'deep' | 'fast' = 'deep') => {
     if (!active || running) return
     const hasActive = active.plan.blocks.some(b => b.terms.some(t => t.accepted)) || active.plan.cpc.some(c => c.accepted)
     if (!hasActive) {
       toast({ title: 'Nothing to run yet', description: 'Accept at least one term (dashed chips are inert suggestions) or add your own.', variant: 'error' })
       return
     }
+    setRunDepth(depth)
     setRunning(true)
     try {
-      const data = await api<{ run: StudioRunPayload }>(`/sessions/${active.id}/run`, { method: 'POST', body: JSON.stringify({}) })
+      const data = await api<{ run: StudioRunPayload }>(`/sessions/${active.id}/run`, { method: 'POST', body: JSON.stringify({ depth }) })
       setRun(data.run)
       setCursor(0)
       setFilters(current => ({ ...DEFAULT_RESULT_FILTERS, sort: current.sort }))
@@ -300,7 +303,7 @@ export function StudioApp() {
       setTrail(t => [
         localTrailEntry(
           'RUN',
-          `Run v${data.run.planVersion} (${data.run.planHash}): ${data.run.gateCounts.recall.toLocaleString()} recall → ${data.run.gateCounts.families.toLocaleString()} families → ${data.run.gateCounts.shown} shown`
+          `${depth === 'deep' ? 'Deep search' : 'Fast scan'} v${data.run.planVersion} (${data.run.planHash}): ${data.run.gateCounts.recall.toLocaleString()} recall → ${data.run.gateCounts.families.toLocaleString()} families → ${data.run.gateCounts.shown} shown`
         ),
         ...t,
       ])
@@ -586,8 +589,10 @@ export function StudioApp() {
     [10, 'Retrieving candidates from the Indian and worldwide corpora…'],
     [18, 'Collapsing duplicate filings into families…'],
     [24, 'Applying your MATCH requirements and exclusions, word by word…'],
-    [30, 'Reranking the strongest candidates…'],
-    [38, 'Scoring claim elements against the shortlist…'],
+    [30, 'Fusing lanes and ordering the strongest candidates…'],
+    ...((active?.plan.elements.length ?? 0) > 0
+      ? ([[38, 'Scoring claim elements against the shortlist…']] as Array<[number, string]>)
+      : []),
     [48, 'Still working — deep searches over 45M documents can take up to a minute. Thorough beats fast.'],
   ]
   const currentStage = DEEP_STAGES.reduce((acc, [at, msg]) => (elapsed >= at ? msg : acc), DEEP_STAGES[0][1])
@@ -599,7 +604,7 @@ export function StudioApp() {
           <Loader2 className="h-4.5 w-4.5 animate-spin" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-foreground">Deep search in progress · {elapsed}s</p>
+          <p className="text-sm font-semibold text-foreground">{runDepth === 'deep' ? 'Deep search' : 'Fast scan'} in progress · {elapsed}s</p>
           <p className="mt-0.5 text-[13px] text-muted-foreground">{currentStage}</p>
         </div>
       </div>
@@ -610,7 +615,9 @@ export function StudioApp() {
         />
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
-        Searching both corpora with full probe budgets — every gate will be counted when it lands.
+        {runDepth === 'deep'
+          ? 'Searching both corpora with full probe budgets — every gate will be counted when it lands.'
+          : 'Quick look with reduced budgets — run a Deep search before relying on the numbers.'}
       </p>
     </div>
   ) : null
@@ -638,8 +645,9 @@ export function StudioApp() {
           </ul>
           {run.families.length === 0 && (
             <p className="mt-2 text-muted-foreground">
-              Nothing here says anything about the state of the art — the search did not complete. Adjust the canvas
-              (usually: switch a MATCH block to BOTH) and run again.
+              Nothing here says anything about the state of the art — retrieval itself returned nothing. Usual causes:
+              date/CPC filters too narrow for this technology, or the meaning lane unavailable (see the warnings above).
+              Widen the filters or wording and run again.
             </p>
           )}
         </div>
@@ -655,15 +663,6 @@ export function StudioApp() {
           onToggleExpanded={setFiltersExpanded}
         />
       )}
-      {readerFamily && (
-        <DocumentReader
-          family={readerFamily}
-          elements={active.plan.elements}
-          onClose={() => setReaderFamily(null)}
-          onSteerFrom={steerFrom}
-          authHeaders={authHeaders}
-        />
-      )}
       {run ? (
         <div className={running ? 'pointer-events-none opacity-50 transition-opacity' : 'transition-opacity'}>
         <ResultsList
@@ -677,6 +676,17 @@ export function StudioApp() {
           onExclude={(family, excluded) => setDocState(family, { excluded })}
           onOpenReader={setReaderFamily}
           openFamilyKey={readerFamily?.familyKey}
+          readerElement={
+            readerFamily ? (
+              <DocumentReader
+                family={readerFamily}
+                elements={active.plan.elements}
+                onClose={() => setReaderFamily(null)}
+                onSteerFrom={steerFrom}
+                authHeaders={authHeaders}
+              />
+            ) : null
+          }
           saturation={saturation}
         />
         </div>
@@ -786,16 +796,33 @@ export function StudioApp() {
             {reportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScrollText className="h-3.5 w-3.5" />}
             <span className="hidden md:inline">Report</span>
           </button>
-          <button
-            type="button"
-            onClick={execute}
-            disabled={running || drafting}
-            className="inline-flex items-center gap-1.5 rounded-md bg-lamp-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-lamp-700 hover:shadow disabled:opacity-50 dark:bg-lamp-500 dark:hover:bg-lamp-400 dark:text-lamp-950"
-            title="Execute the plan on the canvas against the corpus"
-          >
-            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {running ? `Deep search · ${elapsed}s` : 'Run search'}
-          </button>
+          <div className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => execute('fast')}
+              disabled={running || drafting}
+              className="inline-flex items-center gap-1.5 rounded-md border border-lamp-300 bg-card px-3 py-2 text-sm font-semibold text-lamp-700 transition-colors hover:bg-lamp-50 disabled:opacity-50 dark:border-lamp-800 dark:text-lamp-300 dark:hover:bg-lamp-950/40"
+              title="Fast scan (~5-10s): a quick look with reduced probe budgets — for iterating on the canvas"
+            >
+              <Zap className="h-4 w-4" />
+              <span className="hidden xl:inline">Fast scan</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => execute('deep')}
+              disabled={running || drafting}
+              className="inline-flex items-center gap-1.5 rounded-md bg-lamp-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-lamp-700 hover:shadow disabled:opacity-50 dark:bg-lamp-500 dark:hover:bg-lamp-400 dark:text-lamp-950"
+              title="Deep search (30-60s): full probe budgets and extended timeouts across all 45M documents — for the search of record"
+            >
+              {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              {running ? `${runDepth === 'deep' ? 'Deep search' : 'Fast scan'} · ${elapsed}s` : 'Deep search'}
+            </button>
+            <Hint
+              className="self-center"
+              title="Fast scan vs Deep search"
+              text="Fast scan (~5-10s) uses reduced budgets — perfect while you iterate on terms and blocks. Deep search (30-60s) runs full probe budgets and extended timeouts across the whole corpus, and is what belongs in your report. Both are recorded on the trail with their depth."
+            />
+          </div>
         </div>
 
         {showKeys && (

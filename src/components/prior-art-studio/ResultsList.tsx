@@ -31,6 +31,8 @@ interface ResultsListProps {
   onExclude: (family: StudioResultFamily, excluded: boolean) => void
   onOpenReader: (family: StudioResultFamily) => void
   openFamilyKey?: string | null
+  /** The full document reader, rendered inline directly beneath the open card. */
+  readerElement?: React.ReactNode
   saturation?: StudioSaturation | null
 }
 
@@ -94,6 +96,7 @@ export function ResultsList({
   onExclude,
   onOpenReader,
   openFamilyKey,
+  readerElement,
   saturation,
 }: ResultsListProps) {
   const listRef = useRef<HTMLDivElement>(null)
@@ -102,6 +105,12 @@ export function ResultsList({
     const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${cursor}"]`)
     el?.scrollIntoView({ block: 'nearest' })
   }, [cursor])
+
+  useEffect(() => {
+    if (!openFamilyKey) return
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-family="${openFamilyKey}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [openFamilyKey])
 
   if (!families.length) {
     return (
@@ -130,9 +139,10 @@ export function ResultsList({
           const isOpen = openFamilyKey === family.familyKey
           const lane = LANE_META[family.lane] || LANE_META.other
           return (
+            <div key={family.familyKey} className="space-y-2">
             <div
-              key={family.familyKey}
               data-index={index}
+              data-family={family.familyKey}
               onClick={() => onCursorChange(index)}
               className={`rounded-xl border bg-card p-3.5 shadow-sm transition-all ${state.excluded ? 'opacity-40' : ''} ${
                 isCursor
@@ -152,13 +162,39 @@ export function ResultsList({
                 >
                   {family.publicationNumber}
                 </button>
-                <span className="text-[14px] font-semibold leading-snug text-foreground">{family.title}</span>
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation()
+                    onOpenReader(family)
+                  }}
+                  title="Open the full record — abstract, claims, bibliographic details, family"
+                  className="text-left text-[14px] font-semibold leading-snug text-foreground transition-colors hover:text-lamp-700 hover:underline dark:hover:text-lamp-300"
+                >
+                  {family.title}
+                </button>
                 <span className="text-[10px] text-muted-foreground">
                   {family.members.length > 1 ? `family of ${family.members.length} · ` : ''}
                   {family.applicants ? `${family.applicants} · ` : ''}
                   {family.publicationDate || ''}
                 </span>
                 {family.isNew && <span className="text-[9px] font-extrabold tracking-wider text-primary">NEW</span>}
+                {family.meetsMatch === false && (
+                  <span
+                    className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground"
+                    title="Does not contain a term from every MATCH block — shown anyway, because the closest art often uses different words"
+                  >
+                    misses MATCH
+                  </span>
+                )}
+                {family.hitsNotTerm && (
+                  <span
+                    className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700 dark:bg-red-950/50 dark:text-red-300"
+                    title="Contains one of your NOT terms — hidden by default, shown because you enabled the NOT-hits filter"
+                  >
+                    NOT hit
+                  </span>
+                )}
                 {state.tag && (
                   <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold ${TAG_META[state.tag].classes}`}>
                     {TAG_META[state.tag].label}
@@ -260,6 +296,8 @@ export function ResultsList({
                   </a>
                 </span>
               </div>
+            </div>
+            {isOpen && readerElement && <div className="pl-2 sm:pl-4">{readerElement}</div>}
             </div>
           )
         })}

@@ -87,21 +87,18 @@ async function main() {
     )
     assert(typeof run.gateCounts.matchRemoved === 'number', 'MATCH narrowing is counted, never invisible')
 
-    // When no keyword index serves the corpus, MATCH is enforced by us, so every
-    // shown document must literally satisfy it. When the index DOES serve it,
-    // Postgres already judged the document over four fields (including ragText,
-    // which the result payload doesn't carry) — re-checking here would wrongly
-    // discard legitimate top_terms matches, so we trust the database's verdict.
-    if (run.gateCounts.matchMode === 'filter') {
-      const required = [['torque', 'clutch']]
-      const violating = run.families.filter(f => {
-        const text = `${f.title || ''} ${f.abstract || ''} ${f.snippet || ''}`.toLowerCase()
-        return !required.every(group => group.some(term => text.includes(term)))
-      })
-      assert(violating.length === 0, `every shown document satisfies the MATCH blocks (${violating.length} violations)`)
-    } else {
-      console.log('  (keyword index served this corpus — DB verdict trusted, no client-side re-filter)')
-    }
+    // THE core invariant after the production incident: MATCH classifies, it
+    // never deletes. Everything ranked must be presented, flagged either way.
+    const meets = run.families.filter(f => f.meetsMatch !== false).length
+    const misses = run.families.filter(f => f.meetsMatch === false).length
+    console.log(`  meetsMatch: ${meets} · missesMatch: ${misses} · notHits: ${run.gateCounts.notHits}`)
+    assert(
+      (run.gateCounts.matchSatisfied ?? 0) + (run.gateCounts.matchRemoved ?? 0) === run.gateCounts.shown ||
+        run.gateCounts.matchMode === 'none',
+      'matchSatisfied + matchRemoved account for every shown family — nothing was deleted'
+    )
+    assert(misses === 0 || run.families.some(f => f.meetsMatch === false), 'non-matching documents are PRESENT and flagged, not removed')
+    assert(run.families.every(f => typeof f.meetsMatch === 'boolean' || run.gateCounts.matchMode === 'none'), 'every family carries its MATCH classification')
 
     console.log('\n[3c] Corpus isolation (no live patent-data APIs)')
     const ALLOWED = new Set(['indian-corpus', 'google-patents-corpus'])

@@ -28,9 +28,9 @@ const GATE_HELP: Record<string, string> = {
   Corpus: 'Every patent document in the PatentNest corpus (Google Patents public data + Indian corpus + fetched documents). Estimate.',
   Filters: 'Documents surviving your date, jurisdiction and classification filters — before any keyword or meaning matching. Click to see what each constraint removed.',
   Recall: 'Documents retrieved from the corpus. On the worldwide corpus this is driven by the meaning (EXPAND) lane, because no full-text index covers those 45M records — see the MATCH gate for how your literal terms were applied. Exact.',
-  MATCH: 'Your MATCH terms applied as a requirement: every MATCH block must be satisfied literally. On the worldwide corpus this runs as a filter over retrieved candidates rather than as its own recall lane, so it narrows precisely but cannot surface a document the meaning lane never retrieved. Widen a block to EXPAND if this is cutting too deep.',
-  Families: 'The same invention filed in several countries is one “family”. Duplicates collapse so you review each invention once.',
-  Shown: 'The ranked set presented for review, ordered by the reranker. Work it with the keyboard: j/k to move, 1/2/3 to tag.',
+  MATCH: 'How many retrieved documents literally satisfy every MATCH block. This is a LENS, not a filter — nothing is removed. All documents are shown below; use the “Meets/Misses MATCH” pills above the results to focus on either group.',
+  Families: 'The ranked set collapsed so the same invention filed in several countries appears once. This is what you review.',
+  Shown: 'Everything retrieved and ranked is presented — matching, non-matching and NOT-flagged alike. Filters above the results narrow the view without removing anything.',
 }
 
 export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvestTerms }: GatesFunnelProps) {
@@ -41,8 +41,8 @@ export function GatesFunnel({ counts, detail, running, suggestedTerms, onHarvest
         { label: 'Corpus', value: formatCount(counts.corpus, counts.corpusIsEstimate) },
         { label: 'Filters', value: formatCount(counts.filters, counts.filtersIsEstimate), clickable: true },
         { label: 'Recall', value: formatCount(counts.recall), accent: true },
-        ...(counts.matchMode === 'filter'
-          ? [{ label: 'MATCH', value: counts.matchRemoved ? `−${counts.matchRemoved.toLocaleString()}` : '−0' }]
+        ...(counts.matchMode === 'filter' && typeof counts.matchSatisfied === 'number'
+          ? [{ label: 'MATCH', value: `${counts.matchSatisfied.toLocaleString()}/${(counts.matchSatisfied + (counts.matchRemoved || 0)).toLocaleString()}` }]
           : []),
         { label: 'Families', value: formatCount(counts.families) },
         { label: 'Shown', value: formatCount(counts.shown) },
