@@ -8,6 +8,7 @@
 import { useEffect, useRef } from 'react'
 import { BookOpen, ExternalLink, EyeOff, Info } from 'lucide-react'
 import { Hint } from '@/components/ui/hint'
+import { resolvePatentLink } from '@/lib/prior-art-studio/patent-links'
 import type {
   StudioDocTag,
   StudioElement,
@@ -62,10 +63,6 @@ const VERDICT_CLASSES: Record<string, string> = {
   PART: 'bg-amber-600/40 text-foreground border-amber-600/60',
   WEAK: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800',
   NONE: 'bg-muted text-muted-foreground/50 border-border',
-}
-
-function googlePatentsUrl(family: StudioResultFamily): string {
-  return family.link || `https://patents.google.com/patent/${family.publicationNumber.replace(/[^A-Za-z0-9]/g, '')}`
 }
 
 /** Sparkline of new-relevant-per-batch: the shape of a search running dry. */
@@ -202,8 +199,8 @@ export function ResultsList({
                 )}
               </div>
 
-              {(family.snippet || family.abstract) && (
-                <p className={`mt-1.5 max-w-4xl text-[13px] leading-relaxed text-muted-foreground ${isOpen ? '' : 'line-clamp-2'}`}>
+              {!isOpen && (family.snippet || family.abstract) && (
+                <p className="mt-1.5 max-w-4xl text-[13px] leading-relaxed text-muted-foreground line-clamp-2">
                   {family.snippet || family.abstract}
                 </p>
               )}
@@ -285,7 +282,7 @@ export function ResultsList({
                     <EyeOff className="h-3 w-3" />
                   </button>
                   <a
-                    href={googlePatentsUrl(family)}
+                    href={resolvePatentLink(family)}
                     target="_blank"
                     rel="noreferrer"
                     title="Open on Google Patents (key o)"
@@ -297,7 +294,9 @@ export function ResultsList({
                 </span>
               </div>
             </div>
-            {isOpen && readerElement && <div className="pl-2 sm:pl-4">{readerElement}</div>}
+            {isOpen && readerElement && (
+              <div className="ml-1 border-l-2 border-lamp-500/60 pl-2 sm:pl-4">{readerElement}</div>
+            )}
             </div>
           )
         })}

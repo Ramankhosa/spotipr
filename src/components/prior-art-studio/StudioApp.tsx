@@ -13,6 +13,7 @@ import {
   ArrowLeft,
   Zap,
   ClipboardCopy,
+  FileSpreadsheet,
   HelpCircle,
   Keyboard,
   Loader2,
@@ -25,6 +26,7 @@ import {
 import { useAuth } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
 import { Hint } from '@/components/ui/hint'
+import { resolvePatentLink } from '@/lib/prior-art-studio/patent-links'
 import {
   type StudioDocTag,
   type StudioPlan,
@@ -97,7 +99,7 @@ export function StudioApp() {
   const [saturation, setSaturation] = useState<StudioSaturation | null>(null)
   const [booleanPreview, setBooleanPreview] = useState('')
 
-  const [mode, setMode] = useState<Mode>('quick')
+  const [mode, setMode] = useState<Mode>('studio')
   const [mainTab, setMainTab] = useState<MainTab>('results')
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [showKeys, setShowKeys] = useState(false)
@@ -111,25 +113,30 @@ export function StudioApp() {
   const [running, setRunning] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [runDepth, setRunDepth] = useState<'deep' | 'fast'>('deep')
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  const [exportLoading, setExportLoading] = useState(false)
   const [pinning, setPinning] = useState(false)
   const savingRef = useRef(false)
 
-  // Elapsed-seconds ticker for the deep-search progress narrative.
+  // Elapsed-seconds ticker for the deep-search progress narrative. Seeded from
+  // the run's server start time so a resumed poll doesn't restart at 0s.
   useEffect(() => {
     if (!running) {
       setElapsed(0)
       return
     }
-    const startedAt = Date.now()
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000)
+    const startedAt = runStartedAt ?? Date.now()
+    setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))
+    const timer = setInterval(() => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000))), 1000)
     return () => clearInterval(timer)
-  }, [running])
+  }, [running, runStartedAt])
 
   // ------------------------------------------------------------------ setup
   useEffect(() => {
     if (typeof window === 'undefined') return
-    setMode((localStorage.getItem(MODE_KEY) as Mode) || 'quick')
+    const storedMode = localStorage.getItem(MODE_KEY)
+    setMode(storedMode === 'quick' || storedMode === 'studio' ? storedMode : 'studio')
     if (!localStorage.getItem(ONBOARDING_KEY)) setShowOnboarding(true)
   }, [])
 
@@ -151,6 +158,56 @@ export function StudioApp() {
   }, [user, toast])
 
   // ------------------------------------------------------------- session io
+  /** Poll a background run until it completes or fails. Tolerates transient network blips. */
+  const pollRun = useCallback(async (sessionId: string, runId: string): Promise<StudioRunPayload> => {
+    let consecutiveErrors = 0
+    for (let attempt = 0; attempt < 150; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      try {
+        const data = await api<{ status: 'RUNNING' | 'COMPLETE' | 'FAILED'; error?: string; run?: StudioRunPayload }>(
+          `/sessions/${sessionId}/runs/${runId}`
+        )
+        consecutiveErrors = 0
+        if (data.status === 'COMPLETE' && data.run) return data.run
+        if (data.status === 'FAILED') throw new Error(data.error || 'The search failed on the server.')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        // A FAILED status is final; a fetch hiccup is not — retry a few times.
+        if (message && !message.startsWith('Failed to fetch') && !message.startsWith('NetworkError') && !message.includes('Request failed (5')) throw err
+        consecutiveErrors += 1
+        if (consecutiveErrors >= 3) throw err
+      }
+    }
+    throw new Error('The search is taking unusually long — reload the page to check its status.')
+  }, [])
+
+  /** Shared landing path for a finished run — used by execute() and the resume-after-refresh poll. */
+  const finishRun = useCallback(
+    (run: StudioRunPayload, depth: 'deep' | 'fast') => {
+      setRun(run)
+      setCursor(0)
+      setFilters(current => ({ ...DEFAULT_RESULT_FILTERS, sort: current.sort }))
+      setReaderFamily(null)
+      setTrail(t => [
+        localTrailEntry(
+          'RUN',
+          `${depth === 'deep' ? 'Deep search' : 'Fast scan'} v${run.planVersion} (${run.planHash}): ${run.gateCounts.recall.toLocaleString()} recall → ${run.gateCounts.families.toLocaleString()} families → ${run.gateCounts.shown} shown`
+        ),
+        ...t,
+      ])
+      if (run.families.length === 0) {
+        toast({
+          title: 'Search returned no documents',
+          description: run.warnings[0] || 'See the explanation above the results.',
+          variant: 'error',
+        })
+      } else if (run.warnings.length) {
+        toast({ title: 'Run finished with notes', description: run.warnings[0] })
+      }
+    },
+    [toast]
+  )
+
   const openSession = useCallback(
     async (sessionId: string) => {
       try {
@@ -162,11 +219,14 @@ export function StudioApp() {
             planHash: string
             createdAt: string
             gateCounts: StudioRunPayload['gateCounts']
+            gateDetail?: StudioRunPayload['gateDetail'] | null
+            suggestedTerms?: string[] | null
             results: StudioResultFamily[]
             warnings?: string[]
             newFamilyCount: number
             durationMs?: number
           } | null
+          activeRun: { id: string; depth: 'deep' | 'fast'; createdAt: string } | null
           docStates: Array<{ familyKey: string; tag?: StudioDocTag | null; excluded: boolean }>
           trail: StudioTrailEntryPayload[]
           theories: StudioTheoryPayload[]
@@ -187,6 +247,8 @@ export function StudioApp() {
                 planHash: data.latestRun.planHash,
                 createdAt: data.latestRun.createdAt,
                 gateCounts: data.latestRun.gateCounts,
+                gateDetail: data.latestRun.gateDetail || undefined,
+                suggestedTerms: data.latestRun.suggestedTerms || undefined,
                 families: data.latestRun.results || [],
                 warnings: data.latestRun.warnings || [],
                 newFamilyCount: data.latestRun.newFamilyCount || 0,
@@ -200,11 +262,29 @@ export function StudioApp() {
         setReaderFamily(null)
         setMainTab('results')
         setDisclosure(data.session.seedText || '')
+
+        // A search is still running server-side (page was refreshed or reopened
+        // mid-run) — resume the poll instead of losing it.
+        if (data.activeRun) {
+          const { id: runId, depth, createdAt } = data.activeRun
+          setRunDepth(depth)
+          setRunStartedAt(new Date(createdAt).getTime())
+          setRunning(true)
+          pollRun(sessionId, runId)
+            .then(run => finishRun(run, depth))
+            .catch(err =>
+              toast({ title: 'Run failed', description: err instanceof Error ? err.message : String(err), variant: 'error' })
+            )
+            .finally(() => {
+              setRunning(false)
+              setRunStartedAt(null)
+            })
+        }
       } catch (err) {
         toast({ title: 'Could not open session', description: err instanceof Error ? err.message : String(err), variant: 'error' })
       }
     },
-    [toast]
+    [toast, pollRun, finishRun]
   )
 
   const createSession = async () => {
@@ -294,34 +374,33 @@ export function StudioApp() {
     }
     setRunDepth(depth)
     setRunning(true)
+    setRunStartedAt(Date.now())
     try {
-      const data = await api<{ run: StudioRunPayload }>(`/sessions/${active.id}/run`, { method: 'POST', body: JSON.stringify({ depth }) })
-      setRun(data.run)
-      setCursor(0)
-      setFilters(current => ({ ...DEFAULT_RESULT_FILTERS, sort: current.sort }))
-      setReaderFamily(null)
-      setTrail(t => [
-        localTrailEntry(
-          'RUN',
-          `${depth === 'deep' ? 'Deep search' : 'Fast scan'} v${data.run.planVersion} (${data.run.planHash}): ${data.run.gateCounts.recall.toLocaleString()} recall → ${data.run.gateCounts.families.toLocaleString()} families → ${data.run.gateCounts.shown} shown`
-        ),
-        ...t,
-      ])
-      if (data.run.families.length === 0) {
-        toast({
-          title: 'Search returned no documents',
-          description: data.run.warnings[0] || 'See the explanation above the results.',
-          variant: 'error',
-        })
-      } else if (data.run.warnings.length) {
-        toast({ title: 'Run finished with notes', description: data.run.warnings[0] })
+      // The run executes in the background on the server (deep searches outlive
+      // proxy timeouts); this POST only starts it, then we poll for the result.
+      const response = await fetch(`/api/prior-art-studio/sessions/${active.id}/run`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ depth }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      let runId: string
+      if (response.status === 409 && payload?.runId) {
+        runId = payload.runId // a run is already in flight (second tab / lost response) — adopt it
+      } else if (!response.ok || !payload?.runId) {
+        throw new Error(payload?.error || `Request failed (${response.status})`)
+      } else {
+        runId = payload.runId
       }
+      const run = await pollRun(active.id, runId)
+      finishRun(run, depth)
     } catch (err) {
       toast({ title: 'Run failed', description: err instanceof Error ? err.message : String(err), variant: 'error' })
     } finally {
       setRunning(false)
+      setRunStartedAt(null)
     }
-  }, [active, running, toast])
+  }, [active, running, toast, pollRun, finishRun])
 
   const setDocState = useCallback(
     async (family: StudioResultFamily, patch: Partial<DocStateLite>) => {
@@ -458,6 +537,31 @@ export function StudioApp() {
     }
   }
 
+  /** Excel workbook of the tagged shortlist (Relevant + Maybe) for client sharing. */
+  const downloadExcel = async () => {
+    if (!active) return
+    setExportLoading(true)
+    try {
+      const response = await fetch(`/api/prior-art-studio/sessions/${active.id}/export`, { headers: authHeaders() })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload?.error || 'Excel export failed')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `Prior-Art_${active.title.replace(/[^A-Za-z0-9-_ ]/g, '').slice(0, 40) || 'session'}.xlsx`
+      link.click()
+      URL.revokeObjectURL(url)
+      toast({ title: 'Excel exported', description: 'Contains the Relevant + Maybe shortlist with feature comparisons.', variant: 'success' })
+    } catch (err) {
+      toast({ title: 'Excel export failed', description: err instanceof Error ? err.message : String(err), variant: 'error' })
+    } finally {
+      setExportLoading(false)
+    }
+  }
+
   // -------------------------------------------------------------- filtering
   const allFamilies = useMemo(() => run?.families || [], [run])
   const visibleFamilies = useMemo(
@@ -485,7 +589,7 @@ export function StudioApp() {
       else if (event.key === 'k') setCursor(c => Math.max(c - 1, 0))
       else if (event.key === 'Enter' && family) setReaderFamily(family)
       else if (event.key === 'o' && family) {
-        window.open(family.link || `https://patents.google.com/patent/${family.publicationNumber.replace(/[^A-Za-z0-9]/g, '')}`, '_blank')
+        window.open(resolvePatentLink(family), '_blank')
       } else if (event.key === 'x' && family) setDocState(family, { excluded: !docStates[family.familyKey]?.excluded })
       else if (family && (event.key === '1' || event.key === '2' || event.key === '3')) {
         const tag: StudioDocTag = event.key === '1' ? 'RELEVANT' : event.key === '2' ? 'MAYBE' : 'NOT_RELEVANT'
@@ -795,6 +899,16 @@ export function StudioApp() {
           >
             {reportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScrollText className="h-3.5 w-3.5" />}
             <span className="hidden md:inline">Report</span>
+          </button>
+          <button
+            type="button"
+            onClick={downloadExcel}
+            disabled={exportLoading}
+            title="Export tagged patents (Relevant + Maybe) as a spreadsheet — details, abstracts, feature comparison, claims"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+          >
+            {exportLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+            <span className="hidden md:inline">Excel</span>
           </button>
           <div className="inline-flex items-center gap-1.5">
             <button

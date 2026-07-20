@@ -32,7 +32,7 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
   const [runs, docStates, trail, theories] = await Promise.all([
-    prisma.priorArtStudioRun.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'asc' } }),
+    prisma.priorArtStudioRun.findMany({ where: { sessionId: session.id, status: 'COMPLETE' }, orderBy: { createdAt: 'asc' } }),
     prisma.priorArtStudioDocState.findMany({ where: { sessionId: session.id } }),
     prisma.priorArtStudioTrailEntry.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'asc' }, take: 300 }),
     prisma.priorArtStudioTheory.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'asc' } }),

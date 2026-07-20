@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react'
 import { ExternalLink, Loader2, Sparkles, X } from 'lucide-react'
 import { Hint } from '@/components/ui/hint'
+import { googlePatentsUrl, resolvePatentLink } from '@/lib/prior-art-studio/patent-links'
 import type { StudioElement, StudioResultFamily } from '@/lib/prior-art-studio/types'
 
 interface PatentDetail {
@@ -40,14 +41,20 @@ interface DocumentReaderProps {
   authHeaders: () => Record<string, string>
 }
 
-function googlePatentsUrl(publicationNumber: string): string {
-  return `https://patents.google.com/patent/${publicationNumber.replace(/[^A-Za-z0-9]/g, '')}`
-}
-
 function applicantText(value: unknown): string {
   if (!value) return ''
   if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.map(v => String(v)).join('; ')
+  // Corpus applicants are stored as [{ raw, name, address, sequence }].
+  if (Array.isArray(value)) {
+    return value
+      .map(v => {
+        if (typeof v === 'string') return v
+        if (v && typeof v === 'object' && typeof (v as { name?: unknown }).name === 'string') return (v as { name: string }).name
+        return ''
+      })
+      .filter(Boolean)
+      .join('; ')
+  }
   return ''
 }
 
@@ -115,7 +122,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
             <Sparkles className="h-3 w-3" /> More like this
           </button>
           <a
-            href={family.link || googlePatentsUrl(family.publicationNumber)}
+            href={resolvePatentLink(family)}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
@@ -136,7 +143,9 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
             </div>
           ) : (
             <>
-              <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Abstract</h4>
+              <h4 className="sticky top-0 z-10 mb-1 bg-card py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Abstract
+              </h4>
               <p className="mb-4 whitespace-pre-wrap text-xs leading-relaxed text-foreground/90">
                 {abstract || <span className="text-muted-foreground">No abstract stored for this document.</span>}
               </p>
@@ -146,7 +155,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
                   <button
                     type="button"
                     onClick={() => setShowClaims(v => !v)}
-                    className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                    className="sticky top-0 z-10 mb-1 block w-full bg-card py-1 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
                   >
                     Claims {showClaims ? '▾' : '▸'}
                     {detail?.numberOfClaims ? ` · ${detail.numberOfClaims}` : ''}
@@ -162,7 +171,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
 
               {detail?.descriptionText && (
                 <>
-                  <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <h4 className="sticky top-0 z-10 mb-1 bg-card py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Description (extract)
                   </h4>
                   <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
@@ -184,7 +193,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
 
         <div className="max-h-[520px] overflow-y-auto p-4">
           {elements.length > 0 && family.elementCells && (
-            <div className="mb-4">
+            <div className="mb-4 rounded-lg border border-amber-200/70 bg-amber-50/40 p-2.5 dark:border-amber-900/60 dark:bg-amber-950/20">
               <h4 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Element evidence
               </h4>

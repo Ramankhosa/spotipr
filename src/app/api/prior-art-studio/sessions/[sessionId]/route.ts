@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
-import { appendTrail, computeSaturation, getOwnedSession, summarizePlanEdit } from '@/lib/prior-art-studio/service'
+import { appendTrail, computeSaturation, getOwnedSession, resolveStaleRun, summarizePlanEdit } from '@/lib/prior-art-studio/service'
 import type { StudioPlan } from '@/lib/prior-art-studio/types'
 import { renderBooleanPreview } from '@/lib/prior-art-studio/compiler'
 import type { Prisma } from '@prisma/client'
@@ -16,9 +16,13 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   const session = await getOwnedSession(params.sessionId, auth.user.id)
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
-  const [latestRun, docStates, trail, theories] = await Promise.all([
+  const [latestRun, runningRow, docStates, trail, theories] = await Promise.all([
     prisma.priorArtStudioRun.findFirst({
-      where: { sessionId: session.id },
+      where: { sessionId: session.id, status: 'COMPLETE' },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.priorArtStudioRun.findFirst({
+      where: { sessionId: session.id, status: 'RUNNING' },
       orderBy: { createdAt: 'desc' },
     }),
     prisma.priorArtStudioDocState.findMany({ where: { sessionId: session.id } }),
@@ -31,7 +35,16 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
     prisma.priorArtStudioTheory.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' } }),
   ])
 
+  // A RUNNING row lets a refreshed client resume polling instead of losing the
+  // in-flight search; stale orphans are failed here rather than lingering.
+  const activeRow = runningRow ? await resolveStaleRun(runningRow) : null
+  const activeRun =
+    activeRow && activeRow.status === 'RUNNING'
+      ? { id: activeRow.id, depth: activeRow.depth === 'fast' ? ('fast' as const) : ('deep' as const), createdAt: activeRow.createdAt.toISOString() }
+      : null
+
   return NextResponse.json({
+    activeRun,
     session: {
       id: session.id,
       title: session.title,

@@ -4741,6 +4741,8 @@ model PriorArtStudioRun {
   planSnapshot   Json // StudioPlan as executed
   planHash       String
   gateCounts     Json // { corpus, filters, recall, families, shown, lanes: { matchOnly, castOnly, both } }
+  gateDetail     Json?
+  suggestedTerms Json?
   providerStats  Json?
   warnings       Json?
   results        Json // condensed family-grouped results for re-render + diffing
@@ -4748,12 +4750,17 @@ model PriorArtStudioRun {
   familyCount    Int    @default(0)
   newFamilyCount Int    @default(0)
   durationMs     Int?
+  status         String @default("COMPLETE") // RUNNING | COMPLETE | FAILED
+  error          String?
+  depth          String @default("deep") // deep | fast
+  completedAt    DateTime?
 
   createdAt DateTime @default(now())
 
   session PriorArtStudioSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
+  @@index([sessionId, status])
   @@map("prior_art_studio_runs")
 }
 

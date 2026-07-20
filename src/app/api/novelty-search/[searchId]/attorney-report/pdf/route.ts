@@ -7,6 +7,7 @@ import { buildNoveltyAttorneyReportModel, type AttorneyReportCitation, type Atto
 import { hydrateNoveltyReportPatentMetadata } from '@/lib/novelty-report-metadata';
 
 export const runtime = 'nodejs';
+export const maxDuration = 120;
 
 const PDFDocument = require('pdfkit/js/pdfkit.standalone');
 

@@ -47,6 +47,27 @@ function isLocalCorpusResult(result: NormalizedPatentResult): boolean {
 /** How many top families get per-element evidence (keeps the extra scan cheap). */
 const ELEMENT_GRID_LIMIT = 40
 
+/**
+ * Providers historically built `link` from the raw DOCDB publication number,
+ * yielding patents.google.com URLs that 404 (US pre-grant serials lose their
+ * leading zero in DOCDB). Keep only genuinely external links; the client
+ * computes the canonical Google Patents URL itself.
+ */
+function externalLinkOrNull(link: string | null | undefined): string | null {
+  if (!link || /patents\.google\.com/i.test(link)) return null
+  return link
+}
+
+/** Corpus applicants are stored as [{ raw, name, address, sequence }] — show the name. */
+function applicantDisplayName(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object') {
+    const name = (value as { name?: unknown }).name
+    if (typeof name === 'string' && name.trim()) return name
+  }
+  return value == null ? '' : String(value)
+}
+
 // ---------------------------------------------------------------------------
 // Trail
 // ---------------------------------------------------------------------------
@@ -505,6 +526,8 @@ export async function runStudioPlan(input: {
   requestHeaders: Record<string, string>
   /** 'deep' (default): full probe budgets, 30-60s. 'fast': the quick iterate loop. */
   depth?: 'deep' | 'fast'
+  /** When set, the results land on this pre-created RUNNING row instead of a new one. */
+  existingRunId?: string
 }): Promise<StudioRunPayload> {
   const depth: 'deep' | 'fast' = input.depth === 'fast' ? 'fast' : 'deep'
   const started = Date.now()
@@ -710,14 +733,14 @@ export async function runStudioPlan(input: {
       abstract: result.abstract || null,
       snippet: result.snippet || null,
       applicants: Array.isArray(result.applicants)
-        ? (result.applicants as unknown[]).map(a => String(a)).slice(0, 3).join('; ')
+        ? (result.applicants as unknown[]).map(applicantDisplayName).filter(Boolean).slice(0, 3).join('; ')
         : typeof result.applicants === 'string'
           ? result.applicants
           : undefined,
       publicationDate: toDateString(result.publicationDate),
       jurisdiction: result.jurisdiction,
       classifications: (result.classifications || result.cpcCodes || []).slice(0, 6),
-      link: result.link || result.sourceUrl || null,
+      link: externalLinkOrNull(result.link || result.sourceUrl),
       members: [
         {
           publicationNumber: result.publicationNumber,
@@ -739,9 +762,14 @@ export async function runStudioPlan(input: {
   // Count distinct families across the whole recall pool for the funnel.
   const poolFamilyKeys = new Set(pool.map(r => familyKeyOf(r.publicationNumber)))
 
-  // Diff vs previous run (what did this plan change buy us?).
+  // Diff vs previous run (what did this plan change buy us?). Placeholder rows
+  // (RUNNING/FAILED) and this run's own row must not count as "previous".
   const previousRun = await prisma.priorArtStudioRun.findFirst({
-    where: { sessionId: input.sessionId },
+    where: {
+      sessionId: input.sessionId,
+      status: 'COMPLETE',
+      ...(input.existingRunId ? { id: { not: input.existingRunId } } : {}),
+    },
     orderBy: { createdAt: 'desc' },
     select: { results: true },
   })
@@ -883,22 +911,28 @@ export async function runStudioPlan(input: {
   )
 
   const storedFamilies = families.slice(0, STORED_FAMILY_LIMIT)
-  const run = await prisma.priorArtStudioRun.create({
-    data: {
-      sessionId: input.sessionId,
-      planVersion: input.planVersion,
-      planSnapshot: input.plan as unknown as Prisma.InputJsonValue,
-      planHash: compiled.planHash,
-      gateCounts: gateCounts as unknown as Prisma.InputJsonValue,
-      providerStats: searchResponse.providerStats as unknown as Prisma.InputJsonValue,
-      warnings: [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])] as unknown as Prisma.InputJsonValue,
-      results: storedFamilies as unknown as Prisma.InputJsonValue,
-      resultCount: ranked.length,
-      familyCount: poolFamilyKeys.size,
-      newFamilyCount,
-      durationMs,
-    },
-  })
+  const allWarnings = [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])]
+  const runData = {
+    planVersion: input.planVersion,
+    planSnapshot: input.plan as unknown as Prisma.InputJsonValue,
+    planHash: compiled.planHash,
+    gateCounts: gateCounts as unknown as Prisma.InputJsonValue,
+    gateDetail: gateDetail as unknown as Prisma.InputJsonValue,
+    suggestedTerms: suggestedTerms as unknown as Prisma.InputJsonValue,
+    providerStats: searchResponse.providerStats as unknown as Prisma.InputJsonValue,
+    warnings: allWarnings as unknown as Prisma.InputJsonValue,
+    results: storedFamilies as unknown as Prisma.InputJsonValue,
+    resultCount: ranked.length,
+    familyCount: poolFamilyKeys.size,
+    newFamilyCount,
+    durationMs,
+    depth,
+    status: 'COMPLETE',
+    completedAt: new Date(),
+  }
+  const run = input.existingRunId
+    ? await prisma.priorArtStudioRun.update({ where: { id: input.existingRunId }, data: runData })
+    : await prisma.priorArtStudioRun.create({ data: { sessionId: input.sessionId, ...runData } })
 
   await appendTrail(
     input.sessionId,
@@ -916,12 +950,126 @@ export async function runStudioPlan(input: {
     gateCounts,
     gateDetail,
     families,
-    warnings: [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])],
+    warnings: allWarnings,
     newFamilyCount,
     durationMs,
     booleanPreview: compiled.booleanPreview,
     suggestedTerms,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Background runs. Deep searches take 30-60s+, longer than any reverse-proxy
+// read timeout is guaranteed to allow — so the run route creates a RUNNING row,
+// kicks the search off in-process (the deployment is a long-lived PM2 node,
+// same pattern as the drafting route's background jobs) and the client polls.
+// ---------------------------------------------------------------------------
+
+/** A RUNNING row older than this is an orphan (server restart, hard crash). */
+export const STUDIO_RUN_STALE_MS = 10 * 60 * 1000
+
+export async function startStudioRun(input: {
+  sessionId: string
+  userId: string
+  plan: StudioPlan
+  planVersion: number
+  requestHeaders: Record<string, string>
+  depth?: 'deep' | 'fast'
+}): Promise<{ runId: string }> {
+  const depth: 'deep' | 'fast' = input.depth === 'fast' ? 'fast' : 'deep'
+  // Refuse unrunnable plans synchronously so the route answers 400 instead of
+  // parking a FAILED row the user has to poll to discover.
+  const compiled = compileStudioPlan(input.plan)
+  if (compiled.warnings.length && !compiled.queryPlan.searchQuery && !compiled.queryPlan.retrievalQueries) {
+    throw new Error(compiled.warnings[0])
+  }
+
+  const placeholder = await prisma.priorArtStudioRun.create({
+    data: {
+      sessionId: input.sessionId,
+      planVersion: input.planVersion,
+      planSnapshot: input.plan as unknown as Prisma.InputJsonValue,
+      planHash: compiled.planHash,
+      gateCounts: {} as Prisma.InputJsonValue,
+      results: [] as unknown as Prisma.InputJsonValue,
+      status: 'RUNNING',
+      depth,
+    },
+  })
+
+  setTimeout(() => {
+    void runStudioPlan({ ...input, depth, existingRunId: placeholder.id }).catch(async error => {
+      const message = error instanceof Error ? error.message : 'Search run failed.'
+      console.error(
+        '[StudioAlert]',
+        JSON.stringify({ event: 'run_job_failed', sessionId: input.sessionId, runId: placeholder.id, message: message.slice(0, 300) })
+      )
+      try {
+        await prisma.priorArtStudioRun.update({
+          where: { id: placeholder.id },
+          data: { status: 'FAILED', error: message.slice(0, 2000), completedAt: new Date() },
+        })
+        await appendTrail(
+          input.sessionId,
+          'SYSTEM',
+          'system',
+          `${depth === 'deep' ? 'Deep search' : 'Fast scan'} v${input.planVersion} failed: ${message.slice(0, 200)}`
+        )
+      } catch (persistError) {
+        console.error('[PriorArtStudio] Could not record run failure:', persistError)
+      }
+    })
+  }, 0)
+
+  return { runId: placeholder.id }
+}
+
+/** Rebuild the client payload from a stored COMPLETE run row. */
+export function studioRunPayloadFromRow(row: {
+  id: string
+  planVersion: number
+  planHash: string
+  createdAt: Date
+  gateCounts: unknown
+  gateDetail?: unknown
+  results: unknown
+  warnings: unknown
+  newFamilyCount: number
+  durationMs: number | null
+  suggestedTerms?: unknown
+}): StudioRunPayload {
+  return {
+    runId: row.id,
+    planVersion: row.planVersion,
+    planHash: row.planHash,
+    createdAt: row.createdAt.toISOString(),
+    gateCounts: (row.gateCounts || {}) as StudioGateCounts,
+    gateDetail: (row.gateDetail as StudioGateDetail | null) || undefined,
+    families: Array.isArray(row.results) ? (row.results as unknown as StudioResultFamily[]) : [],
+    warnings: Array.isArray(row.warnings) ? (row.warnings as string[]) : [],
+    newFamilyCount: row.newFamilyCount || 0,
+    durationMs: row.durationMs || 0,
+    booleanPreview: '',
+    suggestedTerms: Array.isArray(row.suggestedTerms) ? (row.suggestedTerms as string[]) : undefined,
+  }
+}
+
+/**
+ * Lazily fail RUNNING rows the server can no longer be working on (restart or
+ * crash mid-run). Called from the polling route and the session loader — no
+ * cron needed, the next reader sweeps.
+ */
+export async function resolveStaleRun<T extends { id: string; status: string; createdAt: Date }>(row: T): Promise<T> {
+  if (row.status !== 'RUNNING' || Date.now() - row.createdAt.getTime() < STUDIO_RUN_STALE_MS) return row
+  const failed = await prisma.priorArtStudioRun.update({
+    where: { id: row.id },
+    data: {
+      status: 'FAILED',
+      error: 'The server restarted or the run exceeded its time budget — run the search again.',
+      completedAt: new Date(),
+    },
+  })
+  return failed as unknown as T
 }
 
 /**

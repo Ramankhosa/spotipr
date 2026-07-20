@@ -1,7 +1,49 @@
 import { prisma } from '@/lib/prisma';
+import { PATENT_CORPUS_SOURCE_INDIAN } from '@/lib/patent-corpus-service';
+
+// Report hydration runs on the request path (search detail + attorney-report PDF), so it
+// must never outlive the request. `local_patents` holds the ~45M-row Google Patents corpus
+// alongside the Indian corpus; a lookup that cannot use an index sequential-scans all of it.
+const HYDRATION_STATEMENT_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.NOVELTY_REPORT_HYDRATION_TIMEOUT_MS || '8000') || 8000
+);
+
+// Kind codes appended to a kind-stripped number so lookups stay exact-match against the
+// unique `publicationNumberKey` index. Matching on a computed kind-stripped expression (or
+// a `contains`/LIKE '%..%') instead would sequential-scan the whole corpus.
+const KIND_CODE_VARIANTS = ['A', 'A1', 'A2', 'A4', 'B', 'B1', 'B2', 'B4', 'C', 'C1', 'U', 'U1'];
+
+// Only the columns localPatentToMetadata actually reads. The corpus rows carry rawText,
+// claimsText and descriptionText, which would otherwise be dragged over the wire per row.
+const METADATA_SELECT = {
+  publicationNumber: true,
+  applicationNumberRaw: true,
+  title: true,
+  abstract: true,
+  abstractOriginal: true,
+  applicants: true,
+  inventors: true,
+  classifications: true,
+  filingDate: true,
+  publicationDate: true,
+  numberOfPages: true,
+  numberOfClaims: true,
+  sourcePdfName: true,
+  sourcePageNumber: true,
+  extractionConfidence: true,
+  rawApplicantBlock: true,
+  rawInventorBlock: true,
+  ipIndiaDetails: true,
+} as const;
 
 function cleanText(value: unknown) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Compact form that keeps the kind code — matches local_patents."publicationNumberKey". */
+function compactPatentNumber(value: unknown) {
+  return cleanText(value).toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function canonicalPatentNumber(value: unknown) {
@@ -156,15 +198,54 @@ export async function hydrateNoveltyReportPatentMetadata<T extends { stage1Resul
 
   const canonicalNumbers = Array.from(new Set(patentNumbers.map(canonicalPatentNumber).filter(Boolean))).slice(0, 80);
   const numericTokens = canonicalNumbers.map(value => value.replace(/^IN/i, '')).filter(Boolean);
-  const localPatents = await prisma.localPatent.findMany({
-    where: {
-      OR: [
-        ...canonicalNumbers.map(value => ({ publicationNumber: { contains: value } })),
-        ...numericTokens.map(value => ({ applicationNumberRaw: { contains: value } })),
-      ],
-    },
-    take: 200,
-  });
+
+  // Every branch below is an exact match against an indexed column: `publicationNumber` and
+  // `publicationNumberKey` both carry unique b-tree indexes, and the `applicationNumberRaw`
+  // branch is confined to the Indian corpus so it resolves through the corpusSources GIN
+  // index instead of scanning the Google corpus. Kind-code variants are enumerated here
+  // because the canonical form is kind-stripped while the stored key retains the kind code.
+  const exactPublicationNumbers = new Set<string>();
+  const compactPublicationKeys = new Set<string>();
+  for (const number of patentNumbers.slice(0, 200)) {
+    const raw = cleanText(number);
+    if (!raw) continue;
+    exactPublicationNumbers.add(raw);
+    exactPublicationNumbers.add(raw.toUpperCase());
+    const compact = compactPatentNumber(raw);
+    if (compact) compactPublicationKeys.add(compact);
+  }
+  for (const canonical of canonicalNumbers) {
+    compactPublicationKeys.add(canonical);
+    for (const kind of KIND_CODE_VARIANTS) compactPublicationKeys.add(`${canonical}${kind}`);
+  }
+
+  let localPatents: Array<Record<string, any>> = [];
+  try {
+    const [, rows] = await prisma.$transaction([
+      prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(HYDRATION_STATEMENT_TIMEOUT_MS)}, true)`,
+      prisma.localPatent.findMany({
+        where: {
+          OR: [
+            { publicationNumber: { in: Array.from(exactPublicationNumbers) } },
+            { publicationNumberKey: { in: Array.from(compactPublicationKeys) } },
+            {
+              corpusSources: { has: PATENT_CORPUS_SOURCE_INDIAN },
+              applicationNumberRaw: { in: numericTokens },
+            },
+          ],
+        },
+        select: METADATA_SELECT,
+        take: 200,
+      }),
+    ]);
+    localPatents = rows as Array<Record<string, any>>;
+  } catch (error) {
+    // Enrichment is additive: the report already carries the pipeline's own metadata. Never
+    // fail (or stall) an export because the corpus lookup did not come back.
+    console.warn('[NoveltyReportMetadata] Local corpus hydration skipped.',
+      error instanceof Error ? error.message : error);
+    return searchRun;
+  }
   if (!localPatents.length) return searchRun;
 
   const localByCanonical = new Map<string, any>();
