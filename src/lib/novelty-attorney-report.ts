@@ -46,6 +46,12 @@ export interface AttorneyReportFeatureRow {
 export interface AttorneyReportCitation {
   citationNo: string;
   publicationNumber: string;
+  originalPublicationNumber?: string;
+  publicationJurisdiction?: string;
+  searchAuthorityScope?: string;
+  sourceCorpus?: string;
+  filingCountry?: string;
+  targetLegalJurisdiction?: string;
   title: string;
   relevanceScore: number | null;
   evidenceQuality: string;
@@ -131,6 +137,11 @@ export interface AttorneyReportPatentComparison extends AttorneyReportCitation {
   venue: string;
   doi: string;
   sourceProviders: string;
+  priorityScore?: number;
+  importantFeatureCoverage?: number;
+  strongImportantFeatureCount?: number;
+  strongNoveltyFeatureCount?: number;
+  relationshipBonus?: number;
   citationCount: number | null;
   coverage: {
     present: number;
@@ -154,6 +165,16 @@ export interface AttorneyReportMethodology {
   searchedEvidence: string;
   techniques: string[];
   preliminaryStatus: string;
+}
+
+export interface AttorneyReportCombination {
+  referenceA: { publicationNumber: string; title: string; teaches: string[] };
+  referenceB: { publicationNumber: string; title: string; adds: string[] };
+  combinedImportantFeatureCoverage: number;
+  apparentMotivation: string;
+  missingImportantFeatures: string[];
+  stillMissingRelationship: string;
+  label: 'Inventive-step review';
 }
 
 export interface AttorneyReportModel {
@@ -201,6 +222,10 @@ export interface AttorneyReportModel {
   comparisons: AttorneyReportPatentComparison[];
   patentComparisons: AttorneyReportPatentComparison[];
   paperComparisons: AttorneyReportPatentComparison[];
+  mainComparisons: AttorneyReportPatentComparison[];
+  appendixMappedComparisons: AttorneyReportPatentComparison[];
+  mainCitations: AttorneyReportCitation[];
+  potentialCombinations: AttorneyReportCombination[];
   riskAssessment: {
     noveltyRisk: AttorneyReportRiskLevel;
     noveltyRiskLabel: string;
@@ -212,6 +237,9 @@ export interface AttorneyReportModel {
     coreFeatureCount: number;
     strongestSingleReferenceCoreCoverage: number;
     distributedCoreCoverage: number;
+    highestSingleReferenceCoreCoveragePercent: number;
+    distributedCoreCoveragePercent: number;
+    assessmentConfidence: 'Low' | 'Medium' | 'High';
   };
   potentialDifferentiationSpace: string;
   matrixInsight: string;
@@ -247,6 +275,31 @@ export interface AttorneyReportModel {
 function cleanText(value: unknown, fallback = ''): string {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   return text || fallback;
+}
+
+function canonicalPublicationDisplay(value: unknown): string {
+  const raw = cleanText(value);
+  if (/^PAPER:/i.test(raw)) return raw;
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function normalizedAuthority(value: unknown): string {
+  const raw = cleanText(value).toUpperCase();
+  const aliases: Record<string, string> = {
+    INDIA: 'IN', CHINA: 'CN', 'UNITED STATES': 'US', USA: 'US',
+    'UNITED KINGDOM': 'GB', JAPAN: 'JP', KOREA: 'KR',
+    EUROPE: 'EP', EUROPEAN: 'EP', WORLDWIDE: 'WO', WIPO: 'WO',
+  };
+  return aliases[raw] || raw;
+}
+
+function publicationAuthority(publicationNumber: string, ...metadataValues: unknown[]): string {
+  for (const value of metadataValues) {
+    const authority = normalizedAuthority(value);
+    if (/^[A-Z]{2}$/.test(authority)) return authority;
+  }
+  const prefix = canonicalPublicationDisplay(publicationNumber).match(/^([A-Z]{2})/)?.[1];
+  return prefix || 'Not available';
 }
 
 function canonicalPatentNumber(value: unknown): string {
@@ -923,6 +976,17 @@ function deterministicRiskAssessment(
     coreFeatureCount,
     strongestSingleReferenceCoreCoverage: Math.round(strongestSingleReferenceCoreCoverage * 100) / 100,
     distributedCoreCoverage: Math.round(distributedCoreCoverage * 100) / 100,
+    highestSingleReferenceCoreCoveragePercent: Math.round(strongestSingleReferenceCoreCoverage * 100),
+    distributedCoreCoveragePercent: Math.round(distributedCoreCoverage * 100),
+    assessmentConfidence: confidenceFromCounts({
+      searched: counts.patentsSearched,
+      found: counts.patentsFound,
+      directlyRelevant: counts.directlyRelevant,
+      retrieved: counts.patentsSearched,
+      reviewed: counts.screened,
+      visible: counts.directlyRelevant,
+      analyzed: counts.detailedCitations,
+    }) as 'Low' | 'Medium' | 'High',
   };
 }
 
@@ -1551,36 +1615,6 @@ function buildClaimPositioningIntelligence(
   };
 }
 
-function closestCitationPriority(
-  citation: AttorneyReportCitation,
-  comparisons: AttorneyReportPatentComparison[],
-  conceptMapping: ClaimConceptMapping[],
-  featureSummaries: AttorneyReportFeatureSummary[]
-): number {
-  const comparison = comparisons.find(item => item.publicationNumber === citation.publicationNumber);
-  if (!comparison) return Number(citation.relevanceScore || 0);
-  const importantFeatures = featureSummaries.filter(feature => feature.importance === 'core_inventive' || feature.type === 'novelty_candidate');
-  const weightedTotal = importantFeatures.reduce((sum, feature) => sum + featurePriorityWeight(feature), 0) || 1;
-  const weightedAtomicCoverage = importantFeatures.reduce((sum, feature) => {
-    const row = comparison.rows.find(item => item.userFeature === feature.feature);
-    const statusWeight = row?.status === 'Present' ? 1 : row?.status === 'Partial' ? 0.5 : row?.status === 'Unknown' ? 0.1 : 0;
-    const evidenceWeight = row?.evidenceStrength === 'Strong' ? 1 : row?.evidenceStrength === 'Moderate' ? 0.8 : row?.evidenceStrength === 'Weak' ? 0.45 : 0;
-    return sum + featurePriorityWeight(feature) * statusWeight * evidenceWeight;
-  }, 0) / weightedTotal;
-  const conceptScore = conceptMapping.reduce((best, concept) => {
-    const isBestReference = canonicalPatentNumber(concept.bestReference) === canonicalPatentNumber(citation.publicationNumber);
-    const relationshipBoost = isBestReference && concept.relationshipMapped ? 0.25 : 0;
-    return Math.max(best, isBestReference ? concept.coverage + relationshipBoost : 0);
-  }, 0);
-  const evidenceScore = comparison.rows.reduce((sum, row) => {
-    if (row.status !== 'Present' && row.status !== 'Partial') return sum;
-    return sum + (row.evidenceStrength === 'Strong' ? 1 : row.evidenceStrength === 'Moderate' ? 0.7 : 0.35);
-  }, 0) / Math.max(1, comparison.rows.length);
-  const categoryBoost = citation.matchCategory === 'direct' ? 0.15 : citation.matchCategory === 'component' ? 0.08 : citation.matchCategory === 'borderline' ? 0.02 : 0;
-  const rolePenalty = /remote|background/i.test(citation.referenceRole) ? 0.06 : 0;
-  return weightedAtomicCoverage * 4 + conceptScore * 3 + evidenceScore * 1.5 + Number(citation.relevanceScore || 0) + categoryBoost - rolePenalty;
-}
-
 function sanitizeRiskItem(value: unknown): string {
   return reportSafeText(value)
     .replace(/\bNot Novel determination indicates\b/gi, 'Preliminary mapped-overlap assessment indicates')
@@ -1712,6 +1746,195 @@ function reviewPriorityFor(matchCategory: AttorneyReportCitation['matchCategory'
   return 'Standard';
 }
 
+function prioritizationFeatureWeight(type: AttorneyReportFeatureType): number {
+  return type === 'novelty_candidate' ? 2
+    : type === 'core_technical' ? 1.5
+      : type === 'implementation' ? 0.7
+        : 0.2;
+}
+
+function evidenceFactor(row: AttorneyReportFeatureRow | undefined): number {
+  if (!row || row.status === 'Absent' || row.status === 'Unknown') return 0;
+  if (row.status === 'Present') return 1;
+  return row.evidenceStrength === 'Strong' || (row.extentScore ?? 0) >= 0.55 || (row.confidence ?? 0) >= 0.65 ? 0.6 : 0.4;
+}
+
+function postMappingPriorityMetrics(
+  comparison: AttorneyReportPatentComparison,
+  stage0: NormalizedIdea,
+  features: AttorneyReportFeatureSummary[]
+) {
+  const rowByFeature = new Map(comparison.rows.map(row => [row.userFeature.toLowerCase(), row]));
+  const important = features.filter(feature => feature.type === 'core_technical' || feature.type === 'novelty_candidate');
+  const totalImportantWeight = important.reduce((sum, feature) => sum + prioritizationFeatureWeight(feature.type), 0);
+  const importantMappedWeight = important.reduce((sum, feature) =>
+    sum + prioritizationFeatureWeight(feature.type) * evidenceFactor(rowByFeature.get(feature.feature.toLowerCase())), 0);
+  const baseScore = features.reduce((sum, feature) =>
+    sum + prioritizationFeatureWeight(feature.type) * evidenceFactor(rowByFeature.get(feature.feature.toLowerCase())), 0);
+  const stronglyMapped = important.filter(feature => evidenceFactor(rowByFeature.get(feature.feature.toLowerCase())) >= 0.6);
+  const mappedCount = (linked: string[]) => linked.filter(feature => evidenceFactor(rowByFeature.get(feature.toLowerCase())) > 0).length;
+  const relationshipText = [
+    comparison.title,
+    comparison.abstract,
+    comparison.technicalDisclosure,
+    comparison.summary,
+    ...comparison.rows.map(row => `${row.patentDisclosure} ${row.evidenceQuote}`),
+  ].join(' ').toLowerCase();
+  const relationshipExpresslySupported = (description: string) => {
+    const tokens = Array.from(new Set(cleanText(description).toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(token => token.length > 4)))
+      .slice(0, 20);
+    if (tokens.length === 0) return false;
+    const hits = tokens.filter(token => relationshipText.includes(token)).length;
+    return hits >= Math.min(4, Math.max(2, Math.ceil(tokens.length * 0.25)));
+  };
+  let relationshipBonus = 0;
+  let primaryRelationshipMapped = false;
+  for (const concept of stage0.claimConcepts || []) {
+    if (mappedCount(concept.linkedFeatures || []) < 2) continue;
+    relationshipBonus += concept.importance === 'primary' ? 1.5 : concept.importance === 'secondary' ? 1 : 0.5;
+    if (concept.importance === 'primary' && relationshipExpresslySupported(`${concept.title} ${concept.claimableSummary}`)) {
+      primaryRelationshipMapped = true;
+    }
+  }
+  for (const interaction of stage0.noveltyFocusInteractions || []) {
+    if (mappedCount(interaction.linkedFeatures || []) >= 2) {
+      relationshipBonus += 1.5;
+      if (relationshipExpresslySupported(interaction.description)) primaryRelationshipMapped = true;
+    }
+  }
+  return {
+    score: Math.round((baseScore + relationshipBonus) * 100) / 100,
+    importantCoverage: totalImportantWeight > 0 ? importantMappedWeight / totalImportantWeight : 0,
+    strongImportantCount: stronglyMapped.length,
+    strongNoveltyCount: stronglyMapped.filter(feature => feature.type === 'novelty_candidate').length,
+    anyImportantMapped: important.some(feature => evidenceFactor(rowByFeature.get(feature.feature.toLowerCase())) > 0),
+    primaryRelationshipMapped,
+    relationshipBonus,
+  };
+}
+
+function applySelectivePriorities(
+  source: AttorneyReportPatentComparison[],
+  stage0: NormalizedIdea,
+  features: AttorneyReportFeatureSummary[]
+): AttorneyReportPatentComparison[] {
+  const ranked = source.map((comparison, originalIndex) => {
+    const metrics = postMappingPriorityMetrics(comparison, stage0, features);
+    const desired = metrics.primaryRelationshipMapped || (metrics.importantCoverage >= 0.75 && metrics.strongImportantCount >= 2)
+      ? 'Critical'
+      : metrics.strongImportantCount >= 2 || metrics.strongNoveltyCount >= 1 || metrics.importantCoverage >= 0.5
+        ? 'High'
+        : metrics.anyImportantMapped || comparison.matchCategory === 'component'
+          ? 'Medium'
+          : 'Low';
+    return { comparison, originalIndex, metrics, desired };
+  }).sort((a, b) =>
+    (b.metrics.score - a.metrics.score) ||
+    ((b.comparison.relevanceScore ?? -1) - (a.comparison.relevanceScore ?? -1)) ||
+    (a.originalIndex - b.originalIndex)
+  );
+  const caps = { Critical: 4, High: 8, Medium: 15 } as const;
+  const counts = { Critical: 0, High: 0, Medium: 0 };
+  const nextLevel = (level: string) => level === 'Critical' ? 'High' : level === 'High' ? 'Medium' : 'Low';
+  return ranked.map(({ comparison, metrics, desired }, index) => {
+    let level = desired;
+    while (level !== 'Low' && counts[level as keyof typeof counts] >= caps[level as keyof typeof caps]) {
+      level = nextLevel(level);
+    }
+    if (level !== 'Low') counts[level as keyof typeof counts] += 1;
+    return {
+      ...comparison,
+      citationNo: `D${index + 1}`,
+      reviewPriority: level,
+      priorityScore: metrics.score,
+      importantFeatureCoverage: Math.round(metrics.importantCoverage * 100) / 100,
+      strongImportantFeatureCount: metrics.strongImportantCount,
+      strongNoveltyFeatureCount: metrics.strongNoveltyCount,
+      relationshipBonus: metrics.relationshipBonus,
+    };
+  });
+}
+
+function selectMainComparisons(comparisons: AttorneyReportPatentComparison[]): AttorneyReportPatentComparison[] {
+  const selected: AttorneyReportPatentComparison[] = [];
+  const add = (items: AttorneyReportPatentComparison[], limit: number) => {
+    for (const item of items) {
+      if (selected.length >= limit || selected.includes(item)) break;
+      selected.push(item);
+    }
+  };
+  add(comparisons.filter(item => item.reviewPriority === 'Critical').slice(0, 3), 10);
+  add(comparisons.filter(item => item.reviewPriority === 'High'), 10);
+  if (selected.length < 8) add(comparisons.filter(item => item.reviewPriority === 'Medium'), 8);
+  return selected;
+}
+
+function buildPotentialCombinations(
+  comparisons: AttorneyReportPatentComparison[],
+  stage0: NormalizedIdea,
+  features: AttorneyReportFeatureSummary[]
+): AttorneyReportCombination[] {
+  const important = features.filter(feature => feature.type === 'core_technical' || feature.type === 'novelty_candidate');
+  if (important.length === 0) return [];
+  const mapped = (comparison: AttorneyReportPatentComparison) => new Set(important
+    .filter(feature => evidenceFactor(comparison.rows.find(row => row.featureNumber === feature.featureNumber)) > 0)
+    .map(feature => feature.feature));
+  const relationships = [
+    ...(stage0.claimConcepts || []).map(concept => ({ description: concept.title, linkedFeatures: concept.linkedFeatures || [] })),
+    ...(stage0.noveltyFocusInteractions || []).map(interaction => ({ description: interaction.description, linkedFeatures: interaction.linkedFeatures || [] })),
+  ];
+  const pairs: Array<{ score: number; result: AttorneyReportCombination }> = [];
+  for (let left = 0; left < comparisons.length; left += 1) {
+    for (let right = left + 1; right < comparisons.length; right += 1) {
+      const a = comparisons[left];
+      const b = comparisons[right];
+      const aMapped = mapped(a);
+      const bMapped = mapped(b);
+      const union = new Set(Array.from(aMapped).concat(Array.from(bMapped)));
+      if (union.size < 2) continue;
+      const onlyA = Array.from(aMapped).filter(feature => !bMapped.has(feature));
+      const onlyB = Array.from(bMapped).filter(feature => !aMapped.has(feature));
+      if (onlyA.length === 0 || onlyB.length === 0) continue;
+      const duplicateCount = Array.from(aMapped).filter(feature => bMapped.has(feature)).length;
+      const coveredRelationship = relationships.find(relationship =>
+        relationship.linkedFeatures.length >= 2 && relationship.linkedFeatures.every(feature => union.has(feature))
+      );
+      const missingRelationship = relationships.find(relationship =>
+        relationship.linkedFeatures.some(feature => !union.has(feature))
+      );
+      const classificationsA = `${a.cpcCodes} ${a.ipcCodes}`.match(/[A-HY]\d{2}[A-Z]?/gi) || [];
+      const classificationsB = new Set((`${b.cpcCodes} ${b.ipcCodes}`.match(/[A-HY]\d{2}[A-Z]?/gi) || []).map(value => value.toUpperCase()));
+      const sharedClass = classificationsA.map(value => value.toUpperCase()).find(value => classificationsB.has(value));
+      const sharedFeature = Array.from(aMapped).find(feature => bMapped.has(feature));
+      const apparentMotivation = sharedClass
+        ? `Both records share ${sharedClass} classification subject matter, which may provide an apparent technical starting point for combination review.`
+        : sharedFeature
+          ? `Both records address ${sharedFeature}, which may provide an apparent shared technical mechanism for combination review.`
+          : 'technical motivation to combine is not established from the reviewed records.';
+      const missing = important.filter(feature => !union.has(feature.feature)).map(feature => `${feature.featureNumber}: ${feature.feature}`);
+      const score = (union.size / important.length) * 10 + onlyA.length + onlyB.length + (coveredRelationship ? 2 : 0) - duplicateCount;
+      pairs.push({
+        score,
+        result: {
+          referenceA: { publicationNumber: a.publicationNumber, title: a.title, teaches: Array.from(aMapped) },
+          referenceB: { publicationNumber: b.publicationNumber, title: b.title, adds: onlyB },
+          combinedImportantFeatureCoverage: Math.round((union.size / important.length) * 100),
+          apparentMotivation,
+          missingImportantFeatures: missing,
+          stillMissingRelationship: missingRelationship
+            ? `${missingRelationship.description}: ${missingRelationship.linkedFeatures.filter(feature => !union.has(feature)).join(', ') || 'relationship evidence remains unconfirmed'}`
+            : 'No additional Stage 0 important-feature relationship was identified as missing from the combined mapped cells.',
+          label: 'Inventive-step review',
+        },
+      });
+    }
+  }
+  return pairs.sort((a, b) => b.score - a.score).slice(0, 3).map(pair => pair.result);
+}
+
 function buildFeatureRows(stage0: NormalizedIdea, inventionDescription: string, patentMap: PatentFeatureMap, remark?: PerPatentRemark): AttorneyReportFeatureRow[] {
   const details = featureDetailsMap(stage0, inventionDescription);
   const suppliedRows = new Map<string, any>();
@@ -1777,22 +2000,35 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
   const stage1 = searchRun.stage1Results || {};
   const stage35 = searchRun.stage35Results || {};
   const stage4 = searchRun.stage4Results || {};
-  const featureMaps: PatentFeatureMap[] = Array.isArray(stage35?.feature_map) ? stage35.feature_map : [];
+  const seenMappedCitations = new Set<string>();
+  const featureMaps: PatentFeatureMap[] = (Array.isArray(stage35?.feature_map) ? stage35.feature_map : []).filter((map: PatentFeatureMap) => {
+    const key = canonicalPatentNumber(map.pn || (map as any).publicationNumber);
+    if (!key || seenMappedCitations.has(key)) return false;
+    seenMappedCitations.add(key);
+    return true;
+  });
   const patentIndex = buildPatentIndex(stage1);
   const generatedDate = formatDate(new Date());
   const reportNumber = `PN-NOV-${String(searchRun.jurisdiction || 'IN').toUpperCase()}-${generatedDate.replace(/-/g, '')}-${String(searchRun.id || '').slice(0, 8).toUpperCase()}`;
+  const sourceConfig = (searchRun.config as any)?.searchSource || {};
+  const featureSummaries = buildFeatureSummaries(stage0, searchRun.inventionDescription || '');
+  const configuredCountries = Array.isArray(sourceConfig?.filters?.countries)
+    ? sourceConfig.filters.countries.map((country: unknown) => normalizedAuthority(country)).filter(Boolean)
+    : [];
+  const searchAuthorityScope = configuredCountries.length ? configuredCountries.join(', ') : 'Worldwide';
+  const targetLegalJurisdiction = cleanText(searchRun.jurisdiction, 'IN').toUpperCase();
 
-  const comparisons: AttorneyReportPatentComparison[] = featureMaps.map((map, index) => {
-    const pn = cleanText(map.pn || (map as any).publicationNumber, 'Unknown');
-    const meta = patentIndex.get(canonicalPatentNumber(pn)) || {};
+  const rawComparisons: AttorneyReportPatentComparison[] = featureMaps.map((map, index) => {
+    const originalPn = cleanText(map.pn || (map as any).publicationNumber, 'Unknown');
+    const meta = patentIndex.get(canonicalPatentNumber(originalPn)) || {};
     const rawMeta = meta.raw && typeof meta.raw === 'object' ? meta.raw : {};
     const ipIndiaDetails = meta.ipIndiaDetails && typeof meta.ipIndiaDetails === 'object'
       ? meta.ipIndiaDetails
       : ((rawMeta as any).ipIndiaDetails && typeof (rawMeta as any).ipIndiaDetails === 'object' ? (rawMeta as any).ipIndiaDetails : {});
-    const gate = gateRecordFor(stage1, pn) || {};
+    const gate = gateRecordFor(stage1, originalPn) || {};
     const gateDecision = normalizeRerankDecision(gateDecisionForReport(gate, meta));
     const category = matchCategoryFromDecision(gateDecision);
-    const remark = remarkFor(stage4, pn);
+    const remark = remarkFor(stage4, originalPn);
     const rows = buildFeatureRows(stage0, searchRun.inventionDescription || '', map, remark);
     const present = rows.filter(row => row.status === 'Present').length;
     const partial = rows.filter(row => row.status === 'Partial').length;
@@ -1804,11 +2040,36 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     const overlapRisk = safeOverlapLabel(rawThreat);
     const claimImpactSummary = buildClaimImpactSummary(rows, overlapRisk.label);
     const relevanceScore = numberScore(gate.rerankScore ?? gate.score ?? meta.rerankScore ?? meta.relevanceScore ?? remark?.relevance);
-    const referenceType: 'patent' | 'paper' = meta.referenceType === 'paper' || pn.toUpperCase().startsWith('PAPER:') ? 'paper' : 'patent';
+    const referenceType: 'patent' | 'paper' = meta.referenceType === 'paper' || originalPn.toUpperCase().startsWith('PAPER:') ? 'paper' : 'patent';
+    const pn = referenceType === 'paper' ? originalPn : canonicalPublicationDisplay(originalPn);
+    const sourceCorpus = firstText(meta.sourceLabel, meta.sourceProviders, meta.sourceProvider, 'Not available');
 
     return {
       citationNo,
       publicationNumber: pn,
+      originalPublicationNumber: originalPn,
+      publicationJurisdiction: referenceType === 'paper' ? 'Not applicable' : publicationAuthority(
+        pn,
+        meta.publicationAuthority,
+        meta.publication_authority,
+        meta.authority,
+        meta.country,
+        meta.jurisdiction,
+        (rawMeta as any).publicationAuthority,
+        (rawMeta as any).country,
+      ),
+      searchAuthorityScope,
+      sourceCorpus,
+      filingCountry: firstText(
+        meta.filingCountry,
+        meta.filing_country,
+        meta.filingOffice,
+        meta.filing_office,
+        (rawMeta as any).filingCountry,
+        (rawMeta as any).filing_country,
+        'Not available'
+      ),
+      targetLegalJurisdiction,
       title: firstText(map.title, meta.title, remark?.title, referenceType === 'paper' ? 'Untitled Paper' : 'Untitled Patent'),
       referenceType,
       relevanceScore,
@@ -1840,7 +2101,7 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       authors: firstText(meta.authors, '-'),
       venue: firstText(meta.venue, '-'),
       doi: firstText(meta.doi, '-'),
-      sourceProviders: firstText(meta.sourceLabel, meta.sourceProviders, meta.sourceProvider, '-'),
+      sourceProviders: sourceCorpus,
       citationCount: Number.isFinite(Number(meta.citationCount)) ? Math.max(0, Math.trunc(Number(meta.citationCount))) : null,
       coverage: { present, partial, absent, unknown, score },
       summary: reportSafeText(firstText(remark?.summary, remark?.remarks, map.remarks, 'Reference summary prepared for feature comparison.')),
@@ -1853,9 +2114,20 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     };
   });
 
-  const citations = comparisons.map(({ citationNo, publicationNumber, title, relevanceScore, evidenceQuality, referenceRole, reviewPriority, matchCategory, matchCategoryLabel, referenceType }) => ({
+  const comparisons = applySelectivePriorities(rawComparisons, stage0, featureSummaries);
+  const mainComparisons = selectMainComparisons(comparisons);
+  const mainComparisonKeys = new Set(mainComparisons.map(item => canonicalPatentNumber(item.publicationNumber)));
+  const appendixMappedComparisons = comparisons.filter(item => !mainComparisonKeys.has(canonicalPatentNumber(item.publicationNumber)));
+
+  const citations = comparisons.map(({ citationNo, publicationNumber, originalPublicationNumber, publicationJurisdiction, searchAuthorityScope: citationSearchScope, sourceCorpus, filingCountry, targetLegalJurisdiction: citationTargetJurisdiction, title, relevanceScore, evidenceQuality, referenceRole, reviewPriority, matchCategory, matchCategoryLabel, referenceType }) => ({
     citationNo,
     publicationNumber,
+    originalPublicationNumber,
+    publicationJurisdiction,
+    searchAuthorityScope: citationSearchScope,
+    sourceCorpus,
+    filingCountry,
+    targetLegalJurisdiction: citationTargetJurisdiction,
     title,
     relevanceScore,
     evidenceQuality,
@@ -1865,6 +2137,8 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     matchCategoryLabel,
     referenceType,
   }));
+  const mainCitationKeys = new Set(mainComparisons.map(item => canonicalPatentNumber(item.publicationNumber)));
+  const mainCitations = citations.filter(citation => mainCitationKeys.has(canonicalPatentNumber(citation.publicationNumber)));
   const patentCitations = citations.filter(citation => citation.referenceType === 'patent');
   const paperCitations = citations.filter(citation => citation.referenceType === 'paper');
   const patentComparisons = comparisons.filter(comparison => comparison.referenceType === 'patent');
@@ -1894,19 +2168,35 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       (typeof relevance === 'number' && relevance >= 0.4))
     .sort((a, b) => (b.relevance ?? -1) - (a.relevance ?? -1));
   const otherShortlistedCitations = gateApprovedShortlist
-    .slice(0, 20)
-    .map(({ item, relevance }, index) => ({
-      citationNo: `S${index + 1}`,
-      publicationNumber: getPublicationNumber(item),
-      title: firstText(item?.title, item?.invention_title, item?.referenceType === 'paper' ? 'Untitled Paper' : 'Untitled Patent'),
-      referenceType: item?.referenceType === 'paper' ? 'paper' as const : 'patent' as const,
-      relevanceScore: relevance,
-      evidenceQuality: cleanText(item?.evidence_quality, 'not mapped'),
-      referenceRole: 'Shortlisted / not mapped',
-      reviewPriority: reviewPriorityFor('rejected', 0, relevance),
-      matchCategory: 'rejected' as const,
-      matchCategoryLabel: 'Not mapped / shortlisted',
-    }));
+    .map(({ item, relevance }, index) => {
+      const originalPublicationNumber = getPublicationNumber(item);
+      const referenceType = item?.referenceType === 'paper' ? 'paper' as const : 'patent' as const;
+      const publicationNumber = referenceType === 'paper' ? originalPublicationNumber : canonicalPublicationDisplay(originalPublicationNumber);
+      return {
+        citationNo: `S${index + 1}`,
+        publicationNumber,
+        originalPublicationNumber,
+        publicationJurisdiction: referenceType === 'paper' ? 'Not applicable' : publicationAuthority(
+          publicationNumber,
+          item?.publicationAuthority,
+          item?.authority,
+          item?.country,
+          item?.jurisdiction,
+        ),
+        searchAuthorityScope,
+        sourceCorpus: firstText(item?.sourceLabel, item?.sourceProviders, item?.sourceProvider, 'Not available'),
+        filingCountry: firstText(item?.filingCountry, item?.filing_country, item?.filingOffice, item?.filing_office, 'Not available'),
+        targetLegalJurisdiction,
+        title: firstText(item?.title, item?.invention_title, referenceType === 'paper' ? 'Untitled Paper' : 'Untitled Patent'),
+        referenceType,
+        relevanceScore: relevance,
+        evidenceQuality: cleanText(item?.evidence_quality, 'not mapped'),
+        referenceRole: 'Shortlisted / not mapped',
+        reviewPriority: 'Low',
+        matchCategory: 'rejected' as const,
+        matchCategoryLabel: 'Not mapped / shortlisted',
+      };
+    });
   const otherShortlistedExcludedCount = shortlistCandidates.length - gateApprovedShortlist.length;
   const assigneeSignals = comparisons
     .flatMap(item => item.assignees.split(',').map(value => cleanText(value)))
@@ -1919,23 +2209,19 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
   const assignees = Array.from(new Set(assigneeSignals)).slice(0, 40);
   const inventors = Array.from(new Set(inventorSignalNames)).slice(0, 60);
   const counts = buildNoveltyReportCountSummary(stage1, stage35);
-  const sourceConfig = (searchRun.config as any)?.searchSource || {};
   const sourceMode = cleanText(sourceConfig.mode || 'Selected patent sources');
   const paperSources: string[] = Array.isArray((searchRun.config as any)?.searchSource?.paperSources)
     ? (searchRun.config as any).searchSource.paperSources.map((source: unknown) => cleanText(source).replace(/_/g, ' ')).filter(Boolean)
     : [];
   const patentCount = Number(stage1?.patentCount || 0);
   const paperCount = Number(stage1?.paperCount || 0);
-  const featureSummaries = buildFeatureSummaries(stage0, searchRun.inventionDescription || '');
   const genericFeatures = featureSummaries.filter(feature => feature.type === 'generic_weak').map(feature => feature.feature);
   const claimConcepts = normalizeClaimConcepts(stage0);
+  const potentialCombinations = buildPotentialCombinations(comparisons, stage0, featureSummaries);
   const claimConceptMapping = Array.isArray(stage4?.claimConceptMapping) && stage4.claimConceptMapping.length
     ? stage4.claimConceptMapping as ClaimConceptMapping[]
     : buildFallbackConceptMapping(claimConcepts, comparisons, featureSummaries);
-  const publicClosestCitation = [...citations].sort((a, b) =>
-    closestCitationPriority(b, comparisons, claimConceptMapping, featureSummaries) -
-    closestCitationPriority(a, comparisons, claimConceptMapping, featureSummaries)
-  )[0] || null;
+  const publicClosestCitation = citations[0] || null;
   const claimPositioningIntelligence = buildClaimPositioningIntelligence(stage0, claimConcepts, claimConceptMapping, featureSummaries, comparisons, publicClosestCitation);
   const mainDifferentiator = buildMainDifferentiator(stage0, claimConcepts, claimConceptMapping, featureSummaries);
   const attorneyReviewFocus = buildAttorneyReviewFocus(claimConcepts, claimConceptMapping, featureSummaries, publicClosestCitation);
@@ -2018,13 +2304,15 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
       { number: '1.5', title: 'Summary of Relevant Citations' },
       { number: '1.6', title: 'Component / Feature-Level Prior Art' },
       { number: '1.7', title: 'Key Feature Analysis Matrix' },
+      ...(potentialCombinations.length ? [{ number: '1.8', title: 'Potential Inventive-Step Combinations' }] : []),
       { number: '2', title: 'Citation Analysis' },
       { number: '2.1', title: 'Relevant Patent Citations' },
       ...(paperCitations.length ? [
         { number: '2.2', title: 'Relevant Scholarly Publications' },
         ...paperCitations.map((citation, index) => ({ number: `2.2.${index + 1}`, title: citation.title })),
       ] : []),
-      { number: paperCitations.length ? '2.3' : '2.2', title: 'List of Other Shortlisted Citations' },
+      ...(appendixMappedComparisons.length ? [{ number: 'A', title: 'Remaining Mapped References' }] : []),
+      { number: paperCitations.length ? '2.3' : '2.2', title: 'Appendix B: Shortlisted but Unmapped Citations' },
       { number: '3', title: 'Applicant / Assignee Landscape' },
       { number: '4', title: 'Repeated Inventor / Entity Signals' },
       { number: '5', title: 'Claim-Positioning Analysis' },
@@ -2053,6 +2341,10 @@ export function buildNoveltyAttorneyReportModel(searchRun: any): AttorneyReportM
     comparisons,
     patentComparisons,
     paperComparisons,
+    mainComparisons,
+    appendixMappedComparisons,
+    mainCitations,
+    potentialCombinations,
     riskAssessment,
     potentialDifferentiationSpace,
     matrixInsight,

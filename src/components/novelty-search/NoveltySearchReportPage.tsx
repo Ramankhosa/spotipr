@@ -1093,11 +1093,11 @@ export default function NoveltySearchReportPage({
                       {executiveSummary.summary || executiveSummary.text || 'No summary provided.'}
                     </td>
                   </tr>
-                  {(executiveSummary.novelty_score || executiveSummary.confidence) && (
+                  {executiveSummary.confidence && (
                     <tr>
-                      <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4">Novelty Score:</td>
+                      <td className="border border-paper-400 p-2 font-bold bg-paper-100 w-1/4">Assessment Confidence:</td>
                       <td className="border border-paper-400 p-2">
-                        {executiveSummary.novelty_score || 'â€”'} {executiveSummary.confidence ? `â€¢ Confidence: ${executiveSummary.confidence}` : ''}
+                        {executiveSummary.confidence}
                       </td>
                     </tr>
                   )}

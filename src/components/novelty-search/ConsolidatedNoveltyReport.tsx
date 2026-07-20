@@ -82,6 +82,11 @@ interface CitationView {
   doi: string;
   sourceProviders: string;
   citationCount: number | null;
+  publicationJurisdiction?: string;
+  searchAuthorityScope?: string;
+  sourceCorpus?: string;
+  filingCountry?: string;
+  targetLegalJurisdiction?: string;
   rows: FeatureComparisonRow[];
 }
 
@@ -526,7 +531,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       stage35Results: stage35,
       stage4Results: stage4,
     });
-    const citations: CitationView[] = model.comparisons.map(item => ({
+    const toCitationView = (item: typeof model.comparisons[number]): CitationView => ({
       citationNo: item.citationNo,
       publicationNumber: item.publicationNumber,
       title: item.title,
@@ -554,6 +559,11 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       doi: item.doi,
       sourceProviders: item.sourceProviders,
       citationCount: item.citationCount,
+      publicationJurisdiction: item.publicationJurisdiction,
+      searchAuthorityScope: item.searchAuthorityScope,
+      sourceCorpus: item.sourceCorpus,
+      filingCountry: item.filingCountry,
+      targetLegalJurisdiction: item.targetLegalJurisdiction,
       rows: item.rows.map(row => ({
         feature_id: row.featureNumber,
         feature: row.userFeature,
@@ -575,7 +585,9 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
         novelty_impact: row.noveltyImpact,
         claim_review_note: row.claimReviewNote,
       })),
-    }));
+    });
+    const citations: CitationView[] = model.mainComparisons.map(toCitationView);
+    const appendixMapped = model.appendixMappedComparisons.map(toCitationView);
 
     return {
       ...model,
@@ -583,6 +595,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
       patentCitations: citations.filter(citation => citation.referenceType === 'patent'),
       paperCitations: citations.filter(citation => citation.referenceType === 'paper'),
       otherShortlisted: model.otherShortlistedCitations,
+      appendixMapped,
       assignees: model.assignees,
       inventors: model.inventors,
       stats: {
@@ -739,16 +752,18 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                 ['1.5', 'Summary of Relevant Citations'],
                 ['1.6', 'Component / Feature-Level Prior Art'],
                 ['1.7', 'Key Feature Analysis'],
+                ...(reportData.potentialCombinations.length ? [['1.8', 'Potential Inventive-Step Combinations']] : []),
                 ['2.1', 'Relevant Patent Citations'],
                 ...(reportData.paperCitations.length ? [['2.2', 'Relevant Scholarly Publications']] : []),
-                [reportData.paperCitations.length ? '2.3' : '2.2', 'List of Other Shortlisted Citations'],
+                ...(reportData.appendixMapped.length ? [['A', 'Remaining Mapped References']] : []),
+                [reportData.paperCitations.length ? '2.3' : '2.2', 'Appendix B: Shortlisted but Unmapped'],
                 ['3', 'Applicant / Assignee Landscape'],
                 ['4', 'Repeated Inventor / Entity Signals'],
                 ['5', 'Claim-Positioning Analysis'],
                 ['6', 'Claim-Positioning Observations'],
                 ['7', 'Limitations and Next Steps'],
               ].map(([number, label]) => (
-                <a key={number} href={`#section-${number.replace('.', '-')}`} className="flex gap-3 text-slate-700 hover:text-ai-blue-700">
+                <a key={number} href={number === 'A' ? '#appendix-a' : `#section-${number.replace('.', '-')}`} className="flex gap-3 text-slate-700 hover:text-ai-blue-700">
                   <span className="w-12 font-semibold">{number}</span>
                   <span>{label}</span>
                 </a>
@@ -773,6 +788,12 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
               The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for review.
             </p>
             <div className="mt-5 grid gap-3 text-sm md:grid-cols-2">
+              <div className="rounded-sm border border-rose-200 bg-rose-50 p-3"><span className="font-semibold">Anticipation risk: </span>{reportData.riskAssessment.noveltyRisk}</div>
+              <div className="rounded-sm border border-amber-200 bg-amber-50 p-3"><span className="font-semibold">Combination / inventive-step risk: </span>{reportData.riskAssessment.combinationRisk}</div>
+              <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Highest single-reference core coverage: </span>{reportData.riskAssessment.highestSingleReferenceCoreCoveragePercent}%</div>
+              <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Distributed core-feature coverage: </span>{reportData.riskAssessment.distributedCoreCoveragePercent}%</div>
+              <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Assessment confidence: </span>{reportData.riskAssessment.assessmentConfidence}</div>
+              <div className="rounded-sm border border-slate-300 p-3 text-slate-600">Distributed coverage may indicate combination risk; it cannot by itself establish anticipation by one reference.</div>
               <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Search query: </span>{cleanText(stage0?.searchQuery, '-')}</div>
               <div className="rounded-sm border border-slate-300 p-3"><span className="font-semibold">Search concluded on: </span>{generatedDate}</div>
               {reportData.countLabels.map(item => (
@@ -940,6 +961,26 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             </div>
           </Section>
 
+          {reportData.potentialCombinations.length > 0 && (
+            <Section id="section-1-8" title="1.8 Potential Inventive-Step Combinations">
+              <p className="mb-4 text-sm leading-6 text-slate-700">
+                These pairs support an inventive-step review only. They are not single-reference novelty or anticipation conclusions.
+              </p>
+              <div className="space-y-4">
+                {reportData.potentialCombinations.map((pair, index) => (
+                  <div key={`${pair.referenceA.publicationNumber}-${pair.referenceB.publicationNumber}`} className="rounded-sm border border-slate-300 p-4 text-sm leading-6">
+                    <div className="font-semibold text-slate-950">Combination {index + 1}: {pair.referenceA.publicationNumber} + {pair.referenceB.publicationNumber}</div>
+                    <p className="mt-2"><span className="font-semibold">Reference A teaches: </span>{pair.referenceA.teaches.join('; ') || '-'}</p>
+                    <p><span className="font-semibold">Reference B adds: </span>{pair.referenceB.adds.join('; ') || '-'}</p>
+                    <p><span className="font-semibold">Combined important-feature coverage: </span>{pair.combinedImportantFeatureCoverage}%</p>
+                    <p><span className="font-semibold">Apparent motivation: </span>{pair.apparentMotivation}</p>
+                    <p><span className="font-semibold">Still missing: </span>{pair.missingImportantFeatures.join('; ') || pair.stillMissingRelationship}</p>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
           <Section id="section-2-1" title="2.1 Relevant Patent Citations" breakBefore>
             <p className="mb-5 max-w-4xl text-sm leading-6 text-slate-700">
               The relevant patent records are mapped based on the key features of the submitted invention.
@@ -953,6 +994,8 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                   <DenseTable>
                     <tbody>
                       <tr><Cell className="w-48 font-semibold">Publication No:</Cell><Cell>{citation.publicationNumber}</Cell><Cell className="w-48 font-semibold">Publication Date:</Cell><Cell>{citation.publicationDate}</Cell></tr>
+                      <tr><Cell className="font-semibold">Publication Authority:</Cell><Cell>{citation.publicationJurisdiction || 'Not available'}</Cell><Cell className="font-semibold">Filing Country / Office:</Cell><Cell>{citation.filingCountry || 'Not available'}</Cell></tr>
+                      <tr><Cell className="font-semibold">Search Authority Scope:</Cell><Cell>{citation.searchAuthorityScope || 'Worldwide'}</Cell><Cell className="font-semibold">Target Legal Jurisdiction:</Cell><Cell>{citation.targetLegalJurisdiction || '-'}</Cell></tr>
                       <tr><Cell className="font-semibold">Application No:</Cell><Cell>{citation.applicationNumber}</Cell><Cell className="font-semibold">Application Date:</Cell><Cell>{citation.filingDate}</Cell></tr>
                       <tr><Cell className="font-semibold">Priority Date:</Cell><Cell colSpan={3}>{citation.priorityDate}</Cell></tr>
                       <tr><Cell className="font-semibold">Reference Role:</Cell><Cell>{citation.referenceRole}</Cell><Cell className="font-semibold">Review Priority:</Cell><Cell>{citation.reviewPriority}</Cell></tr>
@@ -961,7 +1004,7 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
                       <tr><Cell className="font-semibold">Assignee(s):</Cell><Cell colSpan={3}>{citation.assignees}</Cell></tr>
                       <tr><Cell className="font-semibold">Title:</Cell><Cell colSpan={3}>{citation.title}</Cell></tr>
                       <tr><Cell className="font-semibold">Technical Disclosure:</Cell><Cell colSpan={3}>{reportSafeText(citation.abstract)}</Cell></tr>
-                      <tr><Cell className="font-semibold">Source:</Cell><Cell colSpan={3}><a className="text-ai-blue-700 underline" href={citation.link} target="_blank" rel="noreferrer">{citation.link}</a></Cell></tr>
+                      <tr><Cell className="font-semibold">Source Corpus / Provider:</Cell><Cell colSpan={3}>{citation.sourceCorpus || citation.sourceProviders || '-'}</Cell></tr>
                     </tbody>
                   </DenseTable>
 
@@ -1058,8 +1101,21 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
             </Section>
           )}
 
+          {reportData.appendixMapped.length > 0 && (
+            <Section id="appendix-a" title="Appendix A: Remaining Mapped References" breakBefore>
+              <DenseTable>
+                <thead><tr><HeaderCell>Publication</HeaderCell><HeaderCell>Title</HeaderCell><HeaderCell>Priority</HeaderCell><HeaderCell>Role</HeaderCell></tr></thead>
+                <tbody>{reportData.appendixMapped.map(item => (
+                  <tr className="print-row" key={item.publicationNumber}>
+                    <Cell className="font-semibold">{item.publicationNumber}</Cell><Cell>{item.title}</Cell><Cell>{item.reviewPriority}</Cell><Cell>{item.referenceRole}</Cell>
+                  </tr>
+                ))}</tbody>
+              </DenseTable>
+            </Section>
+          )}
+
           {reportData.otherShortlisted.length > 0 && (
-            <Section id={reportData.paperCitations.length ? 'section-2-3' : 'section-2-2'} title={`${reportData.paperCitations.length ? '2.3' : '2.2'} List of Other Shortlisted Citations`} breakBefore>
+            <Section id={reportData.paperCitations.length ? 'section-2-3' : 'section-2-2'} title="Appendix B: Shortlisted but Unmapped References" breakBefore>
               <div className="mb-5 rounded-sm border border-ai-blue-200 bg-ai-blue-50 p-4 text-sm font-semibold text-ai-blue-950">
                 These citations were shortlisted for reference but not mapped in detail in this report version.
               </div>

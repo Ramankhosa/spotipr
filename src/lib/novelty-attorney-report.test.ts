@@ -2,6 +2,82 @@ import { describe, expect, it } from 'vitest';
 import { buildNoveltyAttorneyReportModel } from './novelty-attorney-report';
 
 describe('buildNoveltyAttorneyReportModel', () => {
+  it('applies evidence priorities, caps the main report, retains appendices, and separates jurisdiction metadata', () => {
+    const patents = Array.from({ length: 18 }, (_, index) => ({
+      publicationNumber: `CN-121704${String(index).padStart(3, '0')}-A`,
+      title: `Mapped reference ${index + 1}`,
+      abstract: 'An autonomous control loop performs anomaly inference and sends telemetry.',
+      relevanceScore: 0.99 - index * 0.01,
+      country: 'CN',
+      sourceProvider: 'google-patents-corpus',
+    }));
+    const featureMapFor = (publicationNumber: string, title: string, index: number) => ({
+      pn: publicationNumber,
+      title,
+      feature_analysis: [
+        { feature: 'autonomous control loop', status: 'Present', quote: 'autonomous control loop', field: 'abstract', confidence: 0.9 },
+        { feature: 'anomaly inference feedback', status: 'Present', quote: 'anomaly inference', field: 'abstract', confidence: 0.9 },
+        { feature: 'remote telemetry interface', status: index % 2 === 0 ? 'Present' : 'Absent', quote: index % 2 === 0 ? 'sends telemetry' : '', field: 'abstract', confidence: 0.7 },
+        { feature: 'distributed routing actuator', status: index % 2 === 1 ? 'Present' : 'Absent', quote: index % 2 === 1 ? 'distributed routing actuator' : '', field: 'abstract', confidence: 0.7 },
+      ],
+    });
+    const model = buildNoveltyAttorneyReportModel({
+      id: 'priority-search',
+      title: 'Autonomous inspection controller',
+      jurisdiction: 'IN',
+      inventionDescription: 'An autonomous controller uses anomaly inference feedback and telemetry.',
+      config: { searchSource: { mode: 'LOCAL_CORPUS', filters: {} } },
+      stage0Results: {
+        searchQuery: 'autonomous anomaly inference controller',
+        inventionFeatures: ['autonomous control loop', 'anomaly inference feedback', 'remote telemetry interface', 'distributed routing actuator'],
+        featureDetails: [
+          { feature: 'autonomous control loop', feature_type: 'core_technical' },
+          { feature: 'anomaly inference feedback', feature_type: 'novelty_candidate' },
+          { feature: 'remote telemetry interface', feature_type: 'core_technical' },
+          { feature: 'distributed routing actuator', feature_type: 'novelty_candidate' },
+        ],
+        claimConcepts: [{
+          title: 'Inference-driven autonomous control',
+          linkedFeatures: ['autonomous control loop', 'anomaly inference feedback'],
+          claimableSummary: 'Inference feedback controls autonomous operation.',
+          importance: 'primary',
+        }],
+      },
+      stage1Results: {
+        retrievedCount: 300,
+        reviewedCount: 80,
+        retrievalCandidates: patents,
+        aiRelevance: { byPn: {}, gateStatus: 'complete' },
+      },
+      stage35Results: {
+        feature_map: [
+          ...patents.map((patent, index) => featureMapFor(patent.publicationNumber, patent.title, index)),
+          featureMapFor('CN 121704000 A', 'Equivalent duplicate', 0),
+        ],
+      },
+      stage4Results: { confidence: 'Medium' },
+    });
+
+    expect(model.comparisons).toHaveLength(18);
+    expect(model.mainComparisons).toHaveLength(10);
+    expect(model.appendixMappedComparisons).toHaveLength(8);
+    expect(model.comparisons.filter(item => item.reviewPriority === 'Critical')).toHaveLength(4);
+    expect(model.comparisons.filter(item => item.reviewPriority === 'High')).toHaveLength(8);
+    expect(model.comparisons.filter(item => item.reviewPriority === 'Medium')).toHaveLength(6);
+    expect(model.comparisons.find(item => item.publicationNumber === 'CN121704000A')).toMatchObject({
+      publicationNumber: 'CN121704000A',
+      publicationJurisdiction: 'CN',
+      searchAuthorityScope: 'Worldwide',
+      targetLegalJurisdiction: 'IN',
+      sourceCorpus: 'google-patents-corpus',
+      filingCountry: 'Not available',
+    });
+    expect(model.riskAssessment.highestSingleReferenceCoreCoveragePercent).toBe(75);
+    expect(model.riskAssessment.distributedCoreCoveragePercent).toBe(100);
+    expect(model.potentialCombinations.length).toBeGreaterThan(0);
+    expect(model.potentialCombinations[0].label).toBe('Inventive-step review');
+  });
+
   it('builds professional preliminary assessment sections and side-by-side comparison rows', () => {
     const model = buildNoveltyAttorneyReportModel({
       id: 'search123456789',
@@ -187,7 +263,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
     expect(model.tableOfContents.map(item => item.title)).toContain('Claim-Positioning Observations');
     expect(model.tableOfContents).toContainEqual({ number: '1', title: 'Search Overview' });
     expect(model.tableOfContents).toContainEqual({ number: '2', title: 'Citation Analysis' });
-    expect(model.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
+    expect(model.tableOfContents).toContainEqual({ number: '2.2', title: 'Appendix B: Shortlisted but Unmapped Citations' });
     expect(model.tableOfContents.some(item => item.number === '2.3')).toBe(false);
     expect(model.reportTitle).toBe('Preliminary Novelty Assessment Report');
     expect(model.evidenceBasis).toContain('based on limited preliminary data');
@@ -218,7 +294,7 @@ describe('buildNoveltyAttorneyReportModel', () => {
       matchCategory: 'direct',
       matchCategoryLabel: 'Direct invention-level match',
       referenceRole: 'Closest invention-level reference',
-      reviewPriority: 'High',
+      reviewPriority: 'Medium',
     });
     expect(model.componentCitations.map(item => item.publicationNumber)).toEqual(['IN456A']);
     expect(model.comparisons[0].technicalDisclosure).toContain('soil moisture sensor');

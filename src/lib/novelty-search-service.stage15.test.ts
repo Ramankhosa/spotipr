@@ -1,5 +1,6 @@
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { NoveltySearchService } from './novelty-search-service';
+import { patentSearchOrchestrator } from './patent-search';
 
 vi.mock('./metering/gateway', () => ({
   llmGateway: {
@@ -11,7 +12,151 @@ function service() {
   return new NoveltySearchService() as any;
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('NoveltySearchService Stage 1.5 helpers', () => {
+  test('keeps the retrieval funnel at 300 candidates and an 80-record gate', () => {
+    const config = service().mergeConfig();
+
+    expect(config.stage1.candidateLimit).toBe(300);
+    expect(config.stage15.maxCandidates).toBe(80);
+  });
+
+  test('uses corpus-only search without generated exclusion filters', async () => {
+    const candidates = Array.from({ length: 300 }, (_, index) => ({
+      publicationNumber: `WO2026${String(index).padStart(6, '0')}A1`,
+      title: `Candidate ${index}`,
+      abstract: 'Technical candidate disclosure.',
+      sourceProvider: 'google-patents-corpus',
+      relevanceScore: 1 - index / 1000,
+    }));
+    const searchSpy = vi.spyOn(patentSearchOrchestrator, 'search').mockResolvedValue({
+      queryPlan: {} as any,
+      providerStats: [],
+      warnings: [],
+      results: candidates.slice(0, 50) as any,
+      candidateResults: candidates as any,
+      diagnostics: {
+        displayLimit: 50,
+        candidateLimit: 300,
+        resultCount: 50,
+        candidateResultCount: 300,
+        providerCandidateCount: 300,
+        providerContributionCounts: {},
+        rerankApplied: true,
+        minRerankScore: 0,
+        droppedBelowFloor: 0,
+      },
+    });
+    const svc = service();
+    const config = svc.mergeConfig({
+      searchSource: { mode: 'LOCAL_CORPUS', includePatents: true, includePapers: false, filters: {} },
+    });
+    const result = await svc.performStage1(
+      { id: 'search-300', jurisdiction: 'IN', inventionDescription: 'A technical control platform.' },
+      {
+        searchQuery: 'technical control platform',
+        inventionFeatures: ['adaptive control mechanism'],
+        searchExclusions: ['legacy exclusion'],
+      },
+      config,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data.retrievalCandidates).toHaveLength(300);
+    expect(searchSpy).toHaveBeenCalledTimes(1);
+    expect(searchSpy.mock.calls[0][0]).toMatchObject({
+      candidateLimit: 300,
+      disableProviderFallback: true,
+      filters: {},
+      queryPlan: { excludedTerms: [] },
+    });
+  });
+
+  test('stops assessment when Voyage reranking fails after one retry', async () => {
+    const searchSpy = vi.spyOn(patentSearchOrchestrator, 'search').mockResolvedValue({
+      queryPlan: {} as any,
+      providerStats: [],
+      warnings: ['rerank unavailable'],
+      results: [{ publicationNumber: 'P1' }, { publicationNumber: 'P2' }] as any,
+      candidateResults: [{ publicationNumber: 'P1' }, { publicationNumber: 'P2' }] as any,
+      diagnostics: {
+        displayLimit: 50,
+        candidateLimit: 300,
+        resultCount: 2,
+        candidateResultCount: 2,
+        providerCandidateCount: 2,
+        providerContributionCounts: {},
+        rerankApplied: false,
+        minRerankScore: 0,
+        droppedBelowFloor: 0,
+      },
+    });
+    const svc = service();
+    const result = await svc.performStage1(
+      { id: 'rerank-required', jurisdiction: 'IN', inventionDescription: 'Control platform.' },
+      { searchQuery: 'control platform', inventionFeatures: ['adaptive control mechanism'] },
+      svc.mergeConfig({ searchSource: { mode: 'LOCAL_CORPUS', includePatents: true, includePapers: false } }),
+    );
+
+    expect(searchSpy).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ success: false });
+    expect(result.error).toContain('Voyage reranking is required');
+  });
+
+  test('promotes evidence-backed high-signal rejects before ordinary accepted records', () => {
+    const svc = service();
+    const stage0 = {
+      searchQuery: 'adaptive inspection platform',
+      inventionFeatures: [
+        'autonomous propulsion control',
+        'onboard anomaly inference',
+        'closed loop route adaptation',
+        'remote telemetry interface',
+      ],
+      featureDetails: [
+        { feature: 'autonomous propulsion control', feature_type: 'core_technical' },
+        { feature: 'onboard anomaly inference', feature_type: 'novelty_candidate' },
+        { feature: 'closed loop route adaptation', feature_type: 'core_technical' },
+        { feature: 'remote telemetry interface', feature_type: 'implementation' },
+      ],
+      claimConcepts: [{
+        title: 'Autonomous inference control loop',
+        linkedFeatures: ['autonomous propulsion control', 'onboard anomaly inference'],
+        claimableSummary: 'Inference controls autonomous movement.',
+        importance: 'primary',
+      }],
+    };
+    const retrievalCandidates = [
+      { publicationNumber: 'P1', title: 'Core plus novelty' },
+      { publicationNumber: 'P2', title: 'Two core features' },
+      { publicationNumber: 'P3', title: 'Keyword-only noise' },
+      { publicationNumber: 'P4', title: 'Ordinary accepted record' },
+    ];
+    const stage1Data = {
+      retrievalCandidates,
+      aiRelevance: {
+        accepted: ['P4'], component: [], borderline: [], rejected: ['P1', 'P2', 'P3'], gateStatus: 'complete',
+        byPn: {
+          P1: { pn: 'P1', decision: 'reject', score: 0.2, matched_features: ['F1', 'F2'], reviewStatus: 'reviewed' },
+          P2: { pn: 'P2', decision: 'reject', score: 0.3, matched_features: ['F1', 'F3'], reviewStatus: 'reviewed' },
+          P3: { pn: 'P3', decision: 'reject', score: 0.8, matched_features: [], reason: 'keyword overlap', reviewStatus: 'reviewed' },
+          P4: { pn: 'P4', decision: 'accept', score: 0.9, matched_features: ['F4'], reviewStatus: 'reviewed' },
+        },
+      },
+    };
+
+    const selected = svc.selectRelevantPatentsForDeepAnalysis(stage1Data, 4, stage0);
+
+    expect(selected.map((item: any) => item.publicationNumber)).toEqual(['P1', 'P2', 'P4']);
+    expect(selected[0]).toMatchObject({ highSignal: true, preMappingPriorityScore: 5 });
+    expect(selected[0].promotionReasons).toContain('core_plus_novelty');
+    expect(selected[1].promotionReasons).toContain('two_core_features');
+    expect(selected.some((item: any) => item.publicationNumber === 'P3')).toBe(false);
+  });
+
   test('reuses only complete Stage 1.5 gate caches', () => {
     const svc = service();
     const complete = { aiRelevance: { byPn: { IN1: {} }, cacheKey: 'k1', gateStatus: 'complete' } };

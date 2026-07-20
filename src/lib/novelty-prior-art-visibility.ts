@@ -12,6 +12,7 @@ export interface PriorArtGateRecord {
   rerankDecision?: string;
   matched_features?: string[];
   missing_features?: string[];
+  primary_claim_relationship?: boolean;
   reason?: string;
   evidence_quality?: string;
   reviewStatus?: 'reviewed' | 'gate_error' | 'review_error';

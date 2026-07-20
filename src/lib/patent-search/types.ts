@@ -159,6 +159,22 @@ export interface PatentSearchRequest {
   deepSearch?: boolean
   maxSemanticQueryWords?: number
   suppressSensitiveLogging?: boolean
+  /**
+   * Optional sink for per-lane failures. Providers swallow lane errors by design
+   * (a dead lane degrades the search rather than killing it), which means a run
+   * where every lane timed out is indistinguishable from a run that genuinely
+   * found nothing. Pass an array here and the provider records what died, so the
+   * caller can say so instead of reporting an empty result as a finding.
+   */
+  laneDiagnostics?: SearchLaneDiagnostic[]
+}
+
+/** One lane (vector probe / full-text / field / metadata) that failed or timed out. */
+export interface SearchLaneDiagnostic {
+  providerId: string
+  lane: string
+  reason: 'timeout' | 'error'
+  detail?: string
 }
 
 export interface PatentResultScores {

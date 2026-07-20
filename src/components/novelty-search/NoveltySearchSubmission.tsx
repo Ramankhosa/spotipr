@@ -211,7 +211,8 @@ export default function NoveltySearchSubmission(props: {
   // Fixed, not stateful: the corpus lane is the only primary source. Live provider APIs
   // are chosen server-side as a fallback when the corpus returns nothing.
   const selectedProviderIds = LOCAL_CORPUS_PROVIDER_IDS
-  const [selectedCountries, setSelectedCountries] = useState<string[]>(DEFAULT_PATENT_COUNTRY_CODES)
+  // Empty means Worldwide. Explicit selections narrow the local corpus search.
+  const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [showAllCountries, setShowAllCountries] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [filingFrom, setFilingFrom] = useState('')
@@ -289,7 +290,7 @@ export default function NoveltySearchSubmission(props: {
   // European keyword fields only matter when the EPO provider is in play, which is now
   // a server-side fallback rather than a user choice.
   const usesEpoSearch = false
-  const hasSelectedSources = selectedCountries.length > 0 || (includePapers && paperSources.length > 0)
+  const hasSelectedSources = true
   const dateFilters = useMemo(() => ({
     ...(filingFrom ? { filingDateFrom: filingFrom } : {}),
     ...(filingTo ? { filingDateTo: filingTo } : {}),
@@ -302,11 +303,11 @@ export default function NoveltySearchSubmission(props: {
     providerIds: selectedProviderIds,
     searchMode: 'intelligent' as const,
     llmExpansion: true,
-    includePatents: selectedCountries.length > 0,
+    includePatents: true,
     // Country and date scope ride along as corpus filters; the retrieval SQL applies
     // them, so a narrowed search never pays for candidates it will discard.
     filters: {
-      countries: selectedCountries,
+      ...(selectedCountries.length ? { countries: selectedCountries } : {}),
       ...dateFilters,
     },
     includePapers,
@@ -323,7 +324,7 @@ export default function NoveltySearchSubmission(props: {
   }
   const allCountriesSelected = selectedCountries.length === PATENT_COUNTRIES.length
   const countryScopeLabel = useMemo(() => {
-    if (!selectedCountries.length) return 'No countries selected'
+    if (!selectedCountries.length) return 'Worldwide (all patent offices)'
     if (allCountriesSelected) return 'All countries'
     const names = selectedCountries
       .map(code => PATENT_COUNTRIES.find(country => country.code === code)?.name)
@@ -584,10 +585,6 @@ export default function NoveltySearchSubmission(props: {
       setError('Enter at least one manual patent search field.')
       return
     }
-    if (!selectedCountries.length) {
-      setError('Select at least one patent office.')
-      return
-    }
     setIsManualSearching(true)
     setError('')
     setManualHasSearched(true)
@@ -597,9 +594,9 @@ export default function NoveltySearchSubmission(props: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           searchMode: 'manual',
-          filters: { ...manualFilters, countries: selectedCountries },
+          filters: { ...manualFilters, ...(selectedCountries.length ? { countries: selectedCountries } : {}) },
           providerIds: selectedProviderIds,
-          jurisdictions: selectedCountries,
+          jurisdictions: selectedCountries.length ? selectedCountries : undefined,
           sourceMode,
           llmExpansion: false,
           limit: 50,
@@ -669,7 +666,7 @@ export default function NoveltySearchSubmission(props: {
         <div className="flex items-center gap-1 text-xs font-medium">
           <button type="button" onClick={selectMajorCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Major offices</button>
           <button type="button" onClick={selectAllCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Select all</button>
-          <button type="button" onClick={clearCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Clear</button>
+          <button type="button" onClick={clearCountries} className="rounded-lg px-2.5 py-1.5 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900">Worldwide</button>
         </div>
       </div>
 
@@ -693,13 +690,9 @@ export default function NoveltySearchSubmission(props: {
           {showAllCountries ? 'Show fewer offices' : `Show ${SECONDARY_COUNTRIES.length} more offices`}
         </button>
         <span className="text-xs text-slate-500">
-          {selectedCountries.length} of {PATENT_COUNTRIES.length} selected
+          {selectedCountries.length ? `${selectedCountries.length} of ${PATENT_COUNTRIES.length} selected` : 'Worldwide scope'}
         </span>
       </div>
-
-      {!selectedCountries.length && !includePapers && (
-        <p className="text-xs font-medium text-red-600">Select at least one patent office, or enable scholarly papers below.</p>
-      )}
 
       {showLiterature && (
         <div className="space-y-3 border-t border-slate-200 pt-4">
@@ -860,7 +853,7 @@ export default function NoveltySearchSubmission(props: {
           <button
             type="button"
             onClick={() => void runManualSearch()}
-            disabled={isManualSearching || !manualHasCriteria || !selectedCountries.length}
+            disabled={isManualSearching || !manualHasCriteria}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ai-blue-600 px-5 text-sm font-medium text-white hover:bg-ai-blue-700 disabled:opacity-50"
           >
             {isManualSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}

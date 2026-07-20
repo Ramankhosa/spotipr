@@ -17,6 +17,8 @@ import {
   HelpCircle,
   Keyboard,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   ScrollText,
@@ -47,6 +49,7 @@ import { OnboardingCoach } from './OnboardingCoach'
 
 const ONBOARDING_KEY = 'pas_onboarding_done'
 const MODE_KEY = 'pas_mode'
+const RAIL_KEY = 'pas_rail_collapsed'
 
 type Mode = 'quick' | 'studio'
 type MainTab = 'results' | 'grid' | 'trail'
@@ -100,6 +103,7 @@ export function StudioApp() {
   const [booleanPreview, setBooleanPreview] = useState('')
 
   const [mode, setMode] = useState<Mode>('studio')
+  const [railCollapsed, setRailCollapsed] = useState(false)
   const [mainTab, setMainTab] = useState<MainTab>('results')
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [showKeys, setShowKeys] = useState(false)
@@ -137,6 +141,7 @@ export function StudioApp() {
     if (typeof window === 'undefined') return
     const storedMode = localStorage.getItem(MODE_KEY)
     setMode(storedMode === 'quick' || storedMode === 'studio' ? storedMode : 'studio')
+    setRailCollapsed(localStorage.getItem(RAIL_KEY) === '1')
     if (!localStorage.getItem(ONBOARDING_KEY)) setShowOnboarding(true)
   }, [])
 
@@ -149,6 +154,15 @@ export function StudioApp() {
     setMode(next)
     localStorage.setItem(MODE_KEY, next)
   }
+
+  /** Collapse the plan rail to give the results the full width (key: [). */
+  const toggleRail = useCallback(() => {
+    setRailCollapsed(current => {
+      const next = !current
+      localStorage.setItem(RAIL_KEY, next ? '1' : '0')
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     if (!user) return
@@ -583,6 +597,11 @@ export function StudioApp() {
         setShowKeys(v => !v)
         return
       }
+      if (event.key === '[' && mode === 'studio') {
+        toggleRail()
+        event.preventDefault()
+        return
+      }
       if (mainTab !== 'results' || !visibleFamilies.length) return
       const family = visibleFamilies[cursor]
       if (event.key === 'j') setCursor(c => Math.min(c + 1, visibleFamilies.length - 1))
@@ -600,7 +619,7 @@ export function StudioApp() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [active, visibleFamilies, cursor, docStates, setDocState, mainTab])
+  }, [active, visibleFamilies, cursor, docStates, setDocState, mainTab, mode, toggleRail])
 
   // ----------------------------------------------------------------- render
   if (authLoading) return <div className="p-10 text-sm text-muted-foreground">Loading Advanced Search Studio…</div>
@@ -949,6 +968,7 @@ export function StudioApp() {
               ['x', 'exclude family'],
               ['Enter', 'read document'],
               ['o', 'open on Google Patents'],
+              ['[', 'hide / show plan panel'],
               ['?', 'hide this bar'],
             ].map(([key, label]) => (
               <span key={key} className="inline-flex items-center gap-1.5">
@@ -1018,9 +1038,14 @@ export function StudioApp() {
           {resultsPane}
         </div>
       ) : (
-        <div className="grid gap-5 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(340px,26%)_1fr]">
-          {/* left rail — the plan, scrolls independently */}
-          <div className="space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+        <div
+          className={`grid gap-5 lg:h-full lg:min-h-0 ${
+            railCollapsed ? 'lg:grid-cols-1' : 'lg:grid-cols-[minmax(340px,26%)_1fr]'
+          }`}
+        >
+          {/* left rail — the plan, scrolls independently; collapsible so the
+              results can take the full width during triage */}
+          <div className={`space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1 ${railCollapsed ? 'hidden' : ''}`}>
             {seedCard}
             <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
               <QueryCanvas plan={active.plan} disabled={drafting || running} onChange={savePlan} />
@@ -1051,7 +1076,18 @@ export function StudioApp() {
 
           {/* right pane — the work surface, scrolls independently */}
           <div className="flex min-w-0 flex-col lg:min-h-0">
-            <div className="flex shrink-0 items-center gap-1 border-b border-border" role="tablist" aria-label="Workspace">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border">
+              <button
+                type="button"
+                onClick={toggleRail}
+                title={railCollapsed ? 'Show the plan panel (key [)' : 'Hide the plan panel — full width for results (key [)'}
+                aria-label={railCollapsed ? 'Show the plan panel' : 'Hide the plan panel'}
+                aria-expanded={!railCollapsed}
+                className="mr-1 hidden shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:block"
+              >
+                {railCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              </button>
+              <div className="flex items-center gap-1" role="tablist" aria-label="Workspace">
               {([
                 ['results', 'Results', run ? visibleFamilies.length : null],
                 ['grid', 'Element grid', active.plan.elements.length || null],
@@ -1081,6 +1117,7 @@ export function StudioApp() {
                   )}
                 </button>
               ))}
+              </div>
               {theories.length > 0 && (
                 <span className="ml-auto mr-1 rounded-full bg-lamp-100 px-2.5 py-1 text-[10px] font-bold text-lamp-800 dark:bg-lamp-900/60 dark:text-lamp-200">
                   {theories.length} pinned {theories.length === 1 ? 'theory' : 'theories'}

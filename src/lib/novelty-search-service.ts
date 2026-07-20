@@ -8,7 +8,7 @@ import { trackServiceUsage } from './service-usage-tracker';
 import { checkServiceAccess } from './org-access-service';
 import { sendEmail } from './mailer';
 import crypto from 'crypto';
-import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchConceptGroup, type PatentSearchFilters, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
+import { patentSearchOrchestrator, type PatentRetrievalQuery, type PatentSearchConceptGroup, type PatentSearchQueryPlan, type PatentSearchSourceMode } from '@/lib/patent-search';
 import { fetchLocalPatentClaims } from '@/lib/local-patent-claims-service';
 import { compactLogDetails } from '@/lib/patent-search/provider-runtime';
 import {
@@ -1285,15 +1285,6 @@ function buildIndianCorpusRetrievalQueries(
   return queries;
 }
 
-function withStage0Exclusions(filters: PatentSearchFilters, exclusions: string[]): PatentSearchFilters {
-  const cleanedExclusions = Array.from(new Set(exclusions.map(value => String(value || '').trim()).filter(Boolean)));
-  if (!cleanedExclusions.length) return filters;
-  return {
-    ...filters,
-    excludeTerms: Array.from(new Set([...(filters.excludeTerms || []), ...cleanedExclusions])),
-  };
-}
-
 export interface ScreeningResult {
   overall_determination: 'NOVEL' | 'NOT_NOVEL' | 'DOUBT';
   confidence_level: 'HIGH' | 'MEDIUM' | 'LOW';
@@ -1632,7 +1623,7 @@ export class NoveltySearchService extends BasePatentService {
     stage0: {},
     stage1: {
       maxPatents: DEFAULT_VISIBLE_PRIOR_ART_LIMIT,
-      candidateLimit: 180,
+      candidateLimit: 300,
       relevanceThresholds: { high: 0.8, medium: 0.5 }
     },
     stage35a: {
@@ -1707,7 +1698,10 @@ export class NoveltySearchService extends BasePatentService {
         }
       },
       stage0: { ...this.defaultConfig.stage0, ...(requestConfig.stage0 || {}) },
-      stage1: { ...this.defaultConfig.stage1, ...(requestConfig.stage1 || {}) },
+      stage1: {
+        ...this.defaultConfig.stage1,
+        ...(requestConfig.stage1 || {}),
+      },
       stage15: { ...this.defaultConfig.stage15, ...(requestConfig.stage15 || {}) },
       stage35a: { ...this.defaultConfig.stage35a, ...(requestConfig.stage35a || {}) },
       stage35b: { ...this.defaultConfig.stage35b, ...(requestConfig.stage35b || {}) },
@@ -4055,16 +4049,8 @@ RESPONSE:`;
       const stage0EpoAbstractKeywords = includeEpoKeywords ? this.normalizeEpoKeywordList((stage0Data as any).epoAbstractKeywords) : [];
       const stage0EpoCombinedKeywords = includeEpoKeywords ? this.normalizeEpoKeywordList((stage0Data as any).epoCombinedKeywords) : [];
       const stage0SearchExclusions = Array.isArray(stage0Data.searchExclusions) ? stage0Data.searchExclusions.filter(Boolean) : [];
-      const stage1Filters = withStage0Exclusions(config.searchSource?.filters || {}, stage0SearchExclusions);
-      // Google Patents boolean concept groups from Stage 0. Exclusions ride along as an
-      // excluded group so the Google query builder emits -"term" clauses (previously the
-      // Stage 0 exclusions never reached Google at all).
-      const stage0ConceptGroups: PatentSearchConceptGroup[] = [
-        ...this.normalizeGoogleConceptGroups(stage0Data.googleConceptGroups),
-        ...(stage0SearchExclusions.length
-          ? [{ label: 'stage0-exclusions', terms: stage0SearchExclusions.slice(0, 4), excluded: true } as PatentSearchConceptGroup]
-          : []),
-      ];
+      const stage1Filters = config.searchSource?.filters || {};
+      const stage0ConceptGroups: PatentSearchConceptGroup[] = this.normalizeGoogleConceptGroups(stage0Data.googleConceptGroups);
       // Two or more required groups → precise (A1 OR A2) AND (B1 OR B2) query.
       // Fewer → leave precision unset so the builder keeps its broad OR behavior.
       const stage0RequiredGroupCount = stage0ConceptGroups.filter(group => !group.excluded && group.required !== false).length;
@@ -4079,7 +4065,7 @@ RESPONSE:`;
           technicalKeywords: Array.from(new Set(stage0SearchQuery.split(/\s+/).filter(word => word.length > 3))).slice(0, 20),
           synonyms: [],
           mustHaveTerms: [],
-          excludedTerms: stage0SearchExclusions,
+          excludedTerms: [],
           cpcCodes: stage0CpcCodes,
           ipcCodes: stage0IpcCodes,
           classificationHints: Array.from(new Set([...stage0CpcCodes, ...stage0IpcCodes])),
@@ -4101,8 +4087,7 @@ RESPONSE:`;
           warnings: ['Using Stage 0 query plan; Stage 1 LLM query expansion disabled.'],
         };
 
-      const patentSearchPromise = includePatents
-        ? patentSearchOrchestrator.search({
+      const runPatentSearch = () => patentSearchOrchestrator.search({
           searchMode,
           query: searchMode === 'manual' ? '' : stage0SearchQuery,
           title: searchRun?.title || '',
@@ -4120,7 +4105,22 @@ RESPONSE:`;
           limit: config.stage1.maxPatents,
           candidateLimit: config.stage1.candidateLimit,
           requestHeaders,
-        })
+          disableProviderFallback: true,
+        });
+      const patentSearchPromise = includePatents
+        ? (async () => {
+          let response = await runPatentSearch();
+          const needsRerank = (response.diagnostics?.candidateResultCount || response.candidateResults?.length || 0) > 1;
+          if (needsRerank && response.diagnostics?.rerankApplied !== true) {
+            console.warn('[NoveltyPipeline] voyage_rerank_retry', JSON.stringify({ searchId: searchRun?.id }));
+            response = await runPatentSearch();
+          }
+          const retryNeedsRerank = (response.diagnostics?.candidateResultCount || response.candidateResults?.length || 0) > 1;
+          if (retryNeedsRerank && response.diagnostics?.rerankApplied !== true) {
+            throw new Error('Voyage reranking is required for the Novelty retrieval pipeline and did not complete after one retry.');
+          }
+          return response;
+        })()
         : Promise.resolve(null);
       const paperSearchQuery = this.normalizeStage0Scalar(
         config.searchSource?.paperSearchQuery || stage0Data.paperSearchQuery || stage0Data.paperKeywords?.join(' ') || stage0SearchQuery,
@@ -4168,6 +4168,9 @@ RESPONSE:`;
         literatureProviderStats: literatureResponse?.providerStats || [],
         diagnostics: searchResponse?.diagnostics,
         warnings: [...(searchResponse?.warnings || []), ...(literatureResponse?.warnings || [])],
+        retrievalPolicyVersion: 'NOVELTY_CORPUS_RERANK_300',
+        generatedExclusionCount: stage0SearchExclusions.length,
+        generatedExclusionsAppliedAsHardFilters: false,
         candidateCount: retrievalCandidates.length,
         candidates: retrievalCandidates.map(candidate => ({
           publicationNumber: candidate.publicationNumber,
@@ -4418,7 +4421,87 @@ RESPONSE:`;
     };
   }
 
-  private selectRelevantPatentsForDeepAnalysis(stage1Data: any, maxCandidates = 20): any[] {
+  private preMappingPriority(
+    stage0Data: NormalizedIdea,
+    record?: PriorArtGateRecord
+  ): { highSignal: boolean; score: number; matchedFeatures: string[]; reasons: string[] } {
+    const sourceFeatures = Array.isArray(stage0Data.inventionFeatures) ? stage0Data.inventionFeatures : [];
+    const details = new Map(
+      (stage0Data.featureDetails || []).map(detail => [String(detail.feature || '').trim().toLowerCase(), detail] as const)
+    );
+    const atomic = this.buildStage15AtomicFeatures(stage0Data).map((label, index) => ({
+      id: `F${index + 1}`,
+      feature: label.replace(/^F\d+\s*\[[^\]]+\]\s*:\s*/i, '').trim(),
+    }));
+    const resolve = (value: unknown): string | undefined => {
+      const raw = String(value || '').trim();
+      if (!raw) return undefined;
+      const keyFeatureId = raw.match(/\bKF(\d+)\b/i);
+      if (keyFeatureId) {
+        const indexed = sourceFeatures[Number(keyFeatureId[1]) - 1];
+        if (indexed) return indexed;
+      }
+      const id = raw.match(/\bF(\d+)\b/i);
+      if (id) {
+        const indexed = atomic[Number(id[1]) - 1]?.feature;
+        if (indexed) return indexed;
+      }
+      const stripped = raw.replace(/^K?F\d+\s*(?:\[[^\]]+\])?\s*[:\-]?\s*/i, '').trim().toLowerCase();
+      return sourceFeatures.find(feature => {
+        const normalized = String(feature).trim().toLowerCase();
+        return normalized === stripped || raw.toLowerCase() === normalized || raw.toLowerCase().includes(normalized);
+      });
+    };
+    const rawMatches = Array.isArray(record?.matched_features) ? record?.matched_features : [];
+    const matchedFeatures = Array.from(new Set(rawMatches.map(resolve).filter((feature): feature is string => Boolean(feature))));
+    const matchedKeys = new Set(matchedFeatures.map(feature => feature.toLowerCase()));
+    const typeOf = (feature: string): InventionFeatureDetail['feature_type'] =>
+      details.get(feature.toLowerCase())?.feature_type || 'implementation';
+    const weightOf = (feature: string) => ({
+      core_technical: 1.5,
+      novelty_candidate: 2,
+      implementation: 0.7,
+      generic_weak: 0.2,
+    }[typeOf(feature) || 'implementation']);
+    const linkedCount = (linked: string[]) => linked.filter(feature => matchedKeys.has(String(feature).toLowerCase())).length;
+    let score = matchedFeatures.reduce((sum, feature) => sum + weightOf(feature), 0);
+    const reasons: string[] = [];
+    const coreCount = matchedFeatures.filter(feature => typeOf(feature) === 'core_technical').length;
+    const noveltyCount = matchedFeatures.filter(feature => typeOf(feature) === 'novelty_candidate').length;
+    if (coreCount >= 2) reasons.push('two_core_features');
+    if (coreCount >= 1 && noveltyCount >= 1) reasons.push('core_plus_novelty');
+    for (const concept of stage0Data.claimConcepts || []) {
+      if (linkedCount(concept.linkedFeatures || []) < 2) continue;
+      const bonus = concept.importance === 'primary' ? 1.5 : concept.importance === 'secondary' ? 1 : 0.5;
+      score += bonus;
+      if (concept.importance === 'primary') reasons.push(`primary_claim_concept:${concept.title}`);
+    }
+    for (const interaction of stage0Data.noveltyFocusInteractions || []) {
+      if (linkedCount(interaction.linkedFeatures || []) < 2) continue;
+      score += 1.5;
+      reasons.push(`novelty_interaction:${interaction.description}`);
+    }
+    const structuredRecord = record as any;
+    const gateDecision = normalizeRerankDecision(record?.rerankDecision || record?.decision);
+    if (
+      (structuredRecord?.primaryClaimRelationship === true || structuredRecord?.primary_claim_relationship === true) &&
+      (gateDecision !== 'reject' || matchedFeatures.length >= 2)
+    ) {
+      reasons.push('gate_identified_primary_relationship');
+    }
+    return {
+      highSignal: reasons.length > 0,
+      score: Math.round(score * 100) / 100,
+      matchedFeatures,
+      reasons,
+    };
+  }
+
+  private selectRelevantPatentsForDeepAnalysis(
+    stage1Data: any,
+    maxCandidates = 20,
+    stage0Data?: NormalizedIdea
+  ): any[] {
     const gate = stage1Data?.aiRelevance;
     const candidatePool = this.getStage1CandidatePool(stage1Data);
     const safeMaxCandidates = Math.max(0, Math.trunc(maxCandidates || 0));
@@ -4436,7 +4519,7 @@ RESPONSE:`;
       );
       return Math.min(safeMaxCandidates, boundedTarget);
     };
-    const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0) => ({
+    const annotate = (candidate: any, record?: PriorArtGateRecord, score = 0, priority?: ReturnType<NoveltySearchService['preMappingPriority']>) => ({
       ...candidate,
       rerankScore: score,
       rerankDecision: normalizeRerankDecision(record?.rerankDecision || record?.decision),
@@ -4446,8 +4529,40 @@ RESPONSE:`;
       matched_features: record?.matched_features,
       missing_features: record?.missing_features,
       rerankReason: record?.reason,
+      ...(priority ? {
+        highSignal: priority.highSignal,
+        preMappingPriorityScore: priority.score,
+        promotionReasons: priority.reasons,
+      } : {}),
     });
     const selectedKeys = new Set<string>();
+    const highSignalCandidates = stage0Data && candidatePool.length > 0 && gate?.byPn && gate?.gateStatus !== 'failed'
+      ? candidatePool
+        .map((candidate, index) => {
+          const pn = getPriorArtPublicationNumber(candidate);
+          const record = pn ? this.getGateRecordForPublication(gate.byPn, pn) : undefined;
+          const key = this.canonicalPatentNumber(pn) || String(pn || '').toUpperCase();
+          const priority = this.preMappingPriority(stage0Data, record);
+          return { candidate, index, record, key, priority, gateScore: Number(record?.rerankScore ?? record?.score ?? 0) };
+        })
+        .filter(item => Boolean(item.record && item.key && item.priority.highSignal))
+        .sort((a, b) => (b.priority.score - a.priority.score) || (b.gateScore - a.gateScore) || (a.index - b.index))
+        .slice(0, safeMaxCandidates)
+      : [];
+    const promoted = highSignalCandidates.map(item => {
+      selectedKeys.add(item.key);
+      return annotate(item.candidate, item.record, item.gateScore, item.priority);
+    });
+    if (stage0Data) {
+      const highSignalCount = candidatePool.reduce((count, candidate) => {
+        const pn = getPriorArtPublicationNumber(candidate);
+        const record = pn ? this.getGateRecordForPublication(gate?.byPn || {}, pn) : undefined;
+        return count + (record && this.preMappingPriority(stage0Data, record).highSignal ? 1 : 0);
+      }, 0);
+      if (highSignalCount > safeMaxCandidates) {
+        console.warn('[NoveltyPrioritization] high_signal_truncated', JSON.stringify({ highSignalCount, deepAnalysisCeiling: safeMaxCandidates }));
+      }
+    }
     const selectByDecision = (decisionName: 'accept' | 'component' | 'borderline', limit = safeMaxCandidates - selectedKeys.size) => {
       if (!(candidatePool.length > 0 && gate?.byPn && gate?.gateStatus !== 'failed')) return [];
       if (limit <= 0) return [];
@@ -4489,9 +4604,9 @@ RESPONSE:`;
         : count;
     }, 0);
     const targetCount = deepAnalysisTarget(gateAcceptedCount, gateComponentCount, gateBorderlineCount);
-    const borderlineNeeded = Math.max(0, targetCount - accepted.length - component.length);
+    const borderlineNeeded = Math.max(0, targetCount - promoted.length - accepted.length - component.length);
     const borderline = selectByDecision('borderline', Math.min(MAX_BORDERLINE_FILL, borderlineNeeded));
-    const categorySelected = [...accepted, ...component, ...borderline].slice(0, safeMaxCandidates);
+    const categorySelected = [...promoted, ...accepted, ...component, ...borderline].slice(0, safeMaxCandidates);
     if (categorySelected.length > 0) return categorySelected;
 
     const visibleResults = Array.isArray(stage1Data?.visiblePriorArtResults)
@@ -5499,7 +5614,11 @@ RESPONSE:`;
         }
       }
     }
-    const selected = this.selectRelevantPatentsForDeepAnalysis(stage1Data, maxCandidates);
+    const selected = this.selectRelevantPatentsForDeepAnalysis(
+      stage1Data,
+      maxCandidates,
+      stage0Data
+    );
     if (selected.length === 0) return { success: false, error: 'No relevant candidates available for consolidated analysis.' };
 
     const initialProfile = this.adaptiveComplexityProfile(stage0Data, []);
@@ -5893,6 +6012,28 @@ RESPONSE:`;
       })
     } as FeatureMapBatchResult & Record<string, any>;
 
+    const affirmativelyMapped = (map: PatentFeatureMap, feature: string) => {
+      const status = this.getFeatureStatus(map, feature);
+      return status === 'Present' || status === 'Partial';
+    };
+    const uncoveredPrimaryConcepts = (stage0Data.claimConcepts || [])
+      .filter(concept => concept.importance === 'primary')
+      .filter(concept => !featureMaps.some(map =>
+        (concept.linkedFeatures || []).filter(feature => affirmativelyMapped(map, feature)).length >= 2
+      ))
+      .map(concept => ({ title: concept.title, linkedFeatures: concept.linkedFeatures, relationship: concept.claimableSummary }));
+    const uncoveredRelationships = (stage0Data.noveltyFocusInteractions || [])
+      .filter(interaction => !featureMaps.some(map =>
+        (interaction.linkedFeatures || []).filter(feature => affirmativelyMapped(map, feature)).length >= 2
+      ))
+      .map(interaction => ({ description: interaction.description, linkedFeatures: interaction.linkedFeatures }));
+    console.info('[NoveltyPrioritization] uncovered_relationships', JSON.stringify({
+      searchId,
+      uncoveredPrimaryConcepts,
+      uncoveredRelationships,
+      secondPassSearchDeferred: true,
+    }));
+
     const aggregation = await this.performStage35b(searchId, stage0Data, stage35Data, config, requestHeaders);
     if (!aggregation.success || !aggregation.data) {
       return { success: false, error: aggregation.error || 'Consolidated aggregation failed.' };
@@ -6149,6 +6290,13 @@ RESPONSE:`;
         minimumVisibleConfidence,
       } = config.stage15;
       const features = this.buildStage15AtomicFeatures(stage0Data);
+      const primaryRelationships = [
+        ...(stage0Data.claimConcepts || [])
+          .filter(concept => concept.importance === 'primary')
+          .map(concept => ({ title: concept.title, linkedFeatures: concept.linkedFeatures })),
+        ...(stage0Data.noveltyFocusInteractions || [])
+          .map(interaction => ({ title: interaction.description, linkedFeatures: interaction.linkedFeatures })),
+      ];
       const existingGate = stage1Data?.aiRelevance || {};
       const existingByPn: Record<string, PriorArtGateRecord | undefined> = options?.appendNextBatch
         ? { ...(existingGate.byPn || {}) }
@@ -6205,6 +6353,7 @@ RESPONSE:`;
         return [
           'You are a novelty relevance gate for patent and scholarly-paper prior art. Return ONLY a valid JSON array.',
           `Invention features: ${feats}`,
+          ...(primaryRelationships.length ? [`Primary claim relationships: ${JSON.stringify(primaryRelationships)}`] : []),
           '',
           'The invention features should be atomic, preferably with feature IDs and importance labels such as core, major, or peripheral.',
           'Example structure:',
@@ -6281,7 +6430,7 @@ RESPONSE:`;
           '',
           'Output requirements:',
           'Each array element must be:',
-          '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature_id_or_exact_feature_label"],"missing_features":["feature_id_or_exact_feature_label"],"reason":"<=18 words","evidence_quality":"high|medium|low"}',
+          '{"pn":"<id>","score":0..1,"decision":"accept|component|borderline|reject","matched_features":["feature_id_or_exact_feature_label"],"missing_features":["feature_id_or_exact_feature_label"],"primary_claim_relationship":true|false,"reason":"<=18 words","evidence_quality":"high|medium|low"}',
           '',
           'Rules:',
           '- Use only the supplied reference data fields.',
@@ -6290,6 +6439,7 @@ RESPONSE:`;
           '- In reason, do not name the source-field limitation or use early-stage-review wording. Use reviewed citation record if scope must be mentioned.',
           '- matched_features must contain only feature IDs or exact feature labels from the provided invention feature list.',
           '- Do not invent new feature names in matched_features.',
+          ...(primaryRelationships.length ? ['- Set primary_claim_relationship true only when the supplied reference explicitly teaches the linked relationship, not merely the individual features.'] : []),
           '- Use reasonable technical synonyms when matching features.',
           '- Prefer rejecting remote keyword hits, but do not reject concrete component disclosures merely because they lack the full invention combination.',
           '- Keep JSON compact.',
@@ -6439,6 +6589,7 @@ RESPONSE:`;
             missing_features: Array.isArray(found?.missing_features) ? found.missing_features : [],
             reason: typeof found?.reason === 'string' ? found.reason : 'AI relevance gate did not return evidence for this candidate.',
             evidence_quality: typeof found?.evidence_quality === 'string' ? found.evidence_quality : 'low',
+            primary_claim_relationship: found?.primary_claim_relationship === true,
             reviewStatus: 'reviewed',
           };
           byPn[String(pnRaw)] = record;
@@ -6542,7 +6693,8 @@ RESPONSE:`;
 
       const pqaiResults = this.selectRelevantPatentsForDeepAnalysis(
         stage1Data,
-        Math.max(1, config.stage35a.maxRefsTotal || 20)
+        Math.max(1, config.stage35a.maxRefsTotal || 20),
+        stage0Data
       );
       const inventionFeatures = stage0Data.inventionFeatures || [];
 

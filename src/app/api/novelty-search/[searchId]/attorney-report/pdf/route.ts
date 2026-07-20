@@ -200,11 +200,12 @@ function tocLayout(doc: PdfDoc, levels: Array<1 | 2 | 3>) {
 
 // Mirrors the exact sequence of sectionPages.push(...) calls in the GET handler so the
 // reserved TOC page count always matches the rendered entry list.
-function plannedTocLevels(patentCount: number, paperCount: number): Array<1 | 2 | 3> {
+function plannedTocLevels(patentCount: number, paperCount: number, hasCombinations = false, hasMappedAppendix = false): Array<1 | 2 | 3> {
   const levels: Array<1 | 2 | 3> = [];
   levels.push(1); // Executive Snapshot
   levels.push(1); // 1 Search Overview
   for (let i = 0; i < 7; i++) levels.push(2); // 1.1 - 1.7
+  if (hasCombinations) levels.push(2); // 1.8 inventive-step combinations
   levels.push(1); // 2 Citation Analysis
   levels.push(2); // 2.1 Relevant Patent Citations
   for (let i = 0; i < patentCount; i++) levels.push(3);
@@ -212,6 +213,7 @@ function plannedTocLevels(patentCount: number, paperCount: number): Array<1 | 2 
     levels.push(2); // 2.x Relevant Scholarly Publications
     for (let i = 0; i < paperCount; i++) levels.push(3);
   }
+  if (hasMappedAppendix) levels.push(1); // Appendix A
   levels.push(2); // List of Other Shortlisted Citations
   for (let i = 0; i < 5; i++) levels.push(1); // Sections 3-7
   return levels;
@@ -309,6 +311,9 @@ function riskAssessmentFor(report: ReturnType<typeof buildNoveltyAttorneyReportM
     coreFeatureCount: 0,
     strongestSingleReferenceCoreCoverage: 0,
     distributedCoreCoverage: 0,
+    highestSingleReferenceCoreCoveragePercent: 0,
+    distributedCoreCoveragePercent: 0,
+    assessmentConfidence: 'Low' as const,
   };
 }
 
@@ -1374,16 +1379,17 @@ function drawCitationTable(doc: PdfDoc, citations: AttorneyReportCitation[]) {
 
 function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNoveltyAttorneyReportModel>) {
   const features = report.inventionFeatures;
-  if (!features.length || !report.comparisons.length) {
+  const comparisons = report.mainComparisons || report.comparisons;
+  if (!features.length || !comparisons.length) {
     doc.font(FONTS.regular).fontSize(TYPE.small).fillColor(COLORS.muted).text('Feature matrix will appear after citation mapping.', PAGE.left, doc.y, { width: contentWidth(doc) });
     return;
   }
 
   const closestPn = report.publicClosestCitation?.publicationNumber;
-  const strongestReference = report.comparisons.find(item => item.publicationNumber === closestPn)
-    || report.comparisons.reduce((best, item) => (
+  const strongestReference = comparisons.find(item => item.publicationNumber === closestPn)
+    || comparisons.reduce((best, item) => (
       Number(item.coverage?.score || 0) > Number(best?.coverage?.score || 0) ? item : best
-    ), report.comparisons[0]);
+    ), comparisons[0]);
   ensureSpace(doc, 42);
   doc.fillColor(COLORS.text).font(FONTS.semibold).fontSize(TYPE.h3)
     .text('Key Feature Mapping Across Relevant Citations', PAGE.left, doc.y, { width: contentWidth(doc) });
@@ -1401,9 +1407,9 @@ function drawFeatureStatusMatrix(doc: PdfDoc, report: ReturnType<typeof buildNov
     const widths = [citationWidth, roleWidth, ...featureChunk.map(() => featureWidth), signalWidth];
     const headers = ['Citation No.', 'Reference Role', ...featureChunk.map((_, index) => `KF${start + index + 1}`), 'Priority'];
     drawFeatureMatrixHeader(doc, headers, widths);
-    report.comparisons.forEach((item, itemIndex) => {
+    comparisons.forEach((item, itemIndex) => {
       const statusRows = featureChunk.map((_, index) => item.rows[start + index]);
-      const needed = itemIndex === report.comparisons.length - 1 ? 59 : 32;
+      const needed = itemIndex === comparisons.length - 1 ? 59 : 32;
       if (ensureSpace(doc, needed)) drawFeatureMatrixHeader(doc, headers, widths);
       drawFeatureMatrixRow(
         doc,
@@ -1616,7 +1622,6 @@ function drawCitationCardHeader(
   item: ReturnType<typeof buildNoveltyAttorneyReportModel>['comparisons'][number],
   index: number,
   total: number,
-  jurisdiction: string,
   destination?: string,
 ) {
   const x = PAGE.left;
@@ -1653,7 +1658,7 @@ function drawCitationCardHeader(
     ['Reference role', item.referenceRole],
     ['Publication / priority', `${item.publicationDate} / ${item.priorityDate}`],
     ['Assignee', item.assignees],
-    ['Jurisdiction', jurisdiction],
+    ['Publication authority', item.publicationJurisdiction || 'Not available'],
   ];
   const metaY = separatorY + 10;
   const cellWidth = (width - 36) / 4;
@@ -1732,12 +1737,9 @@ export async function GET(
 
     const enrichedSearchRun = await hydrateNoveltyReportPatentMetadata(searchRun);
     const report = buildNoveltyAttorneyReportModel(enrichedSearchRun);
-    const patentComparisons = Array.isArray(report.patentComparisons)
-      ? report.patentComparisons
-      : report.comparisons.filter(item => item.referenceType !== 'paper');
-    const paperComparisons = Array.isArray(report.paperComparisons)
-      ? report.paperComparisons
-      : report.comparisons.filter(item => item.referenceType === 'paper');
+    const detailedComparisons = Array.isArray(report.mainComparisons) ? report.mainComparisons : report.comparisons;
+    const patentComparisons = detailedComparisons.filter(item => item.referenceType !== 'paper');
+    const paperComparisons = detailedComparisons.filter(item => item.referenceType === 'paper');
     const doc = new PDFDocument({
       size: 'A4',
       margins: { top: PAGE.top, bottom: PAGE.bottom, left: PAGE.left, right: PAGE.right },
@@ -1753,7 +1755,12 @@ export async function GET(
     // Reserve the exact number of TOC pages up front (the entry sequence is
     // deterministic), so the TOC can never overflow onto pages appended at the end
     // of the document.
-    const tocPlan = tocLayout(doc, plannedTocLevels(patentComparisons.length, paperComparisons.length));
+    const tocPlan = tocLayout(doc, plannedTocLevels(
+      patentComparisons.length,
+      paperComparisons.length,
+      (report.potentialCombinations || []).length > 0,
+      (report.appendixMappedComparisons || []).length > 0,
+    ));
     const tocPageIndexes: number[] = [];
     for (let i = 0; i < tocPlan.pageCount; i++) {
       addPage(doc);
@@ -1803,6 +1810,12 @@ export async function GET(
       'The objective of this report is to organize relevant patent records and map available evidence against the extracted key features of the submitted invention for review.'
     );
     drawMetadataGrid(doc, [
+      ['Anticipation risk', report.riskAssessment.noveltyRisk],
+      ['Combination / inventive-step risk', report.riskAssessment.combinationRisk],
+      ['Highest single-reference core coverage', `${report.riskAssessment.highestSingleReferenceCoreCoveragePercent ?? Math.round((report.riskAssessment.strongestSingleReferenceCoreCoverage || 0) * 100)}%`],
+      ['Distributed core-feature coverage', `${report.riskAssessment.distributedCoreCoveragePercent ?? Math.round((report.riskAssessment.distributedCoreCoverage || 0) * 100)}%`],
+      ['Assessment confidence', report.riskAssessment.assessmentConfidence || report.finalAssessment.confidence || 'Low'],
+      ['Coverage caution', 'Distributed coverage cannot by itself establish anticipation by one reference.'],
       ['Search Query', report.searchQuery],
       ['Analysis Type', report.evidenceBasis],
     ]);
@@ -1842,21 +1855,36 @@ export async function GET(
     });
 
     startSection('1.5', 'Summary of Relevant Citations', 2);
-    drawCitationTable(doc, report.citations);
+    drawCitationTable(doc, report.mainCitations || report.citations);
 
     startSection('1.6', 'Component / Feature-Level Prior Art', 2);
     drawParagraph(
       doc,
       'These citations disclose one or more relevant invention features, subsystems, materials, process steps, or implementation details, but are not treated as full invention-level matches by themselves.'
     );
-    if (report.componentCitations.length > 0) {
-      drawCitationTable(doc, report.componentCitations);
+    const mainComponents = (report.mainCitations || report.citations).filter(item => item.matchCategory === 'component');
+    if (mainComponents.length > 0) {
+      drawCitationTable(doc, mainComponents);
     } else {
       drawParagraph(doc, 'No separate component / feature-level references were classified in this run.');
     }
 
     startSection('1.7', 'Key Feature Analysis Matrix', 2);
     drawFeatureStatusMatrix(doc, report);
+
+    if ((report.potentialCombinations || []).length > 0) {
+      startSection('1.8', 'Potential Inventive-Step Combinations', 2);
+      drawParagraph(doc, 'These pairs support inventive-step review only. They are not single-reference novelty or anticipation conclusions.');
+      (report.potentialCombinations || []).forEach((pair, index) => {
+        drawFlowTextBlock(doc, `Combination ${index + 1}: ${pair.referenceA.publicationNumber} + ${pair.referenceB.publicationNumber}`, [
+          `Reference A teaches: ${pair.referenceA.teaches.join('; ') || '-'}`,
+          `Reference B adds: ${pair.referenceB.adds.join('; ') || '-'}`,
+          `Combined important-feature coverage: ${pair.combinedImportantFeatureCoverage}%`,
+          `Apparent motivation: ${pair.apparentMotivation}`,
+          `Still missing: ${pair.missingImportantFeatures.join('; ') || pair.stillMissingRelationship}`,
+        ].join('\n'));
+      });
+    }
 
     const drawReferenceDetails = (
       items: typeof report.comparisons,
@@ -1869,9 +1897,9 @@ export async function GET(
         return;
       }
       items.forEach((item, localIndex) => {
-        const itemIndex = Math.max(0, report.comparisons.findIndex(comparison => comparison.publicationNumber === item.publicationNumber));
+        const itemIndex = Math.max(0, detailedComparisons.findIndex(comparison => comparison.publicationNumber === item.publicationNumber));
         const destination = patentDestination(itemIndex);
-        drawCitationCardHeader(doc, item, itemIndex, report.comparisons.length, report.jurisdiction, destination);
+        drawCitationCardHeader(doc, item, itemIndex, detailedComparisons.length, destination);
         const tocTitle = item.referenceType === 'paper'
           ? truncate(item.title, 100)
           : `${cleanText(item.publicationNumber)} - ${truncate(item.title, 74)}`;
@@ -1899,6 +1927,11 @@ export async function GET(
           ['Priority Date', item.priorityDate],
           ['Reference Role', item.referenceRole],
           ['Review Priority', item.reviewPriority],
+          ['Publication Authority', item.publicationJurisdiction || 'Not available'],
+          ['Search Authority Scope', item.searchAuthorityScope || 'Worldwide'],
+          ['Source Corpus / Provider', item.sourceCorpus || item.sourceProviders || 'Not available'],
+          ['Filing Country / Office', item.filingCountry || 'Not available'],
+          ['Target Legal Jurisdiction', item.targetLegalJurisdiction || report.jurisdiction],
           ['Inventor(s)', item.inventors],
           ['CPC / IPC', `${item.cpcCodes} / ${item.ipcCodes}`],
           // Patent links are omitted (see report builder); no Source row when blank.
@@ -1932,8 +1965,13 @@ export async function GET(
       drawReferenceDetails(paperComparisons, '2.2', 'Relevant Scholarly Publications');
     }
 
+    if ((report.appendixMappedComparisons || []).length > 0) {
+      startSection('A', 'Appendix A: Remaining Mapped References', 1);
+      drawCitationTable(doc, report.appendixMappedComparisons || []);
+    }
+
     const otherCitationSection = paperComparisons.length > 0 ? '2.3' : '2.2';
-    startSection(otherCitationSection, 'List of Other Shortlisted Citations', 2);
+    startSection(otherCitationSection, 'List of Other Shortlisted Citations (Appendix B: Shortlisted but Unmapped)', 2);
     const excludedShortlistCount = Number((report as any).otherShortlistedExcludedCount || 0);
     if (report.otherShortlistedCitations.length > 0) {
       drawParagraph(doc, 'The citations below cleared retrieval relevance screening but were not selected for detailed feature mapping because the report focuses on the most relevant mapped references.');
@@ -2024,8 +2062,11 @@ export async function GET(
     const risk = riskAssessmentFor(report);
     drawMetadataGrid(doc, [
       ['Automated overlap position', report.finalAssessment.decision],
-      ['Novelty / anticipation risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`],
-      ['Component-combination risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`],
+      ['Anticipation risk', `${risk.noveltyRisk} - ${risk.noveltyRiskExplanation}`],
+      ['Combination / inventive-step risk', `${risk.combinationRisk} - ${risk.combinationRiskExplanation}`],
+      ['Highest single-reference core coverage', `${risk.highestSingleReferenceCoreCoveragePercent ?? Math.round((risk.strongestSingleReferenceCoreCoverage || 0) * 100)}%`],
+      ['Distributed core-feature coverage', `${risk.distributedCoreCoveragePercent ?? Math.round((risk.distributedCoreCoverage || 0) * 100)}% (cannot by itself establish anticipation)`],
+      ['Assessment confidence', risk.assessmentConfidence || report.finalAssessment.confidence || 'Low'],
       ['Closest mapped citation', report.publicClosestCitation?.publicationNumber || '-'],
       ['Reference role', report.publicClosestCitation?.referenceRole || '-'],
       ['Review priority', report.publicClosestCitation?.reviewPriority || '-'],

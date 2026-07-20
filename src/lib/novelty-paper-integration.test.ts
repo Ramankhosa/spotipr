@@ -127,6 +127,6 @@ describe('novelty scholarly-paper integration', () => {
     expect(report.paperComparisons).toEqual([]);
     expect(report.countLabels.some(item => item.label === 'Scholarly papers retrieved')).toBe(false);
     expect(report.tableOfContents.some(item => item.title === 'Relevant Scholarly Publications')).toBe(false);
-    expect(report.tableOfContents).toContainEqual({ number: '2.2', title: 'List of Other Shortlisted Citations' });
+    expect(report.tableOfContents).toContainEqual({ number: '2.2', title: 'Appendix B: Shortlisted but Unmapped Citations' });
   });
 });

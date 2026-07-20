@@ -44,6 +44,7 @@ import type {
   PatentSearchFilters,
   PatentSearchProviderId,
   PatentSearchProvider,
+  SearchLaneDiagnostic,
 } from '../types'
 import {
   clampLimit,
@@ -141,9 +142,18 @@ function logEmbeddingSearch(
 function logOptionalSearchError(
   stage: string,
   error: unknown,
-  details: Record<string, unknown> = {}
+  details: Record<string, unknown> = {},
+  sink?: { diagnostics?: SearchLaneDiagnostic[]; providerId: string }
 ) {
   const errorDetails = searchErrorDetails(error)
+  // Record the failure for the caller as well as the log: a swallowed lane is
+  // invisible otherwise, and an empty result then reads as a finding about the art.
+  sink?.diagnostics?.push({
+    providerId: sink.providerId,
+    lane: stage,
+    reason: isStatementTimeoutError(error) ? 'timeout' : 'error',
+    detail: String(errorDetails.errorMessage || '').slice(0, 200) || undefined,
+  })
   if (isStatementTimeoutError(error)) {
     // force=true: on the 45M-row Google corpus a statement timeout is the
     // dominant failure mode of the optional lanes, not background noise —
@@ -503,16 +513,27 @@ function trimRetrievalText(value: unknown, maxWords = 36) {
 // Raise only alongside an explicit connection_limit on DATABASE_URL.
 const VECTOR_PROBE_CONCURRENCY = Math.max(1, Number(process.env.PATENT_SEARCH_VECTOR_PROBE_CONCURRENCY || '3') || 3)
 
+// Deep-search per-probe ceilings. These are deliberately far below the pool's
+// theoretical capacity: an IVFFlat ordered scan with a selective post-filter
+// re-costs as `k` grows, and past a point Postgres abandons the index for a
+// sequential scan of ~30M rows — which then burns the whole lane timeout and
+// returns nothing. A moderate lift keeps the plan on the index while still
+// removing the fast path's recall cap. Tunable without a deploy.
+const DEEP_FEATURE_PROBE_ROWS = Math.max(24, Number(process.env.PATENT_SEARCH_DEEP_FEATURE_ROWS || '64') || 64)
+const DEEP_CONCEPT_PROBE_ROWS = Math.max(140, Number(process.env.PATENT_SEARCH_DEEP_CONCEPT_ROWS || '220') || 220)
+
 function retrievalQueryLimit(query: LocalRetrievalQuery, safeLimit: number, deep = false) {
   if (query.type === 'concept' || query.type === 'semantic') {
-    return deep ? Math.max(120, Math.min(280, safeLimit)) : Math.max(60, Math.min(140, safeLimit))
+    return deep
+      ? Math.max(120, Math.min(DEEP_CONCEPT_PROBE_ROWS, safeLimit))
+      : Math.max(60, Math.min(140, safeLimit))
   }
   if (query.type === 'feature_pair') return 0
   // The fast path caps feature probes at 24 rows; with 8-9 probes that made
   // "recall" a cap artifact (~200 docs) rather than a statement about the art.
-  // Deep search scales the per-probe budget with the requested candidate pool.
+  // Deep lifts that cap, but only as far as the index plan tolerates.
   return deep
-    ? Math.max(40, Math.min(150, Math.ceil(safeLimit / 3)))
+    ? Math.max(40, Math.min(DEEP_FEATURE_PROBE_ROWS, Math.ceil(safeLimit / 3)))
     : Math.max(12, Math.min(24, Math.ceil(safeLimit / 8)))
 }
 
@@ -704,13 +725,18 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const searchStartedAt = Date.now()
     const tuning = await resolveRetrievalTuning()
     const deep = request.deepSearch === true
-    // Deep searches may run each lane up to 30s: the attorney was told this is
-    // a deep search and shown live progress, so thorough beats fast here.
-    const laneTimeoutMs = deep ? Math.max(tuning.statementTimeoutMs, 30_000) : tuning.statementTimeoutMs
+    // Deep searches get a longer lane budget than the fast path, but NOT so long
+    // that a stuck lane monopolises a pooled connection: every probe runs inside
+    // a transaction holding one connection from a pool of num_cpus*2+1, shared
+    // with the rest of the app (including this run's own status poller). 30s here
+    // was enough for two providers x 3 concurrent probes to starve the pool.
+    const deepLaneTimeoutMs = Math.max(10_000, Number(process.env.PATENT_SEARCH_DEEP_LANE_TIMEOUT_MS || '18000') || 18_000)
+    const laneTimeoutMs = deep ? Math.max(tuning.statementTimeoutMs, deepLaneTimeoutMs) : tuning.statementTimeoutMs
     const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = laneTimeoutMs) =>
       queryRawWithStatementTimeout<T>(query, timeoutMs)
     const traceId = request.requestHeaders?.['x-request-id'] ||
       `patent-search-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const laneSink = { diagnostics: request.laneDiagnostics, providerId: this.id }
     const safeLimit = clampLimit(request.limit, 20, deep ? 600 : 300)
     const candidateLimit = Math.max(safeLimit * 4, 40)
     const queryPlan = request.queryPlan
@@ -831,7 +857,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         `)
         textRows.forEach((row, index) => merge(row, 'textRank', index + 1, 1))
       } catch (error) {
-        logOptionalSearchError('full_text_search', error, { traceId, providerId: this.id })
+        logOptionalSearchError('full_text_search', error, { traceId, providerId: this.id }, laneSink)
       }
 
       if (this.metadataSearchEnabled) {
@@ -863,7 +889,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           `)
           metadataRows.forEach((row, index) => merge(row, 'textRank', index + 1, 0.45))
         } catch (error) {
-          logOptionalSearchError('metadata_text_search', error, { traceId, providerId: this.id })
+          logOptionalSearchError('metadata_text_search', error, { traceId, providerId: this.id }, laneSink)
         }
       }
     }
@@ -979,7 +1005,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
               traceId,
               queryIndex,
               queryType: outcome.retrievalQuery.type,
-            })
+            }, laneSink)
             return
           }
           vectorQueriesCompleted += 1
@@ -1029,6 +1055,12 @@ export class IndianCorpusProvider implements PatentSearchProvider {
           embeddingModel: PATENT_CORPUS_EMBEDDING_MODEL,
           ...searchErrorDetails(error),
         }, true)
+        request.laneDiagnostics?.push({
+          providerId: this.id,
+          lane: 'vector_search',
+          reason: isStatementTimeoutError(error) ? 'timeout' : 'error',
+          detail: String(searchErrorDetails(error).errorMessage || '').slice(0, 200) || undefined,
+        })
         if (request.strictSemantic) throw error
       }
     } else {
@@ -1115,7 +1147,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         `)
         fieldRows.forEach((row, index) => merge(row, 'fieldRank', index + 1, 1.1))
       } catch (error) {
-        logOptionalSearchError('field_search', error, { traceId, providerId: this.id })
+        logOptionalSearchError('field_search', error, { traceId, providerId: this.id }, laneSink)
       }
     }
 

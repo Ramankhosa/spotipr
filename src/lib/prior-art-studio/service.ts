@@ -5,7 +5,7 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma, TaskCode } from '@prisma/client'
 import { patentSearchOrchestrator } from '@/lib/patent-search'
-import type { NormalizedPatentResult } from '@/lib/patent-search/types'
+import type { NormalizedPatentResult, SearchLaneDiagnostic } from '@/lib/patent-search/types'
 import { hasSearchEmbeddingApiKey } from '@/lib/patent-corpus-service'
 import { compileStudioPlan } from './compiler'
 import { scoreElements } from './element-scoring'
@@ -512,6 +512,40 @@ function harvestTerms(text: string): string[] {
   )
 }
 
+/**
+ * Turn swallowed lane failures into warnings an attorney can act on. The whole
+ * point is that a run whose lanes died must never read as "no prior art found" —
+ * an incomplete search and an empty field are opposite conclusions.
+ */
+export function describeLaneDiagnostics(
+  diagnostics: SearchLaneDiagnostic[],
+  depth: 'deep' | 'fast'
+): string[] {
+  if (!diagnostics.length) return []
+  const warnings: string[] = []
+  const label = (items: SearchLaneDiagnostic[]) =>
+    Array.from(new Set(items.map(d => `${d.lane.replace(/_/g, ' ')} (${d.providerId})`))).join(', ')
+
+  const timedOut = diagnostics.filter(d => d.reason === 'timeout')
+  if (timedOut.length) {
+    warnings.push(
+      `${timedOut.length} retrieval lane${timedOut.length === 1 ? '' : 's'} timed out and returned nothing: ${label(timedOut)}. ` +
+        'This run therefore searched LESS of the corpus than the gate counts imply — treat a thin result set as an incomplete search, not as an absence of art' +
+        (depth === 'deep' ? ', and re-run or use Fast scan, whose smaller budgets usually complete.' : ', and re-run.')
+    )
+  }
+
+  const errored = diagnostics.filter(d => d.reason === 'error')
+  if (errored.length) {
+    const detail = errored.find(d => d.detail)?.detail
+    warnings.push(
+      `${errored.length} retrieval lane${errored.length === 1 ? '' : 's'} failed: ${label(errored)}.` +
+        (detail ? ` First error: ${detail}` : '')
+    )
+  }
+  return warnings
+}
+
 function toDateString(value: string | Date | null | undefined): string | null {
   if (!value) return null
   const date = value instanceof Date ? value : new Date(value)
@@ -535,6 +569,10 @@ export async function runStudioPlan(input: {
   if (compiled.warnings.length && !compiled.queryPlan.searchQuery && !compiled.queryPlan.retrievalQueries) {
     throw new Error(compiled.warnings[0])
   }
+
+  // Providers swallow lane failures by design; without this sink a run where
+  // every lane timed out is indistinguishable from one that found nothing.
+  const laneDiagnostics: SearchLaneDiagnostic[] = []
 
   const [corpusEstimate, filterEstimate, searchResponse] = await Promise.all([
     estimateCorpusCount(),
@@ -565,6 +603,7 @@ export async function runStudioPlan(input: {
       limit: RESULT_LIMIT,
       candidateLimit: CANDIDATE_LIMIT,
       requestHeaders: input.requestHeaders,
+      laneDiagnostics,
     }),
   ])
 
@@ -599,8 +638,23 @@ export async function runStudioPlan(input: {
   const pubs = Array.from(
     new Set([...pool, ...rankedRaw].map(r => r.publicationNumber).filter(Boolean))
   )
-  const corpusRows = pubs.length
-    ? await prisma.localPatent.findMany({
+  // Deep runs hand this up to 1000 publication numbers and it detoasts ragText
+  // for every one. It is indexed, but it is also the largest single query in the
+  // run and the most likely place to lose a race for a pooled connection — so it
+  // degrades (family collapse falls back to publication number, literal matching
+  // to the payload text) rather than failing the whole search.
+  const corpusFetchWarnings: string[] = []
+  let corpusRows: Array<{
+    publicationNumber: string
+    familyId: string | null
+    title: string | null
+    abstract: string | null
+    abstractOriginal: string | null
+    ragText: string | null
+  }> = []
+  if (pubs.length) {
+    try {
+      corpusRows = await prisma.localPatent.findMany({
         where: { publicationNumber: { in: pubs } },
         select: {
           publicationNumber: true,
@@ -611,7 +665,13 @@ export async function runStudioPlan(input: {
           ragText: true,
         },
       })
-    : []
+    } catch (error) {
+      console.error('[PriorArtStudio] Corpus text fetch failed:', error)
+      corpusFetchWarnings.push(
+        `The indexed text of the retrieved documents could not be read (${error instanceof Error ? error.message : 'query failed'}). Family grouping and MATCH classification for this run fall back to the shorter result payload, so both are less precise than usual.`
+      )
+    }
+  }
   const familyByPub = new Map(corpusRows.map(r => [r.publicationNumber, r.familyId || null]))
   const familyKeyOf = (pub: string) => familyByPub.get(pub) || pub
   const textByPub = new Map(
@@ -832,6 +892,17 @@ export async function runStudioPlan(input: {
     )
   }
 
+  // A lane that timed out contributed nothing, and the search engine cannot tell
+  // the difference between that and an exhausted corpus. Say which lanes died so
+  // a thin result set is never mistaken for a finding about the state of the art.
+  if (laneDiagnostics.length) {
+    laneWarnings.push(...describeLaneDiagnostics(laneDiagnostics, depth))
+    console.error(
+      '[StudioAlert]',
+      JSON.stringify({ event: 'retrieval_lane_degraded', sessionId: input.sessionId, depth, lanes: laneDiagnostics })
+    )
+  }
+
   const gateDetail = await buildGateDetail(input.plan, corpusEstimate)
 
   const gateCounts: StudioGateCounts = {
@@ -911,7 +982,7 @@ export async function runStudioPlan(input: {
   )
 
   const storedFamilies = families.slice(0, STORED_FAMILY_LIMIT)
-  const allWarnings = [...compiled.warnings, ...laneWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])]
+  const allWarnings = [...compiled.warnings, ...laneWarnings, ...corpusFetchWarnings, ...guardWarnings, ...matchWarnings, ...elementWarnings, ...(searchResponse.warnings || [])]
   const runData = {
     planVersion: input.planVersion,
     planSnapshot: input.plan as unknown as Prisma.InputJsonValue,
