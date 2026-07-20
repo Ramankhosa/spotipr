@@ -183,12 +183,24 @@ const featureMappingSchema = {
   },
 }
 
-function errorResponses() {
+function errorResponses(options: { analysis?: boolean } = {}) {
   return {
     '400': { description: 'Invalid request', content: { 'application/json': { schema: errorSchema } } },
     '401': { description: 'Missing, invalid, revoked, or expired API key', content: { 'application/json': { schema: errorSchema } } },
-    '403': { description: 'API client suspended', content: { 'application/json': { schema: errorSchema } } },
-    '429': { description: 'Rate or quota limit exceeded', headers: { 'Retry-After': { schema: { type: 'integer' } } }, content: { 'application/json': { schema: errorSchema } } },
+    '403': {
+      description: options.analysis
+        ? 'API client suspended (CLIENT_SUSPENDED), or AI analysis is not enabled for this client (ANALYSIS_NOT_ENABLED)'
+        : 'API client suspended',
+      content: { 'application/json': { schema: errorSchema } },
+    },
+    '413': { description: 'Request body exceeds 256 KB (PAYLOAD_TOO_LARGE)', content: { 'application/json': { schema: errorSchema } } },
+    '429': {
+      description: options.analysis
+        ? 'Rate or quota limit exceeded, including the separate daily AI analysis quota (ANALYSIS_QUOTA_EXCEEDED)'
+        : 'Rate or quota limit exceeded',
+      headers: { 'Retry-After': { schema: { type: 'integer' } } },
+      content: { 'application/json': { schema: errorSchema } },
+    },
     '503': { description: 'Service or semantic search unavailable', content: { 'application/json': { schema: errorSchema } } },
     '500': { description: 'Unexpected server error', content: { 'application/json': { schema: errorSchema } } },
   }
@@ -201,7 +213,8 @@ export async function GET(request: NextRequest) {
       title: 'PatentNest Patent Intelligence API',
       version: '1.1.0',
       description:
-        'Server-to-server patent intelligence over the Indian patent corpus: hybrid semantic search with a coverage manifest, publication lookup, AI invention-feature extraction, and element-wise feature-to-patent evidence mapping. AI agents can call the same tools through the MCP endpoint at POST /api/v1/mcp (streamable HTTP, same bearer API keys).',
+        'Server-to-server patent intelligence over the Indian patent corpus: hybrid semantic search with a coverage manifest, publication lookup, AI invention-feature extraction, and element-wise feature-to-patent evidence mapping. AI agents can call the same tools through the MCP endpoint at POST /api/v1/mcp (streamable HTTP, same bearer API keys).\n\n' +
+        'Quotas: every request consumes the per-minute, per-day, and per-month request budgets, reported in RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, X-RateLimit-Daily-Remaining, and X-RateLimit-Monthly-Remaining. The two /api/v1/analysis endpoints additionally consume a separate daily AI analysis budget (X-RateLimit-Analysis-Limit and X-RateLimit-Analysis-Remaining); an analysis credit is charged only once a request has passed validation and is about to run the model, so 400/404 responses never cost one. Request bodies are capped at 256 KB.',
     },
     servers: [{ url: request.nextUrl.origin }],
     security: [{ bearerApiKey: [] }],
@@ -305,7 +318,7 @@ export async function GET(request: NextRequest) {
                 },
               },
             },
-            ...errorResponses(),
+            ...errorResponses({ analysis: true }),
           },
         },
       },
@@ -353,7 +366,7 @@ export async function GET(request: NextRequest) {
               },
             },
             '404': { description: 'Patent not found', content: { 'application/json': { schema: errorSchema } } },
-            ...errorResponses(),
+            ...errorResponses({ analysis: true }),
           },
         },
       },

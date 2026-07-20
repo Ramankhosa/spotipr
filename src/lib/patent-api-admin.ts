@@ -7,6 +7,7 @@ const DEFAULT_LIMITS = {
   rateLimitPerMinute: 30,
   dailyRequestLimit: 2000,
   monthlyRequestLimit: 50000,
+  dailyAnalysisLimit: 200,
 }
 
 function cleanText(value: unknown, maxLength: number) {
@@ -17,6 +18,14 @@ function positiveInteger(value: unknown, fallback: number, max: number) {
   if (value === undefined || value === null || value === '') return fallback
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) throw new Error(`Limit must be an integer between 1 and ${max}.`)
+  return parsed
+}
+
+/** Analysis limits accept 0, which switches AI analysis off for the client. */
+function nonNegativeInteger(value: unknown, fallback: number, max: number) {
+  if (value === undefined || value === null || value === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) throw new Error(`Limit must be an integer between 0 and ${max}.`)
   return parsed
 }
 
@@ -71,6 +80,7 @@ export async function listPatentApiClients() {
         { periodType: 'MINUTE', periodStart: starts.minute },
         { periodType: 'DAY', periodStart: starts.day },
         { periodType: 'MONTH', periodStart: starts.month },
+        { periodType: 'ANALYSIS_DAY', periodStart: starts.day },
       ],
     },
   }) : []
@@ -82,6 +92,7 @@ export async function listPatentApiClients() {
       minute: buckets.find(row => row.clientId === client.id && row.periodType === 'MINUTE')?.requestCount || 0,
       day: buckets.find(row => row.clientId === client.id && row.periodType === 'DAY')?.requestCount || 0,
       month: buckets.find(row => row.clientId === client.id && row.periodType === 'MONTH')?.requestCount || 0,
+      analysisDay: buckets.find(row => row.clientId === client.id && row.periodType === 'ANALYSIS_DAY')?.requestCount || 0,
     },
   }))
 }
@@ -110,6 +121,7 @@ export async function getPatentApiClient(id: string) {
       minute: buckets.find(row => row.periodType === 'MINUTE' && row.periodStart.getTime() === starts.minute.getTime())?.requestCount || 0,
       day: buckets.find(row => row.periodType === 'DAY' && row.periodStart.getTime() === starts.day.getTime())?.requestCount || 0,
       month: buckets.find(row => row.periodType === 'MONTH' && row.periodStart.getTime() === starts.month.getTime())?.requestCount || 0,
+      analysisDay: buckets.find(row => row.periodType === 'ANALYSIS_DAY' && row.periodStart.getTime() === starts.day.getTime())?.requestCount || 0,
     },
   }
 }
@@ -127,6 +139,7 @@ export async function createPatentApiClient(body: any, actorUserId: string) {
         rateLimitPerMinute: positiveInteger(body?.rateLimitPerMinute, DEFAULT_LIMITS.rateLimitPerMinute, 10_000),
         dailyRequestLimit: positiveInteger(body?.dailyRequestLimit, DEFAULT_LIMITS.dailyRequestLimit, 10_000_000),
         monthlyRequestLimit: positiveInteger(body?.monthlyRequestLimit, DEFAULT_LIMITS.monthlyRequestLimit, 100_000_000),
+        dailyAnalysisLimit: nonNegativeInteger(body?.dailyAnalysisLimit, DEFAULT_LIMITS.dailyAnalysisLimit, 1_000_000),
         createdByUserId: actorUserId,
       },
     })
@@ -153,6 +166,7 @@ export async function updatePatentApiClient(id: string, body: any, actorUserId: 
         rateLimitPerMinute: positiveInteger(body?.rateLimitPerMinute, existing.rateLimitPerMinute, 10_000),
         dailyRequestLimit: positiveInteger(body?.dailyRequestLimit, existing.dailyRequestLimit, 10_000_000),
         monthlyRequestLimit: positiveInteger(body?.monthlyRequestLimit, existing.monthlyRequestLimit, 100_000_000),
+        dailyAnalysisLimit: nonNegativeInteger(body?.dailyAnalysisLimit, existing.dailyAnalysisLimit, 1_000_000),
       },
     })
     await audit(actorUserId, 'PATENT_API_CLIENT_UPDATED', 'PatentApiClient', {
@@ -161,6 +175,7 @@ export async function updatePatentApiClient(id: string, body: any, actorUserId: 
       rateLimitPerMinute: updated.rateLimitPerMinute,
       dailyRequestLimit: updated.dailyRequestLimit,
       monthlyRequestLimit: updated.monthlyRequestLimit,
+      dailyAnalysisLimit: updated.dailyAnalysisLimit,
     }, tx)
     return updated
   })

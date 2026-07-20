@@ -107,6 +107,12 @@ export default function PatentApiDeveloperPage() {
             and typically respond in tens of seconds; plan client timeouts accordingly.
           </p>
           <p className="mt-2">
+            The two <code>/api/v1/analysis</code> endpoints draw on a separate daily analysis budget, reported as{' '}
+            <code>X-RateLimit-Analysis-Remaining</code> and exhausted with <code>ANALYSIS_QUOTA_EXCEEDED</code>. A credit
+            is charged only when a validated request reaches the model, so rejected requests cost nothing. Request
+            bodies are capped at 256 KB (<code>PAYLOAD_TOO_LARGE</code>).
+          </p>
+          <p className="mt-2">
             Confidentiality: submitted disclosures are processed to produce the response and are not used to train
             models. Request logs store hashes and metadata, never disclosure text.
           </p>

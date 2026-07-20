@@ -1477,6 +1477,7 @@ enum PatentApiUsagePeriod {
   MINUTE
   DAY
   MONTH
+  ANALYSIS_DAY
 }
 
 model LocalPatent {
@@ -1666,6 +1667,7 @@ model PatentApiClient {
   rateLimitPerMinute  Int                   @default(30)
   dailyRequestLimit   Int                   @default(2000)
   monthlyRequestLimit Int                   @default(50000)
+  dailyAnalysisLimit  Int                   @default(200)
   createdByUserId     String?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt

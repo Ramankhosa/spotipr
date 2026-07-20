@@ -8,7 +8,13 @@ import {
   patentApiRequestId,
   recordPatentApiRequest,
 } from '@/lib/patent-api-auth'
-import { getPublicIndianPatent, getPublicSearchCoverage, searchPublicIndianPatents } from '@/lib/patent-public-api'
+import { readPatentApiJsonBody } from '@/lib/patent-api-route'
+import {
+  assertPatentPublicApiEnabled,
+  getPublicIndianPatent,
+  getPublicSearchCoverage,
+  searchPublicIndianPatents,
+} from '@/lib/patent-public-api'
 import {
   extractPublicInventionFeatures,
   mapFeaturesToPublicPatent,
@@ -132,7 +138,7 @@ function negotiateProtocolVersion(requested: unknown) {
     : SUPPORTED_PROTOCOL_VERSIONS[0]
 }
 
-async function executeTool(name: string, args: any) {
+async function executeTool(name: string, args: any, auth: PatentApiAuthContext) {
   switch (name) {
     case 'search_patents': {
       const query = typeof args?.query === 'string' ? args.query.trim() : ''
@@ -165,7 +171,7 @@ async function executeTool(name: string, args: any) {
       if (typeof args?.description !== 'string') {
         throw new PatentApiError('INVALID_REQUEST', 'description must be a string.', 400)
       }
-      const analysis = await extractPublicInventionFeatures({ title: args.title, description: args.description })
+      const analysis = await extractPublicInventionFeatures({ title: args.title, description: args.description, auth })
       return {
         data: analysis,
         resultCount: analysis.features.length,
@@ -179,7 +185,7 @@ async function executeTool(name: string, args: any) {
       if (typeof args?.publicationNumber !== 'string' || !args.publicationNumber.trim()) {
         throw new PatentApiError('INVALID_REQUEST', 'publicationNumber must be a non-empty string.', 400)
       }
-      const mapping = await mapFeaturesToPublicPatent({ features: args.features, publicationNumber: args.publicationNumber })
+      const mapping = await mapFeaturesToPublicPatent({ features: args.features, publicationNumber: args.publicationNumber, auth })
       return {
         data: mapping,
         resultCount: mapping.featureFindings.length,
@@ -198,6 +204,9 @@ async function handleToolsCall(request: NextRequest, requestId: string, message:
   const startedAt = Date.now()
   let auth: PatentApiAuthContext
   try {
+    // Checked before authentication so a disabled platform never spends a
+    // client's quota on a request it was always going to refuse.
+    assertPatentPublicApiEnabled()
     auth = await authenticatePatentApiRequest(request)
   } catch (error) {
     // Authentication and quota failures are HTTP-level concerns in the
@@ -221,14 +230,18 @@ async function handleToolsCall(request: NextRequest, requestId: string, message:
     return rpcError(message.id, -32001, known.message, known.status, headers, { code: known.code })
   }
 
-  const headers = new Headers({ 'X-Request-ID': requestId })
-  const rateHeaders = patentApiRateHeaders(auth)
-  rateHeaders.forEach((value, key) => headers.set(key, value))
+  // Built after the tool runs so analysis-quota counters reserved during
+  // execution are reflected in the response headers.
+  const responseHeaders = () => {
+    const headers = new Headers({ 'X-Request-ID': requestId })
+    patentApiRateHeaders(auth).forEach((value, key) => headers.set(key, value))
+    return headers
+  }
   try {
     if (!TOOLS.some(tool => tool.name === toolName)) {
       throw new PatentApiError('UNKNOWN_TOOL', `Unknown tool: ${toolName || '(missing name)'}.`, 404)
     }
-    const result = await executeTool(toolName, toolArgs)
+    const result = await executeTool(toolName, toolArgs, auth)
     await recordPatentApiRequest({
       auth,
       request,
@@ -243,7 +256,7 @@ async function handleToolsCall(request: NextRequest, requestId: string, message:
       content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }],
       structuredContent: result.data,
       isError: false,
-    }, headers)
+    }, responseHeaders())
   } catch (error) {
     const isKnownError = error instanceof PatentApiError
     const known = isKnownError
@@ -260,7 +273,10 @@ async function handleToolsCall(request: NextRequest, requestId: string, message:
       errorCode: known.code,
     }).catch(logError => console.error('[PatentPublicAPI] Failed to write MCP error request log:', logError))
     // Tool execution failures are returned as MCP tool errors so the calling
-    // model can see what went wrong and adjust its next call.
+    // model can see what went wrong and adjust its next call. Retry-After still
+    // rides along on the HTTP response so transports can back off.
+    const headers = responseHeaders()
+    if (known.retryAfter) headers.set('Retry-After', String(known.retryAfter))
     return rpcResult(message.id, {
       content: [{ type: 'text', text: JSON.stringify({ error: { code: known.code, message: known.message } }) }],
       isError: true,
@@ -272,8 +288,11 @@ export async function POST(request: NextRequest) {
   const requestId = patentApiRequestId(request)
   let message: JsonRpcMessage
   try {
-    message = await request.json()
-  } catch {
+    message = await readPatentApiJsonBody(request, { allowArray: true })
+  } catch (error) {
+    if (error instanceof PatentApiError && error.code === 'PAYLOAD_TOO_LARGE') {
+      return rpcError(null, -32600, error.message, error.status)
+    }
     return rpcError(null, -32700, 'Parse error: the request body must be valid JSON.', 400)
   }
   if (Array.isArray(message)) {

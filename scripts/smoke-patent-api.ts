@@ -57,10 +57,12 @@ async function main() {
       const extraction = await extractPublicInventionFeatures({
         title: 'Solar-powered cold-chain container',
         description: SMOKE_DISCLOSURE,
+        auth,
       })
       const mapping = await mapFeaturesToPublicPatent({
         features: extraction.features.slice(0, 3),
         publicationNumber: sample.publicationNumber,
+        auth,
       })
       analysis = {
         extractedFeatures: extraction.features.length,
@@ -68,6 +70,7 @@ async function main() {
         suggestedSearchQuery: Boolean(extraction.suggestedSearchQuery),
         mappingCoverage: mapping.coverage,
         mappingEvidenceBasis: mapping.evidenceBasis,
+        analysisQuotaRemaining: auth.quota.analysis?.remaining ?? null,
       }
     }
     process.env.PATENT_PUBLIC_API_ENABLED = originalEnabled

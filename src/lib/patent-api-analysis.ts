@@ -8,7 +8,7 @@ import {
 } from '@/lib/novelty-search-service'
 import { PATENT_CORPUS_SOURCE_INDIAN } from '@/lib/patent-corpus-service'
 import { normalizePatentNumberKey } from '@/lib/patent-number'
-import { PatentApiError } from '@/lib/patent-api-auth'
+import { PatentApiAuthContext, PatentApiError, reserveAnalysisQuota } from '@/lib/patent-api-auth'
 import { assertPatentPublicApiEnabled } from '@/lib/patent-public-api'
 
 export const PATENT_API_ANALYSIS_LIMITS = {
@@ -29,6 +29,19 @@ let serviceUserCache: { userId: string; expiresAt: number } | null = null
 
 export function patentApiAnalysisEnabled() {
   return Boolean((process.env.PATENT_PUBLIC_API_LLM_USER_EMAIL || '').trim())
+}
+
+/**
+ * Gate for the billable part of an analysis request. Deliberately called after
+ * input validation and record lookup so that a request destined to fail with
+ * 400/404 never consumes a client's analysis credit, and never before the LLM
+ * call so a reserved credit always corresponds to real model spend.
+ */
+async function beginAnalysisSpend(auth: PatentApiAuthContext) {
+  if (!patentApiAnalysisEnabled()) {
+    throw new PatentApiError('ANALYSIS_UNAVAILABLE', 'AI analysis endpoints are not enabled.', 503)
+  }
+  await reserveAnalysisQuota(auth)
 }
 
 /**
@@ -151,7 +164,7 @@ function toPublicFeatureExtraction(parsed: any) {
  * Extract atomic invention features from a plain-English disclosure using the
  * same normalization stage that powers the in-app novelty search.
  */
-export async function extractPublicInventionFeatures(input: { title?: string | null; description: string }) {
+export async function extractPublicInventionFeatures(input: { title?: string | null; description: string; auth: PatentApiAuthContext }) {
   assertPatentPublicApiEnabled()
   const description = String(input.description || '').trim()
   const title = String(input.title || '').trim()
@@ -167,6 +180,7 @@ export async function extractPublicInventionFeatures(input: { title?: string | n
     throw new PatentApiError('INVALID_REQUEST', `title must contain at most ${limits.titleMaxChars} characters.`, 400)
   }
 
+  await beginAnalysisSpend(input.auth)
   const prompt = NOVELTY_SEARCH_NORMALIZATION_PROMPT_V2
     .replace('{title}', title || 'Untitled Invention')
     .replace('{rawIdea}', description)
@@ -229,7 +243,7 @@ function collectFindings(entry: any, features: string[]): PublicFeatureFinding[]
  * evidence chart (verbatim quotes with their source field) using the same
  * feature-analysis stage as the in-app novelty pipeline.
  */
-export async function mapFeaturesToPublicPatent(input: { features: string[]; publicationNumber: string }) {
+export async function mapFeaturesToPublicPatent(input: { features: string[]; publicationNumber: string; auth: PatentApiAuthContext }) {
   assertPatentPublicApiEnabled()
   const limits = PATENT_API_ANALYSIS_LIMITS
   const features = Array.isArray(input.features)
@@ -255,6 +269,7 @@ export async function mapFeaturesToPublicPatent(input: { features: string[]; pub
   })
   if (!row) throw new PatentApiError('PATENT_NOT_FOUND', 'No Indian patent was found for that publication number.', 404)
 
+  await beginAnalysisSpend(input.auth)
   const abstract = (row.abstract || '').replace(/\s+/g, ' ').trim().slice(0, ABSTRACT_MAX_CHARS)
   const claimsExcerpt = (row.claimsText || '').replace(/\s+/g, ' ').trim().slice(0, CLAIMS_EXCERPT_MAX_CHARS)
   // Mirrors the internal batch block: the claims line is emitted only when the
