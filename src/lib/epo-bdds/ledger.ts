@@ -113,6 +113,15 @@ export interface PendingFilter {
   fromYear?: number | null
   toYear?: number | null
   authorities?: string[] | null
+  /**
+   * Exclude files whose publication year could not be read from the name.
+   *
+   * MUST mirror SliceFilter.onlyDated in selector.ts. The dry run selects from
+   * the live catalogue and the real run selects from the ledger; if only one of
+   * them honours this flag, the dry run under-reports what the real run will do.
+   * On EP full-text that is the difference between 316 GB and 4.1 TB.
+   */
+  onlyDated?: boolean
   /** Re-attempt files that previously failed. Default true. */
   includeFailed?: boolean
   limit?: number
@@ -140,6 +149,9 @@ export async function pendingFiles(filter: PendingFilter): Promise<LedgerFile[]>
   }
   if (filter.toYear != null) {
     conditions.push(Prisma.sql`(f."pubYearFrom" IS NULL OR f."pubYearFrom" <= ${filter.toYear})`)
+  }
+  if (filter.onlyDated && (filter.fromYear != null || filter.toYear != null)) {
+    conditions.push(Prisma.sql`(f."pubYearFrom" IS NOT NULL OR f."pubYearTo" IS NOT NULL)`)
   }
   if (filter.authorities?.length) {
     const upper = filter.authorities.map(a => a.toUpperCase())

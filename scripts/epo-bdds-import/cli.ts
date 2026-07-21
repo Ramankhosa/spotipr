@@ -438,6 +438,7 @@ async function runBackfill(args: Args) {
     fromYear: args.fromYear,
     toYear: args.toYear,
     authorities: args.authorities,
+    onlyDated: args.onlyDated,
     limit: args.limit,
   })
 
