@@ -1519,6 +1519,26 @@ model LocalPatent {
   pqaiDetails            Json?
   pqaiFetchedAt          DateTime?
 
+  // Text-provenance markers (migration 20260721120000). All nullable with no
+  // default, so ADD COLUMN was metadata-only — no heap rewrite on 45.4M rows.
+  // Deliberately NOT backfilled:
+  //   NULL     -> never touched by the EPO service. Legacy: Google-US-partial
+  //               (first independent claim + 5,000-char description) for US
+  //               rows, no text at all elsewhere. Resolved by rule in the
+  //               patent_text_availability view.
+  //   NOT NULL -> we wrote it, and these say exactly what it is.
+  // `textUpdatedAt IS NOT NULL` is the permanent answer to "did we modify this row?".
+  claimsSource            String?
+  claimsCompleteness      String?
+  descriptionSource       String?
+  descriptionCompleteness String?
+  textUpdatedAt           DateTime?
+  /// What embeddingText was built from. NULL = legacy title+abstract.
+  /// 'title+first-claim' marks granted EP specs, which carry no abstract and use
+  /// claim 1 in its place — the handle for finding those rows if their vectors
+  /// ever need re-evaluating.
+  embeddingTextSource     String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1656,6 +1676,171 @@ model LocalPatentEmbedding {
   // REINDEX after a large corpus refresh; IVFFlat centroids are fixed at build time.
   // Dev may show drift here; that is expected and harmless.
   @@map("local_patent_embeddings")
+}
+
+// ---------------------------------------------------------------------------
+// EPO BDDS ingestion (migration 20260721120000).
+//
+// Everything below is a SIDE TABLE. No EPO content is written into
+// local_patents by the import path, so no existing row is rewritten and the
+// 8.6 GB non-partial local_patents_search_tsv_idx does not grow.
+// See scripts/epo-bdds-import/RUNBOOK.md.
+// ---------------------------------------------------------------------------
+
+enum EpoBddsFileStatus {
+  QUEUED
+  DOWNLOADED
+  VERIFIED
+  LOADED
+  FAILED
+  SKIPPED
+}
+
+enum EpoCoverageStatus {
+  NOT_IMPORTED
+  PARTIAL
+  IMPORTED
+}
+
+model EpoBddsDelivery {
+  id           String    @id @default(cuid())
+  productId    Int
+  productName  String
+  lane         String // ep-fulltext | docdb | inpadoc
+  deliveryId   Int
+  deliveryName String
+  publishedAt  DateTime?
+  expiresAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+
+  @@unique([productId, deliveryId], map: "epo_bdds_delivery_product_delivery_key")
+  @@index([lane], map: "epo_bdds_delivery_lane_idx")
+  @@map("epo_bdds_delivery")
+}
+
+/// One row per (product, delivery, file) — the resume ledger. A file at LOADED
+/// is never downloaded, parsed or loaded again.
+model EpoBddsFile {
+  id         String @id @default(cuid())
+  productId  Int
+  deliveryId Int
+  fileId     Int
+  lane       String
+  fileName   String
+  /// Parsed from the human-readable `fileSize` string ("1.5 GB"); an estimate.
+  sizeBytes       BigInt?
+  /// The verified truth, from Content-Length and the bytes actually written.
+  bytesDownloaded BigInt?
+  checksum        String?
+  /// The API never states the algorithm; detected empirically per file.
+  checksumAlgo    String?
+  /// Slice coordinates parsed from fileName so --year/--authority can skip a
+  /// file without downloading it. NULL => record-level filtering required.
+  authority   String?
+  pubYearFrom Int?
+  pubYearTo   Int?
+
+  status        EpoBddsFileStatus @default(QUEUED)
+  attemptCount  Int               @default(0)
+  recordsLoaded Int               @default(0)
+  errorMessage  String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @default(now()) @updatedAt
+
+  @@unique([productId, deliveryId, fileId], map: "epo_bdds_file_coordinates_key")
+  @@index([status], map: "epo_bdds_file_status_idx")
+  @@index([lane, pubYearTo], map: "epo_bdds_file_lane_year_idx")
+  @@map("epo_bdds_file")
+}
+
+/// EP full text. A 1:1 extension of local_patents keyed on publicationNumber —
+/// NOT a second copy of the publication. Claims and description are both stored
+/// in FULL; what varies is which YEARS are imported (see EpoEpCoverage).
+///
+/// The GIN FTS index is on claimsText ONLY and is created in raw SQL by the
+/// migration; a tsvector over full descriptions would add tens of GB.
+model EpoEpFulltext {
+  publicationNumber    String  @id
+  publicationNumberKey String
+  kind                 String?
+  lang                 String?
+  publicationYear      Int?
+
+  claimsText           String?  @db.Text
+  claimsCount          Int?
+  claimsComplete       Boolean  @default(false)
+  descriptionText      String?  @db.Text
+  descriptionCharCount Int?
+  descriptionComplete  Boolean  @default(false)
+
+  /// Capture policy that produced this row, e.g. 'claims-full+description-full'.
+  /// Recorded so a later policy change knows which rows need upgrading.
+  textPolicy       String
+  sourceProductId  Int?
+  sourceDeliveryId Int?
+  ingestedAt       DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+
+  @@index([publicationNumberKey], map: "epo_ep_fulltext_pubkey_idx")
+  @@index([publicationYear], map: "epo_ep_fulltext_year_idx")
+  @@map("epo_ep_fulltext")
+}
+
+/// Per-year slice status — the authoritative answer to "do we hold EP <year>
+/// completely?". A half-loaded year reports PARTIAL, never IMPORTED.
+model EpoEpCoverage {
+  id              String            @id @default(cuid())
+  productId       Int
+  publicationYear Int
+  status          EpoCoverageStatus @default(NOT_IMPORTED)
+  textPolicy      String?
+  expectedDocs    Int?
+  loadedDocs      Int               @default(0)
+  importedAt      DateTime?
+  updatedAt       DateTime          @default(now()) @updatedAt
+
+  @@unique([productId, publicationYear], map: "epo_ep_coverage_product_year_key")
+  @@map("epo_ep_coverage")
+}
+
+/// DOCDB enrichment: applicants / inventors / IPC for publications we already
+/// hold. Insert-only and deliberately WITHOUT a foreign key — this is why
+/// Phase 2 never has to UPDATE 45M local_patents rows.
+///
+/// publicationNumberKey MUST come from the same expression the Google loader
+/// uses (04-postgres-load-and-upsert.sql:68): uppercase, strip
+/// non-alphanumerics, KEEP the kind code.
+model EpoPatentBib {
+  publicationNumberKey String   @id
+  publicationNumber    String
+  applicants           Json?
+  inventors            String[] @default([])
+  ipc                  String[] @default([])
+  docdbFamilyId        String?
+  sourceProductId      Int?
+  sourceDeliveryId     Int?
+  ingestedAt           DateTime @default(now())
+  updatedAt            DateTime @default(now()) @updatedAt
+
+  @@index([docdbFamilyId], map: "epo_patent_bib_family_idx")
+  @@map("epo_patent_bib")
+}
+
+/// Audit for the opt-in `fieldfill` command — the only thing that ever writes
+/// to local_patents. One row per column filled, so every write is reversible.
+model EpoGapfillAudit {
+  id               String   @id @default(cuid())
+  localPatentId    Int
+  column           String
+  sourceDeliveryId Int?
+  filledAt         DateTime @default(now())
+
+  @@index([localPatentId], map: "epo_gapfill_audit_patent_idx")
+  @@index([filledAt], map: "epo_gapfill_audit_filled_idx")
+  @@map("epo_gapfill_audit")
 }
 
 model PatentApiClient {

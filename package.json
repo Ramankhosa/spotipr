@@ -121,10 +121,12 @@
     "react-dom": "^18",
     "react-konva": "^18.2.16",
     "recharts": "^3.2.1",
+    "saxes": "^6.0.0",
     "tailwind-merge": "^3.3.1",
     "twitter-api-v2": "^1.28.0",
     "word-extractor": "^1.0.4",
     "xlsx": "^0.18.5",
+    "yauzl": "^3.4.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
@@ -137,6 +139,7 @@
     "@types/pdfkit": "^0.17.3",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/yauzl": "^3.4.0",
     "@typescript-eslint/eslint-plugin": "^7.2.0",
     "@typescript-eslint/parser": "^7.2.0",
     "autoprefixer": "^10.4.16",

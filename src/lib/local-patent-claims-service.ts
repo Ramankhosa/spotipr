@@ -7,10 +7,21 @@ import { prisma } from '@/lib/prisma'
 //   - the Google Patents bulk load, which stores the first (broadest independent)
 //     claim for US publications — the public dataset carries no claims for other
 //     countries;
-//   - the IPIndia PDF pipeline, which stores full claims for Indian patents.
+//   - the EPO BDDS EP full-text import (src/lib/epo-bdds), which fills FULL claims
+//     for EP publications that had none. It is strictly NULL-fill: a row that
+//     already carried claims is never overwritten.
 //
-// Coverage is therefore partial by design. Callers use claims when present and fall
-// back to title/abstract evidence otherwise, without surfacing the difference.
+// Coverage is therefore uneven, and the rows differ in KIND as well as presence: a
+// US row holds one independent claim, an EP row holds the complete set. That
+// difference is now reported as `claimsAvailability` so callers can surface it
+// instead of treating a one-claim stub and a 15-claim specification alike.
+//
+// Provenance rules (migration 20260721120000):
+//   claimsCompleteness NOT NULL -> we wrote it; the value says exactly what it is
+//   claimsCompleteness NULL     -> legacy, i.e. the Google US first-claim
+//
+// NOTE Indian rows hold title + abstract only; the IPIndia pipeline does not
+// currently populate claims, despite what this comment previously asserted.
 
 const CLAIMS_LOOKUP_STATEMENT_TIMEOUT_MS = Math.max(
   1000,
@@ -69,8 +80,17 @@ export async function fetchLocalPatentClaims(publicationNumbers: string[]): Prom
 
     const [, rows] = await prisma.$transaction([
       prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(CLAIMS_LOOKUP_STATEMENT_TIMEOUT_MS)}, true)`,
-      prisma.$queryRaw<Array<{ publicationNumber: string; claimsText: string | null }>>(Prisma.sql`
-        SELECT p."publicationNumber", p."claimsText"
+      prisma.$queryRaw<Array<{
+        publicationNumber: string
+        claimsText: string | null
+        claimsAvailability: string | null
+      }>>(Prisma.sql`
+        SELECT p."publicationNumber", p."claimsText",
+               -- An explicit marker means we wrote it and recorded what it is;
+               -- NULL means legacy, which today can only be the Google US
+               -- first-claim. No join needed: the EP import fills this column
+               -- directly, so the IN-list index scan is unchanged.
+               COALESCE(p."claimsCompleteness", 'FIRST_CLAIM_ONLY') AS "claimsAvailability"
         FROM "local_patents" p
         WHERE (${Prisma.join(conditions, ' OR ')})
           AND p."claimsText" IS NOT NULL
