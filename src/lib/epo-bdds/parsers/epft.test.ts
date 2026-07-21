@@ -45,9 +45,13 @@ const FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
 </ep-patent-document>`
 
 describe('parseEpFullText', () => {
-  it('reads identity from the root element', () => {
+  it('builds the PUBLICATION number from country + doc-number + kind', () => {
+    // The root id="EP12783558B1" is APPLICATION-based. Keying on it matched
+    // zero rows against a corpus keyed by publication number.
     const record = parseEpFullText(FIXTURE)!
-    expect(record.publicationNumber).toBe('EP12783558B1')
+    expect(record.publicationNumber).toBe('EP2912867B1')
+    expect(record.documentId).toBe('EP12783558B1')
+    expect(record.publicationNumber).not.toBe(record.documentId)
     expect(record.country).toBe('EP')
     expect(record.kind).toBe('B1')
     expect(record.publicationDate).toBe('20250129')

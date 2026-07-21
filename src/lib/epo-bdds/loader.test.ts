@@ -5,7 +5,8 @@ import type { EpFullTextRecord } from './parsers/epft'
 function record(overrides: Partial<EpFullTextRecord> = {}): EpFullTextRecord {
   const claims = ['Claim one text.', 'Claim two text.', 'Claim three text.']
   return {
-    publicationNumber: 'EP12783558B1',
+    publicationNumber: 'EP2912867B1',
+    documentId: 'EP12783558B1',
     country: 'EP',
     docNumber: '2912867',
     kind: 'B1',

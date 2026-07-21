@@ -34,8 +34,18 @@ import { SaxesParser, type SaxesTagPlain } from 'saxes'
 import { normalizeIpc } from './docdb'
 
 export interface EpFullTextRecord {
-  /** e.g. "EP12783558B1", from the root element's id. */
+  /**
+   * The PUBLICATION number, e.g. "EP2912867B1" — country + doc-number + kind.
+   *
+   * ⚠️ NOT the root element's `id` attribute. That is built from the
+   * APPLICATION number ("EP12783558B1" for this same document) and matches
+   * nothing in a corpus keyed by publication number. Using it meant a full
+   * archive of 4,258 EP publications matched zero rows in local_patents.
+   */
   publicationNumber: string
+  /** The root `id` attribute — application-number based. Kept for traceability
+   *  back to the source file; never used as a join key. */
+  documentId: string | null
   country: string
   docNumber: string
   kind: string
@@ -139,7 +149,8 @@ export function parseEpFullText(xml: string, preferLang = 'en'): EpFullTextRecor
         const docNumber = attrs['doc-number'] || ''
         const kind = attrs['kind'] || ''
         record = {
-          publicationNumber: attrs['id'] || `${country}${docNumber}${kind}`,
+          publicationNumber: `${country}${docNumber}${kind}`,
+          documentId: attrs['id'] || null,
           country,
           docNumber,
           kind,

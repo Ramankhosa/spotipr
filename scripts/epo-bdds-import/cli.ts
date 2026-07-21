@@ -486,9 +486,10 @@ async function runBackfill(args: Args) {
             productId: file.productId,
             deliveryId: file.deliveryId,
             textPolicy: args.textPolicy,
-            // EP row creation is opt-in: granted specs carry no abstract, so a
-            // new row would need a substitute vector text. Fills are always on.
-            createMissingRows: args.createMissingRowsExplicit === true,
+            // On by default: publications not in the corpus become rows, using
+            // claim 1 as the embedding basis when there is no abstract.
+            // --no-create-missing turns it off.
+            createMissingRows: args.createMissingRows,
             fromYear: args.fromYear,
             toYear: args.toYear,
           })
