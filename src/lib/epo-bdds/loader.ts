@@ -406,11 +406,25 @@ export class EpFullTextLoader {
     if (this.buffer.length >= this.batchSize) await this.flush()
   }
 
+  /**
+   * Write one batch ATOMICALLY.
+   *
+   * The three statements below used to run as independent autocommits, so a
+   * failure in the third left the first two committed — an archive could report
+   * FAILED while having written thousands of rows. Wrapping the batch in one
+   * transaction makes it all-or-nothing, so ledger status and stored data always
+   * agree. Earlier batches of the same archive still commit, which is fine: the
+   * loader is idempotent, so re-running the archive completes it.
+   */
   async flush(): Promise<void> {
     if (!this.buffer.length) return
     const batch = this.buffer
     this.buffer = []
 
+    await prisma.$transaction(async tx => { await this.writeBatch(tx as typeof prisma, batch) })
+  }
+
+  private async writeBatch(tx: typeof prisma, batch: EpFullTextRecord[]): Promise<void> {
     const pubs = batch.map(r => r.publicationNumber)
     const keys = batch.map(r => publicationNumberKey(r.publicationNumber))
     const kinds = batch.map(r => r.kind || null)
@@ -424,7 +438,7 @@ export class EpFullTextLoader {
     const descChars = stored.map(s => s.descriptionCharCount)
     const descComplete = stored.map(s => s.descriptionComplete)
 
-    const result = await prisma.$executeRaw(Prisma.sql`
+    const result = await tx.$executeRaw(Prisma.sql`
       INSERT INTO "epo_ep_fulltext" (
         "publicationNumber", "publicationNumberKey", "kind", "lang", "publicationYear",
         "claimsText", "claimsCount", "claimsComplete",
@@ -454,8 +468,8 @@ export class EpFullTextLoader {
     `)
     this.stats.loaded += Number(result)
 
-    if (this.options.fillLocalPatents !== false) await this.fillExisting(batch, stored)
-    if (this.options.createMissingRows !== false) await this.createMissing(batch, stored)
+    if (this.options.fillLocalPatents !== false) await this.fillExisting(tx, batch, stored)
+    if (this.options.createMissingRows !== false) await this.createMissing(tx, batch, stored)
   }
 
   /**
@@ -466,14 +480,14 @@ export class EpFullTextLoader {
    * write stamps the provenance markers, so `textUpdatedAt IS NOT NULL`
    * permanently identifies every row this service has modified.
    */
-  private async fillExisting(batch: EpFullTextRecord[], stored: StoredText[]): Promise<void> {
+  private async fillExisting(tx: typeof prisma, batch: EpFullTextRecord[], stored: StoredText[]): Promise<void> {
     const pubs = batch.map(r => r.publicationNumber)
     const claims = stored.map(s => s.claimsText)
     const descriptions = stored.map(s => s.descriptionText)
     const claimsCompleteness = stored.map(s => (s.claimsComplete ? 'FULL' : 'PARTIAL'))
     const descCompleteness = stored.map(s => (s.descriptionComplete ? 'FULL' : 'TRUNCATED_5K'))
 
-    const filled = await prisma.$queryRaw<Array<{ id: number }>>(Prisma.sql`
+    const filled = await tx.$queryRaw<Array<{ id: number }>>(Prisma.sql`
       UPDATE "local_patents" lp
       SET "claimsText"      = COALESCE(lp."claimsText", s.claims),
           "descriptionText" = COALESCE(lp."descriptionText", s.description),
@@ -499,7 +513,7 @@ export class EpFullTextLoader {
     this.stats.filledExisting += filled.length
 
     if (filled.length) {
-      await prisma.$executeRaw(Prisma.sql`
+      await tx.$executeRaw(Prisma.sql`
         INSERT INTO "epo_gapfill_audit" ("id", "localPatentId", "column", "sourceDeliveryId", "filledAt")
         SELECT 'epg_' || s.id::text || '_' || ${this.options.deliveryId}::text,
                s.id, 'claimsText/descriptionText', ${this.options.deliveryId}, now()
@@ -510,7 +524,7 @@ export class EpFullTextLoader {
 
     // Distinguish "already had text" from "not in the corpus at all" — the two
     // look identical in a plain not-updated count, and mean very different things.
-    const present = await prisma.$queryRaw<Array<{ n: bigint }>>(Prisma.sql`
+    const present = await tx.$queryRaw<Array<{ n: bigint }>>(Prisma.sql`
       SELECT count(*)::bigint AS n FROM "local_patents"
       WHERE "publicationNumber" = ANY(${pubs})
     `)
@@ -525,7 +539,7 @@ export class EpFullTextLoader {
    * Needs a title plus SOMETHING to embed: an abstract (A-publications) or, for
    * granted specs that have none, claim 1. Anything with neither is skipped.
    */
-  private async createMissing(batch: EpFullTextRecord[], stored: StoredText[]): Promise<void> {
+  private async createMissing(tx: typeof prisma, batch: EpFullTextRecord[], stored: StoredText[]): Promise<void> {
     const candidates = batch
       .map((record, i) => ({ record, text: stored[i] }))
       .filter(({ record }) => Boolean(record.title && (record.abstract || record.claims[0])))
@@ -538,7 +552,7 @@ export class EpFullTextLoader {
       c.record.abstract ? 'title+abstract' : 'title+first-claim')
     const embeddingBody = candidates.map(c => c.record.abstract ?? c.record.claims[0] ?? '')
 
-    const created = await prisma.$executeRaw(Prisma.sql`
+    const created = await tx.$executeRaw(Prisma.sql`
       INSERT INTO "local_patents" (
         "publicationNumber", "publicationNumberKey", "title", "abstract", "country", "kind",
         "publicationDate", "classifications", "claimsText", "descriptionText",

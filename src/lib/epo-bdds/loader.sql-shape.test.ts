@@ -52,8 +52,8 @@ function unnestBlocks(body: string): Array<{ arrays: number; aliases: number }> 
 describe('loader SQL shape', () => {
   for (const method of ['createMissing', 'fillExisting', 'createLocalPatents', 'upsertBib', 'flush']) {
     it(`${method}: every UNNEST supplies exactly as many arrays as it declares aliases`, () => {
-      for (const [b, body] of methodBodies(method).entries()) {
-        for (const [i, block] of unnestBlocks(body).entries()) {
+      for (const [b, body] of Array.from(methodBodies(method).entries())) {
+        for (const [i, block] of Array.from(unnestBlocks(body).entries())) {
           expect(
             block.arrays,
             `${method}[${b}] UNNEST #${i + 1}: ${block.arrays} arrays vs ${block.aliases} aliases`
@@ -70,7 +70,7 @@ describe('loader SQL shape', () => {
 
     // Every s.<name> referenced in the SELECT must be declared.
     const referenced = new Set((body.match(/\bs\.([a-z_]+)/g) || []).map(m => m.slice(2)))
-    for (const name of referenced) {
+    for (const name of Array.from(referenced)) {
       expect(declared.has(name), `SELECT references s.${name}, not in the alias list`).toBe(true)
     }
   })
