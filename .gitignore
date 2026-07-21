@@ -81,3 +81,6 @@ scripts/test-*.ts
 # re-checking files it believes are unchanged.
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# EPO BDDS archive staging (transient; deleted after each file loads)
+.epo-cache/

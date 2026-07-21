@@ -144,9 +144,19 @@ export class DiskGuard {
 
 export function describeSnapshot(snapshot: DiskSnapshot): string {
   const pct = snapshot.totalBytes ? (snapshot.usedBytes / snapshot.totalBytes) * 100 : 0
-  return (
+  const base =
     `${snapshot.path}: ${formatGb(snapshot.freeBytes)} free of ${formatGb(snapshot.totalBytes)} ` +
     `(${pct.toFixed(0)}% used), floor ${formatGb(snapshot.minFreeBytes)}, ` +
     `headroom ${formatGb(snapshot.headroomBytes)}`
-  )
+
+  // A filesystem SMALLER than the floor is not a full disk — it is the wrong
+  // disk. Almost always /tmp on a tmpfs, where a multi-GB archive would be
+  // written into RAM. Say so, rather than leaving a confusing negative headroom.
+  if (snapshot.totalBytes < snapshot.minFreeBytes) {
+    return base + `
+    ^ this filesystem is smaller than the floor — it is probably a tmpfs ` +
+      `(RAM-backed).
+      Point --data-dir or EPO_DATA_DIR at the main data disk.`
+  }
+  return base
 }

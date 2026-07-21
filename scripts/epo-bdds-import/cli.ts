@@ -87,11 +87,24 @@ interface Args {
   limit?: number
 }
 
+/**
+ * Where archives are staged.
+ *
+ * NOT os.tmpdir(): on the production VM /tmp is a tmpfs (RAM-backed, 7.8 GB), so
+ * staging a 10 GB archive there would consume memory and fail. Defaults to a
+ * directory beside the app, which sits on the main data disk. Override with
+ * EPO_DATA_DIR or --data-dir.
+ */
+function defaultDataDir(): string {
+  const configured = process.env.EPO_DATA_DIR?.trim()
+  return configured || join(process.cwd(), '.epo-cache')
+}
+
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] || 'help',
     probe: true,
-    dataDir: join(tmpdir(), 'epo-bdds-probe'),
+    dataDir: defaultDataDir(),
     json: false,
     keep: false,
     // Honours "if a patent does not exist in our database, add it" — but only
