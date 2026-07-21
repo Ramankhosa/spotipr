@@ -481,6 +481,13 @@ export class EpFullTextLoader {
    * permanently identifies every row this service has modified.
    */
   private async fillExisting(tx: typeof prisma, batch: EpFullTextRecord[], stored: StoredText[]): Promise<void> {
+    // Join on publicationNumberKey, NOT publicationNumber.
+    //
+    // local_patents."publicationNumber" holds Google's RAW value, which is
+    // hyphenated ("EP-4497325-A1"); the normalised form lives in
+    // publicationNumberKey (04-postgres-load-and-upsert.sql:67-68). Joining on
+    // the raw column matched zero rows out of 4,458.
+    const keys = batch.map(r => publicationNumberKey(r.publicationNumber))
     const pubs = batch.map(r => r.publicationNumber)
     const claims = stored.map(s => s.claimsText)
     const descriptions = stored.map(s => s.descriptionText)
@@ -502,10 +509,10 @@ export class EpFullTextLoader {
           "textUpdatedAt" = now(),
           "updatedAt"     = now()
       FROM UNNEST(
-        ${pubs}::text[], ${claims}::text[], ${descriptions}::text[],
+        ${keys}::text[], ${claims}::text[], ${descriptions}::text[],
         ${claimsCompleteness}::text[], ${descCompleteness}::text[]
-      ) AS s(pub, claims, description, claims_completeness, desc_completeness)
-      WHERE lp."publicationNumber" = s.pub
+      ) AS s(key, claims, description, claims_completeness, desc_completeness)
+      WHERE lp."publicationNumberKey" = s.key
         AND ((lp."claimsText" IS NULL AND s.claims IS NOT NULL)
           OR (lp."descriptionText" IS NULL AND s.description IS NOT NULL))
       RETURNING lp."id"
@@ -526,7 +533,7 @@ export class EpFullTextLoader {
     // look identical in a plain not-updated count, and mean very different things.
     const present = await tx.$queryRaw<Array<{ n: bigint }>>(Prisma.sql`
       SELECT count(*)::bigint AS n FROM "local_patents"
-      WHERE "publicationNumber" = ANY(${pubs})
+      WHERE "publicationNumberKey" = ANY(${keys})
     `)
     const inCorpus = Number(present[0]?.n ?? 0)
     this.stats.notInCorpus += Math.max(0, batch.length - inCorpus)

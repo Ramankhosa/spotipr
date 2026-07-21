@@ -45,6 +45,18 @@ const FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
 </ep-patent-document>`
 
 describe('parseEpFullText', () => {
+  it('prefers <B110> over the root doc-number attribute', () => {
+    // In the live weekly feed the root doc-number carries the APPLICATION number
+    // for most documents; B110 is the canonical ST.32 publication number.
+    const appNumbered = FIXTURE.replace('doc-number="2912867"', 'doc-number="22765930"')
+    expect(parseEpFullText(appNumbered)!.publicationNumber).toBe('EP2912867B1')
+  })
+
+  it('falls back to doc-number when B110 is absent', () => {
+    const noB110 = FIXTURE.replace(/<B110>[^<]*<\/B110>/, '')
+    expect(parseEpFullText(noB110)!.publicationNumber).toBe('EP2912867B1')
+  })
+
   it('builds the PUBLICATION number from country + doc-number + kind', () => {
     // The root id="EP12783558B1" is APPLICATION-based. Keying on it matched
     // zero rows against a corpus keyed by publication number.

@@ -116,6 +116,13 @@ export function parseEpFullText(xml: string, preferLang = 'en'): EpFullTextRecor
   let pendingTitleLang: string | null = null
   const titles = new Map<string, string>()
 
+  // <B110> is the canonical ST.32 PUBLICATION number. The root element's
+  // doc-number attribute is NOT reliable: in the live weekly feed it carries the
+  // application number for most documents (verified on a real 2025 archive —
+  // 4,253 of 4,458 rows came out as 8-digit application numbers, only 200 as
+  // proper 7-digit publication numbers). Prefer B110, fall back to doc-number.
+  let publicationDocNumber: string | null = null
+
   // Claims and description are collected per language, then chosen at the end.
   // Per language, an array of claims; each claim is an array of its (possibly
   // nested) claim-text fragments.
@@ -214,6 +221,9 @@ export function parseEpFullText(xml: string, preferLang = 'en'): EpFullTextRecor
         if (value) titles.set(pendingTitleLang || 'und', value)
         pendingTitleLang = null
         break
+      case 'B110':
+        if (value) publicationDocNumber = value
+        break
       case 'B210':
         if (record && value) record.applicationNumber = value
         break
@@ -265,6 +275,11 @@ export function parseEpFullText(xml: string, preferLang = 'en'): EpFullTextRecor
 
   if (!record) return null
   const result = record as EpFullTextRecord
+
+  if (publicationDocNumber) {
+    result.docNumber = publicationDocNumber
+    result.publicationNumber = `${result.country}${publicationDocNumber}${result.kind}`
+  }
 
   const title = pickByLang(titles, preference)
   if (title) { result.title = title.value; result.titleLang = title.lang }
