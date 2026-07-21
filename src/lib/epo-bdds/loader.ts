@@ -557,20 +557,24 @@ export class EpFullTextLoader {
              ${this.textPolicy === 'claims-full+description-full' ? 'FULL' : 'TRUNCATED_5K'},
              now(), now(), now()
       FROM (
+        -- The array order here MUST match the alias list below, one for one.
+        -- A mismatch is not caught at compile time; it surfaces at runtime as
+        -- "column s.<name> does not exist".
         SELECT * FROM UNNEST(
-          ${candidates.map(c => c.record.publicationNumber)}::text[],
-          ${candidates.map(c => publicationNumberKey(c.record.publicationNumber))}::text[],
-          ${candidates.map(c => (c.record.title ?? '').slice(0, 1000))}::text[],
-          ${candidates.map(c => c.record.abstract ?? '')}::text[],
-          ${candidates.map(c => c.record.country || 'EP')}::text[],
-          ${candidates.map(c => c.record.kind || null)}::text[],
-          ${candidates.map(c => parseDocdbDate(c.record.publicationDate))}::timestamp[],
-          ${candidates.map(c => c.record.ipc)}::text[][],
-          ${candidates.map(c => c.text.claimsText)}::text[],
-          ${candidates.map(c => c.text.descriptionText)}::text[],
-          ${candidates.map(c => [c.record.title, (c.record.descriptionText ?? '').slice(0, 4000)]
-            .filter(Boolean).join('\n').slice(0, 20000))}::text[]
-        ) AS t(pub, key, title, country, kind, pubdate, ipc, claims, description, embedding)
+          ${candidates.map(c => c.record.publicationNumber)}::text[],          -- pub
+          ${candidates.map(c => publicationNumberKey(c.record.publicationNumber))}::text[], -- key
+          ${candidates.map(c => (c.record.title ?? '').slice(0, 1000))}::text[], -- title
+          ${candidates.map(c => c.record.abstract ?? '')}::text[],             -- abstract
+          ${candidates.map(c => c.record.country || 'EP')}::text[],            -- country
+          ${candidates.map(c => c.record.kind || null)}::text[],               -- kind
+          ${candidates.map(c => parseDocdbDate(c.record.publicationDate))}::timestamp[], -- pubdate
+          ${candidates.map(c => c.record.ipc)}::text[][],                      -- ipc
+          ${candidates.map(c => c.text.claimsText)}::text[],                   -- claims
+          ${candidates.map(c => c.text.descriptionText)}::text[],              -- description
+          ${embeddingBody}::text[],                                            -- embed_body
+          ${embeddingBasis}::text[]                                            -- embed_basis
+        ) AS t(pub, key, title, abstract, country, kind, pubdate, ipc,
+               claims, description, embed_body, embed_basis)
       ) s
       WHERE NOT EXISTS (
         SELECT 1 FROM "local_patents" lp
