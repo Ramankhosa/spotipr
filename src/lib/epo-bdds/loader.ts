@@ -157,14 +157,15 @@ export class DocdbLoader {
         "classifications", "corpusSources", "embeddingText", "createdAt", "updatedAt"
       )
       SELECT s.pub, s.key, s.title, s.abstract, s.country, s.kind, s.family, s.pubdate,
-             s.ipc, ARRAY['epo-docdb']::TEXT[],
+             COALESCE(string_to_array(NULLIF(s.ipc, ''), '|'), ARRAY[]::TEXT[]),
+             ARRAY['epo-docdb']::TEXT[],
              LEFT(s.title || E'\n' || s.abstract, 20000),
              now(), now()
       FROM (
         SELECT * FROM UNNEST(
           ${pubs}::text[], ${keys}::text[], ${titles}::text[], ${abstracts}::text[],
           ${countries}::text[], ${kinds}::text[], ${families}::text[],
-          ${dates}::timestamp[], ${ipc}::text[][]
+          ${dates}::timestamp[], ${ipc.map(list => list.join('|'))}::text[]
         ) AS t(pub, key, title, abstract, country, kind, family, pubdate, ipc)
       ) s
       -- Protects the publicationNumberKey unique constraint when a different
@@ -192,11 +193,15 @@ export class DocdbLoader {
         "publicationNumberKey", "publicationNumber", "applicants", "inventors", "ipc",
         "docdbFamilyId", "sourceProductId", "sourceDeliveryId", "ingestedAt", "updatedAt"
       )
-      SELECT s.key, s.pub, s.applicants::jsonb, s.inventors, s.ipc, s.family,
+      SELECT s.key, s.pub, s.applicants::jsonb,
+             COALESCE(string_to_array(NULLIF(s.inventors, ''), '|'), ARRAY[]::TEXT[]),
+             COALESCE(string_to_array(NULLIF(s.ipc, ''), '|'), ARRAY[]::TEXT[]),
+             s.family,
              ${this.options.productId}, ${this.options.deliveryId}, now(), now()
       FROM UNNEST(
         ${keys}::text[], ${pubs}::text[], ${applicants}::text[],
-        ${inventors}::text[][], ${ipc}::text[][], ${families}::text[]
+        ${inventors.map(list => list.join('|'))}::text[],
+        ${ipc.map(list => list.join('|'))}::text[], ${families}::text[]
       ) AS s(key, pub, applicants, inventors, ipc, family)
       ON CONFLICT ("publicationNumberKey") DO UPDATE SET
         "applicants"       = EXCLUDED."applicants",
@@ -570,7 +575,11 @@ export class EpFullTextLoader {
       -- embeddingText matches the corpus convention (title + a short statement
       -- of the invention). The abstract COLUMN stays NULL for granted specs: we
       -- embed claim 1, we do not present it as an abstract.
-      SELECT s.pub, s.key, s.title, NULLIF(s.abstract, ''), s.country, s.kind, s.pubdate, s.ipc,
+      -- ipc travels as a pipe-joined string: UNNEST(text[][]) would flatten to
+      -- scalars (and requires rectangular arrays). Same convention as the
+      -- Google loader (04-postgres-load-and-upsert.sql: string_to_array on '|').
+      SELECT s.pub, s.key, s.title, NULLIF(s.abstract, ''), s.country, s.kind, s.pubdate,
+             COALESCE(string_to_array(NULLIF(s.ipc, ''), '|'), ARRAY[]::TEXT[]),
              s.claims, s.description,
              ARRAY['epo-ep-fulltext']::TEXT[],
              LEFT(s.title || E'\n' || s.embed_body, 20000), s.embed_basis,
@@ -589,7 +598,7 @@ export class EpFullTextLoader {
           ${candidates.map(c => c.record.country || 'EP')}::text[],            -- country
           ${candidates.map(c => c.record.kind || null)}::text[],               -- kind
           ${candidates.map(c => parseDocdbDate(c.record.publicationDate))}::timestamp[], -- pubdate
-          ${candidates.map(c => c.record.ipc)}::text[][],                      -- ipc
+          ${candidates.map(c => c.record.ipc.join('|'))}::text[],              -- ipc (pipe-joined)
           ${candidates.map(c => c.text.claimsText)}::text[],                   -- claims
           ${candidates.map(c => c.text.descriptionText)}::text[],              -- description
           ${embeddingBody}::text[],                                            -- embed_body
