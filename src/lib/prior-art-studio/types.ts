@@ -41,6 +41,8 @@ export interface StudioElementCell {
   tier: 'abstract' | 'claims'
 }
 
+export type StudioElementAssessmentStatus = 'ASSESSED' | 'UNASSESSED' | 'UNAVAILABLE'
+
 /** Documents the attorney marked relevant, fed back as a visible ranking influence. */
 export interface StudioSteer {
   enabled: boolean
@@ -120,6 +122,8 @@ export interface StudioResultFamily {
   hitsNotTerm?: boolean
   /** Per-element evidence, keyed by element id. Present when the plan has elements. */
   elementCells?: Record<string, StudioElementCell>
+  /** Missing cells are never evidence: this says whether the family was actually assessed. */
+  elementAssessmentStatus?: StudioElementAssessmentStatus
 }
 
 /** One constraint's contribution to narrowing — what the Filters gate removed. */

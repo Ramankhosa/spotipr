@@ -22,7 +22,7 @@ vi.mock('./provider-registry', () => ({
   getPatentSearchProvider: mocks.getPatentSearchProvider,
 }))
 
-import { PatentSearchOrchestrator } from './orchestrator'
+import { PatentSearchOrchestrator, rerankQueryForPlan } from './orchestrator'
 
 function provider(id: PatentSearchProviderId, results: NormalizedPatentResult[]): PatentSearchProvider {
   return {
@@ -80,6 +80,14 @@ describe('PatentSearchOrchestrator with Google Patents BigQuery', () => {
       warnings: [],
     })
     mocks.resolveProviderIds.mockReturnValue(['pqai', 'google-patents-bigquery'])
+  })
+
+  test('uses the natural-language semantic query for reranking, not lexical OR syntax', () => {
+    expect(rerankQueryForPlan({
+      searchQuery: 'torque OR clutch OR screwdriver',
+      semanticQuery: 'A surgical screwdriver with a preset torque clutch that re-engages automatically',
+      originalQuery: 'Torque-limiting surgical screwdriver',
+    })).toBe('A surgical screwdriver with a preset torque clutch that re-engages automatically')
   })
 
   test('merges BigQuery candidates through the existing provider aggregation path', async () => {

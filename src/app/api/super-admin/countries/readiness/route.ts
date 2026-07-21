@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifySuperAdmin } from '@/lib/super-admin-auth'
 import { computeCountryReadiness, computeAllCountriesReadiness } from '@/lib/country-readiness-service'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: NextRequest) {
   try {
     const admin = await verifySuperAdmin(request)

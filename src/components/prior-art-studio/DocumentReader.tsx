@@ -192,14 +192,15 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
         </div>
 
         <div className="max-h-[520px] overflow-y-auto p-4">
-          {elements.length > 0 && family.elementCells && (
+          {elements.length > 0 && (
             <div className="mb-4 rounded-lg border border-amber-200/70 bg-amber-50/40 p-2.5 dark:border-amber-900/60 dark:bg-amber-950/20">
               <h4 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Element evidence
               </h4>
               <div className="space-y-1.5">
                 {elements.map((element, i) => {
-                  const cell = family.elementCells?.[element.id]
+                  const assessmentStatus = family.elementAssessmentStatus || (family.elementCells ? 'ASSESSED' : 'UNASSESSED')
+                  const cell = assessmentStatus === 'ASSESSED' ? family.elementCells?.[element.id] : undefined
                   return (
                     <div key={element.id} className="flex items-start gap-2 border-b border-dashed border-border pb-1.5 text-[11px]">
                       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
@@ -224,7 +225,7 @@ export function DocumentReader({ family, elements, onClose, onSteerFrom, authHea
                                 : 'bg-muted text-muted-foreground/60'
                         }`}
                       >
-                        {cell?.verdict || '—'}
+                        {cell?.verdict || (assessmentStatus === 'UNAVAILABLE' ? 'UNAVAILABLE' : 'NOT ASSESSED')}
                       </span>
                     </div>
                   )

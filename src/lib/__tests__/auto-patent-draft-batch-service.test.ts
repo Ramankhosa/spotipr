@@ -251,8 +251,8 @@ describe('auto patent draft document mode', () => {
 
   test('maps global figure defaults and honors per-file overrides', () => {
     const rows: AutoPatentDraftDocumentRow[] = [
-      { rowNo: 1, sourceFilename: 'a.docx', title: 'A', ideaDetails: 'Idea A', imageCount: 2, errors: [], warnings: [], extractedImages: [{ id: 'img-1' } as any] },
-      { rowNo: 2, sourceFilename: 'b.pdf', title: 'B', ideaDetails: 'Idea B', imageCount: 0, errors: [], warnings: [], extractedImages: [] },
+      { rowNo: 1, sourceFilename: 'a.docx', title: 'A', ideaDetails: 'Idea A', imageCount: 2, extractedImages: [{ id: 'img-1' } as any] },
+      { rowNo: 2, sourceFilename: 'b.pdf', title: 'B', ideaDetails: 'Idea B', imageCount: 0, extractedImages: [] },
     ]
 
     const { ideas, skipped } = buildDocumentIdeasFromRows(
@@ -272,7 +272,7 @@ describe('auto patent draft document mode', () => {
 
   test('reports files with no usable idea text as skipped', () => {
     const rows: AutoPatentDraftDocumentRow[] = [
-      { rowNo: 1, sourceFilename: 'empty.pdf', title: 'Empty', ideaDetails: '', imageCount: 0, errors: [], warnings: [], extractionError: 'No readable text was found.', extractedImages: [] },
+      { rowNo: 1, sourceFilename: 'empty.pdf', title: 'Empty', ideaDetails: '', imageCount: 0, extractionError: 'No readable text was found.', extractedImages: [] },
     ]
 
     const { ideas, skipped } = buildDocumentIdeasFromRows(rows, [], { useUploadedFigures: true, generateDiagrams: true })
@@ -283,7 +283,7 @@ describe('auto patent draft document mode', () => {
 
   test('honors an edited idea-text override even when extraction was empty', () => {
     const rows: AutoPatentDraftDocumentRow[] = [
-      { rowNo: 1, sourceFilename: 'scan.pdf', title: 'Scan', ideaDetails: '', imageCount: 0, errors: [], warnings: [], extractionError: 'No readable text was found.', extractedImages: [] },
+      { rowNo: 1, sourceFilename: 'scan.pdf', title: 'Scan', ideaDetails: '', imageCount: 0, extractionError: 'No readable text was found.', extractedImages: [] },
     ]
 
     const { ideas, skipped } = buildDocumentIdeasFromRows(

@@ -25,6 +25,7 @@ import {
   requestSearchQueryEmbeddings,
 } from '@/lib/patent-corpus-service'
 import type { StudioElement, StudioElementCell, StudioElementVerdict } from './types'
+import type { ExternalAiUsageContext } from '@/lib/external-ai-usage'
 
 const STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'onto', 'upon', 'said', 'which', 'wherein',
@@ -107,11 +108,15 @@ export async function scoreElements(input: {
   elements: StudioElement[]
   publicationNumbers: string[]
   traceId?: string
-}): Promise<Record<string, Record<string, StudioElementCell>>> {
+  externalAiUsage?: ExternalAiUsageContext
+}): Promise<{
+  cells: Record<string, Record<string, StudioElementCell>>
+  semanticAvailable: boolean
+}> {
   const elements = input.elements.filter(e => e.text.trim())
   const pubs = Array.from(new Set(input.publicationNumbers.filter(Boolean)))
   const out: Record<string, Record<string, StudioElementCell>> = {}
-  if (!elements.length || !pubs.length) return out
+  if (!elements.length || !pubs.length) return { cells: out, semanticAvailable: false }
 
   // ---- 1. document text (for literal coverage + tier labelling) -------------
   const rows = await prisma.localPatent.findMany({
@@ -140,7 +145,7 @@ export async function scoreElements(input: {
     try {
       const vectors = await requestSearchQueryEmbeddings(
         elements.map(e => e.text.slice(0, 800)),
-        { traceId: input.traceId }
+        { traceId: input.traceId, externalAiUsage: input.externalAiUsage }
       )
       const column = Prisma.raw(`"${PATENT_CORPUS_EMBEDDING_COLUMN}"`)
       const op = Prisma.raw(PATENT_CORPUS_EMBEDDING_DISTANCE_OP)
@@ -207,8 +212,9 @@ export async function scoreElements(input: {
         semantic.set(elements[i].id, perElement)
       }
     } catch (error) {
-      // Element scoring is additive: if embeddings are unavailable the grid
-      // degrades to literal-coverage only rather than failing the run.
+      // The run continues, but callers mark these cells UNAVAILABLE. Literal
+      // absence alone must never be converted into a NONE verdict after an
+      // embedding failure.
       console.warn('[PriorArtStudio] Element semantic scoring unavailable:', error)
     }
   }
@@ -216,7 +222,13 @@ export async function scoreElements(input: {
   // If no element got semantic scores, the embedding step failed or was
   // unavailable — verdicts must be judged on literal coverage alone and the
   // caller must be told, not handed scores computed on a silently capped scale.
-  const semanticAvailable = semantic.size > 0
+  const semanticAvailable = Array.from(semantic.values()).some(scores => scores.size > 0)
+  const assessablePubs = new Set(
+    pubs.filter(pub =>
+      docs.has(pub) &&
+      elements.every(element => semantic.get(element.id)?.has(pub))
+    )
+  )
 
   // ---- 3. blend, normalising semantic signal within this candidate set ------
   for (const element of elements) {
@@ -234,6 +246,9 @@ export async function scoreElements(input: {
 
     for (const pub of pubs) {
       const doc = docs.get(pub)
+      // A missing corpus document or vector is missing evidence, not a NONE
+      // finding. Leave this publication out so the caller marks it UNAVAILABLE.
+      if (!semanticAvailable || !assessablePubs.has(pub) || !doc) continue
       const searchText = doc
         ? `${doc.title}\n${doc.abstract}\n${doc.hasClaims ? doc.claims : ''}`.toLowerCase()
         : ''
@@ -264,7 +279,7 @@ export async function scoreElements(input: {
     }
   }
 
-  return out
+  return { cells: out, semanticAvailable }
 }
 
 // Coverage arithmetic (coveredElements / findCombinations /

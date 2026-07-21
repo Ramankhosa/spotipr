@@ -70,6 +70,7 @@ const DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS = Math.max(
 
 interface RetrievalTuning {
   maxVectorQueries: number
+  ivfflatProbes: number
   textCandidateCap: number
   trigramCandidateCap: number
   metadataCandidateCap: number
@@ -86,6 +87,7 @@ async function resolveRetrievalTuning(): Promise<RetrievalTuning> {
     }
     return {
       maxVectorQueries: Math.max(1, num('retrieval.maxVectorQueries', 9)),
+      ivfflatProbes: Math.max(1, Math.min(5000, num('retrieval.ivfflatProbes', 24))),
       textCandidateCap: Math.max(200, num('retrieval.textCandidateCap', 1600)),
       trigramCandidateCap: Math.max(100, num('retrieval.trigramCandidateCap', 900)),
       metadataCandidateCap: Math.max(100, num('retrieval.metadataCandidateCap', 600)),
@@ -96,6 +98,7 @@ async function resolveRetrievalTuning(): Promise<RetrievalTuning> {
     // Settings are a tuning convenience, never a dependency of search.
     return {
       maxVectorQueries: 9,
+      ivfflatProbes: 24,
       textCandidateCap: 1600,
       trigramCandidateCap: 900,
       metadataCandidateCap: 600,
@@ -228,14 +231,21 @@ function corpusSourceCondition(corpusSource: string) {
   return Prisma.sql`p."corpusSources" @> ARRAY[${corpusSource}]::TEXT[]`
 }
 
-async function queryRawWithStatementTimeout<T = any>(query: Prisma.Sql, timeoutMs = DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS) {
+async function queryRawWithStatementTimeout<T = any>(
+  query: Prisma.Sql,
+  timeoutMs = DEFAULT_SEARCH_STATEMENT_TIMEOUT_MS,
+  ivfflatProbes = 24
+) {
   // Use a sequential transaction instead of an interactive callback transaction.
   // Prisma's interactive transaction default expires after 5 seconds, which is
   // shorter than this provider's PostgreSQL statement timeout (8 seconds).
   // Both operations below still run on the same connection/transaction, so the
   // transaction-local statement_timeout applies to the search query.
-  const [, rows] = await prisma.$transaction([
+  const [, , rows] = await prisma.$transaction([
     prisma.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`,
+    // pgvector defaults to one IVFFlat probe. Set the calibrated value locally
+    // so retrieval correctness does not depend on an out-of-band ALTER DATABASE.
+    prisma.$executeRaw`SELECT set_config('ivfflat.probes', ${String(Math.max(1, Math.floor(ivfflatProbes)))}, true)`,
     prisma.$queryRaw<T[]>(query),
   ])
   return rows
@@ -639,6 +649,7 @@ function rowToResult(row: any, providerId: PatentSearchProviderId = 'indian-corp
   const matchedFields = uniqueStrings([
     row.vectorScore !== undefined ? 'semantic' : '',
     row.textScore !== undefined ? 'fullText' : '',
+    row.structuredMatch === true ? 'structuredMatchCandidate' : '',
     row.titleScore !== undefined ? 'titleOrAbstract' : '',
     row.fieldScore !== undefined ? 'fieldFilter' : '',
     row.classificationScore !== undefined ? 'classification' : '',
@@ -733,7 +744,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
     const deepLaneTimeoutMs = Math.max(10_000, Number(process.env.PATENT_SEARCH_DEEP_LANE_TIMEOUT_MS || '18000') || 18_000)
     const laneTimeoutMs = deep ? Math.max(tuning.statementTimeoutMs, deepLaneTimeoutMs) : tuning.statementTimeoutMs
     const runQuery = <T = any>(query: Prisma.Sql, timeoutMs = laneTimeoutMs) =>
-      queryRawWithStatementTimeout<T>(query, timeoutMs)
+      queryRawWithStatementTimeout<T>(query, timeoutMs, tuning.ivfflatProbes)
     const traceId = request.requestHeaders?.['x-request-id'] ||
       `patent-search-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const laneSink = { diagnostics: request.laneDiagnostics, providerId: this.id }
@@ -894,6 +905,61 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       }
     }
 
+    // The broad keyword query above remains an OR recall lane. This dedicated
+    // indexed lane expresses the Studio contract faithfully: alternatives in
+    // one MATCH block are OR-ed, while distinct blocks are AND-ed. Results from
+    // semantic probes are still merged below, so patents using different words
+    // remain discoverable. Studio performs exact word-boundary confirmation
+    // after retrieval and exposes that as `meetsMatch`.
+    const literalMatchGroups = (queryPlan.literalMatchGroups || [])
+      .map(group => ({
+        ...group,
+        terms: uniqueStrings((group.terms || []).map(normalizeWhitespace).filter(Boolean)).slice(0, 50),
+      }))
+      .filter(group => group.terms.length)
+    if (literalMatchGroups.length && !manualMode) {
+      try {
+        const searchDocument = this.titleAbstractOnlySearch
+          ? titleAbstractSearchDocumentExpression()
+          : searchDocumentExpression()
+        const groupQueries = literalMatchGroups.map(group =>
+          group.terms
+            .map(term => /\s/.test(term) ? `"${term.replace(/"/g, '')}"` : term)
+            .join(' OR ')
+        )
+        const groupConditions = groupQueries.flatMap(groupQuery => [
+          Prisma.sql`numnode(websearch_to_tsquery('english'::regconfig, ${groupQuery})) > 0`,
+          Prisma.sql`${searchDocument} @@ websearch_to_tsquery('english'::regconfig, ${groupQuery})`,
+        ])
+        const rankExpression = Prisma.join(
+          groupQueries.map(groupQuery =>
+            Prisma.sql`ts_rank_cd(${searchDocument}, websearch_to_tsquery('english'::regconfig, ${groupQuery}))`
+          ),
+          ' + '
+        )
+        const matchCandidatePoolLimit = Math.min(Math.max(candidateLimit * 8, 300), tuning.textCandidateCap)
+        const structuredRows = await runQuery<any>(Prisma.sql`
+          WITH hits AS MATERIALIZED (
+            SELECT p."id", (${rankExpression}) AS "structuredMatchScore"
+            FROM "local_patents" p
+            ${whereSql([...groupConditions, ...filterConditions])}
+            ORDER BY "structuredMatchScore" DESC
+            LIMIT ${matchCandidatePoolLimit}
+          )
+          SELECT ${commonSelectSql(Prisma.sql`,
+            hits."structuredMatchScore" AS "textScore",
+            true AS "structuredMatch"`)}
+          FROM hits
+          JOIN "local_patents" p ON p."id" = hits."id"
+          ORDER BY "textScore" DESC
+          LIMIT ${candidateLimit}
+        `)
+        structuredRows.forEach((row, index) => merge(row, 'textRank', index + 1, 1.35))
+      } catch (error) {
+        logOptionalSearchError('structured_match_search', error, { traceId, providerId: this.id }, laneSink)
+      }
+    }
+
     const retrievalQueries = buildFallbackRetrievalQueries(
       queryPlan,
       request.title,
@@ -910,6 +976,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
       textQueryLength: textQuery.length,
       retrievalQueryCount: retrievalQueries.length,
       vectorRetrievalQueryCount: vectorRetrievalQueries.length,
+      ivfflatProbes: tuning.ivfflatProbes,
       safeLimit,
       candidateLimit,
     })
@@ -920,7 +987,7 @@ export class IndianCorpusProvider implements PatentSearchProvider {
         const embeddingStartedAt = Date.now()
         const vectors = await requestSearchQueryEmbeddings(
           vectorRetrievalQueries.map(query => query.text),
-          { traceId }
+          { traceId, externalAiUsage: request.externalAiUsage }
         )
         logEmbeddingSearch('info', 'query_embeddings_created', {
           traceId,

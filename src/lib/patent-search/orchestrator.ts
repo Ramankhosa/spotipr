@@ -1,5 +1,6 @@
 import type {
   NormalizedPatentResult,
+  PatentSearchQueryPlan,
   PatentSearchProviderId,
   PatentSearchProviderStats,
   PatentSearchRequest,
@@ -20,6 +21,20 @@ import { getProviderAccessGates } from '@/lib/settings/provider-access-service'
 
 function logSearchEvent(event: string, details: Record<string, unknown>) {
   console.info('[PatentSearch]', JSON.stringify(compactLogDetails({ event, ...details })))
+}
+
+/**
+ * Cross-encoders expect a natural-language information need, not the lexical
+ * syntax sent to `websearch_to_tsquery` (for example `torque OR clutch`).
+ */
+export function rerankQueryForPlan(queryPlan: Partial<PatentSearchQueryPlan>, fallbackQuery = '') {
+  return String(
+    queryPlan.semanticQuery ||
+    queryPlan.originalQuery ||
+    queryPlan.searchQuery ||
+    fallbackQuery ||
+    ''
+  ).replace(/\s+/g, ' ').trim()
 }
 
 function resultLogSummary(result: NormalizedPatentResult) {
@@ -427,7 +442,10 @@ export class PatentSearchOrchestrator {
     const minRerankScore = typeof settings['rerank.minScore'] === 'number'
       ? Math.max(0, Math.min(1, settings['rerank.minScore'] as number))
       : 0
-    const rerankQuery = String(queryPlan.searchQuery || input.query || '').trim()
+    const rerankMaxDocsPerCall = typeof settings['rerank.maxDocsPerCall'] === 'number'
+      ? Math.min(1000, Math.max(1, Math.floor(settings['rerank.maxDocsPerCall'] as number)))
+      : undefined
+    const rerankQuery = rerankQueryForPlan(queryPlan, input.query)
     let rerankApplied = false
     let droppedBelowFloor = 0
     if (rerankEnabled && rerankQuery && candidateResults.length > 1) {
@@ -439,6 +457,10 @@ export class PatentSearchOrchestrator {
             item: result,
             text: `${result.title || ''}\n${result.abstract || result.snippet || ''}`,
           })),
+          {
+            maxDocumentsPerCall: rerankMaxDocsPerCall,
+            externalAiUsage: input.externalAiUsage,
+          },
         )
         if (scored.length) {
           rerankApplied = true
@@ -491,6 +513,7 @@ export class PatentSearchOrchestrator {
               ? scored[Math.floor(scored.length / 2)]?.relevanceScore
               : undefined,
             minRerankScore,
+            maxDocsPerCall: rerankMaxDocsPerCall,
             droppedBelowFloor,
           })
         }

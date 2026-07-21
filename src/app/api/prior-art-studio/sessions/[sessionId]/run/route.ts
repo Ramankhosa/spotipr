@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { getOwnedSession, resolveStaleRun, startStudioRun } from '@/lib/prior-art-studio/service'
-import type { StudioPlan } from '@/lib/prior-art-studio/types'
+import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { validateStudioPlan } from '@/lib/prior-art-studio/plan-schema'
 
 export const runtime = 'nodejs'
 
@@ -26,6 +27,11 @@ export async function POST(request: NextRequest, { params }: { params: { session
     const session = await getOwnedSession(params.sessionId, auth.user.id)
     if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
+    if (auth.user.tenantId) {
+      const serviceCheck = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'NOVELTY_SEARCH')
+      if (!serviceCheck.allowed) return serviceCheck.response
+    }
+
     // One live run per session. A second tab (or a lost response) adopts the
     // existing run instead of piling a duplicate search onto the corpus.
     const existing = await prisma.priorArtStudioRun.findFirst({
@@ -42,16 +48,42 @@ export async function POST(request: NextRequest, { params }: { params: { session
       }
     }
 
+    const recentStarts = await prisma.priorArtStudioRun.count({
+      where: {
+        createdAt: { gte: new Date(Date.now() - 60_000) },
+        session: { userId: auth.user.id },
+      },
+    })
+    if (recentStarts >= 3) {
+      return NextResponse.json(
+        { error: 'Too many search starts. Wait a minute before starting another run.', code: 'STUDIO_RATE_LIMITED' },
+        { status: 429, headers: { 'Retry-After': '60' } }
+      )
+    }
+
     const body = await request.json().catch(() => ({}))
-    const { runId } = await startStudioRun({
+    const planValidation = validateStudioPlan(session.plan)
+    if (!planValidation.success) {
+      return NextResponse.json(
+        { error: planValidation.error, code: 'INVALID_STUDIO_PLAN', fields: planValidation.fields },
+        { status: 400 }
+      )
+    }
+    const { runId, existing: adoptedExisting } = await startStudioRun({
       sessionId: session.id,
       userId: auth.user.id,
-      plan: session.plan as unknown as StudioPlan,
+      tenantId: auth.user.tenantId || undefined,
+      plan: planValidation.plan,
       planVersion: session.planVersion,
       requestHeaders: headersToRecord(request),
       depth: body?.depth === 'fast' ? 'fast' : 'deep',
     })
-    return NextResponse.json({ runId, status: 'RUNNING' }, { status: 202 })
+    return NextResponse.json(
+      adoptedExisting
+        ? { error: 'A search is already running for this session.', runId, status: 'RUNNING' }
+        : { runId, status: 'RUNNING' },
+      { status: adoptedExisting ? 409 : 202 }
+    )
   } catch (error) {
     console.error('[PriorArtStudio] Run start failed:', error)
     return NextResponse.json(

@@ -69,21 +69,23 @@ export function ElementGrid({
   const [openCell, setOpenCell] = useState<string | null>(null)
   const [motivation, setMotivation] = useState<Record<string, string>>({})
 
-  const scored = useMemo(() => families.filter(f => f.elementCells), [families])
-
   const rows = useMemo(
     () =>
-      scored.map(f => ({
+      families.map(f => ({
         familyKey: f.familyKey,
         publicationNumber: f.publicationNumber,
         cells: f.elementCells,
         family: f,
       })),
-    [scored]
+    [families]
   )
 
-  const anticipation = useMemo(() => findAnticipationCandidates({ elements, rows }), [elements, rows])
-  const combinations = useMemo(() => findCombinations({ elements, rows }), [elements, rows])
+  const assessedRows = useMemo(
+    () => rows.filter(row => row.family.elementAssessmentStatus === 'ASSESSED' && row.cells),
+    [rows]
+  )
+  const anticipation = useMemo(() => findAnticipationCandidates({ elements, rows: assessedRows }), [elements, assessedRows])
+  const combinations = useMemo(() => findCombinations({ elements, rows: assessedRows }), [elements, assessedRows])
   const anticipationKeys = new Set(anticipation.map(a => a.familyKey))
 
   if (!elements.length) {
@@ -95,7 +97,7 @@ export function ElementGrid({
     )
   }
 
-  if (!scored.length) {
+  if (!families.length) {
     return (
       <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
         Run the search to score results against your {elements.length} elements.
@@ -165,8 +167,9 @@ export function ElementGrid({
           <tbody>
             {rows.map(row => {
               const isAnticipation = anticipationKeys.has(row.familyKey)
-              const tier = elements.some(e => row.cells?.[e.id]?.tier === 'claims') ? 'claims' : 'abstract'
-              const covered = coveredElements(row.cells, elements).length
+              const assessmentStatus = row.family.elementAssessmentStatus || (row.cells ? 'ASSESSED' : 'UNASSESSED')
+              const tier = assessmentStatus === 'ASSESSED' && elements.some(e => row.cells?.[e.id]?.tier === 'claims') ? 'claims' : 'abstract'
+              const covered = assessmentStatus === 'ASSESSED' ? coveredElements(row.cells, elements).length : 0
               return (
                 <tr key={row.familyKey} className={isAnticipation ? 'bg-emerald-500/[0.07]' : undefined}>
                   <td className="border-b border-border px-3 py-2 align-middle">
@@ -180,18 +183,20 @@ export function ElementGrid({
                     <div className="max-w-[220px] truncate text-[10px] text-muted-foreground">{row.family.title}</div>
                   </td>
                   {elements.map(element => {
-                    const cell = row.cells?.[element.id]
-                    const verdict = cell?.verdict || 'NONE'
+                    const cell = assessmentStatus === 'ASSESSED' ? row.cells?.[element.id] : undefined
+                    const verdict = cell?.verdict
                     const cellKey = `${row.familyKey}:${element.id}`
                     return (
                       <td key={element.id} className="relative border-b border-border px-2 py-2">
                         <button
                           type="button"
                           onClick={() => setOpenCell(openCell === cellKey ? null : cellKey)}
-                          className={`w-full rounded px-1.5 py-1 text-center font-mono text-[9px] font-bold ${VERDICT_STYLE[verdict]}`}
+                          className={`w-full rounded px-1.5 py-1 text-center font-mono text-[9px] font-bold ${
+                            verdict ? VERDICT_STYLE[verdict] : 'bg-muted text-muted-foreground'
+                          }`}
                           aria-expanded={openCell === cellKey}
                         >
-                          {VERDICT_LABEL[verdict]}
+                          {verdict ? VERDICT_LABEL[verdict] : assessmentStatus === 'UNAVAILABLE' ? 'UNAVAILABLE' : 'NOT ASSESSED'}
                         </button>
                         {openCell === cellKey && (
                           <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-border bg-popover p-2.5 text-[11px] shadow-lg">
@@ -219,7 +224,11 @@ export function ElementGrid({
                                 </button>
                               </>
                             ) : (
-                              <p className="text-muted-foreground">Not scored.</p>
+                              <p className="text-muted-foreground">
+                                {assessmentStatus === 'UNAVAILABLE'
+                                  ? 'Assessment unavailable — scoring did not complete. This is not a NONE finding.'
+                                  : 'Not assessed — this document was outside the automatic assessment window.'}
+                              </p>
                             )}
                           </div>
                         )}
@@ -234,7 +243,9 @@ export function ElementGrid({
                           : 'bg-muted text-muted-foreground'
                       }`}
                     >
-                      {tier === 'claims' ? 'claims' : 'abstract'}
+                      {assessmentStatus === 'ASSESSED'
+                        ? tier === 'claims' ? 'claims' : 'abstract'
+                        : assessmentStatus === 'UNAVAILABLE' ? 'unavailable' : 'not assessed'}
                     </span>
                   </td>
                   <td className="border-b border-border px-2 py-2 text-[10px]">
@@ -349,8 +360,9 @@ export function ElementGrid({
 
       {!anticipation.length && !combinations.length && (
         <p className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-          No document covers every element, and no two documents complete each other. On this evidence the claim set
-          looks distinguishable — widen a block to EXPAND if you want to press the search harder before concluding.
+          {rows.some(row => row.family.elementAssessmentStatus !== 'ASSESSED')
+            ? 'No theory is shown from the assessed subset. Some documents are not assessed or unavailable, so this is not a novelty conclusion.'
+            : 'No assessed document covers every element, and no two assessed documents complete each other. Widen a block to EXPAND if you want to press the search harder before concluding.'}
         </p>
       )}
     </div>

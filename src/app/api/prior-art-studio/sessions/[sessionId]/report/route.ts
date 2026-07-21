@@ -4,7 +4,9 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { computeSaturation, getOwnedSession } from '@/lib/prior-art-studio/service'
 import { renderBooleanPreview } from '@/lib/prior-art-studio/compiler'
-import { activeTerms, type StudioGateCounts, type StudioPlan, type StudioResultFamily } from '@/lib/prior-art-studio/types'
+import { activeTerms, type StudioGateCounts, type StudioResultFamily } from '@/lib/prior-art-studio/types'
+import { mergeCanonicalFamilyStates, studioFamilyAliasMap } from '@/lib/prior-art-studio/family-key'
+import { validateStudioPlan } from '@/lib/prior-art-studio/plan-schema'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -38,10 +40,19 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
     prisma.priorArtStudioTheory.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'asc' } }),
   ])
 
-  const plan = session.plan as unknown as StudioPlan
   const latestRun = runs[runs.length - 1]
+  const currentPlan = validateStudioPlan(session.plan)
+  const snapshotPlan = latestRun ? validateStudioPlan(latestRun.planSnapshot) : null
+  const plan = currentPlan.success ? currentPlan.plan : snapshotPlan?.success ? snapshotPlan.plan : null
+  if (!plan) {
+    return NextResponse.json(
+      { error: 'No valid saved plan or run snapshot is available for this report.', code: 'INVALID_STUDIO_PLAN' },
+      { status: 422 }
+    )
+  }
   const latestFamilies = (latestRun?.results as unknown as StudioResultFamily[]) || []
-  const stateByFamily = new Map(docStates.map(s => [s.familyKey, s]))
+  const canonicalDocStates = mergeCanonicalFamilyStates(docStates, studioFamilyAliasMap(latestFamilies))
+  const stateByFamily = new Map(canonicalDocStates.map(s => [s.familyKey, s]))
 
   const children: Paragraph[] = []
 
@@ -169,8 +180,8 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   }
 
   // Reviewing depth — the stopping rule, stated for the record.
-  const reviewedCount = docStates.filter(s => s.tag).length
-  const saturation = computeSaturation(docStates.map(s => ({ tag: s.tag, updatedAt: s.updatedAt })))
+  const reviewedCount = canonicalDocStates.filter(s => s.tag).length
+  const saturation = computeSaturation(canonicalDocStates.map(s => ({ tag: s.tag, updatedAt: s.updatedAt })))
   children.push(
     para(
       `Review depth: ${reviewedCount} document families were individually assessed and marked out of ${latestFamilies.length} presented in the final run. Stopping-rule reading at close: ${saturation.suggestion}`
@@ -178,7 +189,7 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   )
 
   children.push(heading(`${sectionNo++}. Documents reviewed and marked`))
-  const tagged = docStates.filter(s => s.tag || s.excluded || s.note)
+  const tagged = canonicalDocStates.filter(s => s.tag || s.excluded || s.note)
   if (!tagged.length) children.push(para('No documents were tagged in this session.'))
   for (const tagName of ['RELEVANT', 'MAYBE', 'NOT_RELEVANT'] as const) {
     const group = tagged.filter(s => s.tag === tagName)
@@ -227,16 +238,21 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
         { italics: true }
       )
     )
-    const shortlist = docStates.filter(s => s.tag === 'RELEVANT' || s.tag === 'MAYBE')
+    const shortlist = canonicalDocStates.filter(s => s.tag === 'RELEVANT' || s.tag === 'MAYBE')
     for (const state of shortlist) {
       const family = latestFamilies.find(f => f.familyKey === state.familyKey)
       if (!family) continue
-      const tier = plan.elements.some(e => family.elementCells?.[e.id]?.tier === 'claims') ? 'claims' : 'abstract'
-      children.push(para(`${state.publicationNumber} — ${family.title} [${tier}-tier]`, { bold: true }))
+      const assessmentStatus = family.elementAssessmentStatus || (family.elementCells ? 'ASSESSED' : 'UNASSESSED')
+      const tier = assessmentStatus === 'ASSESSED' && plan.elements.some(e => family.elementCells?.[e.id]?.tier === 'claims') ? 'claims' : 'abstract'
+      const tierLabel = assessmentStatus === 'ASSESSED'
+        ? `${tier}-tier`
+        : assessmentStatus === 'UNAVAILABLE' ? 'assessment unavailable' : 'not assessed'
+      children.push(para(`${state.publicationNumber} — ${family.title} [${tierLabel}]`, { bold: true }))
       plan.elements.forEach((element, i) => {
-        const cell = family.elementCells?.[element.id]
+        const cell = assessmentStatus === 'ASSESSED' ? family.elementCells?.[element.id] : undefined
         const found = cell?.matchedTerms?.length ? ` — terms found: ${cell.matchedTerms.join(', ')}` : ''
-        children.push(para(`   E${i + 1} [${cell?.verdict || 'NONE'}] ${element.text}${found}`))
+        const label = cell?.verdict || (assessmentStatus === 'ASSESSED' ? 'UNAVAILABLE' : assessmentStatus)
+        children.push(para(`   E${i + 1} [${label}] ${element.text}${found}`))
       })
     }
     if (!shortlist.length) children.push(para('No references were shortlisted.'))

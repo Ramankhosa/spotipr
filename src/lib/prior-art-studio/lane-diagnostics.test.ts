@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { describeLaneDiagnostics } from './service'
+import { describeLaneDiagnostics, didSemanticLaneRun } from './service'
 import type { SearchLaneDiagnostic } from '@/lib/patent-search/types'
 
 const timeout = (lane: string, providerId = 'google-patents-corpus'): SearchLaneDiagnostic => ({
@@ -54,5 +54,56 @@ describe('describeLaneDiagnostics', () => {
 
   it('uses singular wording for a single lane', () => {
     expect(describeLaneDiagnostics([timeout('vector_probe')], 'deep')[0]).toContain('1 retrieval lane timed out')
+  })
+})
+
+describe('didSemanticLaneRun', () => {
+  const successfulProvider = {
+    providerId: 'google-patents-corpus',
+    label: 'Stored Google Patents Corpus',
+    enabled: true,
+    requested: true,
+    resultCount: 20,
+  }
+
+  it('does not mistake an available API key for a completed vector lane', () => {
+    expect(didSemanticLaneRun({
+      hasEmbeddingKey: true,
+      hasSemanticQueries: true,
+      providerStats: [successfulProvider],
+      laneDiagnostics: [{
+        providerId: 'google-patents-corpus',
+        lane: 'vector_search',
+        reason: 'error',
+        detail: 'Voyage 429',
+      }],
+    })).toBe(false)
+  })
+
+  it('counts a healthy provider when another provider vector lane fails', () => {
+    expect(didSemanticLaneRun({
+      hasEmbeddingKey: true,
+      hasSemanticQueries: true,
+      providerStats: [
+        successfulProvider,
+        { ...successfulProvider, providerId: 'indian-corpus', resultCount: 5 },
+      ],
+      laneDiagnostics: [{ providerId: 'indian-corpus', lane: 'vector_search', reason: 'timeout' }],
+    })).toBe(true)
+  })
+
+  it('requires both credentials and a semantic query', () => {
+    expect(didSemanticLaneRun({
+      hasEmbeddingKey: false,
+      hasSemanticQueries: true,
+      providerStats: [successfulProvider],
+      laneDiagnostics: [],
+    })).toBe(false)
+    expect(didSemanticLaneRun({
+      hasEmbeddingKey: true,
+      hasSemanticQueries: false,
+      providerStats: [successfulProvider],
+      laneDiagnostics: [],
+    })).toBe(false)
   })
 })

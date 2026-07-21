@@ -1,3 +1,5 @@
+import type { ExternalAiUsageContext } from '@/lib/external-ai-usage'
+
 export type PatentSearchProviderId =
   | 'indian-corpus'
   | 'pqai-corpus'
@@ -113,6 +115,8 @@ export interface PatentSearchQueryPlan {
   explicitFilters: PatentSearchFilters
   searchVariants: string[]
   retrievalQueries?: PatentRetrievalQuery[]
+  /** Literal alternatives within a group are OR-ed; every group must match. */
+  literalMatchGroups?: PatentSearchLiteralMatchGroup[]
   llmExpanded: boolean
   confidence: number
   warnings: string[]
@@ -167,6 +171,14 @@ export interface PatentSearchRequest {
    * caller can say so instead of reporting an empty result as a finding.
    */
   laneDiagnostics?: SearchLaneDiagnostic[]
+  /** Optional billing/observability identity for external embedding/rerank calls. */
+  externalAiUsage?: ExternalAiUsageContext
+}
+
+export interface PatentSearchLiteralMatchGroup {
+  id?: string
+  label?: string
+  terms: string[]
 }
 
 /** One lane (vector probe / full-text / field / metadata) that failed or timed out. */

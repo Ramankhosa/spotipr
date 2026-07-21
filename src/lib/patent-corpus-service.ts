@@ -1671,6 +1671,7 @@ type EmbeddingRequestOptions = {
   timeoutMs?: number
   maxAttempts?: number
   traceId?: string
+  externalAiUsage?: import('@/lib/external-ai-usage').ExternalAiUsageContext
 }
 
 function logOpenAISearchEmbedding(
@@ -1889,6 +1890,7 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    const requestStartedAt = Date.now()
     try {
       const response = await fetch('https://api.voyageai.com/v1/embeddings', {
         method: 'POST',
@@ -1902,6 +1904,18 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
       if (!response.ok) {
         const responseBody = await response.text()
         lastError = new Error(`Voyage embedding request failed: ${response.status} ${responseBody.slice(0, 500)}`)
+        const { recordExternalAiUsage } = await import('@/lib/external-ai-usage')
+        await recordExternalAiUsage(options.externalAiUsage, {
+          provider: 'voyage',
+          operation: 'embedding',
+          model: PATENT_CORPUS_EMBEDDING_MODEL,
+          status: 'FAILED',
+          inputCount: inputs.length,
+          latencyMs: Date.now() - requestStartedAt,
+          attempt: attempt + 1,
+          error: lastError.message,
+        })
+        ;(lastError as Error & { externalUsageRecorded?: boolean }).externalUsageRecorded = true
         if (attempt < maxAttempts - 1 && shouldRetryVoyageEmbedding(response.status)) {
           const retryAfter = Number(response.headers.get('retry-after') || 0)
           await sleep(retryAfter > 0 ? retryAfter * 1000 : Math.min(30000, 1000 * 2 ** attempt))
@@ -1920,11 +1934,35 @@ export async function requestVoyageEmbeddings(texts: string[], options: Embeddin
       ) {
         throw new Error('Voyage embedding response did not contain the expected vectors.')
       }
+      const { recordExternalAiUsage } = await import('@/lib/external-ai-usage')
+      await recordExternalAiUsage(options.externalAiUsage, {
+        provider: 'voyage',
+        operation: 'embedding',
+        model: PATENT_CORPUS_EMBEDDING_MODEL,
+        status: 'COMPLETED',
+        inputCount: inputs.length,
+        totalTokens: Number.isFinite(Number(json?.usage?.total_tokens)) ? Number(json.usage.total_tokens) : undefined,
+        latencyMs: Date.now() - requestStartedAt,
+        attempt: attempt + 1,
+      })
       // For binary (ubinary) the elements are packed uint8 bytes; callers convert to a
       // pgvector bit string via corpusEmbeddingToLiteral(). For float they are vectors.
       return embeddings as number[][]
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error))
+      if (!(lastError as Error & { externalUsageRecorded?: boolean }).externalUsageRecorded) {
+        const { recordExternalAiUsage } = await import('@/lib/external-ai-usage')
+        await recordExternalAiUsage(options.externalAiUsage, {
+          provider: 'voyage',
+          operation: 'embedding',
+          model: PATENT_CORPUS_EMBEDDING_MODEL,
+          status: 'FAILED',
+          inputCount: inputs.length,
+          latencyMs: Date.now() - requestStartedAt,
+          attempt: attempt + 1,
+          error: lastError.message,
+        })
+      }
       if (attempt < maxAttempts - 1 && (lastError.name === 'AbortError' || /fetch failed|network/i.test(lastError.message))) {
         await sleep(Math.min(30000, 1000 * 2 ** attempt))
         continue
@@ -1951,8 +1989,15 @@ export async function requestCorpusEmbedding(text: string, options: EmbeddingReq
   return embedding
 }
 
-export function requestSearchQueryEmbeddings(texts: string[], context: { traceId?: string } = {}) {
-  return requestCorpusEmbeddings(texts, { purpose: 'search-query', traceId: context.traceId })
+export function requestSearchQueryEmbeddings(
+  texts: string[],
+  context: { traceId?: string; externalAiUsage?: import('@/lib/external-ai-usage').ExternalAiUsageContext } = {}
+) {
+  return requestCorpusEmbeddings(texts, {
+    purpose: 'search-query',
+    traceId: context.traceId,
+    externalAiUsage: context.externalAiUsage,
+  })
 }
 
 export function requestSearchQueryEmbedding(text: string, context: { traceId?: string } = {}) {

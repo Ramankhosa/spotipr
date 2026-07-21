@@ -88,6 +88,18 @@ export const SETTINGS: SettingDefinition[] = [
     envVar: 'PATENT_SEARCH_MAX_VECTOR_QUERIES',
   },
   {
+    key: 'retrieval.ivfflatProbes',
+    label: 'IVFFlat probes per vector query',
+    description:
+      'Number of IVFFlat lists searched by each ANN query. pgvector defaults to 1, which is too recall-light for the 5,000-list patent index; higher values improve recall at the cost of latency.',
+    category: 'retrieval',
+    type: 'int',
+    default: envNumber('PATENT_SEARCH_IVFFLAT_PROBES', 24),
+    min: 1,
+    max: 5000,
+    envVar: 'PATENT_SEARCH_IVFFLAT_PROBES',
+  },
+  {
     key: 'retrieval.textCandidateCap',
     label: 'Full-text candidate cap',
     description: 'Upper bound on rows the full-text lane materialises before ranking.',

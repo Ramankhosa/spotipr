@@ -65,7 +65,7 @@ describe('Thinking models get through the provider stack', () => {
   })
 
   it('OpenAI GPT-5.6 Sol thinking: base model id, max_completion_tokens + reasoning_effort=high, no temperature, output flows back', async () => {
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (_url: unknown, _init: unknown) => ({
       ok: true,
       json: async () => ({
         choices: [{ message: { content: '1. A system comprising a processor configured to receive and classify data.' }, finish_reason: 'stop' }],

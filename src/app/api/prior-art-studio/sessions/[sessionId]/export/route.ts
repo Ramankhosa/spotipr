@@ -4,7 +4,9 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { getOwnedSession } from '@/lib/prior-art-studio/service'
 import { googlePatentsUrl } from '@/lib/prior-art-studio/patent-links'
-import type { StudioPlan, StudioResultFamily } from '@/lib/prior-art-studio/types'
+import type { StudioResultFamily } from '@/lib/prior-art-studio/types'
+import { mergeCanonicalFamilyStates, studioFamilyAliasMap } from '@/lib/prior-art-studio/family-key'
+import { validateStudioPlan } from '@/lib/prior-art-studio/plan-schema'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -41,25 +43,36 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
       prisma.priorArtStudioRun.findFirst({
         where: { sessionId: session.id, status: 'COMPLETE' },
         orderBy: { createdAt: 'desc' },
-        select: { results: true },
+        select: { results: true, planSnapshot: true },
       }),
       prisma.priorArtStudioDocState.findMany({
         where: { sessionId: session.id, tag: { in: ['RELEVANT', 'MAYBE'] } },
       }),
     ])
 
-    if (!docStates.length) {
+    const latestFamilies = Array.isArray(latestRun?.results)
+      ? latestRun.results as unknown as StudioResultFamily[]
+      : []
+    const canonicalDocStates = mergeCanonicalFamilyStates(docStates, studioFamilyAliasMap(latestFamilies))
+    if (!canonicalDocStates.length) {
       return NextResponse.json({ error: 'No documents are tagged Relevant or Maybe yet.' }, { status: 400 })
     }
 
-    const plan = session.plan as unknown as StudioPlan
-    const latestFamilies = (Array.isArray(latestRun?.results) ? latestRun?.results : []) as unknown as StudioResultFamily[]
+    const currentPlan = validateStudioPlan(session.plan)
+    const snapshotPlan = latestRun ? validateStudioPlan(latestRun.planSnapshot) : null
+    const plan = currentPlan.success ? currentPlan.plan : snapshotPlan?.success ? snapshotPlan.plan : null
+    if (!plan) {
+      return NextResponse.json(
+        { error: 'No valid saved plan or run snapshot is available for export.', code: 'INVALID_STUDIO_PLAN' },
+        { status: 422 }
+      )
+    }
     const familyByKey = new Map(latestFamilies.map(f => [f.familyKey, f]))
     const rankByKey = new Map(latestFamilies.map((f, i) => [f.familyKey, i]))
 
     // Relevant first, then Maybe; within a tag, by rank in the latest run;
     // tagged families no longer present in the latest run's results go last.
-    const ordered = [...docStates].sort((a, b) => {
+    const ordered = [...canonicalDocStates].sort((a, b) => {
       if (a.tag !== b.tag) return a.tag === 'RELEVANT' ? -1 : 1
       const rankA = rankByKey.get(a.familyKey) ?? Number.MAX_SAFE_INTEGER
       const rankB = rankByKey.get(b.familyKey) ?? Number.MAX_SAFE_INTEGER
@@ -111,9 +124,11 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
           family?.title || "(not in the latest run's results)",
           TAG_LABEL[state.tag || ''] || state.tag || '',
           ...plan.elements.map(element => {
-            const cell = family?.elementCells?.[element.id]
-            if (!family || !family.elementCells) return 'not scored'
-            if (!cell) return 'NONE'
+            if (!family) return 'UNASSESSED'
+            const status = family.elementAssessmentStatus || (family.elementCells ? 'ASSESSED' : 'UNASSESSED')
+            if (status !== 'ASSESSED') return status
+            const cell = family.elementCells?.[element.id]
+            if (!cell) return 'UNAVAILABLE'
             const terms = cell.matchedTerms?.length ? ` — terms: ${cell.matchedTerms.join(', ')}` : ''
             return `${cell.verdict}${terms}`
           }),
@@ -122,7 +137,7 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
       const note = [
         'Verdicts are categorical (STRONG / PART / WEAK / NONE) from literal term presence plus semantic similarity. ' +
           '"claims"-tier assessments read the claim text; "abstract"-tier read only title and abstract and are a similarity signal, not a claim mapping. ' +
-          '"not scored" means the document ranked outside the per-run element-scoring window.',
+          '"UNASSESSED" means the document ranked outside the per-run element-scoring window; "UNAVAILABLE" means scoring failed. Neither is a NONE finding.',
       ]
       const comparisonSheet = XLSX.utils.aoa_to_sheet([header, ...rows, [], note])
       comparisonSheet['!cols'] = [

@@ -5,10 +5,12 @@
 import { prisma } from '@/lib/prisma'
 import { Prisma, TaskCode } from '@prisma/client'
 import { patentSearchOrchestrator } from '@/lib/patent-search'
-import type { NormalizedPatentResult, SearchLaneDiagnostic } from '@/lib/patent-search/types'
+import type { NormalizedPatentResult, PatentSearchProviderStats, SearchLaneDiagnostic } from '@/lib/patent-search/types'
 import { hasSearchEmbeddingApiKey } from '@/lib/patent-corpus-service'
 import { compileStudioPlan } from './compiler'
 import { scoreElements } from './element-scoring'
+import { canonicalStudioFamilyKey } from './family-key'
+import { trackServiceUsage } from '@/lib/service-usage-tracker'
 import {
   activeTerms,
   emptyStudioPlan,
@@ -546,6 +548,33 @@ export function describeLaneDiagnostics(
   return warnings
 }
 
+/**
+ * An API key only says the semantic lane was available to attempt. Count it as
+ * having run when at least one requested Studio corpus provider completed its
+ * vector lane; a provider whose `vector_search` failed may still return lexical
+ * results and therefore look successful at the provider level.
+ */
+export function didSemanticLaneRun(input: {
+  hasEmbeddingKey: boolean
+  hasSemanticQueries: boolean
+  providerStats: PatentSearchProviderStats[]
+  laneDiagnostics: SearchLaneDiagnostic[]
+}): boolean {
+  if (!input.hasEmbeddingKey || !input.hasSemanticQueries) return false
+  const failedVectorProviders = new Set(
+    input.laneDiagnostics
+      .filter(diagnostic => diagnostic.lane === 'vector_search')
+      .map(diagnostic => String(diagnostic.providerId))
+  )
+  return input.providerStats.some(stat =>
+    STUDIO_PROVIDER_SET.has(String(stat.providerId)) &&
+    stat.requested &&
+    stat.enabled &&
+    !stat.error &&
+    !failedVectorProviders.has(String(stat.providerId))
+  )
+}
+
 function toDateString(value: string | Date | null | undefined): string | null {
   if (!value) return null
   const date = value instanceof Date ? value : new Date(value)
@@ -555,6 +584,7 @@ function toDateString(value: string | Date | null | undefined): string | null {
 export async function runStudioPlan(input: {
   sessionId: string
   userId: string
+  tenantId?: string
   plan: StudioPlan
   planVersion: number
   requestHeaders: Record<string, string>
@@ -604,6 +634,12 @@ export async function runStudioPlan(input: {
       candidateLimit: CANDIDATE_LIMIT,
       requestHeaders: input.requestHeaders,
       laneDiagnostics,
+      externalAiUsage: input.tenantId ? {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        operationId: input.existingRunId || input.sessionId,
+        sessionId: input.sessionId,
+      } : undefined,
     }),
   ])
 
@@ -647,6 +683,7 @@ export async function runStudioPlan(input: {
   let corpusRows: Array<{
     publicationNumber: string
     familyId: string | null
+    applicationNumberRaw: string | null
     title: string | null
     abstract: string | null
     abstractOriginal: string | null
@@ -659,6 +696,7 @@ export async function runStudioPlan(input: {
         select: {
           publicationNumber: true,
           familyId: true,
+          applicationNumberRaw: true,
           title: true,
           abstract: true,
           abstractOriginal: true,
@@ -672,8 +710,11 @@ export async function runStudioPlan(input: {
       )
     }
   }
-  const familyByPub = new Map(corpusRows.map(r => [r.publicationNumber, r.familyId || null]))
-  const familyKeyOf = (pub: string) => familyByPub.get(pub) || pub
+  const familyIdentityByPub = new Map(corpusRows.map(r => [r.publicationNumber, r]))
+  const familyKeyOf = (pub: string) => {
+    const identity = familyIdentityByPub.get(pub)
+    return canonicalStudioFamilyKey(identity?.familyId, pub, identity?.applicationNumberRaw)
+  }
   const textByPub = new Map(
     corpusRows.map(r => [
       r.publicationNumber,
@@ -841,6 +882,7 @@ export async function runStudioPlan(input: {
   let newFamilyCount = 0
   const families = familyOrder.map(key => {
     const family = familyMap.get(key)!
+    if (input.plan.elements.length) family.elementAssessmentStatus = 'UNASSESSED'
     family.isNew = previousKeys.size > 0 && !previousKeys.has(key)
     if (family.isNew) newFamilyCount += 1
     return family
@@ -852,15 +894,29 @@ export async function runStudioPlan(input: {
   if (input.plan.elements.length && families.length) {
     try {
       const graded = families.slice(0, ELEMENT_GRID_LIMIT)
-      const cells = await scoreElements({
+      const assessment = await scoreElements({
         elements: input.plan.elements,
         publicationNumbers: graded.map(f => f.publicationNumber),
+        externalAiUsage: input.tenantId ? {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          operationId: input.existingRunId || input.sessionId,
+          sessionId: input.sessionId,
+        } : undefined,
       })
-      for (const family of graded) {
-        const perDoc = cells[family.publicationNumber]
-        if (perDoc) family.elementCells = perDoc
+      if (!assessment.semanticAvailable) {
+        for (const family of graded) family.elementAssessmentStatus = 'UNAVAILABLE'
+        elementWarnings.push(
+          'Element evidence is unavailable because semantic element scoring did not complete. Blank cells are not findings about what the documents teach.'
+        )
+      } else {
+        for (const family of graded) {
+          const perDoc = assessment.cells[family.publicationNumber]
+          family.elementAssessmentStatus = perDoc ? 'ASSESSED' : 'UNAVAILABLE'
+          if (perDoc) family.elementCells = perDoc
+        }
       }
-      const scoredCount = graded.filter(f => f.elementCells).length
+      const scoredCount = graded.filter(f => f.elementAssessmentStatus === 'ASSESSED').length
       if (scoredCount === 0) {
         elementWarnings.push(
           'Element evidence could not be computed for any document — the Element Grid is empty for this run, not "no teaching found".'
@@ -868,6 +924,9 @@ export async function runStudioPlan(input: {
       }
     } catch (error) {
       console.warn('[PriorArtStudio] Element scoring failed:', error)
+      for (const family of families.slice(0, ELEMENT_GRID_LIMIT)) {
+        family.elementAssessmentStatus = 'UNAVAILABLE'
+      }
       elementWarnings.push(
         `Element evidence was not computed (${error instanceof Error ? error.message : 'scoring failed'}). The Element Grid is unavailable for this run — treat blank cells as "not assessed", not as "no teaching".`
       )
@@ -884,11 +943,23 @@ export async function runStudioPlan(input: {
   // and falls back to text/trigram. Studio would then show "meaning-only: 0" as
   // though it were a finding about the art, when in fact the lane never ran.
   // Say so loudly instead — a wrong zero is worse than an error here.
-  const semanticLaneRan = hasSearchEmbeddingApiKey()
+  const embeddingKeyAvailable = hasSearchEmbeddingApiKey()
+  const semanticLaneRan = didSemanticLaneRun({
+    hasEmbeddingKey: embeddingKeyAvailable,
+    hasSemanticQueries: Boolean(
+      compiled.queryPlan.semanticQuery || compiled.queryPlan.retrievalQueries?.length
+    ),
+    providerStats: searchResponse.providerStats || [],
+    laneDiagnostics,
+  })
   const laneWarnings: string[] = []
-  if (!semanticLaneRan) {
+  if (!embeddingKeyAvailable) {
     laneWarnings.push(
       'The meaning-based lane did NOT run (no embedding API key configured), so these results come from keyword matching alone. The lane counts and vocabulary-gap figure below are not meaningful for this run, and recall across the worldwide corpus is severely reduced.'
+    )
+  } else if (!semanticLaneRan) {
+    laneWarnings.push(
+      'The meaning-based lane did NOT complete on any enabled corpus provider. Any keyword results are still shown, but meaning-only recall and the vocabulary-gap figure are not valid for this run.'
     )
   }
 
@@ -1013,6 +1084,30 @@ export async function runStudioPlan(input: {
     { planHash: compiled.planHash, gateCounts, booleanPreview: compiled.booleanPreview } as unknown as Prisma.InputJsonValue
   )
 
+  if (input.tenantId) {
+    try {
+      await trackServiceUsage({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        serviceType: 'NOVELTY_SEARCH',
+        operationId: run.id,
+        operationType: 'prior_art_studio_search_complete',
+        isCompleted: true,
+        metadata: {
+          sessionId: input.sessionId,
+          depth,
+          resultCount: ranked.length,
+          familyCount: poolFamilyKeys.size,
+          durationMs,
+        },
+      })
+    } catch (trackingError) {
+      // Usage recording must be visible operationally but must not convert a
+      // completed attorney search into a failed run.
+      console.error('[PriorArtStudio] Failed to record completed-run usage:', trackingError)
+    }
+  }
+
   return {
     runId: run.id,
     planVersion: input.planVersion,
@@ -1042,11 +1137,12 @@ export const STUDIO_RUN_STALE_MS = 10 * 60 * 1000
 export async function startStudioRun(input: {
   sessionId: string
   userId: string
+  tenantId?: string
   plan: StudioPlan
   planVersion: number
   requestHeaders: Record<string, string>
   depth?: 'deep' | 'fast'
-}): Promise<{ runId: string }> {
+}): Promise<{ runId: string; existing: boolean }> {
   const depth: 'deep' | 'fast' = input.depth === 'fast' ? 'fast' : 'deep'
   // Refuse unrunnable plans synchronously so the route answers 400 instead of
   // parking a FAILED row the user has to poll to discover.
@@ -1055,18 +1151,30 @@ export async function startStudioRun(input: {
     throw new Error(compiled.warnings[0])
   }
 
-  const placeholder = await prisma.priorArtStudioRun.create({
-    data: {
-      sessionId: input.sessionId,
-      planVersion: input.planVersion,
-      planSnapshot: input.plan as unknown as Prisma.InputJsonValue,
-      planHash: compiled.planHash,
-      gateCounts: {} as Prisma.InputJsonValue,
-      results: [] as unknown as Prisma.InputJsonValue,
-      status: 'RUNNING',
-      depth,
-    },
-  })
+  let placeholder
+  try {
+    placeholder = await prisma.priorArtStudioRun.create({
+      data: {
+        sessionId: input.sessionId,
+        planVersion: input.planVersion,
+        planSnapshot: input.plan as unknown as Prisma.InputJsonValue,
+        planHash: compiled.planHash,
+        gateCounts: {} as Prisma.InputJsonValue,
+        results: [] as unknown as Prisma.InputJsonValue,
+        status: 'RUNNING',
+        depth,
+      },
+    })
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === 'P2002') {
+      const existing = await prisma.priorArtStudioRun.findFirst({
+        where: { sessionId: input.sessionId, status: 'RUNNING' },
+        orderBy: { createdAt: 'desc' },
+      })
+      if (existing) return { runId: existing.id, existing: true }
+    }
+    throw error
+  }
 
   setTimeout(() => {
     void runStudioPlan({ ...input, depth, existingRunId: placeholder.id }).catch(async error => {
@@ -1092,7 +1200,7 @@ export async function startStudioRun(input: {
     })
   }, 0)
 
-  return { runId: placeholder.id }
+  return { runId: placeholder.id, existing: false }
 }
 
 /** Rebuild the client payload from a stored COMPLETE run row. */

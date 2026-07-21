@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { appendTrail, draftStudioPlan, getOwnedSession } from '@/lib/prior-art-studio/service'
 import { renderBooleanPreview } from '@/lib/prior-art-studio/compiler'
+import { validateStudioPlan } from '@/lib/prior-art-studio/plan-schema'
 import type { Prisma } from '@prisma/client'
 
 export const runtime = 'nodejs'
@@ -45,14 +46,23 @@ export async function POST(request: NextRequest, { params }: { params: { session
       existingTitle: session.title !== 'Untitled search' ? session.title : undefined,
       requestHeaders: headersToRecord(request),
     })
+    const validation = validateStudioPlan(draft.plan)
+    if (!validation.success) {
+      console.error('[PriorArtStudio] Query generator returned an invalid plan:', validation.fields)
+      return NextResponse.json(
+        { error: 'The query generator returned an invalid search plan. Nothing was saved.', code: 'INVALID_GENERATED_PLAN' },
+        { status: 502 }
+      )
+    }
+    const plan = validation.plan
 
     const updated = await prisma.priorArtStudioSession.update({
       where: { id: session.id },
       data: {
-        plan: draft.plan as unknown as Prisma.InputJsonValue,
+        plan: plan as unknown as Prisma.InputJsonValue,
         planVersion: session.planVersion + 1,
         seedText: disclosure.slice(0, 60000),
-        ...(draft.plan.title ? { title: draft.plan.title } : {}),
+        ...(plan.title ? { title: plan.title } : {}),
       },
     })
 
@@ -60,7 +70,7 @@ export async function POST(request: NextRequest, { params }: { params: { session
       session.id,
       'COPILOT',
       `model:${draft.modelCode || 'unknown'}`,
-      `Drafted ${draft.plan.blocks.length} blocks, ${draft.plan.elements.length} elements, ${draft.plan.cpc.length} CPC suggestions from disclosure${draft.usedFallbackTask ? ' (task-fallback routing)' : ''}`,
+      `Drafted ${plan.blocks.length} blocks, ${plan.elements.length} elements, ${plan.cpc.length} CPC suggestions from disclosure${draft.usedFallbackTask ? ' (task-fallback routing)' : ''}`,
       { previousPlanVersion: session.planVersion } as unknown as Prisma.InputJsonValue
     )
 
@@ -68,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: { session
       plan: updated.plan,
       planVersion: updated.planVersion,
       title: updated.title,
-      booleanPreview: renderBooleanPreview(draft.plan),
+      booleanPreview: renderBooleanPreview(plan),
       modelCode: draft.modelCode,
     })
   } catch (error) {

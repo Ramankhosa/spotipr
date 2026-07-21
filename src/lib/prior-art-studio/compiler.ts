@@ -204,6 +204,9 @@ export function compileStudioPlan(plan: StudioPlan): CompiledStudioPlan {
   const filters = buildFilters(plan)
   const elements = plan.elements.map(e => e.text.trim()).filter(Boolean)
   const semanticQuery = [plan.conceptSummary || plan.title, ...elements].filter(Boolean).join('. ')
+  const literalMatchGroups = requiredBlocks(plan)
+    .map(block => ({ id: block.id, label: block.label, terms: activeTerms(block.terms) }))
+    .filter(group => group.terms.length)
 
   const queryPlan: Partial<PatentSearchQueryPlan> = {
     originalQuery: plan.title || plan.conceptSummary || searchQuery,
@@ -216,6 +219,7 @@ export function compileStudioPlan(plan: StudioPlan): CompiledStudioPlan {
     excludedTerms: activeTerms(plan.notTerms),
     cpcCodes: activeCpcCodes(plan),
     retrievalQueries: retrievalQueries.length ? retrievalQueries : undefined,
+    literalMatchGroups: literalMatchGroups.length ? literalMatchGroups : undefined,
     fieldFilters: filters,
     llmExpanded: false,
     warnings: [],

@@ -206,17 +206,20 @@ export function ResultsList({
               )}
 
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {elements.length > 0 && family.elementCells && (
+                {elements.length > 0 && (
                   <span className="inline-flex gap-1" title="Per-element evidence — see the Element Grid tab">
                     {elements.map((element, i) => {
-                      const verdict = family.elementCells?.[element.id]?.verdict || 'NONE'
+                      const assessmentStatus = family.elementAssessmentStatus || (family.elementCells ? 'ASSESSED' : 'UNASSESSED')
+                      const verdict = assessmentStatus === 'ASSESSED' ? family.elementCells?.[element.id]?.verdict : undefined
                       return (
                         <span
                           key={element.id}
-                          className={`inline-block w-6 rounded border px-0.5 text-center font-mono text-[8px] leading-[13px] ${VERDICT_CLASSES[verdict]}`}
-                          title={`E${i + 1}: ${element.text} — ${verdict}`}
+                          className={`inline-block w-6 rounded border px-0.5 text-center font-mono text-[8px] leading-[13px] ${
+                            verdict ? VERDICT_CLASSES[verdict] : 'border-border bg-muted text-muted-foreground'
+                          }`}
+                          title={`E${i + 1}: ${element.text} — ${verdict || (assessmentStatus === 'UNAVAILABLE' ? 'assessment unavailable' : 'not assessed')}`}
                         >
-                          E{i + 1}
+                          {verdict ? `E${i + 1}` : assessmentStatus === 'UNAVAILABLE' ? '!' : '?'}
                         </span>
                       )
                     })}

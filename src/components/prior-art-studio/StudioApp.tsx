@@ -430,11 +430,22 @@ export function StudioApp() {
             : `Restored family of ${family.publicationNumber}`
       setTrail(t => [localTrailEntry('TAG', label), ...t])
       try {
-        const data = await api<{ saturation: StudioSaturation }>(`/sessions/${active.id}/docs`, {
+        const data = await api<{ saturation: StudioSaturation; familyAssessment?: StudioResultFamily }>(`/sessions/${active.id}/docs`, {
           method: 'POST',
           body: JSON.stringify({ familyKey: family.familyKey, publicationNumber: family.publicationNumber, ...patch }),
         })
         if (data.saturation) setSaturation(data.saturation)
+        if (data.familyAssessment) {
+          setRun(current => current ? {
+            ...current,
+            families: current.families.map(item =>
+              item.familyKey === data.familyAssessment!.familyKey ? data.familyAssessment! : item
+            ),
+          } : current)
+          setReaderFamily(current =>
+            current?.familyKey === data.familyAssessment!.familyKey ? data.familyAssessment! : current
+          )
+        }
       } catch (err) {
         toast({ title: 'Mark not saved', description: err instanceof Error ? err.message : String(err), variant: 'error' })
       }
@@ -891,6 +902,21 @@ export function StudioApp() {
             />
           </div>
 
+          {mode === 'studio' && (
+            <button
+              type="button"
+              onClick={toggleRail}
+              title={railCollapsed ? 'Show the search plan (key [)' : 'Hide the search plan (key [)'}
+              aria-label={railCollapsed ? 'Show the search plan' : 'Hide the search plan'}
+              aria-controls="studio-search-plan"
+              aria-expanded={!railCollapsed}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {railCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              <span className="hidden xl:inline">{railCollapsed ? 'Show search plan' : 'Hide search plan'}</span>
+            </button>
+          )}
+
           <button
             type="button"
             title="Keyboard shortcuts (?)"
@@ -1045,7 +1071,10 @@ export function StudioApp() {
         >
           {/* left rail — the plan, scrolls independently; collapsible so the
               results can take the full width during triage */}
-          <div className={`space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1 ${railCollapsed ? 'hidden' : ''}`}>
+          <div
+            id="studio-search-plan"
+            className={`space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1 ${railCollapsed ? 'hidden' : ''}`}
+          >
             {seedCard}
             <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
               <QueryCanvas plan={active.plan} disabled={drafting || running} onChange={savePlan} />
@@ -1082,8 +1111,9 @@ export function StudioApp() {
                 onClick={toggleRail}
                 title={railCollapsed ? 'Show the plan panel (key [)' : 'Hide the plan panel — full width for results (key [)'}
                 aria-label={railCollapsed ? 'Show the plan panel' : 'Hide the plan panel'}
+                aria-controls="studio-search-plan"
                 aria-expanded={!railCollapsed}
-                className="mr-1 hidden shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:block"
+                className="mr-1 shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 {railCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
               </button>

@@ -3,6 +3,12 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import { appendTrail, getOwnedSession } from '@/lib/prior-art-studio/service'
 import type { Prisma } from '@prisma/client'
+import {
+  canonicalStudioFamilyKey,
+  studioFamilyAliasMap,
+  studioFamilyKeyForState,
+} from '@/lib/prior-art-studio/family-key'
+import type { StudioResultFamily } from '@/lib/prior-art-studio/types'
 
 export const runtime = 'nodejs'
 
@@ -18,11 +24,32 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
   const session = await getOwnedSession(params.sessionId, auth.user.id)
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
-  const theories = await prisma.priorArtStudioTheory.findMany({
-    where: { sessionId: session.id },
-    orderBy: { createdAt: 'desc' },
+  const [theories, latestRun] = await Promise.all([
+    prisma.priorArtStudioTheory.findMany({
+      where: { sessionId: session.id },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.priorArtStudioRun.findFirst({
+      where: { sessionId: session.id, status: 'COMPLETE' },
+      orderBy: { createdAt: 'desc' },
+      select: { results: true },
+    }),
+  ])
+  const families = Array.isArray(latestRun?.results)
+    ? latestRun.results as unknown as StudioResultFamily[]
+    : []
+  const aliases = studioFamilyAliasMap(families)
+  return NextResponse.json({
+    theories: theories.map(theory => ({
+      ...theory,
+      familyKeys: theory.publicationNumbers.map((publicationNumber, index) =>
+        studioFamilyKeyForState(
+          { familyKey: theory.familyKeys[index] || publicationNumber, publicationNumber },
+          aliases,
+        )
+      ),
+    })),
   })
-  return NextResponse.json({ theories })
 }
 
 export async function POST(request: NextRequest, { params }: { params: { sessionId: string } }) {
@@ -35,12 +62,15 @@ export async function POST(request: NextRequest, { params }: { params: { session
 
   const body = await request.json().catch(() => ({}))
   const kind = typeof body?.kind === 'string' && KINDS.has(body.kind) ? body.kind : null
-  const publicationNumbers = Array.isArray(body?.publicationNumbers)
+  const publicationNumbers: string[] = Array.isArray(body?.publicationNumbers)
     ? body.publicationNumbers.map((p: unknown) => String(p).slice(0, 60)).filter(Boolean).slice(0, 8)
     : []
-  const familyKeys = Array.isArray(body?.familyKeys)
+  const suppliedFamilyKeys: string[] = Array.isArray(body?.familyKeys)
     ? body.familyKeys.map((p: unknown) => String(p).slice(0, 120)).filter(Boolean).slice(0, 8)
     : []
+  const familyKeys = publicationNumbers.map((publicationNumber, index) =>
+    canonicalStudioFamilyKey(suppliedFamilyKeys[index], publicationNumber)
+  )
   const motivation = typeof body?.motivation === 'string' ? body.motivation.trim().slice(0, 4000) : ''
 
   if (!kind) return NextResponse.json({ error: 'kind must be ANTICIPATION or COMBINATION.' }, { status: 400 })
