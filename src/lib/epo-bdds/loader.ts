@@ -426,7 +426,24 @@ export class EpFullTextLoader {
     const batch = this.buffer
     this.buffer = []
 
-    await prisma.$transaction(async tx => { await this.writeBatch(tx as typeof prisma, batch) })
+    // Default interactive-transaction timeout is 5s; a cold-cache batch against
+    // the 46M-row table exceeded it on prod (128s observed). Give batches a
+    // generous budget — the guard against runaway queries is the step-timing
+    // warning below, not the transaction timeout.
+    await prisma.$transaction(
+      async tx => { await this.writeBatch(tx as typeof prisma, batch) },
+      { timeout: 300_000, maxWait: 30_000 }
+    )
+  }
+
+  /** Log any batch step that runs suspiciously long, so a bad query plan names
+   *  itself in the run output instead of surfacing as an opaque timeout. */
+  private async timed<T>(step: string, fn: () => Promise<T>): Promise<T> {
+    const startedAt = Date.now()
+    const result = await fn()
+    const ms = Date.now() - startedAt
+    if (ms > 10_000) console.warn(`    [slow] ${step} took ${(ms / 1000).toFixed(1)}s`)
+    return result
   }
 
   private async writeBatch(tx: typeof prisma, batch: EpFullTextRecord[]): Promise<void> {
@@ -443,7 +460,7 @@ export class EpFullTextLoader {
     const descChars = stored.map(s => s.descriptionCharCount)
     const descComplete = stored.map(s => s.descriptionComplete)
 
-    const result = await tx.$executeRaw(Prisma.sql`
+    const result = await this.timed('insert epo_ep_fulltext', () => tx.$executeRaw(Prisma.sql`
       INSERT INTO "epo_ep_fulltext" (
         "publicationNumber", "publicationNumberKey", "kind", "lang", "publicationYear",
         "claimsText", "claimsCount", "claimsComplete",
@@ -470,11 +487,15 @@ export class EpFullTextLoader {
         "textPolicy"           = EXCLUDED."textPolicy",
         "sourceDeliveryId"     = EXCLUDED."sourceDeliveryId",
         "updatedAt"            = now()
-    `)
+    `))
     this.stats.loaded += Number(result)
 
-    if (this.options.fillLocalPatents !== false) await this.fillExisting(tx, batch, stored)
-    if (this.options.createMissingRows !== false) await this.createMissing(tx, batch, stored)
+    if (this.options.fillLocalPatents !== false) {
+      await this.timed('fill local_patents', () => this.fillExisting(tx, batch, stored))
+    }
+    if (this.options.createMissingRows !== false) {
+      await this.timed('create local_patents', () => this.createMissing(tx, batch, stored))
+    }
   }
 
   /**
@@ -517,7 +538,12 @@ export class EpFullTextLoader {
         ${keys}::text[], ${claims}::text[], ${descriptions}::text[],
         ${claimsCompleteness}::text[], ${descCompleteness}::text[]
       ) AS s(key, claims, description, claims_completeness, desc_completeness)
-      WHERE lp."publicationNumberKey" = s.key
+      -- The redundant = ANY() qual is deliberate: it gives the planner an
+      -- indexable predicate on the 46M-row table even if it declines to drive
+      -- the UNNEST join through the unique index (standing rule: every
+      -- local_patents predicate must be index-served).
+      WHERE lp."publicationNumberKey" = ANY(${keys})
+        AND lp."publicationNumberKey" = s.key
         AND ((lp."claimsText" IS NULL AND s.claims IS NOT NULL)
           OR (lp."descriptionText" IS NULL AND s.description IS NOT NULL))
       RETURNING lp."id"
