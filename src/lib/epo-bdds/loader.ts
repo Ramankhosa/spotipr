@@ -446,12 +446,25 @@ export class EpFullTextLoader {
     return result
   }
 
-  private async writeBatch(tx: typeof prisma, batch: EpFullTextRecord[]): Promise<void> {
+  private async writeBatch(tx: typeof prisma, rawBatch: EpFullTextRecord[]): Promise<void> {
+    // Dedup by publicationNumber, keeping the LAST occurrence (a correction
+    // republished in the same weekly package supersedes the original). Two rows
+    // with the same key in one INSERT would abort the whole batch with
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+    const byPub = new Map<string, EpFullTextRecord>()
+    for (const record of rawBatch) byPub.set(record.publicationNumber, record)
+    const batch = Array.from(byPub.values())
+
     const pubs = batch.map(r => r.publicationNumber)
     const keys = batch.map(r => publicationNumberKey(r.publicationNumber))
     const kinds = batch.map(r => r.kind || null)
     const langs = batch.map(r => r.claimsLang || r.lang || null)
-    const years = batch.map(r => (r.publicationDate ? Number(r.publicationDate.slice(0, 4)) : null))
+    // Guard with the same regex add() uses: Number("garb") is NaN, and NaN
+    // cannot serialize into ::int[] — one malformed date-publ would abort the batch.
+    const years = batch.map(r =>
+      r.publicationDate && /^\d{4}/.test(r.publicationDate)
+        ? Number(r.publicationDate.slice(0, 4))
+        : null)
     const stored = batch.map(r => this.applyPolicy(r))
     const claims = stored.map(s => s.claimsText)
     const claimCounts = stored.map(s => s.claimsCount)

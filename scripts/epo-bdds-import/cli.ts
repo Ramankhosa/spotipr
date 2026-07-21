@@ -37,6 +37,7 @@ import {
   type ResolvedProduct,
 } from '../../src/lib/epo-bdds/catalog'
 import { createReadStream } from 'node:fs'
+import { Prisma } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
 import { listEntries, readEntryText, streamEntries, summarizeComposition } from '../../src/lib/epo-bdds/archive'
 import { DiskGuard, describeSnapshot } from '../../src/lib/epo-bdds/disk-guard'
@@ -462,8 +463,13 @@ async function runBackfill(args: Args) {
         await assertPipelineHeadroom(guard, item.sizeBytes, reservedBytes, `before ${file.fileName}`)
         await markStarted(file.id)
         const destination = join(args.dataDir, file.fileName)
+        // Re-acquire per file, NOT the token captured at run start: EPO tokens
+        // live ~1 hour and a full-year run takes several. getAccessToken()
+        // caches and refreshes 60s before expiry, so this is a no-op until the
+        // token actually needs renewing.
+        const freshToken = await getAccessToken()
         const downloaded = await downloadFile(
-          token,
+          freshToken,
           { productId: file.productId, deliveryId: file.deliveryId, fileId: file.fileId },
           destination,
           { diskGuard: guard, expectedBytes: item.sizeBytes }
@@ -537,6 +543,44 @@ async function runBackfill(args: Args) {
       },
     }
   )
+
+  // Refresh per-year coverage from what is ACTUALLY stored (epo_ep_fulltext is
+  // the source of truth, the ledger says what is still pending). Derived, not
+  // tracked, so it self-heals: a year is IMPORTED only when no dated file for
+  // it remains unloaded.
+  if (lane === 'ep-fulltext' && selected.length) {
+    const productId = selected[0].id
+    const policy = args.textPolicy ?? 'claims-full+description-5k'
+    await prisma.$executeRaw(Prisma.sql`
+      INSERT INTO "epo_ep_coverage"
+        ("id", "productId", "publicationYear", "status", "textPolicy", "loadedDocs", "importedAt", "updatedAt")
+      SELECT 'epc_' || ${productId}::text || '_' || f."publicationYear"::text,
+             ${productId}, f."publicationYear",
+             (CASE WHEN COALESCE(p.pending, 0) = 0 THEN 'IMPORTED' ELSE 'PARTIAL' END)::"EpoCoverageStatus",
+             ${policy}, f.docs, now(), now()
+      FROM (
+        SELECT "publicationYear", count(*)::int AS docs
+        FROM "epo_ep_fulltext" WHERE "publicationYear" IS NOT NULL
+        GROUP BY 1
+      ) f
+      LEFT JOIN (
+        SELECT COALESCE("pubYearFrom", "pubYearTo") AS year, count(*)::int AS pending
+        FROM "epo_bdds_file"
+        WHERE "lane" = 'ep-fulltext'
+          AND "status" NOT IN ('LOADED', 'SKIPPED')
+          AND COALESCE("pubYearFrom", "pubYearTo") IS NOT NULL
+        GROUP BY 1
+      ) p ON p.year = f."publicationYear"
+      ON CONFLICT ("productId", "publicationYear") DO UPDATE SET
+        "status"     = EXCLUDED."status",
+        "loadedDocs" = EXCLUDED."loadedDocs",
+        "textPolicy" = EXCLUDED."textPolicy",
+        "importedAt" = EXCLUDED."importedAt",
+        "updatedAt"  = now()
+    `).catch(error => {
+      console.warn(`  (coverage refresh failed non-fatally: ${error instanceof Error ? error.message : error})`)
+    })
+  }
 
   heading('RUN SUMMARY')
   console.log(`  files processed : ${result.processed}`)
