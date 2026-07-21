@@ -14294,8 +14294,21 @@ async function handleUnlockFigureSequence(user: any, patentId: string, data: any
 // Image Editor Handlers
 // ============================================================================
 
+// Locates the DiagramSource for a figure, optionally pinned to a language variant.
+async function findDiagramForFigure(sessionId: string, id: any, language?: unknown) {
+  return prisma.diagramSource.findFirst({
+    where: {
+      sessionId,
+      figureNo: Number(id),
+      ...(typeof language === 'string' && language.trim()
+        ? { language: language.trim().toLowerCase() }
+        : {})
+    }
+  })
+}
+
 async function handleUpdateImage(user: any, patentId: string, data: any) {
-  const { sessionId, type, id, imageBase64, filename, preserveOriginal } = data
+  const { sessionId, type, id, imageBase64, filename, preserveOriginal, language } = data
 
   if (!sessionId || !type || !id || !imageBase64) {
     return NextResponse.json({ 
@@ -14367,10 +14380,11 @@ async function handleUpdateImage(user: any, patentId: string, data: any) {
     const publicServeUrl = `/api/projects/${patent.projectId}/patents/${patentId}/upload?filename=${encodeURIComponent(sanitizedFilename)}`
 
     if (type === 'diagram') {
-      // Get current diagram
-      const diagram = await prisma.diagramSource.findFirst({
-        where: { sessionId, figureNo: Number(id) }
-      })
+      // Language narrows to the right per-language variant; fall back to the
+      // unfiltered lookup so a mismatch can never fail a save that used to work.
+      const diagram =
+        (await findDiagramForFigure(sessionId, id, language)) ||
+        (await findDiagramForFigure(sessionId, id, undefined))
 
       if (!diagram) {
         return NextResponse.json({ error: 'Diagram not found' }, { status: 404 })
@@ -14458,7 +14472,7 @@ async function handleUpdateImage(user: any, patentId: string, data: any) {
 }
 
 async function handleRestoreOriginalImage(user: any, patentId: string, data: any) {
-  const { sessionId, type, id } = data
+  const { sessionId, type, id, language } = data
 
   if (!sessionId || !type || !id) {
     return NextResponse.json({ 
@@ -14481,9 +14495,9 @@ async function handleRestoreOriginalImage(user: any, patentId: string, data: any
     }
 
     if (type === 'diagram') {
-      const diagram = await prisma.diagramSource.findFirst({
-        where: { sessionId, figureNo: Number(id) }
-      })
+      const diagram =
+        (await findDiagramForFigure(sessionId, id, language)) ||
+        (await findDiagramForFigure(sessionId, id, undefined))
 
       if (!diagram) {
         return NextResponse.json({ error: 'Diagram not found' }, { status: 404 })

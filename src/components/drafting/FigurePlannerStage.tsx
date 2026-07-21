@@ -79,8 +79,8 @@ import {
   filterComponentsByScopeForFigures
 } from '@/lib/scope-recommendations'
 
-// Dynamic import for ImageEditor (opens miniPaint for image editing)
-const ImageEditor = dynamic(() => import('@/components/ui/ImageEditor'), {
+// Dynamic import for the in-browser canvas image editor (Konva-based; ssr:false is required)
+const ImageEditor = dynamic(() => import('@/components/ui/canvas-editor'), {
   ssr: false,
   loading: () => (
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center">
@@ -370,6 +370,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     imagePath: string
     title: string
     originalImagePath?: string | null
+    language?: string  // diagram language variant, so edits hit the right DiagramSource row
   } | null>(null)
   const [savingEditedImage, setSavingEditedImage] = useState(false)
 
@@ -1165,20 +1166,21 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   }
 
   // === IMAGE EDITOR FUNCTIONS ===
-  
-  // Open miniPaint Image Editor
+
+  // Open the in-browser image editor
   const openImageEditor = (
     type: 'diagram' | 'sketch',
     id: string | number,
     imagePath: string,
     title: string,
-    originalImagePath?: string | null
+    originalImagePath?: string | null,
+    language?: string
   ) => {
-    setEditingImage({ type, id, imagePath, title, originalImagePath })
+    setEditingImage({ type, id, imagePath, title, originalImagePath, language })
     setImageEditorOpen(true)
   }
 
-  // Handle save from miniPaint Image Editor (receives base64 directly)
+  // Handle save from the image editor (receives base64 directly)
   const handleImageEditorSave = async (base64: string, imageObject: any) => {
     if (!editingImage) return
     
@@ -1197,6 +1199,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           sessionId: session?.id,
           type: editingImage.type,
           id: editingImage.id,
+          language: editingImage.language,
           imageBase64: base64,
           filename: `${editingImage.title.replace(/[^a-zA-Z0-9]/g, '_')}_edited.png`,
           preserveOriginal: true
@@ -1204,8 +1207,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       })
       
       if (!updateRes.ok) {
-        const errData = await updateRes.json()
-        throw new Error(errData.error || 'Failed to save edited image')
+        const errData = await updateRes.json().catch(() => ({}))
+        const detail = Array.from(new Set([errData.error, errData.reason].filter(Boolean))).join(' — ')
+        throw new Error(detail || `Failed to save edited image (HTTP ${updateRes.status})`)
       }
       
       // Close editor and refresh
@@ -1220,6 +1224,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save edited image')
+      // Re-throw so the editor can show the reason inline; its modal covers this
+      // component's error banner, so a swallowed failure looks like nothing happened.
+      throw err
     } finally {
       setSavingEditedImage(false)
     }
@@ -1250,7 +1257,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           action: 'restore_original_image',
           sessionId: session?.id,
           type: editingImage.type,
-          id: editingImage.id
+          id: editingImage.id,
+          language: editingImage.language
         })
       })
       
@@ -2802,6 +2810,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           {diagramImageAnalysisLabel(imageAnalysisStatus)}
                         </Badge>
                       )}
+                      {selectedSource.originalImagePath && (
+                        <span title="This figure was manually edited. Re-rendering the PlantUML source will overwrite the manual edits.">
+                          <Badge variant="outline" className="text-xs text-amber-700 bg-amber-50 border-amber-200">
+                            Edited
+                          </Badge>
+                        </span>
+                      )}
                     </div>
                     <Badge variant="outline" className="text-xs text-ai-graphite-500">
                       {selectedSource.imageUploadedAt ? 'Rendered' : selectedSource.plantumlCode ? 'Code Ready' : 'Pending'}
@@ -2845,6 +2860,26 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                       <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                         <Button variant="secondary" size="sm" onClick={() => setExpandedFigNo(figNo)}>
                           <Eye className="w-4 h-4 mr-2" /> Expand
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={!serverImageUrl || !!processingStatus[diagramKey]}
+                          title="Edit this figure (erase, draw, add labels)"
+                          onClick={() => {
+                            if (serverImageUrl) {
+                              openImageEditor(
+                                'diagram',
+                                figNo,
+                                serverImageUrl,
+                                `Fig ${figNo}`,
+                                selectedSource.originalImagePath,
+                                (selectedSource.language || 'en').toLowerCase()
+                              )
+                            }
+                          }}
+                        >
+                          <Paintbrush className="w-4 h-4 mr-2" /> Edit
                         </Button>
                       </div>
                     </>
@@ -4155,7 +4190,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                                   openImageEditor('sketch', sketch.id, sketchImageUrl, sketch.title, sketch.originalImagePath)
                                 }
                               }}
-                              title="Edit this sketch in miniPaint"
+                              title="Edit this sketch"
                             >
                               <Paintbrush className="w-4 h-4" />
                             </Button>
@@ -4215,7 +4250,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               }
                             }}
                             disabled={!sketchImageUrl || sketch.status !== 'SUCCESS'}
-                            title="Edit image in miniPaint"
+                            title="Edit image"
                           >
                             <Paintbrush className={`w-5 h-5 ${sketchImageUrl && sketch.status === 'SUCCESS' ? 'text-ai-blue-500' : 'text-gray-300'}`} />
                           </Button>
@@ -4718,7 +4753,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         </div>
       )}
 
-      {/* MINIPAINT IMAGE EDITOR - Opens miniPaint with image preloaded */}
+      {/* IN-BROWSER IMAGE EDITOR (erase, draw, add text labels) */}
       {imageEditorOpen && editingImage && (
         <ImageEditor
           imageSrc={editingImage.imagePath}
