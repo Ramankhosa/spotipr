@@ -373,7 +373,10 @@ export class EpFullTextLoader {
   private readonly textPolicy: EpTextPolicy
 
   constructor(private readonly options: EpLoadOptions) {
-    this.batchSize = options.batchSize ?? 200
+    // 200 -> 1000: each batch pays a fixed GIN-flush cost on the 8.6 GB tsv
+    // index, so fewer, larger batches move the same rows for ~5x less index
+    // overhead. An archive of ~4,300 records goes from ~22 transactions to ~5.
+    this.batchSize = options.batchSize ?? 1000
     this.textPolicy = options.textPolicy ?? 'claims-full+description-5k'
   }
 
@@ -446,7 +449,27 @@ export class EpFullTextLoader {
     return result
   }
 
+  /**
+   * Per-transaction tuning for bulk writes. All SET LOCAL, so they revert on
+   * commit and never leak into the app's connections.
+   *
+   * synchronous_commit=off is the big one: it stops each batch waiting on an
+   * fsync. The risk is that an OS-level crash could lose the last few committed
+   * batches — acceptable here precisely because the ledger makes re-running an
+   * archive idempotent, so the recovery is "run the same command again".
+   *
+   * gin_pending_list_limit raises how much the GIN index buffers before a
+   * synchronous flush. Those flushes on the 8.6 GB local_patents tsv index are
+   * what the [slow] 20-80s batch timings were measuring.
+   */
+  private async tuneForBulkWrite(tx: typeof prisma): Promise<void> {
+    await tx.$executeRawUnsafe(`SET LOCAL synchronous_commit = off`)
+    await tx.$executeRawUnsafe(`SET LOCAL gin_pending_list_limit = '32MB'`)
+  }
+
   private async writeBatch(tx: typeof prisma, rawBatch: EpFullTextRecord[]): Promise<void> {
+    await this.tuneForBulkWrite(tx)
+
     // Dedup by publicationNumber, keeping the LAST occurrence (a correction
     // republished in the same weekly package supersedes the original). Two rows
     // with the same key in one INSERT would abort the whole batch with

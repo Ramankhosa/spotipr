@@ -47,6 +47,33 @@ function openZip(zipPath: string): Promise<ZipFile> {
   })
 }
 
+/**
+ * Open a nested archive straight from memory.
+ *
+ * An EP weekly delivery holds ~5,400 per-publication zips of roughly 1 MB. The
+ * original implementation spilled each one to a temp file and read it back —
+ * about 11 GB of avoidable disk I/O per archive, on top of the 6 GB archive
+ * itself, and it dominated wall-clock. They are small enough to hold in memory
+ * one at a time.
+ */
+function openZipFromBuffer(buffer: Buffer): Promise<ZipFile> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true }, (error, zipFile) => {
+      if (error || !zipFile) reject(error ?? new Error('Could not open nested archive'))
+      else resolve(zipFile)
+    })
+  })
+}
+
+/** Nested archives above this go to a temp file rather than memory. */
+const MAX_IN_MEMORY_NESTED_BYTES = 256 * 1024 * 1024
+
+async function readStreamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks)
+}
+
 function openEntryStream(zipFile: ZipFile, entry: Entry): Promise<Readable> {
   return new Promise((resolve, reject) => {
     zipFile.openReadStream(entry, (error, stream) => {
@@ -161,6 +188,13 @@ export async function* streamEntries(
       }
 
       if (isNestedArchive(entry.fileName)) {
+        // In memory when it fits (the common case by far: ~1 MB per-publication
+        // zips), on disk only for the rare oversized one.
+        if (entry.uncompressedSize <= MAX_IN_MEMORY_NESTED_BYTES) {
+          const buffer = await readStreamToBuffer(await openEntryStream(zipFile, entry))
+          yield* streamEntriesFromBuffer(buffer, predicate, `${path}!/`)
+          continue
+        }
         const scratch = await mkdtemp(join(tmpdir(), 'epo-nested-'))
         const innerPath = join(scratch, 'inner.zip')
         try {
@@ -169,6 +203,56 @@ export async function* streamEntries(
         } finally {
           await rm(scratch, { recursive: true, force: true }).catch(() => {})
         }
+        continue
+      }
+
+      if (!predicate(described)) continue // never decompressed
+      yield {
+        path,
+        uncompressedSize: entry.uncompressedSize,
+        stream: await openEntryStream(zipFile, entry),
+      }
+    }
+  } finally {
+    zipFile.close()
+  }
+}
+
+/**
+ * Same walk as streamEntries, over an archive already held in memory. Used for
+ * the per-publication zips nested inside a delivery.
+ */
+async function* streamEntriesFromBuffer(
+  buffer: Buffer,
+  predicate: (entry: ArchiveEntry) => boolean,
+  prefix: string
+): AsyncGenerator<StreamedEntry> {
+  const zipFile = await openZipFromBuffer(buffer)
+
+  const pending: Entry[] = []
+  await new Promise<void>((resolve, reject) => {
+    zipFile.on('entry', (entry: Entry) => {
+      if (!isDirectory(entry)) pending.push(entry)
+      zipFile.readEntry()
+    })
+    zipFile.on('end', () => resolve())
+    zipFile.on('error', reject)
+    zipFile.readEntry()
+  })
+
+  try {
+    for (const entry of pending) {
+      const path = prefix + entry.fileName
+      const described: ArchiveEntry = {
+        path,
+        compressedSize: entry.compressedSize,
+        uncompressedSize: entry.uncompressedSize,
+        extension: extensionOf(entry.fileName),
+      }
+
+      if (isNestedArchive(entry.fileName)) {
+        const inner = await readStreamToBuffer(await openEntryStream(zipFile, entry))
+        yield* streamEntriesFromBuffer(inner, predicate, `${path}!/`)
         continue
       }
 
