@@ -59,6 +59,19 @@ export function parseFileSliceInfo(fileName: string): FileSliceInfo {
   const authorityMatch = name.match(AUTHORITY_PATTERN)
   const authority = authorityMatch ? authorityMatch[1] : null
 
+  // EP full-text weekly archive: EPRTBJV<yyyy><wwwwww>001001.zip.
+  // The year is IN THE FILENAME, which matters because the back file groups
+  // these under per-year deliveries ("14.12 EP full-text data 2024") whose
+  // names carry no yyyy/ww stamp. Reading it here is what makes every year back
+  // to 1978 reachable by --year, not just the two the front file still lists.
+  const epWeekly = name.match(/^EPRTBJV(\d{4})(\d{6})/i)
+  if (epWeekly) {
+    const year = Number(epWeekly[1])
+    if (plausibleYear(year)) {
+      return { authority, pubYearFrom: year, pubYearTo: year, deliveryYear: year }
+    }
+  }
+
   const pubDateMatch = name.match(PUBDATE_PATTERN)
   if (pubDateMatch) {
     const year = Number(pubDateMatch[1])

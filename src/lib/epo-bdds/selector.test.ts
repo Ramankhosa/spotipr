@@ -18,6 +18,20 @@ describe('parseFileSliceInfo', () => {
     expect(slice.pubYearTo).toBe(2025)
   })
 
+  it('reads the year out of an EP weekly archive filename', () => {
+    // EPRTBJV<yyyy><wwwwww>001001.zip. The back file groups these under
+    // per-year deliveries ("14.12 EP full-text data 2024") whose NAME has no
+    // yyyy/ww stamp, so without this every pre-2025 year looked unreachable.
+    const slice = parseFileSliceInfo('EPRTBJV2024000052001001.zip')
+    expect(slice.pubYearFrom).toBe(2024)
+    expect(slice.pubYearTo).toBe(2024)
+  })
+
+  it('reads the year for the oldest EP archives too', () => {
+    expect(parseFileSliceInfo('EPRTBJV1978000001001001.zip').pubYearTo).toBe(1978)
+    expect(parseFileSliceInfo('EPRTBJV2000000030001001.zip').pubYearTo).toBe(2000)
+  })
+
   it('treats a year-week stamp as the DELIVERY date, not publication coverage', () => {
     // docdb_xml_bck_202607_… was produced in 2026 week 07 but contains
     // publications spanning decades. Using it as a publication bound would
