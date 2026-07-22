@@ -185,3 +185,17 @@ function sectionText(paragraphs: Paragraph[], sections: SectionSpan[], key: stri
   const from = Number(span.fromId.slice(1)), to = Number(span.toId.slice(1))
   return paragraphs.filter(p => p.index >= from && p.index <= to).map(p => p.text).join('\n\n')
 }
+
+/**
+ * Extract the claims section from a complete specification (Indian practice
+ * files claims inside the complete specification). Returns '' when no claims
+ * heading is found or the section parses to no claim elements — callers treat
+ * that as "claims not present, ask for a separate upload".
+ */
+export function extractClaimsText(specText: string): string {
+  const paragraphs = splitParagraphs(specText)
+  const sections = splitSections(paragraphs)
+  const text = sectionText(paragraphs, sections, 'claims')
+  if (!text.trim()) return ''
+  return parseClaimElements(text).length > 0 ? text : ''
+}

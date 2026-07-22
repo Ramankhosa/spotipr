@@ -102,7 +102,9 @@ export default function OfficeActionWorkspacePage() {
   const [selectedObjectionId, setSelectedObjectionId] = useState<string | null>(null)
   const [tab, setTab] = useState<'objection' | 'evidence' | 'strategy' | 'draft'>('objection')
   const [busy, setBusy] = useState<string | null>(null)     // 'ingest' | 'prepare' | 'export' | 'save'
+  const [prepareStep, setPrepareStep] = useState<string | null>(null)
   const [showCaseFile, setShowCaseFile] = useState(false)
+  const [showAddDocument, setShowAddDocument] = useState(false)
   const [preview, setPreview] = useState<{ lint: any; html: string } | null>(null)
   const [sourceTab, setSourceTab] = useState<string>('FER')
   const [highlight, setHighlight] = useState<string | null>(null)
@@ -158,30 +160,83 @@ export default function OfficeActionWorkspacePage() {
       }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not read the report')
-      toast({ title: `Report read — ${data.objectionCount} objection${data.objectionCount === 1 ? '' : 's'} found`, variant: 'success' })
+      if (data.warning) {
+        toast({ title: `Report read — ${data.objectionCount} objection${data.objectionCount === 1 ? '' : 's'} extracted`, description: data.warning, variant: 'warning' })
+      } else {
+        toast({ title: `Report read — ${data.objectionCount} objection${data.objectionCount === 1 ? '' : 's'} found`, variant: 'success' })
+      }
+      setShowAddDocument(false)
       await load()
     } catch (err) {
       toast({ title: 'Could not process the report', description: err instanceof Error ? err.message : undefined, variant: 'error' })
     } finally { setBusy(null) }
   }
 
+  // Prepare runs as a background job (a real FER is ~3 LLM calls per objection,
+  // far beyond any request timeout) — start it, then poll for progress.
   const prepare = async () => {
+    const anyWork = replies.some(r => r.approved || r.bodyText)
+    if (view?.latestDraft && anyWork) {
+      const ok = window.confirm('Re-preparing drafts a fresh reply: your edits and approvals on the current draft will be replaced. Continue?')
+      if (!ok) return
+    }
     setBusy('prepare')
+    setPrepareStep('Starting…')
     try {
       const res = await fetch(`/api/office-actions/${caseId}/prepare`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: '{}'
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Preparation failed')
-      toast({
-        title: `Reply prepared — ${data.objectionsDrafted} sections drafted`,
-        description: data.judgmentFlags?.length ? `${data.judgmentFlags.length} objection(s) need your judgment.` : undefined,
-        variant: 'success'
-      })
-      setTab('draft')
-      await load()
+      if (data.alreadyRunning) toast({ title: 'Preparation already running — showing its progress', variant: 'warning' })
+
+      const deadline = Date.now() + 30 * 60_000
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 4000))
+        const sres = await fetch(`/api/office-actions/${caseId}/prepare`, { headers: authHeaders() })
+        if (!sres.ok) continue
+        const s = (await sres.json()).job
+        if (!s) continue
+        if (s.status === 'COMPLETED') {
+          const r = s.result || {}
+          toast({
+            title: `Reply prepared — ${r.objectionsDrafted ?? ''} sections drafted`,
+            description: [
+              r.judgmentFlags?.length ? `${r.judgmentFlags.length} objection(s) need your judgment.` : '',
+              r.draftErrors ? `${r.draftErrors} section(s) failed to draft — write or edit them manually.` : ''
+            ].filter(Boolean).join(' ') || undefined,
+            variant: r.draftErrors ? 'warning' : 'success'
+          })
+          setTab('draft')
+          await load()
+          return
+        }
+        if (s.status === 'FAILED' || s.status === 'CANCELLED') {
+          throw new Error(s.lastError || 'Preparation failed')
+        }
+        setPrepareStep(s.currentStep || 'Working…')
+        // Refresh the workspace occasionally so finished sections appear as they land.
+        if (s.status === 'PROCESSING') void load()
+      }
+      throw new Error('Preparation is taking unusually long — reopen the case later; the run continues in the background.')
     } catch (err) {
       toast({ title: 'Could not prepare the reply', description: err instanceof Error ? err.message : undefined, variant: 'error' })
+    } finally { setBusy(null); setPrepareStep(null) }
+  }
+
+  const dismissObjection = async (objectionId: string, dismiss: boolean) => {
+    setBusy('save')
+    try {
+      const res = await fetch(`/api/office-actions/${caseId}/objections`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ objectionId, dismiss })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not update the objection')
+      toast({ title: dismiss ? 'Objection dismissed — it will not be required in the reply' : 'Objection restored', variant: 'success' })
+      await load()
+    } catch (err) {
+      toast({ title: 'Could not update the objection', description: err instanceof Error ? err.message : undefined, variant: 'error' })
     } finally { setBusy(null) }
   }
 
@@ -263,7 +318,11 @@ export default function OfficeActionWorkspacePage() {
     )
   }
 
-  const hasReport = view.case.documents.length > 0
+  // Only a successfully parsed communication counts — a failed upload must
+  // bring the attorney straight back to the intake panel, not a dead end.
+  const completedDocs = view.case.documents.filter(d => d.parseStatus === 'COMPLETED')
+  const failedDocs = view.case.documents.filter(d => d.parseStatus === 'FAILED')
+  const hasReport = completedDocs.length > 0
   const hasInvention = Boolean(view.case.specificationText && view.case.claimsText)
 
   return (
@@ -273,17 +332,32 @@ export default function OfficeActionWorkspacePage() {
         approved={approvedCount}
         total={replies.length || objections.length}
         onOpenCaseFile={() => setShowCaseFile(true)}
+        onAddDocument={() => setShowAddDocument(true)}
         onPrepare={prepare}
         onPreview={previewReply}
         onExport={exportDocx}
         busy={busy}
+        prepareStep={prepareStep}
         hasDraft={Boolean(view.latestDraft)}
         hasReport={hasReport}
       />
 
       {!hasReport ? (
-        <IntakePanel busy={busy === 'ingest'} onIngest={ingestFer} hasInvention={hasInvention}
-          onOpenCaseFile={() => setShowCaseFile(true)} />
+        <>
+          {failedDocs.length > 0 && (
+            <div className="max-w-2xl mx-auto w-full px-4 pt-6">
+              <div className="border border-destructive/40 bg-destructive/5 rounded-md px-4 py-3 text-sm flex gap-2">
+                <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" aria-hidden />
+                <div>
+                  <span className="font-medium">The previous upload could not be read</span>
+                  <span className="text-muted-foreground"> ({failedDocs.length === 1 ? '1 failed attempt' : `${failedDocs.length} failed attempts`}). Try again below — upload a text-based PDF of the report, or paste its text.</span>
+                </div>
+              </div>
+            </div>
+          )}
+          <IntakePanel busy={busy === 'ingest'} onIngest={ingestFer} hasInvention={hasInvention}
+            onOpenCaseFile={() => setShowCaseFile(true)} />
+        </>
       ) : (
         <div className="flex flex-1 min-h-0">
           {/* objection rail */}
@@ -296,28 +370,31 @@ export default function OfficeActionWorkspacePage() {
                 const r = replyFor(o.id)
                 const active = selected?.id === o.id
                 const judgment = o.strategyJson?.judgmentFlag
+                const dismissed = o.status === 'DISMISSED'
                 return (
                   <li key={o.id}>
                     <button
                       onClick={() => { setSelectedObjectionId(o.id); setTab('objection') }}
-                      className={`w-full text-left border rounded-md px-3 py-2.5 transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'}`}
+                      className={`w-full text-left border rounded-md px-3 py-2.5 transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'} ${dismissed ? 'opacity-55' : ''}`}
                     >
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded ${CODE_COLORS[o.canonicalCode] || CODE_COLORS.OTHER}`}>
                           {CODE_LABELS[o.canonicalCode] || o.canonicalCode}{o.subTypeId ? ` · ${o.subTypeId}` : ''}
                         </span>
-                        {judgment && <AlertTriangle className="w-3.5 h-3.5 text-destructive shrink-0" aria-label="Needs your judgment" />}
+                        {judgment && !dismissed && <AlertTriangle className="w-3.5 h-3.5 text-destructive shrink-0" aria-label="Needs your judgment" />}
                       </div>
                       <div className="text-xs text-muted-foreground truncate">
                         {o.localBasis || '—'}{o.claimsAffected?.length ? ` · claims ${compactRange(o.claimsAffected)}` : ''}
                       </div>
                       <div className="mt-1.5 flex items-center gap-1.5 text-[11px]">
-                        {r?.approved
-                          ? <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium"><CheckCircle2 className="w-3 h-3" aria-hidden /> Approved</span>
-                          : r
-                            ? <span className="text-primary font-medium">Drafted — review</span>
-                            : <span className="text-muted-foreground">Awaiting preparation</span>}
-                        {!o.quoteVerified && <span className="text-destructive font-medium">· quote unverified</span>}
+                        {dismissed
+                          ? <span className="text-muted-foreground font-medium">Dismissed — not in the reply</span>
+                          : r?.approved
+                            ? <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium"><CheckCircle2 className="w-3 h-3" aria-hidden /> Approved</span>
+                            : r
+                              ? <span className="text-primary font-medium">Drafted — review</span>
+                              : <span className="text-muted-foreground">Awaiting preparation</span>}
+                        {!o.quoteVerified && !dismissed && <span className="text-destructive font-medium">· quote unverified</span>}
                       </div>
                     </button>
                   </li>
@@ -334,11 +411,18 @@ export default function OfficeActionWorkspacePage() {
                 reply={replyFor(selected.id)}
                 citations={(view.case.documents.flatMap(d => d.citations)).filter(c => (selected.citationLabels || []).includes(c.label))}
                 citedDocs={view.citedDocuments}
+                includedAmendments={(view.latestDraft?.amendedClaimsJson?.claims || []) as any[]}
                 tab={tab}
                 setTab={setTab}
                 busy={busy}
                 onApprove={(approved) => patchDraft({ objectionReplies: [{ objectionId: selected.id, approved }] }, approved ? 'Section approved' : 'Approval withdrawn')}
                 onSaveText={(bodyText) => patchDraft({ objectionReplies: [{ objectionId: selected.id, bodyText }] }, 'Draft updated — re-approve when ready')}
+                onDismiss={(dismiss) => dismissObjection(selected.id, dismiss)}
+                onToggleAmendment={(a, include) => patchDraft(
+                  { amendedClaims: [include
+                    ? { claimNumber: a.claimNumber, markedText: a.markedText, cleanText: a.cleanText, basisRefs: a.basisRefs || [] }
+                    : { claimNumber: a.claimNumber, remove: true }] },
+                  include ? `Claim ${a.claimNumber} amendment included in the reply` : `Claim ${a.claimNumber} amendment excluded from the reply`)}
                 onJump={jumpToSource}
               />
             ) : (
@@ -362,8 +446,29 @@ export default function OfficeActionWorkspacePage() {
         <CaseFilePanel caseId={caseId} onClose={() => { setShowCaseFile(false); void load() }} />
       )}
 
+      {showAddDocument && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 pt-[8vh]" onClick={e => { if (e.target === e.currentTarget) setShowAddDocument(false) }}>
+          <div className="bg-background border rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" role="dialog" aria-label="Add a communication">
+            <div className="px-5 py-3.5 border-b flex items-center justify-between">
+              <h2 className="font-semibold">Add another office communication</h2>
+              <button onClick={() => setShowAddDocument(false)} aria-label="Close" className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+            </div>
+            <IntakePanel busy={busy === 'ingest'} onIngest={ingestFer} hasInvention={hasInvention}
+              onOpenCaseFile={() => { setShowAddDocument(false); setShowCaseFile(true) }} />
+          </div>
+        </div>
+      )}
+
       {preview && (
-        <PreviewModal preview={preview} onClose={() => setPreview(null)} onExport={exportDocx} busy={busy === 'export'} />
+        <PreviewModal
+          preview={preview}
+          onClose={() => setPreview(null)}
+          onExport={exportDocx}
+          busy={busy === 'export'}
+          agent={(view.latestDraft?.complianceJson as any)?.agent || {}}
+          onSaveAgent={(agent) => patchDraft({ agent })}
+          onConfirmForm3={() => patchDraft({ formsStatus: { form3Filed: true } }, 'Form 3 noted as filed').then(() => previewReply())}
+        />
       )}
     </div>
   )
@@ -374,8 +479,8 @@ export default function OfficeActionWorkspacePage() {
 
 function DeadlineStrip(props: {
   view: CaseView; approved: number; total: number
-  onOpenCaseFile: () => void; onPrepare: () => void; onPreview: () => void; onExport: () => void
-  busy: string | null; hasDraft: boolean; hasReport: boolean
+  onOpenCaseFile: () => void; onAddDocument: () => void; onPrepare: () => void; onPreview: () => void; onExport: () => void
+  busy: string | null; prepareStep: string | null; hasDraft: boolean; hasReport: boolean
 }) {
   const { view } = props
   const primary = view.deadlines.find(d => d.consequence) || view.deadlines[0]
@@ -426,9 +531,13 @@ function DeadlineStrip(props: {
           </Button>
           {props.hasReport && (
             <>
+              <Button variant="outline" size="sm" onClick={props.onAddDocument} disabled={props.busy !== null}
+                title="Upload a further communication (subsequent report, hearing notice…)">
+                <Upload className="w-4 h-4 mr-1.5" aria-hidden /> Add document
+              </Button>
               <Button size="sm" onClick={props.onPrepare} disabled={props.busy !== null}>
                 {props.busy === 'prepare'
-                  ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Preparing…</>
+                  ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> {props.prepareStep || 'Preparing…'}</>
                   : <><Sparkles className="w-4 h-4 mr-1.5" aria-hidden /> {props.hasDraft ? 'Re-prepare reply' : 'Prepare reply'}</>}
               </Button>
               <Button variant="outline" size="sm" onClick={props.onPreview} disabled={props.busy !== null || !props.hasDraft}>
@@ -509,15 +618,20 @@ function ObjectionWorkbench(props: {
   reply: any | undefined
   citations: CitationRow[]
   citedDocs: CitedDocView[]
+  includedAmendments: any[]
   tab: 'objection' | 'evidence' | 'strategy' | 'draft'
   setTab: (t: 'objection' | 'evidence' | 'strategy' | 'draft') => void
   busy: string | null
   onApprove: (approved: boolean) => void
   onSaveText: (text: string) => void
+  onDismiss: (dismiss: boolean) => void
+  onToggleAmendment: (amendment: any, include: boolean) => void
   onJump: (tab: string, passage?: string) => void
 }) {
   const { objection: o, reply } = props
   const strategy = o.strategyJson || null
+  const dismissed = o.status === 'DISMISSED'
+  const officeNo = (o.analysisJson?.officeNumber as string) || String(o.sortOrder + 1)
   const [editing, setEditing] = useState(false)
   const [draftText, setDraftText] = useState('')
   useEffect(() => { setEditing(false); setDraftText(reply?.bodyText || '') }, [o.id, reply?.bodyText])
@@ -531,9 +645,18 @@ function ObjectionWorkbench(props: {
           <span className={`text-xs font-semibold px-2 py-0.5 rounded shrink-0 ${CODE_COLORS[o.canonicalCode] || CODE_COLORS.OTHER}`}>
             {CODE_LABELS[o.canonicalCode] || o.canonicalCode}
           </span>
-          <span className="truncate">Objection {o.sortOrder + 1}{o.localBasis ? ` · ${o.localBasis}` : ''}</span>
+          <span className="truncate">Objection {officeNo}{o.localBasis ? ` · ${o.localBasis}` : ''}</span>
         </h2>
+        <Button size="sm" variant="outline" onClick={() => props.onDismiss(!dismissed)} disabled={props.busy !== null}
+          title={dismissed ? 'Bring this objection back into the reply' : 'Exclude this card (misparse, duplicate, or handled elsewhere) — the reply will not require it'}>
+          {dismissed ? 'Restore objection' : 'Dismiss'}
+        </Button>
       </div>
+      {dismissed && (
+        <div className="mt-2 border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 rounded-md px-3 py-2 text-sm">
+          Dismissed — this card is excluded from the reply and from the compliance check.
+        </div>
+      )}
       {strategy?.judgmentFlag && (
         <div className="mt-2 border border-destructive/40 bg-destructive/5 rounded-md px-3 py-2 text-sm flex gap-2">
           <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" aria-hidden />
@@ -623,15 +746,30 @@ function ObjectionWorkbench(props: {
                   <div className="space-y-2">
                     {strategy.amendments.map((a: any, i: number) => {
                       const verdict = (strategy.basisVerdicts || []).find((v: any) => v.claimNumber === a.claimNumber)
+                      const included = props.includedAmendments.some((c: any) => c.claimNumber === a.claimNumber)
+                      const passes = verdict?.verdict === 'pass'
                       return (
                         <div key={i} className="border rounded-md px-3 py-2.5">
                           <div className="text-sm font-serif leading-relaxed" dangerouslySetInnerHTML={{ __html: renderMarked(a.markedText, a.claimNumber) }} />
-                          <div className="mt-2 flex items-center gap-2 text-xs">
+                          <div className="mt-2 flex items-center gap-2 text-xs flex-wrap">
                             <span className="text-muted-foreground">Basis: {(a.basisRefs || []).join(', ') || 'none'}</span>
                             {verdict && (
-                              <span className={`font-semibold px-1.5 py-0.5 rounded ${verdict.verdict === 'pass' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'}`}>
-                                Amendment check: {verdict.verdict === 'pass' ? 'within scope ✓' : 'blocked'}
+                              <span className={`font-semibold px-1.5 py-0.5 rounded ${passes ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'}`}>
+                                Amendment check: {passes ? 'within scope ✓' : 'blocked'}
                               </span>
+                            )}
+                            {passes && (
+                              <span className={`px-1.5 py-0.5 rounded ${included ? 'bg-primary/10 text-primary font-medium' : 'bg-secondary text-secondary-foreground'}`}>
+                                {included ? 'In the reply' : 'Not in the reply'}
+                              </span>
+                            )}
+                            {passes && (
+                              <button
+                                className="text-primary underline underline-offset-2 disabled:opacity-50"
+                                disabled={props.busy !== null}
+                                onClick={() => props.onToggleAmendment(a, !included)}>
+                                {included ? 'Exclude from reply' : 'Include in reply'}
+                              </button>
                             )}
                           </div>
                           {verdict && verdict.verdict !== 'pass' && <p className="text-xs text-destructive mt-1">{verdict.note}</p>}
@@ -663,6 +801,12 @@ function ObjectionWorkbench(props: {
                 </>
               ) : (
                 <>
+                  {reply.draftError && !reply.bodyText && (
+                    <div className="mb-2 border border-destructive/40 bg-destructive/5 rounded-md px-3 py-2 text-sm flex gap-2">
+                      <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" aria-hidden />
+                      <div>Drafting this section failed ({reply.draftError}). Write it with &ldquo;Edit&rdquo;, or run &ldquo;Re-prepare reply&rdquo;.</div>
+                    </div>
+                  )}
                   <div className="border rounded-md px-4 py-3 bg-card font-serif text-[15px] leading-relaxed whitespace-pre-wrap">
                     {reply.bodyText || <span className="text-muted-foreground font-sans text-sm">Empty section.</span>}
                   </div>
@@ -671,7 +815,8 @@ function ObjectionWorkbench(props: {
                     {reply.approved ? (
                       <Button size="sm" variant="outline" onClick={() => props.onApprove(false)} disabled={props.busy !== null}>Withdraw approval</Button>
                     ) : (
-                      <Button size="sm" onClick={() => props.onApprove(true)} disabled={props.busy !== null}>
+                      <Button size="sm" onClick={() => props.onApprove(true)} disabled={props.busy !== null || !(reply.bodyText || '').trim()}
+                        title={!(reply.bodyText || '').trim() ? 'Write the section before approving it' : undefined}>
                         <CheckCircle2 className="w-4 h-4 mr-1.5" aria-hidden /> Approve section
                       </Button>
                     )}
@@ -736,7 +881,7 @@ function EvidenceTab(props: { citations: CitationRow[]; citedDocs: CitedDocView[
                           </span>
                           {r.cell?.passage && (
                             <button className="block text-xs text-primary text-left underline underline-offset-2 truncate max-w-full"
-                              onClick={() => props.onJump(chartLabelToTab(r, chart, props.citations), r.cell.passage)}>
+                              onClick={() => props.onJump(c.label, r.cell.passage)}>
                               “{r.cell.passage.slice(0, 90)}{r.cell.passage.length > 90 ? '…' : ''}”
                             </button>
                           )}
@@ -756,10 +901,6 @@ function EvidenceTab(props: { citations: CitationRow[]; citedDocs: CitedDocView[
   )
 }
 
-// The per-citation chart slice belongs to its own citation tab.
-function chartLabelToTab(_row: any, _chart: any, citations: CitationRow[]): string {
-  return citations[0]?.label || 'FER'
-}
 
 // ============================================================================
 // source viewer
@@ -769,7 +910,9 @@ function SourceViewer(props: {
   highlight: string | null; open: boolean; onClose: () => void
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
-  const ferText = props.view.case.documents[0]?.rawText || ''
+  // Show the report actually in play: the most recent successfully parsed one.
+  const parsedDocs = props.view.case.documents.filter(d => d.parseStatus === 'COMPLETED')
+  const ferText = (parsedDocs[parsedDocs.length - 1] || props.view.case.documents[0])?.rawText || ''
   const docs = props.view.citedDocuments.filter(d => d.status === 'available')
 
   const sources: Array<{ id: string; label: string; text: string; heading: string }> = [
@@ -845,6 +988,21 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
   }, [props.caseId])
   useEffect(() => { void load() }, [load])
 
+  const removeDoc = async (documentId: string) => {
+    if (!window.confirm('Remove this document from the case file? Its indexed text is deleted; the invention text re-points to the latest remaining copy.')) return
+    try {
+      const res = await fetch(`/api/office-actions/${props.caseId}/case-documents?documentId=${encodeURIComponent(documentId)}`, {
+        method: 'DELETE', headers: authHeaders()
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not remove the document')
+      toast({ title: 'Document removed', variant: 'success' })
+      await load()
+    } catch (err) {
+      toast({ title: 'Could not remove the document', description: err instanceof Error ? err.message : undefined, variant: 'error' })
+    }
+  }
+
   const submit = async (file?: File) => {
     setSaving(true)
     try {
@@ -891,9 +1049,20 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
                   <span className="min-w-0">
                     <span className="font-medium">{d.kind === 'SUPPLEMENTARY' ? (d.title || 'Supplementary document') : d.kind.toLowerCase()}</span>
                     {d.intentNote && <span className="block text-xs text-muted-foreground truncate">“{d.intentNote}”</span>}
+                    {d.indexStatus !== 'INDEXED' && (
+                      <span className="block text-xs text-amber-600 dark:text-amber-400">Indexing pending — retrieval may be limited until it completes</span>
+                    )}
                   </span>
-                  <span className="text-[11px] shrink-0 px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground">
-                    {d.newMatterSafe ? 'amendment basis' : 'argument / affidavit only'}
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground">
+                      {d.newMatterSafe ? 'amendment basis' : 'argument / affidavit only'}
+                    </span>
+                    <button
+                      className="text-muted-foreground hover:text-destructive"
+                      aria-label="Remove this document"
+                      title="Remove (wrong upload / superseded)"
+                      onClick={() => void removeDoc(d.id)}
+                    ><X className="w-4 h-4" /></button>
                   </span>
                 </li>
               ))}
@@ -908,6 +1077,11 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
             <option value="CLAIMS">As-filed claims</option>
             <option value="SUPPLEMENTARY">Supplementary material (data, declaration…)</option>
           </select>
+          {kind === 'SPECIFICATION' && (
+            <p className="text-xs text-muted-foreground">
+              A complete specification that contains the claims is fine — the claims section is detected and used automatically.
+            </p>
+          )}
           {kind === 'SUPPLEMENTARY' && (
             <Textarea rows={2} value={intent} onChange={e => setIntent(e.target.value)}
               placeholder='How should this be used? e.g. "Comparative efficacy data — for the Section 3(d) objection."' />
@@ -937,8 +1111,19 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
 // ============================================================================
 // preview modal
 
-function PreviewModal(props: { preview: { lint: any; html: string }; onClose: () => void; onExport: () => void; busy: boolean }) {
+function PreviewModal(props: {
+  preview: { lint: any; html: string }
+  onClose: () => void
+  onExport: () => void
+  busy: boolean
+  agent: { name?: string; regNo?: string }
+  onSaveAgent: (agent: { name?: string; regNo?: string }) => Promise<any> | void
+  onConfirmForm3: () => void
+}) {
   const { lint, html } = props.preview
+  const [agentName, setAgentName] = useState(props.agent?.name || '')
+  const [agentRegNo, setAgentRegNo] = useState(props.agent?.regNo || '')
+  const form3Blocked = (lint?.checks || []).some((c: any) => c.id === 'form3' && c.status === 'fail')
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 pt-[6vh]" onClick={e => { if (e.target === e.currentTarget) props.onClose() }}>
       <div className="bg-background border rounded-lg shadow-xl w-full max-w-3xl max-h-[88vh] flex flex-col" role="dialog" aria-label="Reply preview">
@@ -956,10 +1141,32 @@ function PreviewModal(props: { preview: { lint: any; html: string }; onClose: ()
                 <span className="min-w-0">
                   {c.label}
                   {c.detail && <span className="block text-xs text-muted-foreground">{c.detail}</span>}
+                  {c.id === 'form3' && c.status === 'fail' && (
+                    <button className="block text-xs text-primary underline underline-offset-2 mt-0.5" onClick={props.onConfirmForm3}>
+                      Confirm: the updated Form 3 is filed / accompanies this reply
+                    </button>
+                  )}
                 </span>
               </li>
             ))}
           </ul>
+          <div className="flex flex-wrap items-end gap-2 mt-3">
+            <div className="min-w-0">
+              <label className="block text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-0.5" htmlFor="oa-agent-name">Signatory (agent) name</label>
+              <input id="oa-agent-name" className="h-8 w-56 rounded-md border border-input bg-background px-2 text-sm"
+                placeholder="e.g. A. Sharma" value={agentName} onChange={e => setAgentName(e.target.value)} />
+            </div>
+            <div className="min-w-0">
+              <label className="block text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-0.5" htmlFor="oa-agent-reg">Agent reg. no.</label>
+              <input id="oa-agent-reg" className="h-8 w-36 rounded-md border border-input bg-background px-2 text-sm"
+                placeholder="IN/PA-…" value={agentRegNo} onChange={e => setAgentRegNo(e.target.value)} />
+            </div>
+            <Button size="sm" variant="outline"
+              onClick={() => void props.onSaveAgent({ name: agentName, regNo: agentRegNo })}>
+              Save signature block
+            </Button>
+            {form3Blocked && <span className="text-xs text-muted-foreground">Re-run Preview after resolving checks.</span>}
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-5 bg-muted/30">
           {html

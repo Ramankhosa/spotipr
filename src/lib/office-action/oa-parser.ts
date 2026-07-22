@@ -187,6 +187,17 @@ export function buildTriggerDates(parsed: ParsedFer): Record<string, string> {
   return t
 }
 
+/**
+ * Strict ISO yyyy-mm-dd check. `Date.parse` alone is too lax — it accepts
+ * "10/13/2025", whose slice(0,10) then crashes the deadline engine's
+ * parseIsoDate and fails the whole ingest.
+ */
 function isIso(v: string): boolean {
-  return !isNaN(Date.parse(v))
+  return /^\d{4}-\d{2}-\d{2}/.test(v) && !isNaN(Date.parse(v.slice(0, 10)))
+}
+
+/** Exported guard for callers persisting parser dates (e.g. issueDate). */
+export function safeIsoDate(v: string | undefined | null): string | null {
+  if (!v || !isIso(v)) return null
+  return v.slice(0, 10)
 }

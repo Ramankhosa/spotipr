@@ -5,13 +5,16 @@ import { prisma } from '@/lib/prisma'
 /**
  * PATCH /api/office-actions/:caseId/draft
  * Attorney edits over the latest reply draft: approve/un-approve an objection
- * reply, edit its text, or edit a named section. Edits re-open approval
+ * reply, edit its text, edit a named section, tick the forms checklist, or
+ * control the amended claims going into the filing. Edits re-open approval
  * (an edited section must be re-approved before export).
  *
  * Body: {
  *   objectionReplies?: Array<{ objectionId: string; bodyText?: string; approved?: boolean }>
  *   namedSections?: Record<string, string>
  *   formsStatus?: Record<string, boolean>
+ *   amendedClaims?: Array<{ claimNumber: number; remove?: boolean; markedText?: string; cleanText?: string; basisRefs?: string[] }>
+ *   agent?: { name?: string; regNo?: string }
  * }
  */
 export async function PATCH(request: NextRequest, { params }: { params: { caseId: string } }) {
@@ -60,11 +63,41 @@ export async function PATCH(request: NextRequest, { params }: { params: { caseId
   if (body.formsStatus && typeof body.formsStatus === 'object') {
     compliance.formsStatus = { ...(compliance.formsStatus || {}), ...body.formsStatus }
   }
+  if (body.agent && typeof body.agent === 'object') {
+    compliance.agent = {
+      ...(compliance.agent || {}),
+      ...(typeof body.agent.name === 'string' ? { name: body.agent.name } : {}),
+      ...(typeof body.agent.regNo === 'string' ? { regNo: body.agent.regNo } : {})
+    }
+  }
+
+  // Amended-claims control: the attorney decides what goes into the filing —
+  // remove a proposed amendment, edit its text, or add their own.
+  const amended = { ...((draft.amendedClaimsJson as any) || {}) }
+  let claims: any[] = Array.isArray(amended.claims) ? [...amended.claims] : []
+  if (Array.isArray(body.amendedClaims)) {
+    for (const edit of body.amendedClaims) {
+      const n = Number(edit?.claimNumber)
+      if (!n) continue
+      if (edit.remove === true) {
+        claims = claims.filter(c => c.claimNumber !== n)
+        continue
+      }
+      const existing = claims.find(c => c.claimNumber === n)
+      const target = existing || { claimNumber: n, markedText: '', cleanText: '', basisRefs: [] }
+      if (typeof edit.markedText === 'string') target.markedText = edit.markedText
+      if (typeof edit.cleanText === 'string') target.cleanText = edit.cleanText
+      if (Array.isArray(edit.basisRefs)) target.basisRefs = edit.basisRefs.map(String)
+      if (!existing) claims.push(target)
+    }
+    claims.sort((a, b) => a.claimNumber - b.claimNumber)
+  }
 
   const updated = await prisma.oaResponseDraft.update({
     where: { id: draft.id },
     data: {
       sectionsJson: { ...sections, objectionReplies: replies, namedSections } as any,
+      amendedClaimsJson: { ...amended, claims } as any,
       complianceJson: compliance as any
     }
   })

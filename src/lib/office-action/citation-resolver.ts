@@ -276,14 +276,17 @@ function defaultDeps(): ResolverDeps {
 
 /**
  * Fire-and-forget eager resolution, kicked at FER ingest so cited documents are
- * ready by the time the attorney reaches the citation workbench. In production
- * this enqueues an OfficeActionJob for the worker; inline fallback runs directly.
+ * ready by the time the attorney reaches the citation workbench. Enqueues an
+ * OfficeActionJob AND kicks the inline drain — so resolution happens even when
+ * the standalone worker is not running (the lease claim keeps both safe).
  */
 export async function kickCitationResolution(caseId: string, userId: string): Promise<void> {
   try {
     await prisma.officeActionJob.create({
       data: { caseId, userId, jobType: 'RESOLVE_CITATIONS', status: 'QUEUED', payload: { caseId } }
     })
+    const { kickOfficeActionJobsInline } = await import('../office-action-job-service')
+    kickOfficeActionJobsInline('citations')
   } catch (e) {
     console.warn('[OA citation] could not enqueue resolution job:', e instanceof Error ? e.message : e)
   }

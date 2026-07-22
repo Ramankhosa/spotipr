@@ -70,13 +70,18 @@ const PROVIDER_COLORS: Record<string, string> = {
   zai: 'bg-teal-100 text-teal-800 border-teal-200'
 }
 
+// This map is an ALLOW-LIST, not a display detail: the Stages tab and the
+// Configs feature picker both iterate it, so a feature missing here has its
+// stages silently unmanageable even though they exist and resolve at runtime.
+// Add an entry whenever a new featureCode gains WorkflowStage rows.
 const FEATURE_LABELS: Record<string, string> = {
   PATENT_DRAFTING: 'Patent Drafting',
   PRIOR_ART_SEARCH: 'Prior Art Search',
   NOVELTY_SEARCH: 'Novelty Search',
   DIAGRAM_GENERATION: 'Diagram Generation',
   IDEA_BANK: 'Idea Bank',
-  IDEATION: 'Ideation Engine'
+  IDEATION: 'Ideation Engine',
+  OFFICE_ACTION_RESPONSE: 'FER / Office Action Response'
   // Note: Content Generation was removed - all superset section stages
   // (DRAFT_ANNEXURE_*) are now under PATENT_DRAFTING feature
 }
@@ -87,12 +92,14 @@ const NON_LLM_STAGES = [
   'DRAFT_EXPORT'              // Document generation - no LLM
 ]
 
-// Ideation stage metadata - helps Super Admin choose appropriate models
+// Per-stage metadata - helps Super Admin choose appropriate models.
 // Stages marked as 'lightweight' can use faster, cheaper models (Flash, Mini, Haiku)
 // Stages marked as 'advanced' benefit from more capable models (Pro, Sonnet, GPT-4o)
-// NEW PIPELINE: SEED_INPUT → SEMANTIC_GROUNDING → INVENTIVE_FRAMING → 
+// IDEATION PIPELINE: SEED_INPUT → SEMANTIC_GROUNDING → INVENTIVE_FRAMING →
 //   DIMENSION_DISCOVERY → DIMENSION_EXPANSION → IDEA_GENERATION → PRELIMINARY_NOVELTY_ASSESSMENT
-const IDEATION_STAGE_INFO: Record<string, { complexity: 'lightweight' | 'advanced' | 'deprecated'; tip: string }> = {
+// OFFICE ACTION PIPELINE: OA_INTAKE_PARSE → OA_OBJECTION_CLASSIFY →
+//   OA_CITATION_ANALYSIS → OA_STRATEGY → OA_DRAFT_SECTION
+const STAGE_MODEL_GUIDANCE: Record<string, { complexity: 'lightweight' | 'advanced' | 'deprecated'; tip: string }> = {
   'IDEATION_NORMALIZE': {
     complexity: 'lightweight',
     tip: '🔍 Semantic Grounding - understands idea without inventing/reframing - Flash/Mini models work well'
@@ -120,6 +127,38 @@ const IDEATION_STAGE_INFO: Record<string, { complexity: 'lightweight' | 'advance
   'IDEATION_NOVELTY': {
     complexity: 'advanced',
     tip: '🔬 Preliminary Novelty Assessment (LLM-only, no prior art) - conceptual originality check - Recommend Pro/Sonnet/GPT-4o'
+  },
+
+  // --- FER / Office Action Response ---
+  // Output of these stages goes into a document FILED at a patent office, so
+  // model quality here is a legal-risk decision, not just a cost one.
+  'OA_INTAKE_PARSE': {
+    complexity: 'lightweight',
+    tip: '📄 Structured extraction from the examination report (dates, cited docs, verbatim objections). Long input, mechanical task - Flash/Mini are fine and keep per-matter cost down.'
+  },
+  'OA_OBJECTION_CLASSIFY': {
+    complexity: 'lightweight',
+    tip: '🏷️ Maps each extracted objection to a canonical code + local statute. Quotes are verified deterministically afterwards - Flash/Mini sufficient.'
+  },
+  'OA_CITATION_ANALYSIS': {
+    complexity: 'advanced',
+    tip: '📊 Claim-element × cited-document chart. Every DISCLOSED cell needs a verbatim passage; a weak model yields AMBIGUOUS cells and weakens the whole novelty/inventive-step argument - Recommend Pro/Sonnet/GPT-4o.'
+  },
+  'OA_STRATEGY': {
+    complexity: 'advanced',
+    tip: '⚖️ Assesses the examiner position and proposes amendments with Section 59 basis. Drives what gets amended in a filed reply - use your strongest reasoning model.'
+  },
+  'OA_DRAFT_SECTION': {
+    complexity: 'advanced',
+    tip: '✍️ Writes the actual reply text that is FILED. This - not OA_ARGUMENT - authors every legal argument in the response letter. Recommend Pro/Sonnet/GPT-4o.'
+  },
+  'OA_ARGUMENT': {
+    complexity: 'deprecated',
+    tip: '⚠️ Declared but NOT invoked by the current pipeline - legal argument is written by OA_DRAFT_SECTION. Configuring an expensive model here has no effect.'
+  },
+  'OA_COMPLIANCE_REVIEW': {
+    complexity: 'deprecated',
+    tip: '⚠️ Declared but NOT invoked - the pre-export compliance check is deterministic (compliance-lint.ts), not an LLM call.'
   }
 }
 
@@ -756,17 +795,22 @@ export default function LLMConfigPage() {
                           {stage.description && (
                             <div className="text-sm text-slate-400 mt-1">{stage.description}</div>
                           )}
-                          {/* Show model recommendation for ideation stages */}
-                          {IDEATION_STAGE_INFO[stage.code] && (
-                            <div className={`text-xs mt-2 px-2 py-1 rounded inline-flex items-center gap-1 ${
-                              IDEATION_STAGE_INFO[stage.code].complexity === 'lightweight' 
-                                ? 'bg-green-900/30 text-green-400 border border-green-700/50' 
-                                : 'bg-amber-900/30 text-amber-400 border border-amber-700/50'
-                            }`}>
-                              <span>{IDEATION_STAGE_INFO[stage.code].complexity === 'lightweight' ? '⚡' : '🧠'}</span>
-                              <span>{IDEATION_STAGE_INFO[stage.code].tip}</span>
-                            </div>
-                          )}
+                          {/* Model-choice guidance (ideation + office-action stages) */}
+                          {STAGE_MODEL_GUIDANCE[stage.code] && (() => {
+                            const g = STAGE_MODEL_GUIDANCE[stage.code]
+                            const style = g.complexity === 'lightweight'
+                              ? 'bg-green-900/30 text-green-400 border-green-700/50'
+                              : g.complexity === 'deprecated'
+                                ? 'bg-slate-900/60 text-slate-400 border-slate-600/50'
+                                : 'bg-amber-900/30 text-amber-400 border-amber-700/50'
+                            const icon = g.complexity === 'lightweight' ? '⚡' : g.complexity === 'deprecated' ? '⚠️' : '🧠'
+                            return (
+                              <div className={`text-xs mt-2 px-2 py-1 rounded inline-flex items-start gap-1 border ${style}`}>
+                                <span>{icon}</span>
+                                <span>{g.tip}</span>
+                              </div>
+                            )
+                          })()}
                         </div>
 
                         {isEditing ? (

@@ -1,7 +1,7 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
 import { runOaStage, type OaGateway } from './oa-llm-service'
 import { renderDigest, type InventionDigest } from './invention-digest'
-import { retrieveContext, renderContextBlock } from './context-budget'
+import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, renderSupplementaryBlock } from './context-budget'
 import type { ClassifiedObjection } from './objection-classifier'
 import type { DraftedObjectionReply } from './reply-assembly'
 
@@ -26,17 +26,24 @@ interface DraftCtx {
 
 /** Draft one objection's argument section, retrieving only the basis it needs. */
 export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedObjection): Promise<DraftedObjectionReply> {
+  const query = `${objection.canonicalCode} ${objection.localBasis || ''} ${objection.examinerText}`.slice(0, 800)
   // Retrieve spec basis relevant to this objection (top-K, token-capped).
   const basis = await retrieveContext({
     caseId: ctx.caseId,
-    query: `${objection.canonicalCode} ${objection.localBasis || ''} ${objection.examinerText}`.slice(0, 800),
+    query,
     newMatterSafeOnly: true,     // amendment/argument basis from as-filed spec only
     kinds: ['SPECIFICATION']
+  })
+  // Attorney-provided supplementary evidence targeted at this objection
+  // (efficacy data, declarations…) — argument material, never s.59 basis.
+  const supp = await retrieveSupplementaryContext({
+    caseId: ctx.caseId, objectionCode: objection.canonicalCode, query
   })
 
   const input = [
     `Invention digest:\n${renderDigest(ctx.digest)}`,
     basis.length ? `\nRelevant specification basis (cite the ¶ tags):\n${renderContextBlock(basis)}` : '',
+    (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',
     `\nObjection (${objection.canonicalCode}, ${objection.localBasis || ''}):\n"${objection.examinerText}"`,
     `\nDraft the objection-wise reply for this single objection following the jurisdiction doctrine. Return JSON { heading, bodyText }. Cite ¶ tags for any specification support. Do not fabricate quotes or authorities.`
   ].filter(Boolean).join('\n')
@@ -51,10 +58,14 @@ export async function draftObjectionReply(ctx: DraftCtx, objection: ClassifiedOb
     objectionId: (objection as any).id || String(objection.sortOrder),
     sortOrder: objection.sortOrder,
     code: objection.canonicalCode,
+    officeNumber: objection.officeNumber,
     title: titleOf(objection),
     statuteBasis: objection.localBasis || undefined,
     examinerConcern: shorten(objection.examinerText),
-    bodyText: res.data?.bodyText || '',
+    bodyText: res.success ? (res.data?.bodyText || '') : '',
+    // A failed LLM call must be visible downstream: the lint blocks approving
+    // an empty section, and the UI shows the failure instead of a blank box.
+    draftError: res.success ? undefined : (res.error || 'Drafting failed'),
     approved: false,
     quoteVerified: objection.quoteVerified
   }

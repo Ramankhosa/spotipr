@@ -1,7 +1,7 @@
 import type { OfficeActionProfile } from './oa-profile-schema'
 import { runOaStage, type OaGateway } from './oa-llm-service'
 import { renderDigest, type InventionDigest } from './invention-digest'
-import { retrieveContext, renderContextBlock } from './context-budget'
+import { retrieveContext, renderContextBlock, retrieveSupplementaryContext, renderSupplementaryBlock } from './context-budget'
 import type { ClassifiedObjection } from './objection-classifier'
 import type { ClaimChart } from './claim-chart-service'
 import type { Paragraph } from './document-intake'
@@ -120,11 +120,16 @@ export async function buildObjectionStrategy(
   objection: ClassifiedObjection & { id?: string },
   chart?: ClaimChart
 ): Promise<{ success: boolean; strategy?: ObjectionStrategy; error?: string }> {
+  const query = `${objection.canonicalCode} ${objection.localBasis || ''} ${objection.examinerText}`.slice(0, 800)
   // Retrieve only the spec basis this objection needs (as-filed material only).
   const basis = await retrieveContext({
     caseId: ctx.caseId,
-    query: `${objection.canonicalCode} ${objection.localBasis || ''} ${objection.examinerText}`.slice(0, 800),
+    query,
     kinds: ['SPECIFICATION'], newMatterSafeOnly: true
+  })
+  // Attorney-provided evidence for this objection (post-filing — argument only).
+  const supp = await retrieveSupplementaryContext({
+    caseId: ctx.caseId, objectionCode: objection.canonicalCode, query
   })
 
   const distinctions = chart?.distinctions?.map(d => `claim ${d.claimNumber}: ${d.feature}`) || []
@@ -133,9 +138,10 @@ export async function buildObjectionStrategy(
     `Invention digest:\n${renderDigest(ctx.digest)}`,
     distinctions.length ? `\nFeatures absent from ALL cited documents (your distinctions):\n- ${distinctions.join('\n- ')}` : '',
     basis.length ? `\nSpecification basis available (cite these ¶ tags for any amendment):\n${renderContextBlock(basis)}` : '',
+    (supp.chunks.length || supp.notes.length) ? `\n${renderSupplementaryBlock(supp)}` : '',
     `\nObjection (${objection.canonicalCode}${objection.localBasis ? `, ${objection.localBasis}` : ''}):\n"${objection.examinerText}"`,
     '',
-    'Assess the examiner position and propose 2–3 response options with tradeoffs. If you propose a claim amendment, mark insertions with <ins></ins> and deletions with <del></del>, and cite the ¶ ids that support EVERY inserted feature — only from the basis supplied above. If the record lacks the evidence the objection requires (e.g. comparative efficacy data), do NOT invent it: set judgmentFlag describing the gap.',
+    'Assess the examiner position and propose 2–3 response options with tradeoffs. If you propose a claim amendment, mark insertions with <ins></ins> and deletions with <del></del>, and cite the ¶ ids that support EVERY inserted feature — only from the specification basis supplied above (attorney-provided supporting material is post-filing evidence and is NOT amendment basis). If the record lacks the evidence the objection requires (e.g. comparative efficacy data) and none was provided above, do NOT invent it: set judgmentFlag describing the gap.',
     'Return JSON: { assessment, options:[{id,kind,title,rationale,pros:[],cons:[],recommended}], amendments:[{claimNumber,markedText,cleanText,basisRefs:[]}], judgmentFlag? }.'
   ].filter(Boolean).join('\n')
 

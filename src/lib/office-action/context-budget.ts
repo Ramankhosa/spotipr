@@ -122,6 +122,80 @@ export function renderContextBlock(chunks: RetrievedChunk[]): string {
   return chunks.map(c => `[${c.sectionRef || c.kind}]\n${c.text}`).join('\n\n')
 }
 
+// ---- supplementary material (attorney-provided evidence) ----
+
+export interface SupplementaryContext {
+  /** Evidence text, packed to the token cap. */
+  chunks: RetrievedChunk[]
+  /** The attorney's usage instructions for each matching document. */
+  notes: Array<{ title: string | null; intentNote: string | null }>
+}
+
+/**
+ * Attorney-provided supplementary material (efficacy data, declarations…)
+ * relevant to one objection: documents whose targetCodes include the
+ * objection's canonical code (or that declare no target). Vector retrieval
+ * first; if the document has no embeddings yet (indexing pending/failed),
+ * falls back to its leading chunks so explicitly-provided evidence is never
+ * silently dropped. This material is argument/affidavit evidence ONLY —
+ * never Section 59 amendment basis.
+ */
+export async function retrieveSupplementaryContext(opts: {
+  caseId: string
+  objectionCode: string
+  query: string
+  maxTokens?: number
+}): Promise<SupplementaryContext> {
+  const maxTokens = opts.maxTokens ?? 1500
+  const docs = await prisma.oaCaseDocument.findMany({
+    where: { caseId: opts.caseId, kind: 'SUPPLEMENTARY' },
+    select: { id: true, title: true, intentNote: true, targetCodes: true }
+  })
+  const matching = docs.filter(d => {
+    const codes = Array.isArray(d.targetCodes) ? (d.targetCodes as any[]).map(String) : []
+    return codes.length === 0 || codes.includes(opts.objectionCode)
+  })
+  if (!matching.length) return { chunks: [], notes: [] }
+  const matchIds = new Set(matching.map(d => d.id))
+
+  let chunks = (await retrieveContext({
+    caseId: opts.caseId, query: opts.query,
+    kinds: ['SUPPLEMENTARY'], newMatterSafeOnly: false, maxTokens
+  })).filter(c => matchIds.has(c.documentId))
+
+  if (!chunks.length) {
+    // Deterministic fallback: leading chunks of each matching document.
+    const rows = await prisma.oaDocumentChunk.findMany({
+      where: { documentId: { in: Array.from(matchIds) } },
+      orderBy: { id: 'asc' },
+      take: 12,
+      select: { documentId: true, kind: true, sectionRef: true, text: true, tokenCount: true }
+    })
+    let used = 0
+    for (const r of rows) {
+      const tok = r.tokenCount || estimateTokens(r.text)
+      if (used + tok > maxTokens && chunks.length) break
+      chunks.push({ documentId: r.documentId, kind: r.kind, sectionRef: r.sectionRef, text: r.text, tokenCount: tok, distance: 1 })
+      used += tok
+    }
+  }
+
+  return { chunks, notes: matching.map(d => ({ title: d.title, intentNote: d.intentNote })) }
+}
+
+/** Render the supplementary evidence as a clearly-bounded prompt block. */
+export function renderSupplementaryBlock(supp: SupplementaryContext): string {
+  if (!supp.chunks.length && !supp.notes.length) return ''
+  const noteLines = supp.notes
+    .filter(n => n.intentNote || n.title)
+    .map(n => `- ${n.title || 'Supplementary document'}${n.intentNote ? `: ${n.intentNote}` : ''}`)
+  return [
+    'Attorney-provided supporting material (use for ARGUMENT/EVIDENCE only — it is post-filing material and MUST NOT be cited as Section 59 amendment basis):',
+    noteLines.length ? noteLines.join('\n') : '',
+    renderContextBlock(supp.chunks)
+  ].filter(Boolean).join('\n')
+}
+
 // ---- cost estimation (uses the same per-model prices as the metering layer) ----
 
 export interface CaseCostEstimate {

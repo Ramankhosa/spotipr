@@ -1,5 +1,5 @@
 import { prisma } from '../prisma'
-import { normalizeInvention, estimateTokens } from './document-intake'
+import { normalizeInvention, estimateTokens, extractClaimsText } from './document-intake'
 
 /**
  * Office Action Studio — case document intake
@@ -74,7 +74,18 @@ export async function addCaseDocument(input: AddDocumentInput): Promise<AddDocum
 
   // Keep the case's canonical spec/claims text in sync for the pipeline.
   if (input.kind === 'SPECIFICATION') {
-    await prisma.officeActionCase.update({ where: { id: input.caseId }, data: { specificationText: input.text } })
+    const data: { specificationText: string; claimsText?: string } = { specificationText: input.text }
+    // A complete specification usually contains the claims (standard Indian
+    // filing). If no separate CLAIMS document exists yet, extract them so the
+    // claim charts and amendment pipeline don't silently run without claims.
+    const existing = await prisma.officeActionCase.findUnique({
+      where: { id: input.caseId }, select: { claimsText: true }
+    })
+    if (!existing?.claimsText?.trim()) {
+      const claims = extractClaimsText(input.text)
+      if (claims) data.claimsText = claims
+    }
+    await prisma.officeActionCase.update({ where: { id: input.caseId }, data })
   } else if (input.kind === 'CLAIMS') {
     await prisma.officeActionCase.update({ where: { id: input.caseId }, data: { claimsText: input.text } })
   }
@@ -162,6 +173,32 @@ export async function attachDocumentToCitation(citationId: string, text: string,
       passagesJson: { ...prev, fullDocument: { title: title || prev?.fullDocument?.title, description: text } } as any
     }
   })
+}
+
+/**
+ * Remove a case document and its chunks (wrong upload / superseded copy).
+ * If it was the active SPECIFICATION/CLAIMS source, the case's canonical text
+ * is re-pointed at the most recent remaining document of that kind (or cleared)
+ * so retrieval, the digest and the s.59 guard stay consistent.
+ */
+export async function removeCaseDocument(caseId: string, documentId: string): Promise<boolean> {
+  const doc = await prisma.oaCaseDocument.findFirst({ where: { id: documentId, caseId } })
+  if (!doc) return false
+  await prisma.oaCaseDocument.delete({ where: { id: documentId } })  // chunks cascade
+
+  if (doc.kind === 'SPECIFICATION' || doc.kind === 'CLAIMS') {
+    const latest = await prisma.oaCaseDocument.findFirst({
+      where: { caseId, kind: doc.kind }, orderBy: { createdAt: 'desc' }
+    })
+    const field = doc.kind === 'SPECIFICATION' ? 'specificationText' : 'claimsText'
+    // The digest was built from the removed text — clear it so the next
+    // prepare rebuilds from the current source.
+    await prisma.officeActionCase.update({
+      where: { id: caseId },
+      data: { [field]: latest?.text || null, inventionDigest: null as any }
+    })
+  }
+  return true
 }
 
 export interface CaseDocumentSummary {

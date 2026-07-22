@@ -2,7 +2,7 @@ import { prisma } from '../prisma'
 import { getCountryProfile } from '../country-profile-service'
 import { officeActionProfileSchema, type OfficeActionProfile } from './oa-profile-schema'
 import { computeDeadlines, mostUrgentDeadline, type ComputedDeadline } from './deadline-engine'
-import { parseOfficeActionDocument, cleanOfficeActionText } from './oa-parser'
+import { parseOfficeActionDocument, cleanOfficeActionText, safeIsoDate } from './oa-parser'
 import { classifyObjections } from './objection-classifier'
 import type { OaGateway } from './oa-llm-service'
 
@@ -26,11 +26,24 @@ export interface CaseActor {
 
 /** Load + validate the officeActionProfile for a jurisdiction. */
 export async function loadOfficeActionProfile(jurisdictionCode: string): Promise<OfficeActionProfile | null> {
-  const country = await getCountryProfile(jurisdictionCode.toUpperCase())
-  const block = (country?.profileData as any)?.officeActionProfile
-  if (!block) return null
+  const code = jurisdictionCode.toUpperCase()
+  const country = await getCountryProfile(code)
+  if (!country) {
+    console.warn(`[OA profile] No ACTIVE CountryProfile row for "${code}" — activate it in the jurisdictions hub.`)
+    return null
+  }
+  const block = (country.profileData as any)?.officeActionProfile
+  if (!block) {
+    console.warn(`[OA profile] CountryProfile "${code}" has no officeActionProfile block — run: npm run oa:sync-profile ${code}`)
+    return null
+  }
   const parsed = officeActionProfileSchema.safeParse(block)
-  return parsed.success ? parsed.data : null
+  if (!parsed.success) {
+    console.warn(`[OA profile] officeActionProfile for "${code}" failed validation:`,
+      parsed.error.errors.slice(0, 5).map(e => `${e.path.join('.')}: ${e.message}`).join('; '))
+    return null
+  }
+  return parsed.data
 }
 
 export async function createCase(actor: CaseActor, input: {
@@ -68,7 +81,10 @@ export interface IngestResult {
   mostUrgent: ComputedDeadline | null
   objectionCount: number
   unverifiedQuotes: number
+  /** Fatal: the document could not be parsed at all (route maps this to 422). */
   error?: string
+  /** Degraded but usable: e.g. classification fell back to unclassified cards. */
+  warning?: string
 }
 
 /**
@@ -130,7 +146,9 @@ export async function ingestDocument(
       : []
     const urgent = mostUrgentDeadline(deadlines)
 
-    // 3. Classify objections + verify quotes
+    // 3. Classify objections + verify quotes. On classification failure the
+    // classifier returns deterministic fallback cards (code OTHER) — the
+    // objections are never lost, the run is just degraded.
     const classification = await classifyObjections(
       profile, parseResult.parsed.objections, cleanText,
       { tenantId: actor.tenantId || undefined, userId: actor.userId, requestHeaders: actor.requestHeaders },
@@ -139,8 +157,10 @@ export async function ingestDocument(
     const objections = classification.objections
     const unverified = objections.filter(o => !o.quoteVerified).length
 
-    // 4. Persist (document + objections + citations) atomically
-    const issueDate = parseResult.parsed.dateOfReport ? new Date(parseResult.parsed.dateOfReport) : null
+    // 4. Persist (document + objections + citations) atomically.
+    // Dates from the LLM are guarded — an unparseable date must not fail the ingest.
+    const issueIso = safeIsoDate(parseResult.parsed.dateOfReport) || safeIsoDate(parseResult.parsed.dateOfDispatch)
+    const issueDate = issueIso ? new Date(`${issueIso}T00:00:00Z`) : null
     await prisma.$transaction([
       prisma.officeActionDocument.update({
         where: { id: doc.id },
@@ -165,7 +185,10 @@ export async function ingestDocument(
           claimsAffected: (o.claimsAffected || []) as any,
           citationLabels: (o.citationLabels || []) as any,
           status: 'EXTRACTED',
-          analysisJson: o.rationale ? ({ rationale: o.rationale } as any) : undefined
+          // officeNumber = the FER's own numbering; the reply letter answers under it.
+          analysisJson: (o.rationale || o.officeNumber)
+            ? ({ ...(o.rationale ? { rationale: o.rationale } : {}), ...(o.officeNumber ? { officeNumber: o.officeNumber } : {}) } as any)
+            : undefined
         }
       })),
       ...parseResult.parsed.citedDocuments.map(c => prisma.oaCitation.create({
@@ -204,7 +227,9 @@ export async function ingestDocument(
       mostUrgent: urgent,
       objectionCount: objections.length,
       unverifiedQuotes: unverified,
-      error: classification.success ? undefined : classification.error
+      warning: classification.success
+        ? undefined
+        : `Objections were extracted but could not be auto-classified (${classification.error || 'classification failed'}) — review each card's category.`
     }
   } catch (err) {
     await prisma.officeActionDocument.update({

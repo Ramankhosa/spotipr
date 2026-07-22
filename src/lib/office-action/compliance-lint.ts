@@ -37,6 +37,8 @@ export interface LintInput {
   formsStatus?: FormsStatus
   /** Objection ids the intake marked as confirmed/active (must all be answered). */
   confirmedObjectionIds: string[]
+  /** Canonical codes of the confirmed objections — drives conditional forms checks (s.8 → Form 3). */
+  confirmedObjectionCodes?: string[]
 }
 
 export function lintReply(input: LintInput): LintResult {
@@ -49,6 +51,14 @@ export function lintReply(input: LintInput): LintResult {
   checks.push(missing.length === 0
     ? { id: 'coverage', label: 'Every objection answered', status: 'pass', detail: `${repliedIds.size} approved` }
     : { id: 'coverage', label: 'Every objection answered', status: 'fail', detail: `Unanswered/unapproved: ${missing.length} objection(s)` })
+
+  // 1b. Substance — an approved section must actually contain an argument.
+  // (An LLM failure leaves bodyText empty; that must never export as a
+  // finished section under a heading.)
+  const empty = objectionReplies.filter(r => r.approved && !(r.bodyText || '').trim())
+  checks.push(empty.length === 0
+    ? { id: 'content', label: 'No empty reply sections', status: 'pass' }
+    : { id: 'content', label: 'No empty reply sections', status: 'fail', detail: `${empty.length} approved section(s) have no text — draft or edit them first` })
 
   // 2. Quote fidelity — every objection reply built on a verified examiner quote.
   const unverified = objectionReplies.filter(r => r.approved && !r.quoteVerified)
@@ -78,9 +88,16 @@ export function lintReply(input: LintInput): LintResult {
     ? { id: 'order', label: 'FER numbering order preserved', status: 'pass' }
     : { id: 'order', label: 'FER numbering order preserved', status: 'warn', detail: 'Objection replies not in FER order — assembly re-sorts, verify' })
 
-  // 6. Forms checklist.
-  if (formsStatus.form3Filed === false) checks.push({ id: 'form3', label: 'Form 3 (s.8) resolved', status: 'fail', detail: 'Form 3 objection unresolved — file updated Form 3' })
-  else checks.push({ id: 'form3', label: 'Form 3 (s.8) resolved', status: 'pass' })
+  // 6. Forms checklist. When the report actually raises a s.8/Form 3 objection,
+  // silence is NOT compliance — the attorney must positively confirm it.
+  const hasS8Objection = (input.confirmedObjectionCodes || []).includes('PROCEDURAL_DISCLOSURE')
+  if (formsStatus.form3Filed === false) {
+    checks.push({ id: 'form3', label: 'Form 3 (s.8) resolved', status: 'fail', detail: 'Form 3 objection unresolved — file updated Form 3' })
+  } else if (hasS8Objection && formsStatus.form3Filed !== true) {
+    checks.push({ id: 'form3', label: 'Form 3 (s.8) resolved', status: 'fail', detail: 'The report raises a Section 8 objection — confirm the updated Form 3 is filed (or being filed with this reply)' })
+  } else {
+    checks.push({ id: 'form3', label: 'Form 3 (s.8) resolved', status: 'pass' })
+  }
 
   if (formsStatus.poaFiled === false) checks.push({ id: 'poa', label: 'Power of Attorney on record', status: 'warn', detail: 'POA not on record' })
   if (formsStatus.form4Needed && !formsStatus.form4Filed) checks.push({ id: 'form4', label: 'Form 4 extension filed', status: 'warn', detail: 'Extension chosen but Form 4 not yet filed' })

@@ -2,7 +2,7 @@ import {
   Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel,
   LevelFormat, convertMillimetersToTwip
 } from 'docx'
-import type { AssembledReply, AmendedClaim, DraftedObjectionReply, ReplyBlock } from './reply-assembly'
+import { objectionLabel, type AssembledReply, type AmendedClaim, type DraftedObjectionReply, type ReplyBlock } from './reply-assembly'
 import type { OfficeActionProfile } from './oa-profile-schema'
 import type { LintResult } from './compliance-lint'
 
@@ -141,7 +141,7 @@ function renderBlock(block: ReplyBlock, ctx: Ctx) {
       children.push(numberedHeading(block.title))
       for (const o of block.objections) {
         // 2.N — Objection heading
-        children.push(subNumbered([new TextRun({ text: `Objection ${o.sortOrder + 1} — ${o.title}${o.statuteBasis ? ` (${o.statuteBasis})` : ''}`, bold: true })]))
+        children.push(subNumbered([new TextRun({ text: `Objection ${objectionLabel(o)} — ${o.title}${o.statuteBasis ? ` (${o.statuteBasis})` : ''}`, bold: true })]))
         // Examiner's concern (restated) then the Applicant's response — the systematic pair.
         if (fmt.restate && o.examinerConcern) {
           children.push(body(`Examiner's objection: ${o.examinerConcern}`, { italics: true, indent: 480, after: 80 }))

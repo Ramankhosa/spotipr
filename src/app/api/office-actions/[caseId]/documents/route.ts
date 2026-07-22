@@ -28,6 +28,7 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
 
   // Accepts either a PDF/text upload (multipart) or { rawText } JSON.
   const contentType = request.headers.get('content-type') || ''
+  const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
   let rawText = ''
   let fileName: string | undefined
   let body: any = {}
@@ -37,6 +38,9 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
       const form = await request.formData()
       const file = form.get('file') as File | null
       if (!file) return NextResponse.json({ error: 'file is required' }, { status: 400 })
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return NextResponse.json({ error: 'File is too large (max 15 MB). Upload a smaller PDF or paste the text.' }, { status: 413 })
+      }
       fileName = file.name
       const buf = Buffer.from(await file.arrayBuffer())
       if (file.name?.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
@@ -79,7 +83,12 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
       rawText,
       { fileName }
     )
-    return NextResponse.json(result, { status: result.error ? 207 : 201 })
+    // A parse failure is a real failure — the client must show an error and a
+    // retry path, never a green toast. (Was HTTP 207, which res.ok treats as success.)
+    if (result.error) {
+      return NextResponse.json({ ...result, error: result.error }, { status: 422 })
+    }
+    return NextResponse.json(result, { status: 201 })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Ingest failed'
     return NextResponse.json({ error: message }, { status: 500 })

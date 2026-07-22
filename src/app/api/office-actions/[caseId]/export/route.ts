@@ -48,20 +48,29 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   const namedSections = (draft.sectionsJson as any)?.namedSections as Record<string, string> || {}
   const amendedClaims = (draft.amendedClaimsJson as any)?.claims as AmendedClaim[] || []
   const formsStatus = (draft.complianceJson as any)?.formsStatus || {}
+  const agent = (draft.complianceJson as any)?.agent || {}
 
   const allObjections = oaCase.documents.flatMap(d => d.objections)
-  const confirmedObjectionIds = allObjections.filter(o => o.status !== 'DISMISSED').map(o => o.id)
+  const confirmed = allObjections.filter(o => o.status !== 'DISMISSED')
+  const confirmedObjectionIds = confirmed.map(o => o.id)
+  const confirmedObjectionCodes = confirmed.map(o => o.canonicalCode)
+
+  // The communication this draft answers — never blindly documents[0] (that can
+  // be a failed upload or an earlier notice).
+  const respondingTo = oaCase.documents.find(d => d.id === draft.documentId)
+    || [...oaCase.documents].reverse().find(d => d.parseStatus === 'COMPLETED')
 
   const meta: CaseMeta = {
     jurisdictionOffice: profile.meta.office,
     applicationNumber: oaCase.applicationNumber,
     applicantName: oaCase.applicantName || undefined,
-    reportDate: oaCase.documents[0]?.issueDate?.toISOString().slice(0, 10),
-    agentName: undefined
+    reportDate: respondingTo?.issueDate?.toISOString().slice(0, 10),
+    agentName: agent.name || undefined,
+    agentRegNo: agent.regNo || undefined
   }
 
   const assembled = assembleReply({ profile, meta, objectionReplies, namedSections, amendedClaims })
-  const lint = lintReply({ assembled, objectionReplies, amendedClaims, formsStatus, confirmedObjectionIds })
+  const lint = lintReply({ assembled, objectionReplies, amendedClaims, formsStatus, confirmedObjectionIds, confirmedObjectionCodes })
 
   // Persist the lint result on the draft either way.
   await prisma.oaResponseDraft.update({
@@ -79,6 +88,11 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   }
 
   const buffer = await buildReplyDocx(assembled, profile, { includeComplianceNote: body.includeVerificationNote === true, lint })
+
+  // The reply has been produced and passed the lint — reflect it on the docket.
+  await prisma.officeActionCase.update({
+    where: { id: oaCase.id }, data: { status: 'REPLIED' }
+  }).catch(() => {})
 
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,

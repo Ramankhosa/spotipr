@@ -17,6 +17,8 @@ export interface ClassifiedObjection {
   canonicalCode: CanonicalObjectionCode
   subTypeId?: string
   localBasis?: string
+  /** The office's own numbering ("1", "2.a") — preserved for the reply letter. */
+  officeNumber?: string
   examinerText: string
   quoteVerified: boolean
   claimsAffected?: number[]
@@ -120,26 +122,61 @@ export async function classifyObjections(
   )
 
   if (!result.success || !result.data?.objections) {
-    return { success: false, objections: [], error: result.error || 'Classification failed' }
+    // Classification failed — fall back to deterministic cards built straight
+    // from the parsed objections (code OTHER) so no objection is ever lost.
+    return {
+      success: false,
+      objections: fallbackCards(rawObjections, sourceText),
+      error: result.error || 'Classification failed'
+    }
   }
 
   const objections = normalizeClassified(result.data.objections, rawObjections, sourceText)
   return { success: true, objections }
 }
 
+/** Deterministic cards from the raw parse — used when classification fails. */
+export function fallbackCards(rawObjections: ParsedObjection[], sourceText: string): ClassifiedObjection[] {
+  return rawObjections.map((raw, i) => ({
+    sortOrder: i,
+    canonicalCode: 'OTHER' as CanonicalObjectionCode,
+    localBasis: raw.legalBasisMentioned?.join(', ') || undefined,
+    officeNumber: raw.number,
+    examinerText: raw.examinerText,
+    quoteVerified: verifyQuote(raw.examinerText, sourceText),
+    claimsAffected: raw.claimsAffected,
+    citationLabels: raw.citationLabels
+  }))
+}
+
 /**
  * Deterministic post-processing: coerce to valid codes, verify quotes against
  * the source, and fall back to the raw examiner text when the model's copy
  * drifted (so the card still shows the real objection).
+ *
+ * RECONCILIATION GUARANTEE: every raw parsed objection produces exactly one
+ * card. A raw the model dropped comes back as an OTHER card; a raw the model
+ * mapped twice is only consumed once (the duplicate falls back to its own
+ * positional raw, or none). Losing an objection here would mean the attorney
+ * files a reply that skips an examiner objection.
  */
 export function normalizeClassified(
   llmObjections: any[],
   rawObjections: ParsedObjection[],
   sourceText: string
 ): ClassifiedObjection[] {
-  return llmObjections.map((o, i) => {
-    const idx = typeof o?.index === 'number' && rawObjections[o.index] ? o.index : i
-    const raw = rawObjections[idx]
+  const consumed = new Set<number>()
+  const cards = llmObjections.map((o, i) => {
+    // An explicit index binds to that raw; a repeat of an already-consumed index
+    // is a duplicate and must NOT consume a different raw (that would mark an
+    // unrelated objection as answered). Positional fallback only when the model
+    // gave no usable index at all.
+    const explicit = typeof o?.index === 'number' && rawObjections[o.index] ? o.index : null
+    let idx: number
+    if (explicit !== null) idx = consumed.has(explicit) ? -1 : explicit
+    else idx = consumed.has(i) || !rawObjections[i] ? -1 : i
+    const raw = idx >= 0 ? rawObjections[idx] : undefined
+    if (idx >= 0) consumed.add(idx)
 
     let examinerText = typeof o?.examinerText === 'string' && o.examinerText.trim() ? o.examinerText : (raw?.examinerText || '')
     // If the model's quote doesn't verify but the raw parsed text does, trust the raw text.
@@ -152,15 +189,35 @@ export function normalizeClassified(
     const code: CanonicalObjectionCode = CODE_SET.has(o?.canonicalCode) ? o.canonicalCode : 'OTHER'
 
     return {
-      sortOrder: idx,
+      sortOrder: idx >= 0 ? idx : rawObjections.length + i,
       canonicalCode: code,
       subTypeId: typeof o?.subTypeId === 'string' ? o.subTypeId : undefined,
       localBasis: typeof o?.localBasis === 'string' ? o.localBasis : (raw?.legalBasisMentioned?.join(', ') || undefined),
+      officeNumber: raw?.number,
       examinerText,
       quoteVerified,
       claimsAffected: Array.isArray(o?.claimsAffected) ? o.claimsAffected : raw?.claimsAffected,
       citationLabels: Array.isArray(o?.citationLabels) ? o.citationLabels : raw?.citationLabels,
       rationale: typeof o?.rationale === 'string' ? o.rationale : undefined
     }
-  }).sort((a, b) => a.sortOrder - b.sortOrder)
+  }).filter(c => c.examinerText.trim())
+
+  // Any raw objection the model dropped is appended as an OTHER card.
+  rawObjections.forEach((raw, idx) => {
+    if (consumed.has(idx)) return
+    cards.push({
+      sortOrder: idx,
+      canonicalCode: 'OTHER',
+      subTypeId: undefined,
+      localBasis: raw.legalBasisMentioned?.join(', ') || undefined,
+      officeNumber: raw.number,
+      examinerText: raw.examinerText,
+      quoteVerified: verifyQuote(raw.examinerText, sourceText),
+      claimsAffected: raw.claimsAffected,
+      citationLabels: raw.citationLabels,
+      rationale: 'Not classified by the model — review and re-categorize.'
+    })
+  })
+
+  return cards.sort((a, b) => a.sortOrder - b.sortOrder)
 }

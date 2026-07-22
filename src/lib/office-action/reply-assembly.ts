@@ -22,14 +22,30 @@ export interface CaseMeta {
 
 export interface DraftedObjectionReply {
   objectionId: string
-  sortOrder: number           // FER numbering — preserved
+  sortOrder: number           // extraction order (stable sort key)
+  /** The office's own numbering from the report ("1", "2.a") — the letter answers under it. */
+  officeNumber?: string
   code: string                // canonical code
   title: string               // e.g. "Lack of inventive step"
   statuteBasis?: string       // e.g. "Section 2(1)(ja)"
   examinerConcern: string     // 1–2 sentence restatement of what the examiner objected
   bodyText: string            // the approved argument (may contain paragraphs)
+  /** Set when the drafting LLM call failed — the section needs attorney text. */
+  draftError?: string
   approved: boolean
   quoteVerified: boolean
+}
+
+/** The label a reply section answers under — the office's numbering when known. */
+export function objectionLabel(r: Pick<DraftedObjectionReply, 'officeNumber' | 'sortOrder'>): string {
+  return (r.officeNumber || '').trim() || String(r.sortOrder + 1)
+}
+
+/** ISO yyyy-mm-dd → dd/mm/yyyy for the letter (Indian practice). */
+export function displayDate(iso?: string): string {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso || ''
+  const [y, m, d] = iso.slice(0, 10).split('-')
+  return `${d}/${m}/${y}`
 }
 
 export interface AmendedClaim {
@@ -80,7 +96,7 @@ export function assembleReply(input: AssembleInput): AssembledReply {
   const { profile, meta } = input
   const phrases = profile.response.phrases || {}
   const vars = {
-    date: meta.reportDate || '', dateOfReport: meta.reportDate || '',
+    date: displayDate(meta.reportDate), dateOfReport: displayDate(meta.reportDate),
     applicationNumber: meta.applicationNumber || '', applicantName: meta.applicantName || ''
   }
 
@@ -97,7 +113,7 @@ export function assembleReply(input: AssembleInput): AssembledReply {
         if (salutation) blocks.push({ type: 'salutation', text: salutation })
         break
       case 'subjectLine':
-        blocks.push({ type: 'subjectLine', text: `Reply to the First Examination Report${meta.reportDate ? ` dated ${meta.reportDate}` : ''} — Application No. ${meta.applicationNumber}` })
+        blocks.push({ type: 'subjectLine', text: `Reply to the First Examination Report${meta.reportDate ? ` dated ${displayDate(meta.reportDate)}` : ''} — Application No. ${meta.applicationNumber}` })
         break
       case 'preliminarySubmissions':
         blocks.push({ type: 'namedSection', key, title: titleFor(profile, key, 'Preliminary Submissions'),

@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
+import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { prisma } from '@/lib/prisma'
-import { addCaseDocument, listCaseDocuments, type CaseDocumentKind, type CaseDocumentSource } from '@/lib/office-action/case-document-service'
+import { addCaseDocument, listCaseDocuments, removeCaseDocument, type CaseDocumentKind, type CaseDocumentSource } from '@/lib/office-action/case-document-service'
 import { extractPdfText } from '@/lib/office-action/pdf-extract'
 
 export const maxDuration = 120
 
 const KINDS: CaseDocumentKind[] = ['SPECIFICATION', 'CLAIMS', 'DRAWINGS', 'SUPPLEMENTARY']
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 async function ownedCase(caseId: string, userId: string) {
   const row = await prisma.officeActionCase.findUnique({ where: { id: caseId }, select: { userId: true } })
@@ -36,6 +38,12 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   const guard = await ownedCase(params.caseId, auth.user.id)
   if ('error' in guard) return guard.error
 
+  // Indexing embeds every chunk — gate it like the other OA write routes.
+  if (auth.user.tenantId) {
+    const access = await enforceServiceAccess(auth.user.id, auth.user.tenantId, 'OFFICE_ACTION_RESPONSE')
+    if (!access.allowed) return access.response
+  }
+
   const contentType = request.headers.get('content-type') || ''
   let kind: CaseDocumentKind = 'SPECIFICATION'
   let source: CaseDocumentSource = 'PASTE'
@@ -55,6 +63,9 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
       targetCodes = codes ? String(codes).split(',').map(s => s.trim()).filter(Boolean) : undefined
       source = 'UPLOAD'
       if (!file) return NextResponse.json({ error: 'file is required' }, { status: 400 })
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return NextResponse.json({ error: 'File is too large (max 15 MB). Upload a smaller PDF or paste the text.' }, { status: 413 })
+      }
 
       const buf = Buffer.from(await file.arrayBuffer())
       if (file.name?.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
@@ -87,4 +98,24 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
 
   const result = await addCaseDocument({ caseId: params.caseId, kind, source, title, text, intentNote, targetCodes })
   return NextResponse.json(result, { status: 201 })
+}
+
+// DELETE — remove a wrongly-uploaded / superseded document (and its chunks).
+// Body or query: { documentId }. Re-points the case's canonical spec/claims text.
+export async function DELETE(request: NextRequest, { params }: { params: { caseId: string } }) {
+  const auth = await authenticateUser(request)
+  if (auth.error) return NextResponse.json({ error: auth.error.message }, { status: auth.error.status })
+  const guard = await ownedCase(params.caseId, auth.user.id)
+  if ('error' in guard) return guard.error
+
+  let documentId = new URL(request.url).searchParams.get('documentId') || ''
+  if (!documentId) {
+    const body = await request.json().catch(() => ({}))
+    documentId = String(body.documentId || '')
+  }
+  if (!documentId) return NextResponse.json({ error: 'documentId is required' }, { status: 400 })
+
+  const removed = await removeCaseDocument(params.caseId, documentId)
+  if (!removed) return NextResponse.json({ error: 'Document not found on this case' }, { status: 404 })
+  return NextResponse.json({ removed: true })
 }

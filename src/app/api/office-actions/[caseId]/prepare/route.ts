@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
 import { prisma } from '@/lib/prisma'
-import { prepareReply } from '@/lib/office-action/reply-pipeline'
+import { kickOfficeActionJobsInline } from '@/lib/office-action-job-service'
 
-// Chains chart → strategy → draft for every objection; LLM-heavy.
-export const maxDuration = 300
+export const maxDuration = 60
 
 /**
  * POST /api/office-actions/:caseId/prepare
- * Runs the reply pipeline and persists an OaResponseDraft ready for export.
+ * Enqueues the reply pipeline as a background OfficeActionJob and returns
+ * immediately — a real FER runs ~3 LLM calls per objection, far beyond any
+ * request timeout. The client polls GET for progress. If a prepare job is
+ * already running for this case, it is returned instead of starting a second
+ * (double-clicks must not double the LLM spend).
  * Body (optional): { objectionIds?: string[] } to prepare a subset.
  */
 export async function POST(request: NextRequest, { params }: { params: { caseId: string } }) {
@@ -30,17 +33,68 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   let body: any = {}
   try { body = await request.json() } catch { /* optional */ }
 
-  const requestHeaders: Record<string, string> = {}
-  const authHeader = request.headers.get('authorization')
-  if (authHeader) requestHeaders.authorization = authHeader
-
-  try {
-    const result = await prepareReply(params.caseId, {
-      tenantId: auth.user.tenantId, userId: auth.user.id, requestHeaders,
-      objectionIds: Array.isArray(body.objectionIds) ? body.objectionIds : undefined
-    })
-    return NextResponse.json(result, { status: 201 })
-  } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Prepare failed' }, { status: 500 })
+  // Concurrency guard: one prepare per case at a time.
+  const active = await prisma.officeActionJob.findFirst({
+    where: { caseId: params.caseId, jobType: 'PREPARE_REPLY', status: { in: ['QUEUED', 'PROCESSING'] } },
+    orderBy: { createdAt: 'desc' }
+  })
+  if (active) {
+    return NextResponse.json({ jobId: active.id, status: active.status, alreadyRunning: true }, { status: 202 })
   }
+
+  const job = await prisma.officeActionJob.create({
+    data: {
+      caseId: params.caseId,
+      userId: auth.user.id,
+      jobType: 'PREPARE_REPLY',
+      status: 'QUEUED',
+      payload: {
+        tenantId: auth.user.tenantId || null,
+        objectionIds: Array.isArray(body.objectionIds) ? body.objectionIds : undefined
+      } as any
+    }
+  })
+
+  // Drain inline (detached) so the job runs even without the standalone worker.
+  kickOfficeActionJobsInline('prepare')
+
+  return NextResponse.json({ jobId: job.id, status: 'QUEUED' }, { status: 202 })
+}
+
+/**
+ * GET /api/office-actions/:caseId/prepare — status of the latest prepare job.
+ * The workspace polls this while the pipeline runs.
+ */
+export async function GET(request: NextRequest, { params }: { params: { caseId: string } }) {
+  const auth = await authenticateUser(request)
+  if (auth.error) return NextResponse.json({ error: auth.error.message }, { status: auth.error.status })
+
+  const owner = await prisma.officeActionCase.findUnique({
+    where: { id: params.caseId }, select: { userId: true }
+  })
+  if (!owner) return NextResponse.json({ error: 'Case not found' }, { status: 404 })
+  if (owner.userId !== auth.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  const job = await prisma.officeActionJob.findFirst({
+    where: { caseId: params.caseId, jobType: 'PREPARE_REPLY' },
+    orderBy: { createdAt: 'desc' }
+  })
+  if (!job) return NextResponse.json({ job: null })
+
+  // A QUEUED job with no live drain (e.g. process restarted) gets re-kicked.
+  if (job.status === 'QUEUED' || (job.status === 'PROCESSING' && job.lockedUntil && job.lockedUntil < new Date())) {
+    kickOfficeActionJobsInline('prepare-poll')
+  }
+
+  return NextResponse.json({
+    job: {
+      id: job.id,
+      status: job.status,
+      currentStep: job.currentStep,
+      lastError: job.lastError,
+      result: job.result,
+      createdAt: job.createdAt,
+      completedAt: job.completedAt
+    }
+  })
 }

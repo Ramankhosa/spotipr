@@ -1,4 +1,4 @@
-import type { AssembledReply, ReplyBlock, AmendedClaim } from './reply-assembly'
+import { objectionLabel, type AssembledReply, type ReplyBlock, type AmendedClaim } from './reply-assembly'
 import type { OfficeActionProfile } from './oa-profile-schema'
 
 /**
@@ -83,7 +83,7 @@ function renderBlockHtml(block: ReplyBlock, nextNo: () => number): string {
       const n = nextNo()
       const items = block.objections.map((o, i) => {
         const concern = o.examinerConcern ? `<div class="concern">Examiner's objection: ${esc(o.examinerConcern)}</div><div class="subhead">Applicant’s submission:</div>` : ''
-        return `<div class="obj"><div class="oh"><span class="no">${n}.${i + 1}</span>Objection ${o.sortOrder + 1} — ${esc(o.title)}${o.statuteBasis ? ` (${esc(o.statuteBasis)})` : ''}</div></div>${concern}<div class="indent">${paras(o.bodyText)}</div>`
+        return `<div class="obj"><div class="oh"><span class="no">${n}.${i + 1}</span>Objection ${esc(objectionLabel(o))} — ${esc(o.title)}${o.statuteBasis ? ` (${esc(o.statuteBasis)})` : ''}</div></div>${concern}<div class="indent">${paras(o.bodyText)}</div>`
       }).join('')
       return `<h2 class="sec"><span class="no">${n}.</span>${esc(block.title.toUpperCase())}</h2>${items}`
     }
