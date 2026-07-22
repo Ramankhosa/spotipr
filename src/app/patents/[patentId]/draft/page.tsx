@@ -407,6 +407,8 @@ export default function PatentDraftingPage() {
             error: message,
             details: result?.details,
             code: errorCode,
+            confirmationRequired: result?.confirmationRequired,
+            splitProposal: result?.splitProposal,
             personaWarnings: result?.personaWarnings,
             personaProvenance: result?.personaProvenance
           }

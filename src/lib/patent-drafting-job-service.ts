@@ -6,7 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { generateJWT } from '@/lib/auth'
 import { checkServiceAccess } from '@/lib/org-access-service'
 import { isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
-import { renderPlantUml } from '@/lib/plantuml-renderer'
+import { renderAndWriteDiagramArtifacts, resolveDiagramPagePolicy } from '@/lib/patent-diagrams/artifacts'
 
 const LOCK_MINUTES = Math.max(5, Number(process.env.PATENT_DRAFTING_LOCK_MINUTES || 45))
 const DEFAULT_JURISDICTION = 'IN'
@@ -273,15 +273,58 @@ async function renderDiagramSourceToFile(params: {
 }) {
   const code = String(params.source?.plantumlCode || '').trim()
   if (!code) return null
-
-  const rendered = await renderPlantUml(code, params.format)
   const language = String(params.source.language || 'en').trim().toLowerCase() || 'en'
-  const suffix = language !== 'en' ? `_${language}` : ''
-  const filename = `figure_${params.source.figureNo}${suffix}_${Date.now()}.${params.format}`
-  const baseDir = path.join(process.cwd(), 'uploads', 'patents', params.job.patentId, 'figures')
-  await fs.mkdir(baseDir, { recursive: true })
-  const imagePath = path.join(baseDir, filename)
-  await fs.writeFile(imagePath, rendered.buffer)
+  const existingArtifact = params.source?.renderArtifacts?.[params.format]
+  const existingBuffer = existingArtifact?.path ? await readFirstExistingFile([existingArtifact.path]) : null
+  if (existingBuffer) {
+    if (params.persistOnSource && params.format === 'png' && !params.source.imagePath) {
+      await prisma.diagramSource.update({
+        where: { id: params.source.id },
+        data: {
+          imageFilename: existingArtifact.filename || path.basename(existingArtifact.path),
+          imagePath: existingArtifact.path,
+          imageChecksum: existingArtifact.checksum,
+          imageUploadedAt: new Date(),
+        },
+      })
+    }
+    return {
+      filename: existingArtifact.filename || path.basename(existingArtifact.path),
+      imagePath: existingArtifact.path,
+      buffer: existingBuffer,
+      contentType: existingArtifact.contentType || (params.format === 'svg' ? 'image/svg+xml' : 'image/png'),
+      artifacts: params.source.renderArtifacts,
+    }
+  }
+
+  const session = await prisma.draftingSession.findUnique({
+    where: { id: params.source.sessionId },
+    select: { activeJurisdiction: true, draftingJurisdictions: true },
+  })
+  const pagePolicy = await resolveDiagramPagePolicy(session?.activeJurisdiction || session?.draftingJurisdictions?.[0] || 'US')
+  const sourceMode = String(params.source?.sourceMode || '')
+  const rendered = await renderAndWriteDiagramArtifacts({
+    patentId: params.job.patentId,
+    figureNo: params.source.figureNo,
+    language,
+    plantumlCode: code,
+    pagePolicy,
+    // Legacy IMPORTED_* rows predate the filing-SVG constraints; render them
+    // best-effort so pre-migration sessions keep exporting.
+    enforceFilingSvg: sourceMode === 'MANAGED' || sourceMode === 'RAW_OVERRIDE',
+  })
+  if (rendered.effectiveFontSizePt != null && rendered.effectiveFontSizePt < pagePolicy.minimumTextSizePt) {
+    // A page-fit shortfall must not abort an export job; readiness policy is
+    // enforced upstream and the shortfall is a review item.
+    console.warn(`[PatentDraftingJob] FIG. ${params.source.figureNo} renders below the ${pagePolicy.minimumTextSizePt} pt filing minimum`)
+  }
+  const selected = params.format === 'svg' ? rendered.svg : rendered.png
+  const selectedArtifact = rendered.artifacts[params.format]
+  const filename = selectedArtifact.filename!
+  const imagePath = selectedArtifact.path!
+  params.source.renderArtifacts = rendered.artifacts
+  params.source.imageFilename = rendered.artifacts.png.filename
+  params.source.imagePath = rendered.artifacts.png.path
 
   if (params.persistOnSource) {
     await prisma.diagramSource.update({
@@ -293,9 +336,12 @@ async function renderDiagramSourceToFile(params: {
         }
       },
       data: {
-        imageFilename: filename,
-        imagePath,
-        imageChecksum: rendered.checksum,
+        renderArtifacts: rendered.artifacts as any,
+        renderStatus: 'SUCCESS',
+        renderError: null,
+        imageFilename: rendered.artifacts.png.filename,
+        imagePath: rendered.artifacts.png.path,
+        imageChecksum: rendered.artifacts.png.checksum,
         imageUploadedAt: new Date(),
       }
     })
@@ -304,8 +350,9 @@ async function renderDiagramSourceToFile(params: {
   return {
     filename,
     imagePath,
-    buffer: rendered.buffer,
-    contentType: rendered.contentType,
+    buffer: selected.buffer,
+    contentType: selected.contentType,
+    artifacts: rendered.artifacts,
   }
 }
 
@@ -450,7 +497,7 @@ async function storeBatchFigureArtifacts(params: {
         }))
       }
     } catch {
-      // PNG is the required export format for DOCX; SVG is a convenience artifact.
+      // The central pipeline keeps SVG as master and PNG for DOCX/editor compatibility.
     }
   }
 

@@ -55,9 +55,9 @@ describe('buildReviewPrompt locked review context', () => {
     )
 
     expect(prompt).toContain('LOCKED PATENT FIGURES')
-    expect(prompt).toContain('APPROVED DIAGRAM FIGURES (Read-Only PlantUML Code)')
+    expect(prompt).toContain('APPROVED DIAGRAM FIGURES (Read-Only Structured Facts)')
     expect(prompt).toContain('APPROVED SKETCH FIGURES')
-    expect(prompt).toContain('Do not suggest changing PlantUML')
+    expect(prompt).toContain('Do NOT suggest changing PlantUML')
     expect(prompt).toContain('Target only editable text sections for fixes')
   })
 

@@ -248,6 +248,28 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     return []
   }
 
+  const buildFigureImageUrl = (filename: string) =>
+    `/api/projects/${patent.project.id}/patents/${patent.id}/upload?filename=${encodeURIComponent(filename)}`
+
+  // Reference numerals offered by the editor's label picker. Typing a numeral
+  // that isn't here is still allowed — parts get added to figures before the
+  // reference map catches up.
+  const referenceComponents = useMemo(() => {
+    const seen = new Set<string>()
+    return extractComponentsFromReferenceMap(session?.referenceMap)
+      .map((c: any) => ({
+        numeral: c?.numeral === undefined || c?.numeral === null ? '' : String(c.numeral).trim(),
+        name: String(c?.name || '').trim()
+      }))
+      .filter((c: any) => {
+        if (!c.numeral || seen.has(c.numeral)) return false
+        seen.add(c.numeral)
+        return true
+      })
+      .sort((a: any, b: any) => a.numeral.localeCompare(b.numeral, undefined, { numeric: true }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.referenceMap])
+
   const formatDiagramGenerationWarnings = (response: any): string | null => {
     const messages: string[] = []
     if (Array.isArray(response?.warnings)) {
@@ -305,6 +327,8 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [retryingImageAnalysis, setRetryingImageAnalysis] = useState<Record<string, boolean>>({})
   const manualUploadSlotsRef = useRef<ManualUploadSlot[]>([])
   const [showPlantUML, setShowPlantUML] = useState<Record<number, boolean>>({})
+  const [plantUmlDrafts, setPlantUmlDrafts] = useState<Record<number, string>>({})
+  const [savingPlantUml, setSavingPlantUml] = useState<Record<number, boolean>>({})
   const [countryProfile, setCountryProfile] = useState<any | null>(null)
   const uploadSectionRef = useRef<HTMLDivElement>(null)
   const [highlightUpload, setHighlightUpload] = useState(false)
@@ -367,10 +391,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [editingImage, setEditingImage] = useState<{
     type: 'diagram' | 'sketch'
     id: string | number  // figureNo for diagrams, id for sketches
-    imagePath: string
+    imagePath: string    // image the editor draws on (the pristine base when annotations exist)
+    baseImageFilename?: string | null
     title: string
     originalImagePath?: string | null
     language?: string  // diagram language variant, so edits hit the right DiagramSource row
+    shapes?: any[]     // previously saved annotation layer, re-applied on open
   } | null>(null)
   const [savingEditedImage, setSavingEditedImage] = useState(false)
 
@@ -711,7 +737,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
   // Track which figures have been queued for rendering to prevent duplicate calls (language-aware)
   const queuedForRenderRef = useRef<Set<string>>(new Set())
-  // Track figures that have already had an auto-fix attempt (prevents infinite LLM loops)
+  // Track figures that have already had one centralized validation/re-render attempt.
   // This ref is NEVER cleared by useEffects - only manually by user clicking "Retry Render"
   const autoFixAttemptedRef = useRef<Set<string>>(new Set())
   // Increment to invalidate in-flight renders/uploads when a figure is deleted.
@@ -767,7 +793,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       // 4. Not currently rendering
       // 5. No processing status (not in progress or failed)
       // 6. Not already queued for rendering (prevents duplicate calls)
-      // 7. Not already attempted auto-fix (prevents infinite LLM loops after fix failure)
+      // 7. Not already attempted centralized repair (prevents retry loops after failure)
       const hasFailedAutoFix = autoFixAttemptedRef.current.has(key)
       const shouldRender =
         d.plantumlCode &&
@@ -1167,21 +1193,39 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
   // === IMAGE EDITOR FUNCTIONS ===
 
-  // Open the in-browser image editor
-  const openImageEditor = (
-    type: 'diagram' | 'sketch',
-    id: string | number,
-    imagePath: string,
-    title: string,
-    originalImagePath?: string | null,
+  // Open the in-browser image editor. When a saved annotation layer exists the
+  // editor must draw on the pristine original, otherwise the previous edits
+  // would be baked into the base image and re-applied on top of themselves.
+  const openImageEditor = (opts: {
+    type: 'diagram' | 'sketch'
+    id: string | number
+    title: string
+    imageFilename?: string | null
+    originalImageFilename?: string | null
+    fallbackImagePath: string
+    originalImagePath?: string | null
     language?: string
-  ) => {
-    setEditingImage({ type, id, imagePath, title, originalImagePath, language })
+    annotations?: any
+  }) => {
+    const shapes = Array.isArray(opts.annotations?.shapes) ? opts.annotations.shapes : []
+    const baseFilename = shapes.length
+      ? opts.originalImageFilename || opts.imageFilename
+      : opts.imageFilename
+    setEditingImage({
+      type: opts.type,
+      id: opts.id,
+      title: opts.title,
+      imagePath: baseFilename ? buildFigureImageUrl(baseFilename) : opts.fallbackImagePath,
+      baseImageFilename: baseFilename || null,
+      originalImagePath: opts.originalImagePath,
+      language: opts.language,
+      shapes
+    })
     setImageEditorOpen(true)
   }
 
   // Handle save from the image editor (receives base64 directly)
-  const handleImageEditorSave = async (base64: string, imageObject: any) => {
+  const handleImageEditorSave = async (base64: string, imageObject: any, annotations?: any) => {
     if (!editingImage) return
     
     try {
@@ -1202,7 +1246,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           language: editingImage.language,
           imageBase64: base64,
           filename: `${editingImage.title.replace(/[^a-zA-Z0-9]/g, '_')}_edited.png`,
-          preserveOriginal: true
+          preserveOriginal: true,
+          // Editable layer stored beside the flattened PNG so edits stay revisable.
+          annotations: annotations ?? null
         })
       })
       
@@ -1800,7 +1846,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
           format: 'png',
           figureNo,
           patentId: patent?.id,
-          sessionId: session?.id
+          sessionId: session?.id,
+          language,
+          persistArtifacts: true
         })
       })
 
@@ -1808,7 +1856,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         const info = await resp.json().catch(() => ({}))
         const renderError = info.error || info.details || 'Render failed'
         
-        // AUTO-FIX FEATURE: Attempt auto-fix via LLM ONLY ONCE per figure
+        // Attempt the centralized sanitize/validate/render path once per figure.
         // Check both isAutoFixRetry flag AND autoFixAttemptedRef to prevent infinite loops
         // The ref persists across re-renders and is only cleared by manual "Retry Render" click
         if (getDiagramOpEpoch(key) !== runEpoch) {
@@ -1819,10 +1867,10 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         const hasAttemptedAutoFix = autoFixAttemptedRef.current.has(key)
         
         if (!isAutoFixRetry && !hasAttemptedAutoFix) {
-          console.log(`[AutoFix] Render failed for figure ${figureNo}, attempting ONE auto-fix via LLM...`)
-          // Mark as attempted BEFORE the LLM call to prevent race conditions from useEffect triggers
+          console.log(`[AutoFix] Render failed for figure ${figureNo}, attempting one centralized repair...`)
+          // Mark as attempted before the request to prevent race conditions from useEffect triggers.
           autoFixAttemptedRef.current.add(key)
-          setProcessingStatus(prev => ({ ...prev, [key]: 'Render failed - attempting auto-fix via AI...' }))
+          setProcessingStatus(prev => ({ ...prev, [key]: 'Render failed - validating and rebuilding...' }))
           
           try {
             const fixResp = await onComplete({
@@ -1840,13 +1888,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
               // Refresh to get updated code in diagramSources
               await onRefresh()
               // Retry with fixed code (mark as retry to prevent duplicate auto-fix attempts)
-              // Note: autoFixAttemptedRef already has this key, so even if useEffect triggers,
-              // it won't attempt another LLM call
+              // The attempt marker prevents another repair call if useEffect triggers.
               await runSingleRender(figureNo, fixResp.fixedCode, language, true, runEpoch)
               return // Exit - the retry will handle completion
             } else {
-              // LLM fix failed to produce valid code - mark as failed immediately
-              console.warn(`[AutoFix] LLM did not return valid fixed code for figure ${figureNo}`)
+              console.warn(`[AutoFix] Central repair did not return valid code for figure ${figureNo}`)
             }
           } catch (fixError) {
             console.warn(`[AutoFix] Auto-fix attempt failed for figure ${figureNo}:`, fixError)
@@ -1877,12 +1923,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setProcessingStatus(prev => ({ ...prev, [key]: intelligentMessages[3] }))
       setProcessingStep(prev => ({ ...prev, [key]: 3 }))
 
-      // Upload in the background so the next render can start quickly
+      // The server writes both SVG and PNG masters for a saved source.
       if (getDiagramOpEpoch(key) !== runEpoch) {
         queuedForRenderRef.current.delete(key)
         return
       }
-      queueUpload(key, figureNo, blob, language, runEpoch)
+      if (resp.headers.get('X-Artifact-Persisted') === 'true') {
+        setUploaded(prev => ({ ...prev, [key]: true }))
+        await onRefresh()
+      } else {
+        queueUpload(key, figureNo, blob, language, runEpoch)
+      }
 
       // Clear processing status
       setProcessingStatus(prev => ({ ...prev, [key]: '' }))
@@ -2817,6 +2868,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           </Badge>
                         </span>
                       )}
+                      {selectedSource.sourceMode === 'RAW_OVERRIDE' && (
+                        <Badge variant="outline" className="text-xs text-amber-700 bg-amber-50 border-amber-200">
+                          Expert override
+                        </Badge>
+                      )}
+                      {plan?.isStale && (
+                        <Badge variant="outline" className="text-xs text-red-700 bg-red-50 border-red-200">
+                          Component plan changed
+                        </Badge>
+                      )}
                     </div>
                     <Badge variant="outline" className="text-xs text-ai-graphite-500">
                       {selectedSource.imageUploadedAt ? 'Rendered' : selectedSource.plantumlCode ? 'Code Ready' : 'Pending'}
@@ -2868,14 +2929,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           title="Edit this figure (erase, draw, add labels)"
                           onClick={() => {
                             if (serverImageUrl) {
-                              openImageEditor(
-                                'diagram',
-                                figNo,
-                                serverImageUrl,
-                                `Fig ${figNo}`,
-                                selectedSource.originalImagePath,
-                                (selectedSource.language || 'en').toLowerCase()
-                              )
+                              openImageEditor({
+                                type: 'diagram',
+                                id: figNo,
+                                title: `Fig ${figNo}`,
+                                imageFilename: selectedSource.imageFilename,
+                                originalImageFilename: selectedSource.originalImageFilename,
+                                fallbackImagePath: serverImageUrl,
+                                originalImagePath: selectedSource.originalImagePath,
+                                language: (selectedSource.language || 'en').toLowerCase(),
+                                annotations: selectedSource.annotations
+                              })
                             }
                           }}
                         >
@@ -2906,7 +2970,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               setProcessingStatus(prev => ({ ...prev, [diagramKey]: '' }))
                               setProcessingStep(prev => ({ ...prev, [diagramKey]: 0 }))
                               queuedForRenderRef.current.delete(diagramKey) // Allow re-queueing
-                              // Clear auto-fix attempted flag so user can try auto-fix again on manual retry
+                              // Allow one fresh centralized repair on an explicit manual retry.
                               autoFixAttemptedRef.current.delete(diagramKey)
                               autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en', opEpoch)
                             }}
@@ -2922,7 +2986,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         <Button size="sm" onClick={() => {
                           const opEpoch = getDiagramOpEpoch(diagramKey)
                           queuedForRenderRef.current.delete(diagramKey) // Ensure it can be queued
-                          // Clear auto-fix attempted flag so user-initiated render can try auto-fix
+                          // Allow one centralized repair for this user-initiated render.
                           autoFixAttemptedRef.current.delete(diagramKey)
                           autoProcessDiagram(figNo, selectedSource.plantumlCode, selectedSource.language || 'en', opEpoch)
                         }}>
@@ -3046,25 +3110,58 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                           variant="ghost" 
                           size="sm" 
                           className="w-full text-xs text-ai-graphite-500"
-                          onClick={() => setShowPlantUML(prev => ({ ...prev, [figNo]: !prev[figNo] }))}
+                          onClick={() => {
+                            setShowPlantUML(prev => ({ ...prev, [figNo]: !prev[figNo] }))
+                            setPlantUmlDrafts(prev => prev[figNo] === undefined ? ({ ...prev, [figNo]: selectedSource.plantumlCode }) : prev)
+                          }}
                         >
-                          {showPlantUML[figNo] ? 'Hide diagram source' : 'View diagram source'}
+                          {showPlantUML[figNo] ? 'Hide diagram source' : 'Expert PlantUML editor'}
                         </Button>
                         {showPlantUML[figNo] && (
-                           <div className="mt-2 relative">
+                           <div className="mt-2 space-y-2">
                              <Textarea 
-                        readOnly
-                        value={selectedSource.plantumlCode}
-                               className="font-mono text-xs h-32 bg-paper-100"
-                      />
-                             <Button 
-                               size="sm" 
-                               variant="secondary"
-                               className="absolute top-2 right-2 h-6 text-xs"
-                        onClick={() => navigator.clipboard.writeText(selectedSource.plantumlCode)}
-                      >
-                        Copy
-                             </Button>
+                              readOnly={selectedLang !== 'en'}
+                              value={plantUmlDrafts[figNo] ?? selectedSource.plantumlCode}
+                              onChange={(event) => setPlantUmlDrafts(prev => ({ ...prev, [figNo]: event.target.value }))}
+                              className="font-mono text-xs h-48 bg-paper-100"
+                            />
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="secondary" onClick={() => navigator.clipboard.writeText(plantUmlDrafts[figNo] ?? selectedSource.plantumlCode)}>
+                                Copy
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => setPlantUmlDrafts(prev => ({ ...prev, [figNo]: selectedSource.plantumlCode }))}>
+                                Revert
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={selectedLang !== 'en' || !!savingPlantUml[figNo]}
+                                onClick={async () => {
+                                  setSavingPlantUml(prev => ({ ...prev, [figNo]: true }))
+                                  setError(null)
+                                  try {
+                                    const response = await onComplete({
+                                      action: 'save_plantuml',
+                                      sessionId: session?.id,
+                                      figureNo: figNo,
+                                      title: plan?.title,
+                                      description: plan?.description,
+                                      plantumlCode: plantUmlDrafts[figNo] ?? selectedSource.plantumlCode,
+                                    })
+                                    if (response?.error) throw new Error(response.details ? `${response.error}: ${JSON.stringify(response.details)}` : response.error)
+                                    setPlantUmlDrafts(prev => ({ ...prev, [figNo]: response?.plantumlCode || prev[figNo] }))
+                                    await onRefresh()
+                                  } catch (saveError) {
+                                    setError(saveError instanceof Error ? saveError.message : 'Failed to save PlantUML')
+                                  } finally {
+                                    setSavingPlantUml(prev => ({ ...prev, [figNo]: false }))
+                                  }
+                                }}
+                              >
+                                {savingPlantUml[figNo] && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                                Save expert override
+                              </Button>
+                            </div>
+                            {selectedLang !== 'en' && <p className="text-xs text-ai-graphite-500">Edit the English source; translated variants are regenerated from it.</p>}
                     </div>
                         )}
                   </div>
@@ -3085,22 +3182,24 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             setError(null) // Clear previous errors
                             setGenerationWarning(null)
                             try {
-                             const resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved })
+                             let resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved })
+                              if (resp?.code === 'RAW_OVERRIDE_CONFIRMATION_REQUIRED' && window.confirm('This figure contains expert PlantUML customizations. Replace them and return the figure to managed mode?')) {
+                                resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved, confirmRawReplacement: true })
+                              }
+                              if (resp?.code === 'SPLIT_APPROVAL_REQUIRED') {
+                                const proposedTitles = Array.isArray(resp.splitProposal)
+                                  ? resp.splitProposal.map((item: any) => item?.title).filter(Boolean).join('\n• ')
+                                  : ''
+                                const approved = window.confirm(`This change requires an overview/detail split and will reset figure ordering and stale translations.${proposedTitles ? `\n\n• ${proposedTitles}` : ''}\n\nApprove this split?`)
+                                if (approved) {
+                                  resp = await onComplete({ action: 'regenerate_diagram_llm', sessionId: session?.id, figureNo: figNo, instructions: modifyTextSaved, confirmRawReplacement: true, approveSplit: true })
+                                }
+                              }
                               if (resp?.diagramSource?.plantumlCode) {
                                 setGenerationWarning(formatDiagramGenerationWarnings(resp))
                                 await onRefresh()
                                 setModifyFigNo(null)
                                 setModifyTextSaved('')
-                                // AUTO-RENDER: Automatically render the new code after successful regeneration
-                                const newCode = resp.diagramSource.plantumlCode
-                                const lang = resp.diagramSource.language || 'en'
-                                const diagramKey = getDiagramKey(figNo, lang)
-                                console.log(`[AutoRender] Auto-rendering regenerated diagram for figure ${figNo}`)
-                                // Clear auto-fix flag since this is fresh regenerated code - allow one auto-fix attempt
-                                autoFixAttemptedRef.current.delete(diagramKey)
-                                queuedForRenderRef.current.delete(diagramKey)
-                                const opEpoch = getDiagramOpEpoch(diagramKey)
-                                autoProcessDiagram(figNo, newCode, lang, opEpoch)
                               } else if (resp?.error) {
                                 // Handle API error response
                                 const baseError = resp.details
@@ -4187,7 +4286,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                               onClick={(e) => {
                                 e.stopPropagation()
                                 if (sketchImageUrl) {
-                                  openImageEditor('sketch', sketch.id, sketchImageUrl, sketch.title, sketch.originalImagePath)
+                                  openImageEditor({
+                                  type: 'sketch',
+                                  id: sketch.id,
+                                  title: sketch.title,
+                                  imageFilename: sketch.imageFilename,
+                                  originalImageFilename: sketch.originalImageFilename,
+                                  fallbackImagePath: sketchImageUrl,
+                                  originalImagePath: sketch.originalImagePath,
+                                  annotations: sketch.annotations
+                                })
                                 }
                               }}
                               title="Edit this sketch"
@@ -4246,7 +4354,16 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                             className="h-10 w-10 p-0"
                             onClick={() => {
                               if (sketchImageUrl) {
-                                openImageEditor('sketch', sketch.id, sketchImageUrl, sketch.title, sketch.originalImagePath)
+                                openImageEditor({
+                                  type: 'sketch',
+                                  id: sketch.id,
+                                  title: sketch.title,
+                                  imageFilename: sketch.imageFilename,
+                                  originalImageFilename: sketch.originalImageFilename,
+                                  fallbackImagePath: sketchImageUrl,
+                                  originalImagePath: sketch.originalImagePath,
+                                  annotations: sketch.annotations
+                                })
                               }
                             }}
                             disabled={!sketchImageUrl || sketch.status !== 'SUCCESS'}
@@ -4758,6 +4875,9 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         <ImageEditor
           imageSrc={editingImage.imagePath}
           title={editingImage.title}
+          initialShapes={editingImage.shapes}
+          referenceComponents={referenceComponents}
+          baseImageFilename={editingImage.baseImageFilename}
           onSave={handleImageEditorSave}
           onClose={handleImageEditorClose}
         />

@@ -63,7 +63,10 @@ export interface ReviewContext {
   figures: Array<{
     figureNo: number
     title: string
-    plantuml: string
+    semanticModel?: unknown
+    nodes?: unknown[]
+    edges?: unknown[]
+    plantuml?: string
   }>
   /** Sketches from figure planner - include description to prevent false "missing figure" errors */
   sketches?: Array<{
@@ -278,7 +281,7 @@ export async function runAIReview(
 
 export function buildReviewPrompt(
   draft: Record<string, string>,
-  figures: Array<{ figureNo: number; title: string; plantuml: string }>,
+  figures: Array<{ figureNo: number; title: string; semanticModel?: unknown; nodes?: unknown[]; edges?: unknown[]; plantuml?: string }>,
   jurisdiction: string,
   inventionTitle?: string,
   components?: Array<{ name: string; numeral: string }>,
@@ -321,16 +324,23 @@ export function buildReviewPrompt(
     : 'No figures provided'
   if (!figuresSkipped && figures.length > 0) {
     const figureDetails = figures.map(f => {
+      if (f.semanticModel || f.nodes || f.edges) {
+        const facts = f.semanticModel
+          ? { sourceMode: 'MANAGED', semanticModel: f.semanticModel }
+          : { sourceMode: 'RAW_OVERRIDE_OR_IMPORT', nodes: f.nodes || [], edges: f.edges || [] }
+        return `### Figure ${f.figureNo}: ${f.title}\n\n**Structured Diagram Facts:**\n\`\`\`json\n${JSON.stringify(facts, null, 2)}\n\`\`\``
+      }
+      const plantuml = f.plantuml || ''
       // Extract components and arrows from PlantUML
-      const componentMatches = f.plantuml.match(/(?:rectangle|component|node|database|actor|usecase|storage|cloud|folder|frame|package)\s+["']?([^"'\[\]{}]+)["']?\s*(?:as\s+(\w+))?/gi) || []
-      const arrowMatches = f.plantuml.match(/(\w+)\s*(?:-->|->|<--|<-|--|\.\.>|\.\.)\s*(\w+)/gi) || []
-      const numeralMatches = f.plantuml.match(/\((\d+)\)/g) || []
+      const componentMatches = plantuml.match(/(?:rectangle|component|node|database|actor|usecase|storage|cloud|folder|frame|package)\s+["']?([^"'\[\]{}]+)["']?\s*(?:as\s+(\w+))?/gi) || []
+      const arrowMatches = plantuml.match(/(\w+)\s*(?:-->|->|<--|<-|--|\.\.>|\.\.)\s*(\w+)/gi) || []
+      const numeralMatches = plantuml.match(/\((\d+)\)/g) || []
       
       return `### Figure ${f.figureNo}: ${f.title}
 
 **PlantUML Source Code:**
 \`\`\`plantuml
-${f.plantuml}
+${plantuml}
 \`\`\`
 
 **Extracted Elements from Diagram:**
@@ -339,10 +349,9 @@ ${f.plantuml}
 - Reference Numerals: ${numeralMatches.length > 0 ? Array.from(new Set(numeralMatches)).join(', ') : 'None detected'}`
     }).join('\n\n')
 
-    figuresText = `**APPROVED DIAGRAM FIGURES (Read-Only PlantUML Code):**
-These ${figures.length} approved diagram(s) are provided as locked PlantUML source code.
-The PlantUML code defines the structure, components, and relationships in each figure.
-Analyze the code only to understand what each diagram depicts. Do not suggest changing PlantUML, diagram structure, figure order, figure content, or diagram assets.
+    figuresText = `**APPROVED DIAGRAM FIGURES (Read-Only Structured Facts):**
+These ${figures.length} approved diagram(s) are provided as locked semantic or centrally extracted facts.
+Analyze the facts only to understand what each diagram depicts. Do not suggest changing diagram semantics, figure order, figure content, or diagram assets.
 
 ${figureDetails}`
   }
@@ -1105,7 +1114,7 @@ function getDefaultRecommendation(errors: number, warnings: number): string {
 
 export interface FixContext {
   relatedContent?: Record<string, string>
-  figures?: Array<{ figureNo: number; title: string; plantuml: string }>
+  figures?: Array<{ figureNo: number; title: string; semanticModel?: unknown; nodes?: unknown[]; edges?: unknown[]; plantuml?: string }>
   figuresSkipped?: boolean
   components?: Array<{ name: string; numeral: string }>
   numberingStyle?: NumberingStyle | string
@@ -1135,7 +1144,9 @@ export function buildFixPrompt(
     contextBlock += '\n\n═══ DIAGRAM INFORMATION (PlantUML Code) ═══\n'
     contextBlock += 'The following diagrams are part of the patent. They are provided as PlantUML code:\n\n'
     contextBlock += context.figures.map(f => 
-      `Figure ${f.figureNo}: ${f.title}\n\`\`\`plantuml\n${f.plantuml.substring(0, 800)}\n\`\`\``
+      f.semanticModel || f.nodes || f.edges
+        ? `Figure ${f.figureNo}: ${f.title}\n\`\`\`json\n${JSON.stringify(f.semanticModel ? { semanticModel: f.semanticModel } : { nodes: f.nodes || [], edges: f.edges || [] }).substring(0, 2400)}\n\`\`\``
+        : `Figure ${f.figureNo}: ${f.title}\n\`\`\`plantuml\n${(f.plantuml || '').substring(0, 800)}\n\`\`\``
     ).join('\n\n')
   }
   if (context?.figuresSkipped) {

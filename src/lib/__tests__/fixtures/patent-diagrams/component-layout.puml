@@ -1,0 +1,94 @@
+@startuml
+skinparam backgroundColor #FFFFFF
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 0
+skinparam defaultFontName SansSerif
+skinparam defaultFontSize 13
+skinparam defaultTextAlignment center
+skinparam ArrowColor #000000
+skinparam ArrowThickness 1.1
+skinparam linetype ortho
+skinparam nodesep 34
+skinparam ranksep 38
+skinparam rectangle {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  BorderThickness 1
+  FontColor #000000
+  FontName SansSerif
+  FontSize 13
+  RoundCorner 0
+}
+skinparam rectangle<<SUBSYSTEM>> {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  BorderThickness 1.3
+  FontColor #000000
+  FontStyle bold
+}
+skinparam rectangle<<SYSTEM>> {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  BorderThickness 1.8
+  FontColor #000000
+  FontSize 16
+  FontStyle bold
+}
+skinparam rectangle<<DECISION>> {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  BorderThickness 1.3
+  FontColor #000000
+}
+skinparam activity {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  FontColor #000000
+}
+skinparam actor {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  FontColor #000000
+}
+skinparam participant {
+  BackgroundColor #FFFFFF
+  BorderColor #000000
+  FontColor #000000
+  BorderThickness 1
+}
+skinparam sequence {
+  LifeLineBorderColor #000000
+  LifeLineBackgroundColor #FFFFFF
+  ArrowColor #000000
+  ParticipantBackgroundColor #FFFFFF
+  ParticipantBorderColor #000000
+  GroupBackgroundColor #FFFFFF
+  GroupBorderColor #000000
+  GroupFontColor #000000
+  GroupHeaderFontColor #000000
+}
+hide stereotype
+top to bottom direction
+
+rectangle "Golden System" as SYSTEM <<SYSTEM>> {
+  rectangle "Input Band" as BAND1 <<SUBSYSTEM>> {
+    together {
+      rectangle "Technical Component\n1\n(100)" as C1
+      rectangle "Technical Component\n2\n(200)" as C2
+    }
+    C1 -right[hidden]-> C2
+  }
+  rectangle "Analysis Band" as BAND2 <<SUBSYSTEM>> {
+    together {
+      rectangle "Technical Component\n3\n(300)" as C3
+      rectangle "Technical Component\n4\n(400)" as C4
+    }
+    C3 -right[hidden]-> C4
+  }
+}
+C1 -down[hidden]-> C3
+
+C1 -down-> C3 : technical flow
+C4 -[norank,dashed]-> C2 : review feedback
+@enduml

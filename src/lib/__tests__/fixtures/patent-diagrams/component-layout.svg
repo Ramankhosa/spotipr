@@ -1,0 +1,9 @@
+<svg width="517" height="376" viewBox="0 0 517 376" xmlns="http://www.w3.org/2000/svg">
+  <g class="cluster" data-qualified-name="SYSTEM" id="ent1"><rect x="7" y="7" width="496" height="355.8" fill="#FFF" style="stroke:#000;stroke-width:1.8;"/></g>
+  <g class="cluster" data-qualified-name="SYSTEM.BAND1" id="ent2"><rect x="43" y="52" width="416" height="131.4" fill="#FFF" style="stroke:#000;stroke-width:1.3;"/></g>
+  <g class="cluster" data-qualified-name="SYSTEM.BAND2" id="ent3"><rect x="31" y="207.4" width="448" height="131.4" fill="#FFF" style="stroke:#000;stroke-width:1.3;"/></g>
+  <g class="entity" data-qualified-name="SYSTEM.BAND1.C1" id="ent4"><rect x="66.72" y="94" width="173" height="65.4" fill="#FFF" style="stroke:#000;stroke-width:1;"/></g>
+  <g class="entity" data-qualified-name="SYSTEM.BAND1.C2" id="ent5"><rect x="261.49" y="94" width="173" height="65.4" fill="#FFF" style="stroke:#000;stroke-width:1;"/></g>
+  <g class="entity" data-qualified-name="SYSTEM.BAND2.C3" id="ent6"><rect x="54.74" y="249.4" width="184.5" height="65.4" fill="#FFF" style="stroke:#000;stroke-width:1;"/></g>
+  <g class="entity" data-qualified-name="SYSTEM.BAND2.C4" id="ent7"><rect x="273.36" y="249.4" width="181.3" height="65.4" fill="#FFF" style="stroke:#000;stroke-width:1;"/></g>
+</svg>

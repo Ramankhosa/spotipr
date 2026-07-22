@@ -61,6 +61,7 @@ import {
   filterDrawingSections
 } from '@/lib/figure-availability';
 import { cleanFigureDescriptionForDrafting } from '@/lib/diagram-image-analysis';
+import { summarizeDiagramPlan } from '@/lib/patent-diagrams/facts';
 import crypto from 'crypto';
 
 // NOTE: Legacy SUPERSET_PROMPTS removed - all prompts now come from database
@@ -1031,7 +1032,7 @@ export class DraftingService {
               figures.push({
                 figureNo: seqItem.finalFigNo,
                 title: this.sanitizeFigureTitle(plan.title) || `Figure ${seqItem.finalFigNo}`,
-                description: cleanFigureDescriptionForDrafting(plan.description || source?.description || ''),
+                description: summarizeDiagramPlan(plan, source),
                 type: 'diagram'
               })
             } else {
@@ -1064,7 +1065,7 @@ export class DraftingService {
             figures.push({
               figureNo: figures.length + 1,
               title: this.sanitizeFigureTitle(plan.title) || `Figure ${figures.length + 1}`,
-              description: cleanFigureDescriptionForDrafting(plan.description),
+              description: summarizeDiagramPlan(plan, (session.diagramSources || []).find((source: any) => source.figureNo === plan.figureNo && source.language === 'en')),
               type: 'diagram'
             })
           }
@@ -1088,7 +1089,7 @@ export class DraftingService {
         const planFigures = (session.figurePlans || []).map((f: any) => ({
           figureNo: f.figureNo,
           title: this.sanitizeFigureTitle(f.title) || `Figure ${f.figureNo}`,
-          description: cleanFigureDescriptionForDrafting(f.description)
+          description: summarizeDiagramPlan(f, (session.diagramSources || []).find((source: any) => source.figureNo === f.figureNo && source.language === 'en'))
         }))
         // Include ALL diagram sources, not just uploaded ones - a figure with PlantUML code is still valid
         const diagramFigures = (session.diagramSources || []).map((d: any) => {
@@ -3822,7 +3823,7 @@ Use the Super Admin panel to add the missing prompt.
             figures.push({
               figureNo: seqItem.finalFigNo,
               title: this.sanitizeFigureTitle(plan.title) || `Figure ${seqItem.finalFigNo}`,
-              description: cleanFigureDescriptionForDrafting(plan.description)
+              description: summarizeDiagramPlan(plan, (session.diagramSources || []).find((source: any) => source.figureNo === plan.figureNo && source.language === 'en'))
             })
           } else {
             console.warn(`[DraftingService] Annexure: Diagram in sequence not found: sourceId=${seqItem.sourceId}`)
@@ -3847,7 +3848,7 @@ Use the Super Admin panel to add the missing prompt.
           figures.push({
             figureNo: figures.length + 1,
             title: this.sanitizeFigureTitle(plan.title) || `Figure ${figures.length + 1}`,
-            description: cleanFigureDescriptionForDrafting(plan.description)
+            description: summarizeDiagramPlan(plan, (session.diagramSources || []).find((source: any) => source.figureNo === plan.figureNo && source.language === 'en'))
           })
         }
       }
@@ -3865,7 +3866,7 @@ Use the Super Admin panel to add the missing prompt.
       const planFigures: any[] = (session.figurePlans || []).map((f: any) => ({
         figureNo: f.figureNo,
         title: this.sanitizeFigureTitle(f.title) || `Figure ${f.figureNo}`,
-        description: cleanFigureDescriptionForDrafting(f.description)
+        description: summarizeDiagramPlan(f, (session.diagramSources || []).find((source: any) => source.figureNo === f.figureNo && source.language === 'en'))
       }));
       // Include ALL diagram sources, not just uploaded ones
       const diagramFigures: any[] = (session.diagramSources || []).map((d: any) => {

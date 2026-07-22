@@ -2598,13 +2598,20 @@ model ReferenceMap {
 }
 
 model FigurePlan {
-  id          String  @id @default(cuid())
-  sessionId   String
-  figureNo    Int
-  title       String
-  nodes       Json // Array of component references included in figure
-  edges       Json // Array of {from, to, label} connections
-  description String?
+  id                    String  @id @default(cuid())
+  sessionId             String
+  figureNo              Int
+  title                 String
+  nodes                 Json // Array of component references included in figure
+  edges                 Json // Array of {from, to, label} connections
+  description           String?
+  diagramType           String? @map("diagram_type")
+  semanticSchemaVersion Int?    @map("semantic_schema_version")
+  semanticModel         Json?   @map("semantic_model")
+  semanticChecksum      String? @map("semantic_checksum")
+  referenceMapChecksum  String? @map("reference_map_checksum")
+  validationReport      Json?   @map("validation_report")
+  detailOfFigureNo      Int?    @map("detail_of_figure_no")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2622,6 +2629,18 @@ model DiagramSource {
   figureNo     Int
   plantumlCode String
   checksum     String // For integrity verification
+
+  // Managed semantic diagrams and expert/imported raw overrides share the
+  // same rendering/validation pipeline. Values: MANAGED, RAW_OVERRIDE,
+  // IMPORTED_RAW, IMPORTED_IMAGE.
+  sourceMode             String  @default("MANAGED") @map("source_mode")
+  labelMap               Json?   @map("label_map")
+  renderArtifacts        Json?   @map("render_artifacts")
+  renderStatus           String? @map("render_status")
+  renderError            String? @map("render_error") @db.Text
+  semanticChecksum       String? @map("semantic_checksum")
+  referenceMapChecksum   String? @map("reference_map_checksum")
+  translatedFromChecksum String? @map("translated_from_checksum")
 
   // Language support for multi-jurisdiction translation
   language                String  @default("en") // ISO 639-1 code (en, ja, zh, de, fr, etc.)

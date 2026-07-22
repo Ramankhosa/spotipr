@@ -5,7 +5,7 @@ import crypto from 'crypto'
 import plantumlEncoder from 'plantuml-encoder'
 
 // Whitelist of allowed single-line skinparam keys (same as main route.ts)
-const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|componentBackgroundColor|packageBackgroundColor|activityBackgroundColor|participantBackgroundColor|actorBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
+const ALLOWED_SKINPARAM_KEYS = /^skinparam\s+(backgroundColor|rectangleBackgroundColor|componentBackgroundColor|packageBackgroundColor|activityBackgroundColor|participantBackgroundColor|actorBackgroundColor|monochrome|shadowing|roundcorner|defaultFontName|defaultFontSize|defaultTextAlignment|dpi|ArrowColor|BorderColor|linetype|nodesep|ranksep|BorderThickness|PackageBorderThickness|PackageTitleFontStyle|RectanglePadding|PackagePadding|ArrowThickness)\b/i
 
 // Explicitly banned skinparam patterns
 const BANNED_SKINPARAM_PATTERNS = /^skinparam\s+(FontColor|.*Style(?!.*PackageTitleFontStyle))\b/i
@@ -198,6 +198,11 @@ function cleanForRendering(code: string): string {
 }
 
 export async function POST(request: NextRequest) {
+  // Dev/test utility only: it is unauthenticated, so it must never act as an
+  // open render relay in production deployments.
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
   try {
     const body = await request.json()
     const { code, format = 'svg', figureNo, patentId, sessionId } = body || {}
