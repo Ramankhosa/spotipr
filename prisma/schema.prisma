@@ -2641,6 +2641,11 @@ model DiagramSource {
   originalImagePath     String?
   originalImageFilename String?
 
+  // Editable annotation layer from the canvas editor, applied over the original
+  // image: { version, shapes[], baseImageFilename, savedAt }. Keeping the shapes
+  // means edits stay re-editable instead of being flattened into the PNG.
+  annotations Json?
+
   // Deferred user-uploaded image analysis
   imageAnalysisStatus      DiagramImageAnalysisStatus?
   imageAnalysisError       String?
@@ -2751,6 +2756,9 @@ model SketchRecord {
   // For REFINE mode - original uploaded sketch
   originalImagePath     String?
   originalImageFilename String?
+
+  // Editable annotation layer from the canvas editor (see DiagramSource.annotations)
+  annotations Json?
 
   // AI generation metadata
   aiModel        String? // e.g., "gemini-3-pro-image-preview"

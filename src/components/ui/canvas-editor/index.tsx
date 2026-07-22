@@ -19,6 +19,7 @@ import {
   Redo2,
   Square,
   SquareDashed,
+  Tag,
   Type,
   Undo2,
   X,
@@ -29,8 +30,12 @@ import { cn } from '@/lib/utils'
 import EditorCanvas from './EditorCanvas'
 import TextEditOverlay from './TextEditOverlay'
 import { useHistory } from './useHistory'
+import { whitenToPaperWhite } from './whiten'
 import {
+  ANNOTATIONS_VERSION,
+  AnnotationPayload,
   BoxShape,
+  CalloutShape,
   CanvasImageEditorProps,
   SegmentShape,
   ShapeDesc,
@@ -57,7 +62,8 @@ const TOOLS: { tool: Tool; icon: LucideIcon; label: string }[] = [
   { tool: 'elbowArrow', icon: CornerDownRight, label: 'Bent arrow (90°)' },
   { tool: 'rect', icon: Square, label: 'Rectangle' },
   { tool: 'ellipse', icon: Circle, label: 'Ellipse' },
-  { tool: 'text', icon: Type, label: 'Text label' }
+  { tool: 'text', icon: Type, label: 'Text label' },
+  { tool: 'callout', icon: Tag, label: 'Reference numeral with leader line' }
 ]
 
 interface EditingText {
@@ -67,20 +73,42 @@ interface EditingText {
   initialText: string
   fontSize: number
   color: string
+  /** Present when the text belongs to a callout, i.e. has a leader line. */
+  anchor?: { x: number; y: number }
 }
 
-export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: CanvasImageEditorProps) {
+export default function CanvasImageEditor({
+  imageSrc,
+  onSave,
+  onClose,
+  title,
+  initialShapes,
+  referenceComponents,
+  baseImageFilename
+}: CanvasImageEditorProps) {
   const stageRef = useRef<Konva.Stage>(null)
   const trRef = useRef<Konva.Transformer>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const nextIdRef = useRef(1)
+  // Start past any rehydrated ids so newly drawn shapes can't collide with them.
+  const nextIdRef = useRef(
+    (initialShapes || []).reduce((max, s) => {
+      const n = Number(/^shape_(\d+)$/.exec(s.id)?.[1])
+      return Number.isFinite(n) ? Math.max(max, n + 1) : max
+    }, 1)
+  )
   const draftOriginRef = useRef({ x: 0, y: 0 })
   const initializedForRef = useRef<string | null>(null)
-  const pendingTextRef = useRef<{ x: number; y: number } | null>(null)
+  const pendingTextRef = useRef<{ x: number; y: number; anchor?: { x: number; y: number } } | null>(null)
 
-  const [imageEl, setImageEl] = useState<HTMLImageElement | null>(null)
+  const [imageEl, setImageEl] = useState<HTMLImageElement | HTMLCanvasElement | null>(null)
   const [imageStatus, setImageStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadNonce, setLoadNonce] = useState(0)
+  const [paperWhite, setPaperWhite] = useState(true)
+  const [whitenAvailable, setWhitenAvailable] = useState(false)
+  const rawImageRef = useRef<HTMLImageElement | null>(null)
+  const whitenedRef = useRef<HTMLCanvasElement | null>(null)
+  const paperWhiteRef = useRef(true)
+  paperWhiteRef.current = paperWhite
   const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null)
   const [view, setView] = useState<ViewState>({ scale: 1, x: 0, y: 0 })
   const [fitScale, setFitScale] = useState(1)
@@ -92,7 +120,10 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
   const [eraserWidth, setEraserWidth] = useState(24)
   const [fontSize, setFontSize] = useState(18)
 
-  const { state: shapes, set: setShapes, undo, redo, canUndo, canRedo } = useHistory<ShapeDesc[]>([])
+  // Seeded with any previously saved layer so past edits stay revisable.
+  const { state: shapes, set: setShapes, undo, redo, canUndo, canRedo } = useHistory<ShapeDesc[]>(
+    initialShapes && initialShapes.length ? initialShapes : []
+  )
   const [draftShape, setDraftShape] = useState<ShapeDesc | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState<EditingText | null>(null)
@@ -102,10 +133,12 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
 
   const newId = () => `shape_${nextIdRef.current++}`
 
-  const imageSize = useMemo(
-    () => (imageEl ? { width: imageEl.naturalWidth, height: imageEl.naturalHeight } : null),
-    [imageEl]
-  )
+  const imageSize = useMemo(() => {
+    if (!imageEl) return null
+    return imageEl instanceof HTMLCanvasElement
+      ? { width: imageEl.width, height: imageEl.height }
+      : { width: imageEl.naturalWidth, height: imageEl.naturalHeight }
+  }, [imageEl])
   const minScale = fitScale * 0.1
 
   // --- Image loading -------------------------------------------------------
@@ -114,11 +147,21 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
     setImageStatus('loading')
     setImageEl(null)
     initializedForRef.current = null
+    rawImageRef.current = null
+    whitenedRef.current = null
+    setWhitenAvailable(false)
     const img = new window.Image()
     img.crossOrigin = 'anonymous'
     img.onload = () => {
       if (cancelled) return
-      setImageEl(img)
+      rawImageRef.current = img
+      // Figures arrive with off-white backgrounds (AI sketches, scans, legacy
+      // renders) while the eraser paints pure white; normalizing to paper
+      // white makes erasing invisible and the saved figure uniformly #FFFFFF.
+      const whitened = whitenToPaperWhite(img)
+      whitenedRef.current = whitened ? whitened.element : null
+      setWhitenAvailable(!!whitened)
+      setImageEl(whitened && paperWhiteRef.current ? whitened.element : img)
       setImageStatus('ready')
     }
     img.onerror = () => {
@@ -130,13 +173,25 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
     }
   }, [imageSrc, loadNonce])
 
+  const togglePaperWhite = () => {
+    const next = !paperWhite
+    setPaperWhite(next)
+    const el = next && whitenedRef.current ? whitenedRef.current : rawImageRef.current
+    if (el) setImageEl(el)
+  }
+
   // --- Container sizing ----------------------------------------------------
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const update = () => {
       const rect = el.getBoundingClientRect()
-      setContainerSize({ width: Math.max(1, rect.width), height: Math.max(1, rect.height) })
+      // Ignore degenerate measurements taken before layout settles. Latching onto
+      // one would fix the zoom at a nonsense scale, and the initialise-once guard
+      // below would never let it recover — every click would then map hundreds of
+      // thousands of pixels off-canvas.
+      if (rect.width < 2 || rect.height < 2) return
+      setContainerSize({ width: rect.width, height: rect.height })
     }
     update()
     const observer = new ResizeObserver(update)
@@ -242,6 +297,22 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
         // click's default action, which would blur (and discard) the new input.
         pendingTextRef.current = pos
         break
+      case 'callout':
+        // Drag starts on the part being labelled; the numeral lands where released.
+        draftOriginRef.current = pos
+        setDraftShape({
+          id: newId(),
+          tool: 'callout',
+          anchorX: pos.x,
+          anchorY: pos.y,
+          x: pos.x,
+          y: pos.y,
+          text: '',
+          fontSize,
+          fill: color,
+          strokeWidth
+        })
+        break
       default:
         break
     }
@@ -259,6 +330,10 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
       if (prev.tool === 'elbowArrow') {
         const origin = draftOriginRef.current
         return { ...prev, points: elbowPoints(origin.x, origin.y, pos.x, pos.y) }
+      }
+      if (prev.tool === 'callout') {
+        // The anchor stays put; the label follows the cursor.
+        return { ...prev, x: pos.x, y: pos.y }
       }
       const origin = draftOriginRef.current
       return {
@@ -299,6 +374,19 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
     if (!current) return
     draftRef.current = null
     setDraftShape(null)
+
+    // A finished callout drag opens the numeral input at the label position.
+    if (current.tool === 'callout') {
+      setEditingText({
+        x: current.x,
+        y: current.y,
+        initialText: '',
+        fontSize: fontSizeRef.current,
+        color: colorRef.current,
+        anchor: { x: current.anchorX, y: current.anchorY }
+      })
+      return
+    }
     // Discard accidental clicks: shapes smaller than ~3 screen px.
     const minDim = 3 / (stageRef.current?.scaleX() || 1)
     let valid = true
@@ -339,8 +427,9 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
 
   // --- Text ----------------------------------------------------------------
   const startEditText = (id: string) => {
-    const shape = shapes.find(s => s.id === id) as TextShape | undefined
-    if (!shape) return
+    const found = shapes.find(s => s.id === id)
+    if (!found || (found.tool !== 'text' && found.tool !== 'callout')) return
+    const shape = found as TextShape | CalloutShape
     setSelectedId(null)
     setEditingText({
       shapeId: id,
@@ -348,7 +437,9 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
       y: shape.y,
       initialText: shape.text,
       fontSize: shape.fontSize,
-      color: shape.fill
+      color: shape.fill,
+      // Retained so the leader line survives a re-edit of the numeral.
+      ...(shape.tool === 'callout' ? { anchor: { x: shape.anchorX, y: shape.anchorY } } : {})
     })
   }
 
@@ -364,19 +455,30 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
         setShapes(shapes.map(s => (s.id === editing.shapeId ? { ...s, text: trimmed } : s)))
       }
     } else if (trimmed) {
-      setShapes([
-        ...shapes,
-        {
-          id: newId(),
-          tool: 'text',
-          x: editing.x,
-          y: editing.y,
-          text: trimmed,
-          fontSize: editing.fontSize,
-          fill: editing.color,
-          rotation: 0
-        }
-      ])
+      const shape: ShapeDesc = editing.anchor
+        ? {
+            id: newId(),
+            tool: 'callout',
+            x: editing.x,
+            y: editing.y,
+            anchorX: editing.anchor.x,
+            anchorY: editing.anchor.y,
+            text: trimmed,
+            fontSize: editing.fontSize,
+            fill: editing.color,
+            strokeWidth
+          }
+        : {
+            id: newId(),
+            tool: 'text',
+            x: editing.x,
+            y: editing.y,
+            text: trimmed,
+            fontSize: editing.fontSize,
+            fill: editing.color,
+            rotation: 0
+          }
+      setShapes([...shapes, shape])
     }
   }
 
@@ -477,10 +579,20 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
       return
     }
 
+    // Shapes travel with the flattened PNG so the layer stays re-editable.
+    const annotations: AnnotationPayload = {
+      version: ANNOTATIONS_VERSION,
+      shapes,
+      baseImageFilename: baseImageFilename ?? null,
+      savedAt: new Date().toISOString()
+    }
+
     try {
       setSaving(true)
       setSaveError(null)
-      await Promise.resolve(onSave(base64, { name: `${safeName}_edited.png`, type: 'image/png' }))
+      await Promise.resolve(
+        onSave(base64, { name: `${safeName}_edited.png`, type: 'image/png' }, annotations)
+      )
     } catch (err) {
       console.error('[CanvasImageEditor] save failed', err)
       setSaveError(err instanceof Error ? err.message : 'Failed to save the edited image')
@@ -500,8 +612,8 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
           ? 'text'
           : 'crosshair'
 
-  const showColor = ['pen', 'line', 'arrow', 'elbowArrow', 'rect', 'ellipse', 'text'].includes(tool)
-  const showStrokeWidth = ['pen', 'line', 'arrow', 'elbowArrow', 'rect', 'ellipse'].includes(tool)
+  const showColor = ['pen', 'line', 'arrow', 'elbowArrow', 'rect', 'ellipse', 'text', 'callout'].includes(tool)
+  const showStrokeWidth = ['pen', 'line', 'arrow', 'elbowArrow', 'rect', 'ellipse', 'callout'].includes(tool)
 
   const selectTool = (t: Tool) => {
     setTool(t)
@@ -538,6 +650,21 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
             >
               1:1
             </button>
+            {whitenAvailable && (
+              <button
+                type="button"
+                onClick={togglePaperWhite}
+                className={cn(
+                  'px-2 h-8 rounded-md text-xs whitespace-nowrap transition-colors',
+                  paperWhite
+                    ? 'bg-ai-blue-500 text-white'
+                    : 'text-ai-graphite-600 hover:bg-paper-100'
+                )}
+                title="Normalize the figure background to pure paper white so the eraser blends in"
+              >
+                Paper white
+              </button>
+            )}
             <div className="w-px h-6 bg-paper-200 mx-1" />
             <button
               type="button"
@@ -653,7 +780,7 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
                   <span className="text-xs w-6 tabular-nums">{eraserWidth}</span>
                 </div>
               )}
-              {tool === 'text' && (
+              {(tool === 'text' || tool === 'callout') && (
                 <div className="flex items-center gap-2">
                   <span className="text-xs">Text size</span>
                   <input
@@ -683,6 +810,11 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
               {tool === 'pan' && <span className="text-xs">Drag to pan. Mouse wheel zooms.</span>}
               {tool === 'text' && (
                 <span className="text-xs">Click on the image to place a label.</span>
+              )}
+              {tool === 'callout' && (
+                <span className="text-xs whitespace-nowrap">
+                  Drag from the part outwards, then type or pick a reference numeral.
+                </span>
               )}
             </div>
 
@@ -752,6 +884,7 @@ export default function CanvasImageEditor({ imageSrc, onSave, onClose, title }: 
                   fontSizePx={Math.max(10, editingText.fontSize * view.scale)}
                   color={editingText.color}
                   initialText={editingText.initialText}
+                  suggestions={referenceComponents}
                   onCommit={commitText}
                   onCancel={() => setEditingText(null)}
                 />

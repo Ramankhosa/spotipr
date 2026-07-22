@@ -1,7 +1,7 @@
 'use client'
 
 import Konva from 'konva'
-import { Arrow, Ellipse, Line, Rect, Text } from 'react-konva'
+import { Arrow, Circle, Ellipse, Group, Line, Rect, Text } from 'react-konva'
 import { KonvaEventObject } from 'konva/lib/Node'
 import { SELECTION_COLOR, ShapeDesc, TEXT_FONT_FAMILY } from './types'
 
@@ -185,6 +185,67 @@ export default function ShapeRenderer({
           })
         }}
       />
+    )
+  }
+
+  if (shape.tool === 'callout') {
+    const callout = shape
+    // The leader starts at the edge of the label nearest the anchor so the line
+    // never strikes through the numeral.
+    const halfW = (callout.text.length * callout.fontSize * 0.3) / 2
+    const halfH = callout.fontSize / 2
+    const cx = callout.x + halfW
+    const cy = callout.y + halfH
+    const dx = callout.anchorX - cx
+    const dy = callout.anchorY - cy
+    const dist = Math.hypot(dx, dy) || 1
+    const pad = 4
+    const startX = cx + (dx / dist) * Math.min(halfW + pad, dist)
+    const startY = cy + (dy / dist) * Math.min(halfH + pad, dist)
+
+    return (
+      <Group
+        {...common}
+        visible={!hidden}
+        onDblClick={() => onEditText?.(callout.id)}
+        onDblTap={() => onEditText?.(callout.id)}
+        onDragEnd={(e: KonvaEventObject<DragEvent>) => {
+          // Children hold absolute coordinates, so fold the group's offset back
+          // into the shape and reset the group to the origin.
+          const node = e.target
+          const dxMove = node.x()
+          const dyMove = node.y()
+          node.position({ x: 0, y: 0 })
+          onChange?.(callout.id, {
+            x: callout.x + dxMove,
+            y: callout.y + dyMove,
+            anchorX: callout.anchorX + dxMove,
+            anchorY: callout.anchorY + dyMove
+          })
+        }}
+      >
+        <Line
+          points={[startX, startY, callout.anchorX, callout.anchorY]}
+          stroke={callout.fill}
+          strokeWidth={callout.strokeWidth}
+          lineCap="round"
+          hitStrokeWidth={Math.max(callout.strokeWidth, 14)}
+        />
+        <Circle
+          x={callout.anchorX}
+          y={callout.anchorY}
+          radius={Math.max(callout.strokeWidth * 1.2, 2.5)}
+          fill={callout.fill}
+        />
+        <Text
+          x={callout.x}
+          y={callout.y}
+          text={callout.text}
+          fontSize={callout.fontSize}
+          fontFamily={TEXT_FONT_FAMILY}
+          fill={callout.fill}
+        />
+      </Group>
     )
   }
 

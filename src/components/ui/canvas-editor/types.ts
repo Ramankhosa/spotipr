@@ -9,6 +9,7 @@ export type Tool =
   | 'rect'
   | 'ellipse'
   | 'text'
+  | 'callout'
   | 'pan'
 
 export interface StrokeShape {
@@ -62,7 +63,39 @@ export interface TextShape {
   rotation: number
 }
 
-export type ShapeDesc = StrokeShape | SegmentShape | BoxShape | TextShape
+// A reference numeral with a leader line pointing at the part it labels.
+// Label and anchor move together, which is how patent figures are annotated.
+export interface CalloutShape {
+  id: string
+  tool: 'callout'
+  x: number // label position
+  y: number
+  anchorX: number // tip of the leader line, on the part being labelled
+  anchorY: number
+  text: string
+  fontSize: number
+  fill: string
+  strokeWidth: number
+}
+
+export type ShapeDesc = StrokeShape | SegmentShape | BoxShape | TextShape | CalloutShape
+
+// One entry of the drafting session's reference map, used to suggest numerals.
+export interface ReferenceComponent {
+  numeral: string
+  name: string
+}
+
+// Persisted editable layer. Kept alongside the flattened PNG so edits can be
+// reopened and revised rather than being baked irreversibly into the image.
+export const ANNOTATIONS_VERSION = 1
+
+export interface AnnotationPayload {
+  version: number
+  shapes: ShapeDesc[]
+  baseImageFilename?: string | null
+  savedAt: string
+}
 
 export interface ViewState {
   scale: number
@@ -74,9 +107,19 @@ export interface ViewState {
 // can swap implementations via the dynamic import alone.
 export interface CanvasImageEditorProps {
   imageSrc: string
-  onSave: (editedImageBase64: string, imageObject: any) => void | Promise<void>
+  onSave: (
+    editedImageBase64: string,
+    imageObject: any,
+    annotations: AnnotationPayload
+  ) => void | Promise<void>
   onClose: () => void
   title?: string
+  /** Previously saved shapes, re-applied over imageSrc so edits stay revisable. */
+  initialShapes?: ShapeDesc[]
+  /** Reference numerals offered as suggestions; arbitrary text is still allowed. */
+  referenceComponents?: ReferenceComponent[]
+  /** Filename of the base image the shapes are drawn over, recorded with the payload. */
+  baseImageFilename?: string | null
 }
 
 export const TEXT_FONT_FAMILY = 'Arial, Helvetica, sans-serif'

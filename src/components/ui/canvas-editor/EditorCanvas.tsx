@@ -14,7 +14,7 @@ interface EditorCanvasProps {
   trRef: RefObject<Konva.Transformer>
   width: number
   height: number
-  imageEl: HTMLImageElement
+  imageEl: HTMLImageElement | HTMLCanvasElement
   imageWidth: number
   imageHeight: number
   view: ViewState
@@ -34,7 +34,9 @@ interface EditorCanvasProps {
   onEditText: (id: string) => void
 }
 
-const DRAWING_TOOLS: Tool[] = ['pen', 'eraser', 'eraseRect', 'line', 'arrow', 'rect', 'ellipse', 'text']
+const DRAWING_TOOLS: Tool[] = [
+  'pen', 'eraser', 'eraseRect', 'line', 'arrow', 'elbowArrow', 'rect', 'ellipse', 'text', 'callout'
+]
 
 export default function EditorCanvas({
   stageRef,

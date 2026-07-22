@@ -694,6 +694,7 @@ DRAWING RULES (STRICT COMPLIANCE)
 • Clean, precise lines suitable for patent filings
 • Professional engineering/technical drawing style
 • Clear component separation with distinct boundaries
+• Background must be PURE WHITE (#FFFFFF) edge to edge — no cream, ivory, gray, paper texture, vignette, or border
 • NO shading, gradients, textures, icons, dimension lines, motion marks, UI elements, or decorative curves
 
 ═══════════════════════════════════════════════════════════════════════════════
