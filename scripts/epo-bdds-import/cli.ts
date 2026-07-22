@@ -39,7 +39,10 @@ import {
 import { createReadStream } from 'node:fs'
 import { Prisma } from '@prisma/client'
 import { prisma } from '../../src/lib/prisma'
-import { listEntries, readEntryText, streamEntries, summarizeComposition } from '../../src/lib/epo-bdds/archive'
+import {
+  EntryTooLargeError, MAX_ENTRY_TEXT_BYTES,
+  listEntries, readEntryText, streamEntries, summarizeComposition,
+} from '../../src/lib/epo-bdds/archive'
 import { DiskGuard, describeSnapshot } from '../../src/lib/epo-bdds/disk-guard'
 import { downloadFile } from '../../src/lib/epo-bdds/downloader'
 import { BddsAuthError } from '../../src/lib/epo-bdds/http'
@@ -366,11 +369,41 @@ async function loadDocdbArchive(path: string, loader: DocdbLoader): Promise<void
  * TIFF page images, and they are never decompressed — only the per-publication
  * XML is read.
  */
-async function loadEpFullTextArchive(path: string, loader: EpFullTextLoader): Promise<void> {
+async function loadEpFullTextArchive(
+  path: string,
+  loader: EpFullTextLoader
+): Promise<{ oversize: number }> {
+  let oversize = 0
   for await (const entry of streamEntries(path, e => isEpPublicationXml(e.path))) {
-    const record = parseEpFullText(await readEntryText(entry.stream))
+    // Skip on the size the central directory already reports, so an enormous
+    // entry is never read at all. Some EP applications ship biological sequence
+    // listings as XML running to hundreds of MB; one of those used to abort the
+    // whole 6 GB archive with Node's 512 MB string limit, losing ~5,000 good
+    // publications with it.
+    if (entry.uncompressedSize > MAX_ENTRY_TEXT_BYTES) {
+      entry.stream.resume() // drain so the iterator can advance
+      oversize++
+      console.log(`    [skip] oversized entry ${(entry.uncompressedSize / 1024 ** 2).toFixed(0)} MB: ${entry.path}`)
+      continue
+    }
+
+    let xml: string
+    try {
+      xml = await readEntryText(entry.stream, { path: entry.path })
+    } catch (error) {
+      // Backstop for a central directory that under-reports the real size.
+      if (error instanceof EntryTooLargeError) {
+        oversize++
+        console.log(`    [skip] ${error.message}`)
+        continue
+      }
+      throw error
+    }
+
+    const record = parseEpFullText(xml)
     if (record) await loader.add(record)
   }
+  return { oversize }
 }
 
 /**
@@ -451,7 +484,7 @@ async function runBackfill(args: Args) {
   heading('IMPORT')
   const totals = {
     parsed: 0, enriched: 0, created: 0, fulltext: 0,
-    filled: 0, hadText: 0, notInCorpus: 0, skippedNoAbstract: 0,
+    filled: 0, hadText: 0, notInCorpus: 0, skippedNoAbstract: 0, oversize: 0,
   }
 
   const result = await runOverlappedPipeline(
@@ -499,8 +532,9 @@ async function runBackfill(args: Args) {
             fromYear: args.fromYear,
             toYear: args.toYear,
           })
-          await loadEpFullTextArchive(destination, loader)
+          const { oversize } = await loadEpFullTextArchive(destination, loader)
           await loader.flush()
+          totals.oversize += oversize
           totals.parsed += loader.stats.parsed
           totals.fulltext += loader.stats.loaded
           totals.filled += loader.stats.filledExisting
@@ -595,6 +629,9 @@ async function runBackfill(args: Args) {
     console.log(`  not in corpus   : ${totals.notInCorpus}   (text kept in epo_ep_fulltext)`)
   }
   console.log(`  skipped (no abstract, unsearchable) : ${totals.skippedNoAbstract}`)
+  if (totals.oversize) {
+    console.log(`  skipped (oversized XML, e.g. sequence listings) : ${totals.oversize}`)
+  }
   for (const failure of result.failures.slice(0, 10)) {
     console.log(`    ✗ ${failure.id} [${failure.phase}] ${failure.message}`)
   }

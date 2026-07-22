@@ -208,9 +208,44 @@ export function summarizeComposition(entries: ArchiveEntry[]): CompositionRow[] 
   return Array.from(byExtension.values()).sort((a, b) => b.compressedBytes - a.compressedBytes)
 }
 
-/** Read a whole entry into a string. Only for entries known to be small (XML). */
-export async function readEntryText(stream: Readable): Promise<string> {
+/**
+ * Node cannot hold a string longer than 0x1fffffe8 (~512 MB). Cap well below
+ * that: a publication XML is ~80 KB, so anything approaching this is a
+ * different kind of document (EP applications ship biological sequence
+ * listings as XML that can run to hundreds of MB).
+ */
+export const MAX_ENTRY_TEXT_BYTES = 64 * 1024 * 1024
+
+export class EntryTooLargeError extends Error {
+  constructor(readonly path: string, readonly bytes: number) {
+    super(`archive entry too large to read as text: ${path} (${bytes} bytes)`)
+    this.name = 'EntryTooLargeError'
+  }
+}
+
+/**
+ * Read a whole entry into a string. Only for entries known to be small (XML).
+ *
+ * Throws EntryTooLargeError rather than letting Buffer.concat().toString()
+ * fail with an opaque "Cannot create a string longer than 0x1fffffe8
+ * characters" — which took down three whole 6 GB archives before this guard
+ * existed. Callers should prefer skipping on `uncompressedSize` first; this is
+ * the backstop for when the central directory under-reports.
+ */
+export async function readEntryText(
+  stream: Readable,
+  options: { maxBytes?: number; path?: string } = {}
+): Promise<string> {
+  const maxBytes = options.maxBytes ?? MAX_ENTRY_TEXT_BYTES
   const chunks: Buffer[] = []
-  for await (const chunk of stream) chunks.push(chunk as Buffer)
+  let total = 0
+  for await (const chunk of stream) {
+    total += (chunk as Buffer).length
+    if (total > maxBytes) {
+      stream.destroy()
+      throw new EntryTooLargeError(options.path ?? '<entry>', total)
+    }
+    chunks.push(chunk as Buffer)
+  }
   return Buffer.concat(chunks).toString('utf8')
 }
