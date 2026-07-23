@@ -1,62 +1,131 @@
 /**
  * Pricing API
- * GET /api/pricing
- * 
- * Returns pricing information for all plans
- * Optionally accepts countryCode to return prices in the appropriate currency
+ * GET /api/pricing?country=IN
+ *
+ * Returns pricing for the publicly listed plans. Prices come from the database
+ * (PlanPricing) so super-admin edits apply without a deploy; the plan catalog is the
+ * fallback and the source of the feature bullets.
+ *
+ * Enterprise is sold one-to-one - it returns `isCustomPriced: true` and no amount.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import {
-  PLAN_PRICING,
-  getCurrencyForCountry,
-  formatAmount,
-  getPlanPrice,
-  type PlanCode,
-  type Currency,
-} from '@/lib/razorpay-service'
+import { getCurrencyForCountry, formatAmount, type Currency } from '@/lib/razorpay-service'
+import { listPublicPlans, type ResolvedPlanPrice } from '@/lib/plan-pricing-service'
+import { FEATURE_DEFINITIONS, PLAN_BY_CODE } from '@/lib/plans/catalog'
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic'
 
+/**
+ * Build the feature bullets for a plan straight from the catalog, so the marketing page
+ * can never drift from the quotas the database actually enforces.
+ */
+function getPlanFeatures(plan: ResolvedPlanPrice) {
+  const def = PLAN_BY_CODE[plan.dbPlanCode]
+  if (!def) return []
+
+  const bullets: { value?: string; label: string }[] = []
+
+  // Headline metered features, in the order buyers care about.
+  const ordered: Array<[keyof typeof def.features, string]> = [
+    ['PATENT_DRAFTING', 'Patent drafts / month'],
+    ['NOVELTY_SEARCH', 'Novelty searches / month'],
+    ['IDEATION', 'Ideation runs / month'],
+    ['DIAGRAM_GENERATION', 'Diagrams & sketches / month'],
+    ['PATENT_REVIEW', 'AI patent reviews / month'],
+    ['OFFICE_ACTION_RESPONSE', 'Office Action responses / month'],
+    ['IDEA_BANK', 'Idea Bank reservations / month'],
+    ['PERSONA_SYNC', 'PersonaSync style trainings / month'],
+  ]
+
+  for (const [code, label] of ordered) {
+    const grant = def.features[code]
+    if (!grant) continue
+    bullets.push({ value: String(grant.monthlyQuota), label })
+  }
+
+  bullets.push({
+    label:
+      def.maxJurisdictionsPerPatent === 1
+        ? 'Single-jurisdiction filing pack'
+        : `Multi-jurisdiction filing (up to ${def.maxJurisdictionsPerPatent} countries per patent)`,
+  })
+
+  bullets.push({
+    value: String(def.seats),
+    label: def.seats === 1 ? 'Seat included' : 'Seats included',
+  })
+
+  if (def.modelClasses.allowed.includes('ADVANCED')) {
+    bullets.push({ label: 'Frontier AI models (Advanced tier)' })
+  } else if (def.modelClasses.allowed.includes('PRO_M')) {
+    bullets.push({ label: 'Professional AI models' })
+  }
+
+  return bullets
+}
+
 export async function GET(request: NextRequest) {
   try {
-    // Get country code from query params
     const { searchParams } = new URL(request.url)
     const countryCode = searchParams.get('country') || undefined
-    
-    // Determine currency based on country
+
     const currency: Currency = getCurrencyForCountry(countryCode)
     const currencySymbol = currency === 'INR' ? '₹' : '$'
 
-    // Build pricing response for all plans
-    const plans = (['BASIC', 'PRO', 'ENTERPRISE'] as PlanCode[]).map(planCode => {
-      const plan = PLAN_PRICING[planCode]
-      const monthlyPrice = getPlanPrice(planCode, 'monthly', currency)
-      const yearlyPrice = getPlanPrice(planCode, 'yearly', currency)
-      const yearlyMonthlyEquivalent = Math.round(yearlyPrice / 12)
-      const yearlySavings = (monthlyPrice * 12) - yearlyPrice
+    const [monthlyPlans, yearlyPlans] = await Promise.all([
+      listPublicPlans('monthly'),
+      listPublicPlans('yearly'),
+    ])
+
+    const yearlyByCode = new Map(yearlyPlans.map((p) => [p.dbPlanCode, p]))
+
+    const plans = monthlyPlans.map((monthly) => {
+      const yearly = yearlyByCode.get(monthly.dbPlanCode) ?? monthly
+      const def = PLAN_BY_CODE[monthly.dbPlanCode]
+
+      if (monthly.isCustomPriced) {
+        return {
+          code: monthly.planCode,
+          name: monthly.name,
+          tagline: monthly.tagline,
+          currency,
+          currencySymbol,
+          isCustomPriced: true,
+          pricing: null,
+          features: getPlanFeatures(monthly),
+        }
+      }
+
+      const monthlyAmount = currency === 'INR' ? monthly.priceINR : monthly.priceUSD
+      const yearlyAmount = currency === 'INR' ? yearly.priceINR : yearly.priceUSD
+      const yearlyMonthlyEquivalent = Math.round(yearlyAmount / 12)
+      const yearlySavings = monthlyAmount * 12 - yearlyAmount
 
       return {
-        code: planCode,
-        name: plan.name,
+        code: monthly.planCode,
+        name: monthly.name,
+        tagline: monthly.tagline,
         currency,
         currencySymbol,
+        isCustomPriced: false,
         pricing: {
           monthly: {
-            amount: monthlyPrice,
-            formatted: formatAmount(monthlyPrice, currency),
-            perMonth: formatAmount(monthlyPrice, currency),
+            amount: monthlyAmount,
+            formatted: formatAmount(monthlyAmount, currency),
+            perMonth: formatAmount(monthlyAmount, currency),
           },
           yearly: {
-            amount: yearlyPrice,
-            formatted: formatAmount(yearlyPrice, currency),
+            amount: yearlyAmount,
+            formatted: formatAmount(yearlyAmount, currency),
             perMonth: formatAmount(yearlyMonthlyEquivalent, currency),
             savings: formatAmount(yearlySavings, currency),
-            savingsMonths: plan.yearlyDiscountMonths,
+            savingsMonths: yearly.yearlyDiscountMonths,
           },
         },
-        features: getPlanFeatures(planCode),
+        features: getPlanFeatures(monthly),
+        trialDays: def?.trialDays,
       }
     })
 
@@ -65,52 +134,16 @@ export async function GET(request: NextRequest) {
       currencySymbol,
       countryDetected: countryCode || 'unknown',
       plans,
+      // Surfaced so the pricing page can render the GST line for Indian buyers.
+      taxNote: currency === 'INR' ? 'Prices exclusive of 18% GST' : null,
+      featureCatalog: FEATURE_DEFINITIONS.map((f) => ({
+        code: f.code,
+        name: f.name,
+        description: f.description,
+      })),
     })
   } catch (error) {
     console.error('[Pricing API] Error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-
-/**
- * Get features for each plan
- */
-function getPlanFeatures(planCode: PlanCode) {
-  switch (planCode) {
-    case 'BASIC':
-      return [
-        { value: '1', label: 'Patent Draft / month' },
-        { label: 'Single-jurisdiction filing pack (1 country)' },
-        { value: '3', label: 'Novelty Searches' },
-        { value: '1', label: 'Ideation Refinement Run' },
-        { value: '5', label: 'Diagrams & Sketches' },
-        { label: 'Export-ready (Doc + Figures)' },
-      ]
-    case 'PRO':
-      return [
-        { value: '4', label: 'Patent Drafts / month' },
-        { label: 'Multi-jurisdiction filing (up to 2 countries per patent)' },
-        { value: '20', label: 'Novelty Searches' },
-        { value: '10', label: 'Ideation Refinement Runs' },
-        { value: '30', label: 'Diagrams & Sketches' },
-        { label: 'Priority generation + faster turnaround' },
-      ]
-    case 'ENTERPRISE':
-      return [
-        { value: '15', label: 'Patent Drafts / month' },
-        { label: 'Full jurisdiction access (all supported countries)' },
-        { label: 'Team workspace (up to 5 seats included)' },
-        { label: 'Parallel multi-jurisdiction drafts enabled up to six countries' },
-        { value: '100', label: 'Novelty Searches' },
-        { value: '30', label: 'Ideation Refinement Runs' },
-        { value: '150', label: 'Diagrams & Sketches' },
-        { label: 'Admin controls + usage reporting' },
-      ]
-    default:
-      return []
-  }
-}
-

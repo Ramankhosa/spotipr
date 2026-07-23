@@ -844,7 +844,7 @@ function CampaignOverview({ campaign, onUpdate }: { campaign: Campaign; onUpdate
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-sm text-gray-500">Open Rate</p>
           <p className="text-2xl font-bold text-indigo-600">
@@ -1578,7 +1578,7 @@ function CampaignUsers({ campaign }: { campaign: Campaign }) {
       {/* Summary Cards */}
       {summary && (
         <div className="flex items-center justify-between mb-4">
-          <div className="grid grid-cols-4 gap-4 flex-1">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-1">
             <div className="bg-green-50 rounded-xl p-4">
               <p className="text-3xl font-bold text-green-600">{summary.totalSignedUp}</p>
               <p className="text-sm text-green-700">Total Signups</p>
@@ -1793,7 +1793,7 @@ function CampaignAnalytics({ campaign }: { campaign: Campaign }) {
       {/* Conversion Rates */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Conversion Rates</h3>
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
           {[
             { label: 'Delivery Rate', value: analytics.rates.deliveryRate + '%', color: 'text-blue-600' },
             { label: 'Open Rate', value: analytics.rates.openRate + '%', color: 'text-indigo-600' },
@@ -1836,7 +1836,7 @@ function CampaignAnalytics({ campaign }: { campaign: Campaign }) {
       {/* Status Breakdown */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Status Breakdown</h3>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {Object.entries(analytics.statusCounts).map(([status, count]) => (
             <div key={status} className="text-center p-3 bg-gray-50 rounded-lg">
               <p className="text-xl font-bold text-gray-900">{count as number}</p>

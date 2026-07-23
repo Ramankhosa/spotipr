@@ -182,11 +182,12 @@ export default function SectionInstructionPopover({
   const popoverContent = (
     <div
       ref={popoverRef}
-      className="fixed z-[9999] w-96 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-4"
+      // w-96 (384px) is wider than a phone viewport, so the width is capped
+      // against the viewport and the panel hugs both gutters on small screens.
+      className="fixed z-[9999] left-3 right-3 w-auto sm:left-auto sm:right-6 sm:w-96 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-4"
       style={{
         // Position in the center-right of the viewport for consistent visibility
         top: '120px',
-        right: '24px',
         maxHeight: 'calc(100vh - 140px)',
         overflowY: 'auto'
       }}

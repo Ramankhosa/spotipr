@@ -13,6 +13,8 @@ import crypto from 'crypto'
 import { prisma } from './prisma'
 import type { PaymentStatus, SubscriptionStatus } from '@prisma/client'
 import { sendPaymentSuccessEmail, sendSubscriptionCancelledEmail, sendPaymentFailedEmail } from './payment-notification-service'
+import { getPlanAmount } from './plan-pricing-service'
+import { PUBLIC_TO_PLAN_CODE } from './plans/catalog'
 
 // ============================================================================
 // CONFIGURATION
@@ -39,45 +41,55 @@ function ensureRazorpayConfigured(): void {
 // Plans: BASIC, PRO, ENTERPRISE
 // ============================================================================
 
+/**
+ * FALLBACK pricing only. The live prices are the `PlanPricing` rows in the database,
+ * resolved through `plan-pricing-service`; these values are what a not-yet-seeded
+ * database falls back to and must be kept in sync with `src/lib/plans/catalog.ts`.
+ *
+ * Enterprise is sold one-to-one and is priced at zero here on purpose - self-serve
+ * checkout for it is rejected by `getPlanAmount`.
+ *
+ * INR is pegged at a flat 1:100 to USD (spot ₹96.36 on 2026-07-21, so ~3.8% FX buffer).
+ */
 export const PLAN_PRICING = {
   BASIC: {
     code: 'BASIC',
     name: 'Basic',
     monthly: {
-      USD: 5900,      // $59.00 in cents
-      INR: 499900,    // ₹4,999.00 in paise
+      USD: 900,       // $9.00 in cents
+      INR: 89900,     // ₹899.00 in paise
     },
     yearly: {
-      USD: 64900,     // $649.00 (11 months - 1 month free)
-      INR: 5498900,   // ₹54,989.00 (11 months - 1 month free)
+      USD: 9000,      // $90.00 (10 months - 2 months free)
+      INR: 899000,    // ₹8,990.00 (10 months - 2 months free)
     },
-    yearlyDiscountMonths: 1,
+    yearlyDiscountMonths: 2,
   },
   PRO: {
     code: 'PRO',
     name: 'Pro',
     monthly: {
-      USD: 19900,     // $199.00 in cents
-      INR: 1699900,   // ₹16,999.00 in paise
+      USD: 2000,      // $20.00 in cents
+      INR: 199900,    // ₹1,999.00 in paise
     },
     yearly: {
-      USD: 218900,    // $2,189.00 (11 months - 1 month free)
-      INR: 18698900,  // ₹1,86,989.00 (11 months - 1 month free)
+      USD: 20000,     // $200.00 (10 months - 2 months free)
+      INR: 1999000,   // ₹19,990.00 (10 months - 2 months free)
     },
-    yearlyDiscountMonths: 1,
+    yearlyDiscountMonths: 2,
   },
   ENTERPRISE: {
     code: 'ENTERPRISE',
     name: 'Enterprise',
     monthly: {
-      USD: 59900,     // $599.00 in cents
-      INR: 4999900,   // ₹49,999.00 in paise
+      USD: 0,         // Sold one-to-one - contact sales
+      INR: 0,
     },
     yearly: {
-      USD: 658900,    // $6,589.00 (11 months - 1 month free)
-      INR: 54998900,  // ₹5,49,989.00 (11 months - 1 month free)
+      USD: 0,
+      INR: 0,
     },
-    yearlyDiscountMonths: 1,
+    yearlyDiscountMonths: 2,
   },
 } as const
 
@@ -408,10 +420,12 @@ export async function createOrder(params: CreateOrderParams): Promise<CreateOrde
       adminDiscountId,
     } = params
 
-    // Get plan from database
+    // Get plan from database. The public SKU code is not the DB code - Basic is stored
+    // as FREE_PLAN for backward compatibility - so map through the catalog first.
+    const dbPlanCode = PUBLIC_TO_PLAN_CODE[planCode] ?? `${planCode}_PLAN`
     const plan = await prisma.plan.findFirst({
-      where: { 
-        code: { in: [`${planCode}_PLAN`, planCode] },
+      where: {
+        code: { in: [dbPlanCode, `${planCode}_PLAN`, planCode] },
         status: 'ACTIVE'
       }
     })
@@ -420,8 +434,17 @@ export async function createOrder(params: CreateOrderParams): Promise<CreateOrde
       return { success: false, error: `Plan ${planCode} not found` }
     }
 
-    // Calculate original amount
-    const originalAmount = getPlanPrice(planCode, billingCycle, currency)
+    // Calculate original amount from the database, so super-admin price edits apply
+    // immediately. Throws for one-to-one (Enterprise) plans, which are not self-serve.
+    let originalAmount: number
+    try {
+      originalAmount = await getPlanAmount(planCode, billingCycle, currency)
+    } catch (priceError) {
+      return {
+        success: false,
+        error: priceError instanceof Error ? priceError.message : 'Plan is not available for purchase'
+      }
+    }
 
     // Validate and apply discount
     const discountResult = await validateDiscount(

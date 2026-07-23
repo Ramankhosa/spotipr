@@ -1172,7 +1172,7 @@ function DiagramConfigModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm text-slate-400 mb-1">Margin Top (cm)</label>
             <input
@@ -1341,7 +1341,7 @@ function ValidationModal({
         {/* Word Limits */}
         <div className="bg-slate-700/30 rounded-lg p-4">
           <h4 className="text-white font-medium mb-3">📝 Word Limits</h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm text-slate-400 mb-1">Min Words</label>
               <input
@@ -1386,7 +1386,7 @@ function ValidationModal({
         {/* Character Limits */}
         <div className="bg-slate-700/30 rounded-lg p-4">
           <h4 className="text-white font-medium mb-3">🔤 Character Limits</h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm text-slate-400 mb-1">Min Chars</label>
               <input
@@ -1431,7 +1431,7 @@ function ValidationModal({
         {/* Count Limits (for claims) */}
         <div className="bg-slate-700/30 rounded-lg p-4">
           <h4 className="text-white font-medium mb-3">#️⃣ Count Limits (Claims)</h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm text-slate-400 mb-1">Max Total</label>
               <input
@@ -1560,7 +1560,7 @@ function ExportConfigModal({
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm text-slate-400 mb-1">Page Size</label>
             <select
@@ -1592,7 +1592,7 @@ function ExportConfigModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm text-slate-400 mb-1">Heading Font Family</label>
             <input
@@ -1624,7 +1624,7 @@ function ExportConfigModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm text-slate-400 mb-1">Top (cm)</label>
             <input

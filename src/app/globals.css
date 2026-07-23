@@ -64,6 +64,11 @@
     animation: bounceSubtle 0.6s ease-in-out;
   }
 
+  /* Off-canvas panels (mobile nav drawer, drafting stage rail). */
+  .animate-slide-in-left {
+    animation: slideInLeft 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
   .bg-ai-subtle {
     background: linear-gradient(135deg, #fdfcfa 0%, #f0eee6 100%);
   }
@@ -91,6 +96,15 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
   }
 }
 
@@ -156,6 +170,105 @@
 
 .light-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.2);
+}
+
+/* ==========================================================================
+   Mobile & tablet adaptation
+   Everything below is breakpoint-scoped (<768px unless noted) so desktop
+   rendering is untouched.
+   ========================================================================== */
+
+/* Wide, un-shrinkable content (tables, code, diagrams, matrices) scrolls in
+   its own box instead of pushing the page sideways. Add to the wrapper. */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* Row of chips/tabs that becomes a swipeable rail on narrow screens. */
+.rail-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rail-x::-webkit-scrollbar {
+  display: none;
+}
+
+/* Bottom-anchored mobile bars must clear the iOS home indicator. */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Controls that reveal on hover (row delete buttons, figure overlays, section
+   actions) are simply unreachable on a touch screen — there is no hover state
+   to enter. Pin them visible wherever the primary pointer can't hover. Scoped
+   to `hover: none`, so every mouse-driven browser is untouched. */
+@media (hover: none) {
+  [class*='group-hover:opacity-100'] {
+    opacity: 1 !important;
+  }
+  /* Same reasoning for the slide-in half of those reveals. */
+  [class*='group-hover:ml-0'] {
+    margin-left: 0 !important;
+  }
+
+  /* Exception to the rule above: an overlay that COVERS its subject (figure
+     thumbnails use a full inset-0 scrim) must not be pinned visible — the
+     user would stare at a permanently dimmed image. Collapse those to a bar
+     on the bottom edge so the actions stay reachable and the figure stays
+     legible. Mark such overlays with `reveal-scrim`. */
+  .reveal-scrim {
+    inset: auto 0 0 0 !important;
+    padding: 0.375rem !important;
+    background-color: rgb(0 0 0 / 0.65) !important;
+  }
+}
+
+/* `screen` only: print/PDF export renders at a narrow CSS width and must keep
+   real table layout. */
+@media screen and (max-width: 767px) {
+  /* iOS Safari zooms the whole page when a focused field is under 16px and
+     never zooms back out. Our fields are text-sm (14px), so bump them on
+     phones only — the layout absorbs 2px, a stuck zoom is unrecoverable. */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Bare tables that predate the .scroll-x wrapper still shouldn't widen
+     the document. */
+  table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Replace Safari's grey tap flash with a faint lamp-green one rather than
+     killing it outright — with no highlight and no :active style, taps read
+     as unresponsive. */
+  button,
+  [role='button'],
+  a {
+    -webkit-tap-highlight-color: rgb(46 93 71 / 0.12);
+  }
+
+  /* Long unbroken strings (patent numbers, URLs, CPC codes) are a common
+     source of sideways overflow on phones. */
+  h1,
+  h2,
+  h3,
+  p,
+  li,
+  dd,
+  dt,
+  td,
+  th {
+    overflow-wrap: break-word;
+  }
 }
 
 /* Stage navigation pulse animation */

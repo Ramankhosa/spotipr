@@ -1831,7 +1831,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-ai-blue-50/30">
       {/* ============= HEADER WITH PROGRESS STEPS ============= */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-paper-300 shadow-sm">
-        <div className="max-w-[1800px] mx-auto px-6 py-4">
+        <div className="max-w-[1800px] mx-auto px-3 py-3 sm:px-6 sm:py-4">
           {/* Title */}
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -1949,7 +1949,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       </div>
 
       {/* ============= MAIN CONTENT AREA ============= */}
-      <div className="max-w-[1800px] mx-auto px-6 py-8">
+      <div className="max-w-[1800px] mx-auto px-3 py-5 sm:px-6 sm:py-8">
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
             <span className="text-red-500 text-xl">⚠️</span>
@@ -2630,7 +2630,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                 </div>
 
                 {/* Threat Level Summary Cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
                   <div className="bg-red-50 rounded-2xl p-6 border border-red-100">
                     <div className="text-4xl font-bold text-red-600">{analysisSummary.anticipates}</div>
                     <div className="text-sm font-medium text-red-800 mt-1">🛑 Anticipates</div>
@@ -3016,7 +3016,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                     )}
 
                     {/* Mode Selection */}
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                       {[
                         { mode: 'ai' as const, icon: '🤖', label: 'AI-Selected', desc: 'Use AI-recommended patents' },
                         { mode: 'manual' as const, icon: '✍️', label: 'Manual Only', desc: 'Enter your own prior art' },
@@ -3330,7 +3330,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
                         )}
 
                         {/* Mode Selection */}
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                           {[
                             { mode: 'ai' as const, icon: '🤖', label: 'AI-Selected', desc: 'High-risk patents from AI' },
                             { mode: 'manual' as const, icon: '✍️', label: 'Manual Only', desc: 'Your own prior art notes' },
@@ -3834,7 +3834,7 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
 
       {/* Idea Bank Floating Panel */}
       {ideaBank.length > 0 && ideaBankOpen && (
-        <div className="fixed bottom-4 right-4 w-96 max-h-[500px] bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden z-50 animate-fadeIn">
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-96 max-h-[60vh] sm:max-h-[500px] bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden z-50 animate-fadeIn">
           <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white px-4 py-3 flex items-center justify-between">
             <h4 className="font-semibold flex items-center gap-2">
               <span>💡</span> Idea Bank ({ideaBank.length})

@@ -1081,7 +1081,7 @@ export default function ComponentPlannerStage({ session, patent, onComplete, onR
   }
 
   return (
-    <div className="px-6 py-8 max-w-[1800px] mx-auto">
+    <div className="px-3 py-5 sm:px-6 sm:py-8 max-w-[1800px] mx-auto">
       <div className="mb-8 flex flex-col md:flex-row md:items-start justify-between gap-4">
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">

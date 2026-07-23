@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import localFont from 'next/font/local'
 import { Providers } from '@/components/providers'
 import ConditionalHeader from '@/components/ConditionalHeader'
@@ -43,6 +43,15 @@ export const metadata: Metadata = {
   },
 }
 
+// Phones and tablets are first-class: real device width, pinch-zoom left
+// available (never disable it — it's an accessibility escape hatch), and
+// content allowed under the notch so full-bleed bars reach the edges.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+}
+
 export default function RootLayout({
   children,
 }: {
@@ -50,7 +59,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} ${inter.variable} ${cormorant.variable} bg-background text-foreground min-h-screen`}>
+      <body className={`${inter.className} ${inter.variable} ${cormorant.variable} bg-background text-foreground min-h-screen overflow-x-clip`}>
         <Providers>
           <ConditionalHeader />
           <AppShell>

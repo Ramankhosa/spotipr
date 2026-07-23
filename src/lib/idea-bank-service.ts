@@ -3,6 +3,7 @@ import { llmGateway } from './metering/gateway';
 import { enforceMetering } from './metering/enforcement';
 import { prisma } from './prisma';
 import { checkServiceAccess } from './org-access-service';
+import { recordServiceCompletion } from './service-completion';
 import {
   IdeaBankIdea,
   IdeaBankReservation,
@@ -695,6 +696,19 @@ export class IdeaBankService extends BasePatentService {
       expiresAt: reservation.expiresAt
     });
 
+    // Count the reservation against the plan's IDEA_BANK quota. Without this the
+    // quota is checked on the way in but never decrements, so it never blocks.
+    if (user.tenantId) {
+      await recordServiceCompletion({
+        tenantId: user.tenantId,
+        userId: user.id,
+        serviceType: 'IDEA_BANK',
+        operationId: reservation.id,
+        operationType: 'IDEA_RESERVATION',
+        metadata: { ideaId }
+      });
+    }
+
     return reservation;
   }
 
@@ -815,10 +829,14 @@ export class IdeaBankService extends BasePatentService {
       throw new Error('Idea not found');
     }
 
-    if (user.tenantId) {
-      const access = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
-      if (!access.allowed) throw new Error(access.reason || 'Novelty search access denied');
+    // Fails closed: this launches a novelty search, the most expensive operation in the
+    // product, so an unmeterable user must be refused rather than skipped.
+    if (!user.tenantId) {
+      throw new Error('Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.');
     }
+
+    const access = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+    if (!access.allowed) throw new Error(access.reason || 'Novelty search access denied');
 
     // Create the run and opt-in background job atomically.
     const searchRun = await prisma.$transaction(async tx => {

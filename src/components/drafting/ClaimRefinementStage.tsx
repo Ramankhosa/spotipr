@@ -556,7 +556,7 @@ export default function ClaimRefinementStage({ session, onComplete, onRefresh }:
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-      <div className="max-w-[1800px] mx-auto px-6 py-8 space-y-8">
+      <div className="max-w-[1800px] mx-auto px-3 py-5 sm:px-6 sm:py-8 space-y-6 sm:space-y-8">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="space-y-1">

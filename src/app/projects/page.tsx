@@ -150,7 +150,7 @@ export default function ProjectsPage() {
               />
             </div>
             
-            <div className="relative p-8">
+            <div className="relative p-5 sm:p-8">
               <div className="flex items-center justify-between">
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">

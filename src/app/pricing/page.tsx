@@ -22,12 +22,16 @@ interface PlanPricing {
 interface Plan {
   code: PlanCode
   name: string
+  tagline?: string
   currency: Currency
   currencySymbol: string
+  /** Sold one-to-one - no published price, no self-serve checkout. */
+  isCustomPriced?: boolean
+  /** Null for custom-priced plans. */
   pricing: {
     monthly: PlanPricing
     yearly: PlanPricing
-  }
+  } | null
   features: { value?: string; label: string }[]
 }
 
@@ -79,6 +83,11 @@ export default function PricingPage() {
   const isCheckoutRedirect = searchParams?.get('checkout') === 'true'
   const redirectPlan = searchParams?.get('plan')?.toUpperCase() as PlanCode | undefined
   const redirectCycle = searchParams?.get('cycle') as BillingCycle | undefined
+
+  // Months free on the annual plan, taken from the first publicly priced plan so the badge
+  // always matches the discount actually configured for the plans.
+  const savingsMonths =
+    plans.find(p => p.pricing?.yearly.savingsMonths)?.pricing?.yearly.savingsMonths ?? 2
 
   // Detect user's country and fetch pricing
   useEffect(() => {
@@ -154,8 +163,16 @@ export default function PricingPage() {
   }, [isCheckoutRedirect, redirectPlan, redirectCycle, isLoading, plans, countryCode, billingCycle, initiateCheckout])
 
   const handleSubscribe = async (planCode: PlanCode) => {
+    // Custom-priced plans are never self-serve. Guarded here as well as at the CTA so a
+    // ?checkout=true&plan=ENTERPRISE deep link cannot open a checkout the API will reject.
+    const target = plans.find((p) => p.code === planCode)
+    if (target?.isCustomPriced || target?.pricing === null) {
+      router.push('/contact')
+      return
+    }
+
     // Check if user is logged in - check all possible token keys
-    const token = localStorage.getItem('auth_token') || 
+    const token = localStorage.getItem('auth_token') ||
                   localStorage.getItem('token') || 
                   localStorage.getItem('jwt')
     if (!token) {
@@ -258,7 +275,9 @@ export default function PricingPage() {
               >
                 Yearly
                 <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
-                  Save 1 month
+                  {/* Driven by the plan's configured discount rather than hardcoded, so it
+                      cannot drift from the price the API actually charges. */}
+                  Save {savingsMonths} month{savingsMonths === 1 ? '' : 's'}
                 </span>
               </button>
             </div>
@@ -291,7 +310,9 @@ export default function PricingPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {plans.map((plan, index) => {
               const isPopular = plan.code === 'PRO'
-              const pricing = plan.pricing[billingCycle]
+              // Custom-priced plans (Enterprise) carry no pricing block at all.
+              const pricing = plan.pricing?.[billingCycle] ?? null
+              const isCustomPriced = plan.isCustomPriced === true || pricing === null
               const isSelected = selectedPlan === plan.code
 
               return (
@@ -328,12 +349,23 @@ export default function PricingPage() {
                         </p>
                       </div>
                       <div className="text-right">
-                        <div className="text-4xl font-bold text-white">{pricing.perMonth}</div>
-                        <div className="text-xs tracking-widest text-ai-graphite-500">/ month</div>
-                        {billingCycle === 'yearly' && pricing.savings && (
-                          <div className="text-xs text-green-400 mt-1">
-                            Save {pricing.savings}
-                          </div>
+                        {isCustomPriced ? (
+                          <>
+                            <div className="text-3xl font-bold text-white">Custom</div>
+                            <div className="text-xs tracking-widest text-ai-graphite-500">
+                              / talk to us
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-4xl font-bold text-white">{pricing!.perMonth}</div>
+                            <div className="text-xs tracking-widest text-ai-graphite-500">/ month</div>
+                            {billingCycle === 'yearly' && pricing!.savings && (
+                              <div className="text-xs text-green-400 mt-1">
+                                Save {pricing!.savings}
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
@@ -355,38 +387,45 @@ export default function PricingPage() {
                       ))}
                     </div>
 
-                    {/* CTA Button */}
-                    <button
-                      onClick={() => handleSubscribe(plan.code)}
-                      disabled={isCheckoutLoading && isSelected}
-                      className={`w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg border text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
-                        isPopular
-                          ? 'bg-ai-blue-500/20 border-ai-blue-400/60 text-white hover:bg-ai-blue-500/30'
-                          : 'bg-ai-graphite-900/60 border-ai-graphite-800 text-ai-graphite-200 hover:text-white hover:border-ai-blue-500/40'
-                      }`}
-                    >
-                      {isCheckoutLoading && isSelected ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Processing...
-                        </>
-                      ) : (
-                        <>
-                          Start {plan.name}
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
+                    {/* CTA Button - custom-priced plans go to sales, not checkout */}
+                    {isCustomPriced ? (
+                      <Link
+                        href="/contact"
+                        className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg border text-sm font-medium transition-all duration-200 bg-ai-graphite-900/60 border-ai-graphite-800 text-ai-graphite-200 hover:text-white hover:border-ai-blue-500/40"
+                      >
+                        Talk to sales
+                        <ArrowRight className="w-4 h-4" />
+                      </Link>
+                    ) : (
+                      <button
+                        onClick={() => handleSubscribe(plan.code)}
+                        disabled={isCheckoutLoading && isSelected}
+                        className={`w-full flex items-center justify-center gap-2 px-5 py-3 rounded-lg border text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
+                          isPopular
+                            ? 'bg-ai-blue-500/20 border-ai-blue-400/60 text-white hover:bg-ai-blue-500/30'
+                            : 'bg-ai-graphite-900/60 border-ai-graphite-800 text-ai-graphite-200 hover:text-white hover:border-ai-blue-500/40'
+                        }`}
+                      >
+                        {isCheckoutLoading && isSelected ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Processing...
+                          </>
+                        ) : (
+                          <>
+                            Start {plan.name}
+                            <ArrowRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    )}
 
                     {/* Enterprise Note */}
-                    {plan.code === 'ENTERPRISE' && (
+                    {isCustomPriced && (
                       <div className="mt-4 text-center">
-                        <Link
-                          href="/contact"
-                          className="text-xs text-ai-graphite-500 hover:text-ai-blue-300 transition-colors"
-                        >
-                          Need a tailored rollout or extra seats? Talk to sales
-                        </Link>
+                        <p className="text-xs text-ai-graphite-500">
+                          Priced per organisation — seats, quotas and jurisdictions tailored to your rollout.
+                        </p>
                       </div>
                     )}
                   </div>

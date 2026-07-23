@@ -27,7 +27,8 @@ import {
   FileText,
   AlertCircle,
   PanelLeftClose,
-  PanelLeft
+  PanelLeft,
+  X
 } from 'lucide-react'
 import {
   getVisibleStages,
@@ -38,6 +39,7 @@ import {
   type JurisdictionDraftInfo,
   type JurisdictionSectionInfo
 } from '@/lib/stage-navigation-config'
+import { useIsDesktop } from '@/hooks/useMediaQuery'
 
 // ============================================================================
 // Types
@@ -49,6 +51,9 @@ interface VerticalStageNavProps {
   patentId: string
   onNavigateToStage: (stage: string) => Promise<void>
   onCollapsedChange?: (collapsed: boolean) => void
+  /** Below lg the rail is an off-canvas drawer driven by the page header. */
+  mobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
 interface JurisdictionConfig {
@@ -187,14 +192,22 @@ export default function VerticalStageNav({
   currentStage,
   patentId,
   onNavigateToStage,
-  onCollapsedChange
+  onCollapsedChange,
+  mobileOpen = false,
+  onMobileClose
 }: VerticalStageNavProps) {
   // Theme state - default to light theme
   const [theme, setTheme] = useState<NavTheme>('light')
-  
+
   // Sidebar collapsed state
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false)
-  
+
+  // The icon-only rail is a desktop affordance. As a drawer there is room for
+  // labels, so below lg it always renders expanded regardless of the stored
+  // collapse preference.
+  const isDesktop = useIsDesktop()
+  const collapsedView = isCollapsed && isDesktop
+
   // Expansion states
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
   const [expandedJurisdictions, setExpandedJurisdictions] = useState<Set<string>>(new Set())
@@ -480,8 +493,26 @@ export default function VerticalStageNav({
   }, [])
 
   const handleStageClick = useCallback(async (stageKey: string) => {
+    // As a drawer the rail covers the content it just navigated to, so get
+    // out of the way first.
+    if (!isDesktop) onMobileClose?.()
     await onNavigateToStage(stageKey)
-  }, [onNavigateToStage])
+  }, [isDesktop, onMobileClose, onNavigateToStage])
+
+  // Escape closes the drawer, and the page behind it must not scroll.
+  useEffect(() => {
+    if (!mobileOpen || isDesktop) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onMobileClose?.()
+    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [mobileOpen, isDesktop, onMobileClose])
 
   // ============================================================================
   // Theme Classes
@@ -515,18 +546,29 @@ export default function VerticalStageNav({
   // ============================================================================
 
   return (
-    <aside
-      className={`
-        fixed left-0 top-0 h-screen z-40 flex flex-col
+    <>
+      {/* Drawer scrim — mobile/tablet only. */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[2px] lg:hidden"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={`
+        fixed left-0 top-0 h-screen z-50 lg:z-40 flex flex-col
         backdrop-blur-xl border-r transition-all duration-300
-        ${isCollapsed ? 'w-16' : 'w-72'}
+        w-72 max-w-[85vw] ${collapsedView ? 'lg:w-16' : 'lg:w-72'}
+        ${mobileOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'} lg:translate-x-0 lg:shadow-none
         ${themeClasses.container}
       `}
-    >
+      >
       {/* Header */}
       <div className={`p-4 border-b ${themeClasses.border}`}>
         <div className="flex items-center justify-between">
-          {!isCollapsed ? (
+          {!collapsedView ? (
             <>
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-lamp-600">
@@ -541,7 +583,7 @@ export default function VerticalStageNav({
                   </div>
                 </div>
               </div>
-              
+
               {/* Theme Toggle & Collapse Button */}
               <div className="flex items-center gap-1">
                 <button
@@ -552,7 +594,7 @@ export default function VerticalStageNav({
                   `}
                   title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
                 >
-                  {theme === 'dark' 
+                  {theme === 'dark'
                     ? <Sun className={`w-4 h-4 ${themeClasses.textMuted}`} />
                     : <Moon className={`w-4 h-4 ${themeClasses.textMuted}`} />
                   }
@@ -560,12 +602,22 @@ export default function VerticalStageNav({
                 <button
                   onClick={toggleCollapsed}
                   className={`
-                    p-2 rounded-lg transition-colors
+                    hidden lg:block p-2 rounded-lg transition-colors
                     ${themeClasses.hover}
                   `}
                   title="Collapse sidebar"
                 >
                   <PanelLeftClose className={`w-4 h-4 ${themeClasses.textMuted}`} />
+                </button>
+                <button
+                  onClick={onMobileClose}
+                  className={`
+                    lg:hidden p-2 rounded-lg transition-colors
+                    ${themeClasses.hover}
+                  `}
+                  aria-label="Close stage navigation"
+                >
+                  <X className={`w-4 h-4 ${themeClasses.textMuted}`} />
                 </button>
               </div>
             </>
@@ -589,7 +641,7 @@ export default function VerticalStageNav({
         </div>
 
         {/* Progress Bar */}
-        {!isCollapsed && (
+        {!collapsedView && (
           <div className={`mt-3 h-1.5 rounded-full ${themeClasses.progressBg}`}>
             <div
               className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
@@ -597,7 +649,7 @@ export default function VerticalStageNav({
             />
           </div>
         )}
-        {isCollapsed && (
+        {collapsedView && (
           <div className={`mt-2 mx-auto w-8 h-1 rounded-full ${themeClasses.progressBg}`}>
             <div
               className={`h-full rounded-full transition-all duration-500 ${themeClasses.progressFill}`}
@@ -608,7 +660,7 @@ export default function VerticalStageNav({
       </div>
 
       {/* Stage List */}
-      <nav className={`flex-1 overflow-y-auto py-2 ${isCollapsed ? 'px-1' : 'px-2'} ${theme === 'dark' ? 'dark-scrollbar' : 'light-scrollbar'}`}>
+      <nav className={`flex-1 overflow-y-auto py-2 ${collapsedView ? 'px-1' : 'px-2'} ${theme === 'dark' ? 'dark-scrollbar' : 'light-scrollbar'}`}>
         {visibleStages.map((stage, stageIndex) => {
           const StageIcon = stage.icon
           const isExpanded = expandedStages.has(stage.key)
@@ -620,7 +672,7 @@ export default function VerticalStageNav({
           const isCompleted = isPast && isFullyComplete
 
           // Collapsed view - show only icons
-          if (isCollapsed) {
+          if (collapsedView) {
             return (
               <div key={stage.key} className="mb-1 flex justify-center">
                 <button
@@ -918,6 +970,7 @@ export default function VerticalStageNav({
           </button>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }

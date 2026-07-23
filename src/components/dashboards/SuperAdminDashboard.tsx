@@ -58,6 +58,7 @@ export default function SuperAdminDashboard() {
   })
   const [isCreating, setIsCreating] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     analytics: true,
     ai: true,
@@ -296,6 +297,7 @@ export default function SuperAdminDashboard() {
       title: 'Access Management',
       icon: '🔐',
       items: [
+        { label: 'Plans & Pricing', icon: '💳', href: '/super-admin/plans', badge: 'NEW' },
         { label: 'Trial Campaigns', icon: '📧', href: '/super-admin/trial-campaigns', badge: 'NEW' },
         { label: 'User Management', icon: '👥', href: '/super-admin/users' },
         { label: 'ATI Token Management', icon: '🎟️', href: '/ati-management' },
@@ -306,11 +308,24 @@ export default function SuperAdminDashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+      {/* Drawer scrim — below lg the sidebar overlays instead of reserving width. */}
+      {mobileNavOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-950/60 lg:hidden"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-slate-900/95 backdrop-blur-xl border-r border-slate-700/50 transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-slate-900/95 backdrop-blur-xl border-r border-slate-700/50 transition-all duration-300
+          w-64 ${sidebarCollapsed ? 'lg:w-16' : 'lg:w-64'}
+          ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}
+      >
         {/* Logo Area */}
         <div className="flex items-center justify-between h-16 px-4 border-b border-slate-700/50">
-          {!sidebarCollapsed && (
+          {(!sidebarCollapsed || mobileNavOpen) && (
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
                 <span className="text-white font-bold text-sm">SA</span>
@@ -320,10 +335,19 @@ export default function SuperAdminDashboard() {
           )}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            className="hidden lg:block p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
           >
             <svg className={`w-5 h-5 transition-transform ${sidebarCollapsed ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Close navigation"
+            className="lg:hidden p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
@@ -469,39 +493,51 @@ export default function SuperAdminDashboard() {
       </aside>
 
       {/* Main Content */}
-      <main className={`transition-all duration-300 ${sidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
+      <main className={`transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
         {/* Top Bar */}
         <header className="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-xl border-b border-slate-700/50">
-          <div className="flex items-center justify-between h-16 px-6">
-            <div>
-              <h1 className="text-xl font-bold text-white">Platform Overview</h1>
-              <p className="text-sm text-slate-400">Monitor and manage your entire platform</p>
+          <div className="flex items-center justify-between gap-3 h-16 px-3 sm:px-6">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="Open navigation"
+                className="-ml-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white lg:hidden"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <div className="min-w-0">
+                <h1 className="truncate text-lg sm:text-xl font-bold text-white">Platform Overview</h1>
+                <p className="hidden sm:block text-sm text-slate-400">Monitor and manage your entire platform</p>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 onClick={() => router.push('/super-admin/patent-corpus')}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-500 text-white hover:bg-violet-600 border border-violet-400/60 transition-colors"
+                className="flex items-center gap-2 px-2.5 sm:px-4 py-2 rounded-lg bg-violet-500 text-white hover:bg-violet-600 border border-violet-400/60 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z" />
                 </svg>
-                <span className="text-sm">Patent Journal Extractor</span>
+                <span className="hidden md:inline text-sm">Patent Journal Extractor</span>
               </button>
               <button
                 onClick={() => router.push('/super-admin/patent-api')}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 border border-emerald-400/60 transition-colors"
+                className="flex items-center gap-2 px-2.5 sm:px-4 py-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 border border-emerald-400/60 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-8.52 5.45L7 20H4v-3l5.55-5.48A6 6 0 1121 9z" />
                 </svg>
-                <span className="text-sm">Indian Patent API</span>
+                <span className="hidden md:inline text-sm">Indian Patent API</span>
               </button>
               <button
                 onClick={checkExpiryNotifications}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition-colors"
               >
                 <span>🔔</span>
-                <span className="text-sm">Check Notifications</span>
+                <span className="hidden md:inline text-sm">Check Notifications</span>
               </button>
             </div>
           </div>

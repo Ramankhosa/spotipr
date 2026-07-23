@@ -797,7 +797,7 @@ function ValidationPanel({
 
         {/* Stats Grid - Clickable Filters */}
         <div className="p-4">
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3">
             <button
               onClick={() => setFilterType(filterType === 'error' ? 'all' : 'error')}
               className={`group relative rounded-xl p-3 text-center transition-all ${
@@ -1037,7 +1037,7 @@ function ValidationPanel({
                 </svg>
                 View side-by-side comparison (Original vs Revised)
               </summary>
-              <div className="grid grid-cols-2 gap-4 mt-3">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3">
                 {/* Original Content */}
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -3832,7 +3832,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
       {/* Help Panel - Fixed position in corner */}
       {showHelpPanel && (
-        <div className="fixed bottom-4 right-4 z-40 w-80 bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto z-40 sm:w-80 bg-white rounded-xl shadow-2xl border border-paper-300 overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
           <div className="bg-gradient-to-r from-ai-blue-600 to-ai-blue-600 px-4 py-3 flex items-center justify-between">
             <h3 className="text-white font-semibold flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3879,7 +3879,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       )}
 
       {/* Top Controls Bar - Redesigned */}
-      <div className="max-w-[850px] mx-auto mb-6 px-8">
+      <div className="max-w-[850px] mx-auto mb-6 px-2 sm:px-8">
         {/* Header Row */}
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -4171,7 +4171,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       </div>
 
       {isMultiJurisdiction && (
-        <div className="max-w-[850px] mx-auto mb-8 px-8">
+        <div className="max-w-[850px] mx-auto mb-8 px-2 sm:px-8">
           <div className="border border-paper-300 rounded-lg bg-white shadow-sm p-4">
             <div className="text-xs font-semibold text-ai-graphite-500 uppercase mb-2">
               Multi-Jurisdiction Filing
@@ -4296,7 +4296,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
       )}
 
       {/* The "Paper" Document */}
-      <div className="max-w-[850px] mx-auto bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] min-h-[1100px] px-[60px] py-[60px] relative border border-paper-200">
+      <div className="max-w-[850px] mx-auto bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] min-h-[70vh] sm:min-h-[1100px] px-4 py-8 sm:px-10 sm:py-12 lg:px-[60px] lg:py-[60px] relative border border-paper-200">
 
         {profileLoading && (
           <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
@@ -4328,9 +4328,11 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
 
               return (
               <div key={section.keys.join('|') || idx} className="group relative hover:bg-paper-100/30 transition-colors -mx-4 px-4 py-2 rounded-lg">
-                {/* Hover Actions (Floating) */}
-                <div className={`absolute -right-4 top-0 transform translate-x-full opacity-0 group-hover:opacity-100 transition-opacity pl-2 ${isWorking ? 'opacity-100' : ''}`}>
-                   <div className="flex flex-col gap-1 bg-white border border-paper-300 shadow-sm rounded-md p-1">
+                {/* Section actions. On desktop they float in the margin and
+                    reveal on hover; touch devices have no hover, so below lg
+                    they sit inline above the section and stay visible. */}
+                <div className={`mb-3 flex justify-end lg:absolute lg:-right-4 lg:top-0 lg:mb-0 lg:block lg:transform lg:translate-x-full lg:pl-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity ${isWorking ? 'lg:opacity-100' : ''}`}>
+                   <div className="inline-flex flex-row lg:flex-col gap-1 bg-white border border-paper-300 shadow-sm rounded-md p-1">
                       {!hasContent ? (
                          <button
                            disabled={loading || autoModeRunning}
@@ -5195,7 +5197,7 @@ export default function AnnexureDraftStage({ session, patent, onComplete, onRefr
                                      {/* Speech bubble pointer */}
                                      <div className="absolute -top-2 right-3 w-4 h-4 bg-white border-l border-t border-paper-300 transform rotate-45"></div>
                                      
-                                     <div className="w-80 bg-white rounded-2xl shadow-xl border border-paper-300 overflow-hidden">
+                                     <div className="w-[min(20rem,calc(100vw-2rem))] bg-white rounded-2xl shadow-xl border border-paper-300 overflow-hidden">
                                        {/* Header */}
                                        <div className="bg-gradient-to-r from-ai-blue-500 to-ai-blue-600 px-4 py-3 flex items-center gap-2">
                                          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">

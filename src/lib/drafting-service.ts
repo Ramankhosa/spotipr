@@ -332,11 +332,22 @@ export class DraftingService {
         return { success: false, error: 'Patent not found or access denied' };
       }
 
+      // A session without a tenantId is invisible to quota tracking: every counter in the
+      // drafting route is guarded by `if (session.tenantId)`, so an untenanted session
+      // drafts patents that are never counted against any plan. Refuse to create one.
+      if (!user.tenantId) {
+        return {
+          success: false,
+          error: 'Your account is not linked to an organisation. Please contact your administrator.'
+        };
+      }
+
       // Create drafting session
       const session = await prisma.draftingSession.create({
         data: {
           patentId: params.patentId,
-          userId: user.id
+          userId: user.id,
+          tenantId: user.tenantId
         }
       });
 

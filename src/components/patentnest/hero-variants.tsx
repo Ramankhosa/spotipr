@@ -12,21 +12,21 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useFig } from './figures'
-import { BLUE, BRASS, INK, LAMP, SOFT, VIOLET, WAX } from '@/lib/patentnest/palette'
+import { BLUE, BRASS, INK, LAMP, PAPER, SOFT, VIOLET, WAX } from '@/lib/patentnest/palette'
 
 
 const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }
 const serif = { fontFamily: 'var(--font-cormorant), Georgia, serif' }
 const VIEW = { once: true, margin: '-80px' } as const
 
-function Caption({ x, y, name, promise, color }: { x: number; y: number; name: string; promise: string; color: string }) {
+function Caption({ x, y, name, promise, color, promiseSize = 10.5 }: { x: number; y: number; name: string; promise: string; color: string; promiseSize?: number }) {
   const f = useFig()
   return (
     <g>
       <motion.text x={x} y={y} textAnchor="middle" fontSize="14" letterSpacing="0.14em" fill={color} style={mono} {...f.fade(0.2)}>
         {name}
       </motion.text>
-      <motion.text x={x} y={y + 18} textAnchor="middle" fontSize="10.5" letterSpacing="0.08em" fill={SOFT} style={mono} {...f.fade(0.35)}>
+      <motion.text x={x} y={y + 18} textAnchor="middle" fontSize={promiseSize} letterSpacing="0.08em" fill={SOFT} style={mono} {...f.fade(0.35)}>
         {promise}
       </motion.text>
     </g>
@@ -49,8 +49,8 @@ export function SerpentineHeroFig({ speed = 0.62 }: { speed?: number }) {
   }
 
   return (
-    <svg viewBox="0 0 900 600" className="h-auto w-full" role="img"
-      aria-label="The unbroken line as a serpentine through the patent process: a scribble resolves into a lightbulb, a double search-lens loop passes prior-art documents and the relevance gate, a hatched mechanism drawing is numbered, a claim is refined twice and underlined, the specification writes itself with paragraph numbers, a triple review loop clears the statutes — then the FILED stamp and the ribboned GRANTED seal">
+    <svg viewBox="0 0 900 620" className="h-auto w-full" role="img"
+      aria-label="The unbroken line as a serpentine through the patent process: a scribble resolves into a lightbulb, a double search-lens loop passes prior-art documents and the relevance gate, a hatched mechanism drawing is numbered, a claim is refined twice with its antecedent underlined and checked, the specification writes itself with paragraph numbers, a triple review loop clears the statutes — then the FILED stamp and the ribboned GRANTED seal; small paper interchange dots mark where the line changes ink from stage to stage">
 
       {/* ---- row 1 · disclose (ink) + search (blue) ---- */}
       {/* the scribble resolves into a lightbulb */}
@@ -93,8 +93,8 @@ export function SerpentineHeroFig({ speed = 0.62 }: { speed?: number }) {
           {p}
         </motion.text>
       ))}
-      <Caption x={116} y={200} name="I · DISCLOSE" promise="a rough idea is enough" color={INK} />
-      <Caption x={330} y={248} name="II · SEARCH" promise="30M+ patents · gate-checked" color={BLUE} />
+      <Caption x={116} y={200} name="I · DISCLOSE" promise="AI shapes your rough idea" color={INK} promiseSize={11.5} />
+      <Caption x={330} y={238} name="II · SEARCH" promise="AI searches 30M+ patents" color={BLUE} promiseSize={11.5} />
 
       {/* ---- row 2 · drawings (violet) + claims (brass), right to left ---- */}
       <motion.path
@@ -130,17 +130,15 @@ export function SerpentineHeroFig({ speed = 0.62 }: { speed?: number }) {
       <motion.text x={214} y={282} fontSize="16.5" fill={INK} style={serif} fontStyle="italic" {...f.fade(7.7)}>
         … wherein the sensor array (12) self-calibrates …
       </motion.text>
-      <motion.text x={252} y={240} fontSize="10.5" letterSpacing="0.08em" fill={SOFT} style={mono} {...f.fade(8.0)}>
-        A SENSOR ARRAY
-      </motion.text>
-      <motion.path d="M 322 272 C 310 260, 298 252, 288 246" fill="none" stroke={BRASS} strokeWidth="1.2" {...f.draw(8.05, 0.4)} />
-      <motion.path d="M 348 236 l 4 4.4 l 8 -9" fill="none" stroke={LAMP} strokeWidth="1.8" strokeLinecap="round" {...f.draw(8.25, 0.3)} />
+      {/* the antecedent, underlined where it lives — then checked off */}
+      <motion.line x1={300} y1={290} x2={424} y2={290} stroke={BRASS} strokeWidth="1.3" {...f.draw(8.0, 0.5)} />
+      <motion.path d="M 540 276 l 4 4.4 l 8 -9" fill="none" stroke={LAMP} strokeWidth="1.8" strokeLinecap="round" {...f.draw(8.25, 0.3)} />
       {/* the dependent claim, already forming */}
       <motion.text x={214} y={330} fontSize="12" fill={SOFT} style={serif} fontStyle="italic" {...f.fade(8.4)}>
         2. The array of claim 1, wherein …
       </motion.text>
-      <Caption x={758} y={366} name="III · DRAWINGS" promise="numerals once · FIG. discipline" color={VIOLET} />
-      <Caption x={452} y={366} name="IV · CLAIMS" promise="refined · antecedent verified" color={BRASS} />
+      <Caption x={758} y={366} name="III · DRAWINGS" promise="figures drawn · auto-numbered" color={VIOLET} promiseSize={11.5} />
+      <Caption x={452} y={366} name="IV · CLAIMS" promise="claims drafted & verified" color={BRASS} promiseSize={11.5} />
 
       {/* ---- row 3 · spec (wax) + review (green) + filed/granted ---- */}
       <motion.path
@@ -192,9 +190,17 @@ export function SerpentineHeroFig({ speed = 0.62 }: { speed?: number }) {
       <motion.text x={772} y={508} fontSize="8" letterSpacing="0.14em" fill={SOFT} style={mono} {...f.fade(16.4)}>
         PAT. NO. PN-2,026,001
       </motion.text>
-      <Caption x={176} y={566} name="V · SPECIFICATION" promise="[0001] numbering · 12 offices" color={WAX} />
-      <Caption x={370} y={584} name="VI · REVIEW" promise="no objections · § 112 · § 103" color={LAMP} />
-      <Caption x={636} y={584} name="VII · FILED → GRANTED" promise="for your signature" color={BRASS} />
+      {/* metro interchanges — paper dots where the line hands over its ink */}
+      {([
+        [214, 110, 2.2], [850, 300, 4.8], [660, 300, 6.6], [130, 300, 9.0],
+        [274, 496, 11.5], [420, 486, 13.4], [556, 480, 14.4],
+      ] as const).map(([cx, cy, d]) => (
+        <motion.circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={4} fill={PAPER} stroke={INK} strokeWidth="1.6" {...f.pop(d)} />
+      ))}
+
+      <Caption x={168} y={572} name="V · SPECIFICATION" promise="written for 12 offices" color={WAX} promiseSize={11.5} />
+      <Caption x={370} y={572} name="VI · REVIEW" promise="reviewed like an examiner" color={LAMP} promiseSize={11.5} />
+      <Caption x={636} y={572} name="VII · FILED → GRANTED" promise="ready for your signature" color={BRASS} promiseSize={11.5} />
     </svg>
   )
 }

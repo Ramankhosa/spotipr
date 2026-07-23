@@ -39,7 +39,8 @@ import {
   Languages,
   Lightbulb,
   Link2,
-  Plus
+  Plus,
+  ChevronRight
 } from 'lucide-react'
 
 // DnD Kit imports
@@ -2382,7 +2383,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="p-8 max-w-[1800px] mx-auto space-y-8"
+      className="p-3 sm:p-8 max-w-[1800px] mx-auto space-y-6 sm:space-y-8"
     >
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -2993,7 +2994,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         alt={`Fig ${figNo}`}
                         className="w-full h-64 object-contain bg-white"
                       />
-                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      <div className="reveal-scrim absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                         <Button variant="secondary" size="sm" onClick={() => setExpandedFigNo(figNo)}>
                           <Eye className="w-4 h-4 mr-2" /> Expand
                         </Button>
@@ -3130,7 +3131,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                   </div>
                 )}
 
-                <div className="p-3 bg-white border-t grid grid-cols-4 gap-2">
+                <div className="p-3 bg-white border-t grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <Button variant="ghost" size="sm" className="w-full" onClick={() => { setModifyFigNo(figNo); setModifyTextSaved('') }}>
                     <Edit2 className="w-4 h-4 mr-2" /> Modify
                   </Button>
@@ -3583,6 +3584,31 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 />
               </div>
               <div className="p-4 border-t flex justify-end gap-3">
+                <Button
+                  variant="outline"
+                  disabled={!diagramSource?.imageFilename}
+                  title="Edit this figure (erase, draw, add labels)"
+                  onClick={() => {
+                    const figNo = expandedFigNo
+                    setExpandedFigNo(null)
+                    if (figNo && diagramSource?.imageFilename) {
+                      openImageEditor({
+                        type: 'diagram',
+                        id: figNo,
+                        title: `Fig ${figNo}`,
+                        imageFilename: diagramSource.imageFilename,
+                        originalImageFilename: diagramSource.originalImageFilename,
+                        fallbackImagePath: buildFigureImageUrl(diagramSource.imageFilename),
+                        originalImagePath: diagramSource.originalImagePath,
+                        language: (diagramSource.language || 'en').toLowerCase(),
+                        annotations: diagramSource.annotations
+                      })
+                    }
+                  }}
+                >
+                  <Paintbrush className="w-4 h-4 mr-2" />
+                  Edit image
+                </Button>
                 <Button variant="outline" onClick={() => setExpandedFigNo(null)}>Close</Button>
                 {/* Approval is now automatic - this button removed */}
               </div>
@@ -4351,7 +4377,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
 
                         {/* Hover overlay */}
                         {sketchImageUrl && sketch.status === 'SUCCESS' && (
-                          <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                          <div className="reveal-scrim absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                             <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); setExpandedSketchId(sketch.id) }}>
                               <Eye className="w-4 h-4" />
                             </Button>
@@ -4526,6 +4552,26 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                         Mode: {sketch.mode} • Created: {new Date(sketch.createdAt).toLocaleString()}
                       </div>
                       <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          title="Edit this sketch (erase, draw, add labels)"
+                          onClick={() => {
+                            setExpandedSketchId(null)
+                            openImageEditor({
+                              type: 'sketch',
+                              id: sketch.id,
+                              title: sketch.title,
+                              imageFilename: sketch.imageFilename,
+                              originalImageFilename: sketch.originalImageFilename,
+                              fallbackImagePath: modalSketchImageUrl,
+                              originalImagePath: sketch.originalImagePath,
+                              annotations: sketch.annotations
+                            })
+                          }}
+                        >
+                          <Paintbrush className="w-4 h-4 mr-2" />
+                          Edit image
+                        </Button>
                         <Button
                           variant="outline"
                           onClick={() => {
@@ -4960,6 +5006,20 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       
       <div className="hidden">
         {/* Helper for preserving existing logic not explicitly in UI but needed for compilation if any */}
+      </div>
+
+      {/* Forward navigation. This stage previously relied solely on the
+          screen-edge arrow overlay for advancing; with that removed it needs
+          its own control, like every other stage has. */}
+      <div className="flex justify-end border-t border-paper-300 pt-5">
+        <Button
+          size="lg"
+          onClick={() => onComplete({ action: 'set_stage', sessionId: session?.id, stage: 'ANNEXURE_DRAFT' })}
+          className="w-full sm:w-auto"
+        >
+          Continue to Drafting
+          <ChevronRight className="w-4 h-4 ml-2" />
+        </Button>
       </div>
     </motion.div>
   )

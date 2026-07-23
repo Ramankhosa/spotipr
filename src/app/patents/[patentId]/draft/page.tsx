@@ -23,7 +23,6 @@ import PreliminaryClaimsStage from '@/components/drafting/PreliminaryClaimsStage
 // Vertical Stage Navigation (replaces FloatingStageNavigation)
 import VerticalStageNav from '@/components/drafting/VerticalStageNav'
 // Floating forward/backward navigation buttons
-import FloatingStageButtons from '@/components/drafting/FloatingStageButtons'
 
 interface DraftingSession {
   id: string
@@ -123,6 +122,7 @@ export default function PatentDraftingPage() {
   
   // Sidebar collapsed state for responsive layout
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [stageNavOpen, setStageNavOpen] = useState(false)
   const router = useRouter()
   const params = useParams()
   const patentId = params?.patentId as string
@@ -642,20 +642,6 @@ export default function PatentDraftingPage() {
     }
   }
 
-  // Get prev/next stage info for floating buttons
-  const { prev, next } = getPrevNextStages()
-  
-  // Stage labels for floating buttons
-  const stageLabels: Record<string, string> = {
-    IDEA_ENTRY: 'Invention Structure',
-    PRELIMINARY_CLAIMS: 'Preliminary Claims',
-    RELATED_ART: 'Prior Art',
-    CLAIM_REFINEMENT: 'Claim Refinement',
-    COMPONENT_PLANNER: 'Components',
-    FIGURE_PLANNER: 'Figures',
-    ANNEXURE_DRAFT: 'Drafting'
-  }
-
   return (
     <div className="min-h-screen bg-[#F5F6F7]">
       {/* Vertical Stage Navigation Sidebar */}
@@ -666,22 +652,17 @@ export default function PatentDraftingPage() {
           patentId={patentId}
           onNavigateToStage={handleNavigateToStage}
           onCollapsedChange={setSidebarCollapsed}
+          mobileOpen={stageNavOpen}
+          onMobileClose={() => setStageNavOpen(false)}
         />
       )}
 
-      {/* Floating Forward/Backward Navigation Buttons */}
-      {session && (
-        <FloatingStageButtons
-          onPrevious={prev ? () => handleNavigateToStage(prev) : null}
-          onNext={next ? () => handleNavigateToStage(next) : null}
-          previousLabel={prev ? stageLabels[prev] || prev : undefined}
-          nextLabel={next ? stageLabels[next] || next : undefined}
-          sidebarCollapsed={sidebarCollapsed}
-        />
-      )}
+      {/* Stage navigation lives in the rail and in each stage's own
+          continue/back controls — no screen-edge floating arrows. */}
 
-      {/* Main Content Area - Shifted right for sidebar */}
-      <div className={`${session ? (sidebarCollapsed ? 'pl-16' : 'pl-72') : ''} transition-all duration-300`}>
+      {/* Main Content Area - Shifted right for the rail; below lg the rail is
+          a drawer, so the content keeps the full width. */}
+      <div className={`${session ? (sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-72') : ''} transition-all duration-300`}>
         {/* Quota Error Banner */}
         {quotaError && (
           <div className="bg-amber-50 border-b border-amber-200 px-4 py-3">
@@ -747,36 +728,50 @@ export default function PatentDraftingPage() {
 
         {/* Header - Simplified (navigation moved to sidebar) */}
         <header className="bg-white/90 backdrop-blur-md border-b border-gray-200 sticky top-0 z-30">
-          <div className="w-full max-w-[98%] mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-14">
-              <div className="flex items-center space-x-4 min-w-0 flex-1">
+          <div className="w-full max-w-[98%] mx-auto px-3 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-14 gap-2">
+              <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
+                {/* Below lg the stage rail is a drawer — this is its handle. */}
+                {session && (
+                  <button
+                    type="button"
+                    onClick={() => setStageNavOpen(true)}
+                    aria-label="Open stage navigation"
+                    className="-ml-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 lg:hidden"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                  </button>
+                )}
+
                 <Link
                   href={`/projects/${patent.project.id}`}
-                  className="text-gray-400 hover:text-gray-700 transition-colors duration-200 p-1 rounded-full hover:bg-gray-100"
+                  className="hidden sm:block text-gray-400 hover:text-gray-700 transition-colors duration-200 p-1 rounded-full hover:bg-gray-100"
                   title="Back to Project"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                   </svg>
                 </Link>
-                
+
                 <div className="h-4 w-px bg-gray-200 mx-2 hidden sm:block"></div>
-                
+
                 <div className="flex flex-col justify-center min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-sm font-semibold text-gray-900 truncate max-w-lg cursor-default" title={patent.title}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <h1 className="text-sm font-semibold text-gray-900 truncate max-w-full sm:max-w-lg cursor-default" title={patent.title}>
                       {patent.title}
                     </h1>
                     {styleStatus && (
-                      <Badge variant={styleStatus.enabled ? "default" : "secondary"} className="text-[10px] h-4 px-1.5">
+                      <Badge variant={styleStatus.enabled ? "default" : "secondary"} className="hidden sm:inline-flex text-[10px] h-4 px-1.5">
                         {styleStatus.enabled ? 'Style Active' : 'No Style'}
                       </Badge>
                     )}
                   </div>
-                  <p className="text-[11px] text-gray-500 font-medium flex items-center gap-1">
-                    <span className="uppercase tracking-wider">{STAGE_LABELS[currentStage as keyof typeof STAGE_LABELS]}</span>
+                  <p className="text-[11px] text-gray-500 font-medium flex items-center gap-1 truncate">
+                    <span className="uppercase tracking-wider truncate">{STAGE_LABELS[currentStage as keyof typeof STAGE_LABELS]}</span>
                     <span className="text-gray-300">•</span>
-                    <span>{STAGE_PROGRESS[currentStage as keyof typeof STAGE_PROGRESS]}% Complete</span>
+                    <span className="whitespace-nowrap">{STAGE_PROGRESS[currentStage as keyof typeof STAGE_PROGRESS]}%</span>
                   </p>
                 </div>
               </div>
@@ -791,13 +786,13 @@ export default function PatentDraftingPage() {
 
                 <button
                   onClick={resumeSession}
-                  className="inline-flex items-center px-3 py-1.5 border border-indigo-600/20 text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                  className="inline-flex items-center px-2.5 sm:px-3 py-1.5 border border-indigo-600/20 text-xs font-medium rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
                   title="Resume the latest drafting session"
                 >
-                  <svg className="w-3 h-3 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-3 h-3 sm:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  Resume
+                  <span className="hidden sm:inline">Resume</span>
                 </button>
               </div>
             </div>
@@ -805,7 +800,7 @@ export default function PatentDraftingPage() {
         </header>
 
         {/* Main Content - Maximized Writing Space */}
-        <main className="w-full mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <main className="w-full mx-auto py-3 px-2 sm:py-6 sm:px-6 lg:px-8">
           {navNotice && (
             <div className="max-w-[98%] mx-auto mb-3">
               <div className="flex items-start gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">

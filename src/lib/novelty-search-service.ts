@@ -1891,12 +1891,16 @@ export class NoveltySearchService extends BasePatentService {
   async prepareNoveltySearch(request: NoveltySearchRequest): Promise<NoveltySearchResponse> {
     try {
       const user = await this.validateUser(request.jwtToken);
-      if (user.tenantId) {
-        const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
-        if (!serviceAccess.allowed) {
-          return { success: false, error: serviceAccess.reason || 'Novelty search access denied.' };
-        }
+      // Fails closed: an unmetered novelty search is the most expensive thing to give away.
+      if (!user.tenantId) {
+        return { success: false, error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.' };
       }
+
+      const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+      if (!serviceAccess.allowed) {
+        return { success: false, error: serviceAccess.reason || 'Novelty search access denied.' };
+      }
+
       const config = this.mergeConfig(request.config);
       const result = await this.performStage0(
         `preview-${user.id}`,
@@ -1925,13 +1929,16 @@ export class NoveltySearchService extends BasePatentService {
       const user = await this.validateUser(request.jwtToken);
       let remainingQuota: { daily: number | null; monthly: number | null } | undefined;
 
-      if (user.tenantId) {
-        const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
-        if (!serviceAccess.allowed) {
-          return { success: false, error: serviceAccess.reason || 'Novelty search access denied.' };
-        }
-        remainingQuota = serviceAccess.remainingQuota;
+      // Fails closed: an unmetered novelty search is the most expensive thing to give away.
+      if (!user.tenantId) {
+        return { success: false, error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.' };
       }
+
+      const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+      if (!serviceAccess.allowed) {
+        return { success: false, error: serviceAccess.reason || 'Novelty search access denied.' };
+      }
+      remainingQuota = serviceAccess.remainingQuota;
 
       const config = this.mergeConfig(request.config);
       const intelligentSearch = config.searchSource?.searchMode !== 'manual';
@@ -2102,15 +2109,18 @@ export class NoveltySearchService extends BasePatentService {
       // QUOTA CHECK: Use the centralized service-access gate so tenant status,
       // MANUAL_ATI bypasses, role/team rules, and plan quotas stay consistent
       // with the API middleware.
-      if (user.tenantId) {
-        const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
-        if (!serviceAccess.allowed) {
-          console.log(`[NoveltySearch] Access denied for tenant ${user.tenantId}: ${serviceAccess.reason}`);
-          return {
-            success: false,
-            error: serviceAccess.reason || 'Novelty search access denied. Please contact your administrator.'
-          };
-        }
+      // Fails closed: an unmetered novelty search is the most expensive thing to give away.
+      if (!user.tenantId) {
+        return { success: false, error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.' };
+      }
+
+      const serviceAccess = await checkServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+      if (!serviceAccess.allowed) {
+        console.log(`[NoveltySearch] Access denied for tenant ${user.tenantId}: ${serviceAccess.reason}`);
+        return {
+          success: false,
+          error: serviceAccess.reason || 'Novelty search access denied. Please contact your administrator.'
+        };
       }
 
       // Merge config with defaults

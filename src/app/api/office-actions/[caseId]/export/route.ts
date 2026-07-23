@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { recordServiceCompletion } from '@/lib/service-completion'
 import { prisma } from '@/lib/prisma'
 import { loadOfficeActionProfile } from '@/lib/office-action/oa-case-service'
 import { assembleReply, type DraftedObjectionReply, type AmendedClaim, type CaseMeta } from '@/lib/office-action/reply-assembly'
@@ -93,6 +94,19 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
   await prisma.officeActionCase.update({
     where: { id: oaCase.id }, data: { status: 'REPLIED' }
   }).catch(() => {})
+
+  // A lint-passing exported reply is what an OFFICE_ACTION_RESPONSE quota unit buys.
+  // Keyed on the case, so re-exporting the same reply does not consume a second unit.
+  if (auth.user.tenantId) {
+    await recordServiceCompletion({
+      tenantId: auth.user.tenantId,
+      userId: auth.user.id,
+      serviceType: 'OFFICE_ACTION_RESPONSE',
+      operationId: oaCase.id,
+      operationType: 'OA_REPLY_EXPORT',
+      metadata: { applicationNumber: oaCase.applicationNumber, jurisdiction: oaCase.jurisdictionCode }
+    })
+  }
 
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,

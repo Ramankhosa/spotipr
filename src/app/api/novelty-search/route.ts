@@ -91,11 +91,22 @@ export async function POST(request: NextRequest) {
         where: { id: payload.sub },
         select: { id: true, tenantId: true }
       });
-      if (user?.tenantId) {
-        const serviceCheck = await enforceServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
-        if (!serviceCheck.allowed) {
-          return serviceCheck.response;
-        }
+      // Fails closed. Novelty search is the most expensive operation in the product
+      // (PQAI / SerpAPI / Voyage calls), so a user with no tenant must be refused rather
+      // than silently granted an unmetered search.
+      if (!user?.tenantId) {
+        return NextResponse.json(
+          {
+            error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.',
+            code: 'TENANT_UNRESOLVED'
+          },
+          { status: 403 }
+        );
+      }
+
+      const serviceCheck = await enforceServiceAccess(user.id, user.tenantId, 'NOVELTY_SEARCH');
+      if (!serviceCheck.allowed) {
+        return serviceCheck.response;
       }
     }
 

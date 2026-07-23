@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { unstable_noStore as noStore } from 'next/cache'
 import { useAuth } from '@/lib/auth-context'
 import { getDateOnlyMonthRange, getDateOnlyYearRange } from '@/lib/usage-periods'
@@ -261,6 +261,14 @@ export default function UserServiceUsagePage() {
   const [expandedPatentId, setExpandedPatentId] = useState<string | null>(null)
   const [showPatentCosts, setShowPatentCosts] = useState<boolean>(false)
 
+  // Monotonic request id. Changing "From" and then "To" fires two overlapping requests,
+  // and the unified usage query is heavy (7 table scans), so the wider range often
+  // resolves LAST and overwrites the range the admin actually selected - which looks
+  // exactly like "the date filter does nothing". Responses older than the latest request
+  // are discarded.
+  const usageRequestRef = useRef(0)
+  const tenantUsersRequestRef = useRef(0)
+
   useEffect(() => {
     if (!user) {
       window.location.href = '/login'
@@ -276,9 +284,15 @@ export default function UserServiceUsagePage() {
   }, [user])
 
   useEffect(() => {
-    if (user && user.roles?.some(role => role === 'SUPER_ADMIN' || role === 'SUPER_ADMIN_VIEWER')) {
-      fetchUsage()
+    if (!user || !user.roles?.some(role => role === 'SUPER_ADMIN' || role === 'SUPER_ADMIN_VIEWER')) {
+      return
     }
+
+    // Debounced: picking a From date and then a To date is two state updates in quick
+    // succession, and each one would otherwise fire a full (expensive) usage query. The
+    // delay collapses them into a single request for the range the admin actually wants.
+    const timer = setTimeout(() => { fetchUsage() }, 350)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, dateRange, selectedMonth, selectedYear, selectedTenantId])
 
@@ -305,6 +319,15 @@ export default function UserServiceUsagePage() {
       }
       if (dateRange.from > dateRange.to) {
         return { error: 'From date must be on or before To date.' }
+      }
+      // Native date inputs emit partially-typed years (0002, 0202, ...) as complete,
+      // valid-looking values. Reject them rather than running a query over two millennia.
+      const outOfRange = [dateRange.from, dateRange.to].find(value => {
+        const year = Number(value.slice(0, 4))
+        return !Number.isInteger(year) || year < 2000 || year > 2100
+      })
+      if (outOfRange) {
+        return { error: 'Dates must fall between the years 2000 and 2100.' }
       }
       return {
         startDate: dateRange.from,
@@ -366,6 +389,9 @@ export default function UserServiceUsagePage() {
   }
 
   const fetchUsage = async () => {
+    const requestId = ++usageRequestRef.current
+    const isStale = () => requestId !== usageRequestRef.current
+
     try {
       setLoading(true)
       setError(null)
@@ -394,12 +420,18 @@ export default function UserServiceUsagePage() {
         headers
       })
 
+      if (isStale()) return
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error || 'Failed to fetch unified usage data')
       }
 
       const body = await response.json()
+
+      // A newer range was requested while this one was in flight - drop the result.
+      if (isStale()) return
+
       setData(body.users || [])
       setSummary({
         totalPatentsDrafted: body.summary?.totalPatentsDrafted || 0,
@@ -437,6 +469,7 @@ export default function UserServiceUsagePage() {
       setTenantUsersTenantId(null)
       setTenantUsersError(null)
     } catch (err) {
+      if (isStale()) return
       console.error('Failed to fetch service usage data:', err)
       setError(err instanceof Error ? err.message : 'Unknown error')
       setData([])
@@ -446,11 +479,16 @@ export default function UserServiceUsagePage() {
       setTenantUsersTenantId(null)
       setTenantUsersError(null)
     } finally {
-      setLoading(false)
+      // Only the newest request may clear the spinner, otherwise a slow stale response
+      // switches the table back to "loaded" while the current one is still running.
+      if (!isStale()) setLoading(false)
     }
   }
 
   const fetchTenantUsers = async (tenantId: string) => {
+    const requestId = ++tenantUsersRequestRef.current
+    const isStale = () => requestId !== tenantUsersRequestRef.current
+
     try {
       setTenantUsersLoading(true)
       setTenantUsersError(null)
@@ -485,15 +523,18 @@ export default function UserServiceUsagePage() {
 
       const body: TenantUserUsageResponse = await response.json()
 
+      if (isStale()) return
+
       setTenantUsers(body.users || [])
       setTenantUsersTenantId(body.tenantId || tenantId)
     } catch (err) {
+      if (isStale()) return
       console.error('Failed to fetch tenant user usage:', err)
       setTenantUsers([])
       setTenantUsersTenantId(null)
       setTenantUsersError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
-      setTenantUsersLoading(false)
+      if (!isStale()) setTenantUsersLoading(false)
     }
   }
 

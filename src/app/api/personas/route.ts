@@ -13,6 +13,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyJWT } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { canUsePersona, canCreateOwnPersona, canCreateOrgPersona, canManageOrgPersonas } from '@/lib/permissions'
+import { enforceServiceAccess } from '@/lib/service-access-middleware'
+import { recordServiceCompletion } from '@/lib/service-completion'
 import type { PersonaVisibility } from '@prisma/client'
 
 const PERSONA_NAME_PATTERN = /^[\w\s\-\.]+$/
@@ -183,10 +185,17 @@ export async function POST(request: NextRequest) {
 
     // Check permission to create personas
     if (!canCreateOwnPersona(user as any)) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Permission denied. Your role does not allow creating personas.',
         code: 'PERMISSION_DENIED'
       }, { status: 403 })
+    }
+
+    // PersonaSync is a plan feature (Enterprise by default). It previously had no gate at
+    // all, so tenants on plans that exclude PERSONA_SYNC could still train styles.
+    const personaAccess = await enforceServiceAccess(user.id, user.tenantId, 'PERSONA_SYNC')
+    if (!personaAccess.allowed) {
+      return personaAccess.response
     }
 
     let body: any
@@ -339,6 +348,17 @@ export async function POST(request: NextRequest) {
       // Don't fail creation if audit logging fails
       console.warn('[Personas] Audit log failed:', auditError)
     }
+
+    // Count the trained persona against the plan's PERSONA_SYNC quota. Keyed on the
+    // persona id, so editing it later never consumes a second unit.
+    await recordServiceCompletion({
+      tenantId: user.tenantId,
+      userId: user.id,
+      serviceType: 'PERSONA_SYNC',
+      operationId: persona.id,
+      operationType: 'PERSONA_CREATED',
+      metadata: { name: persona.name, visibility: persona.visibility }
+    })
 
     return NextResponse.json({
       success: true,

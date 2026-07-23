@@ -735,7 +735,7 @@ export default function SuperAdminATIDashboard() {
       {/* Reveal Token Modal */}
       {revealedToken && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-[min(24rem,calc(100vw-1.5rem))] shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">Token Revealed</h3>
@@ -792,7 +792,7 @@ export default function SuperAdminATIDashboard() {
       {/* Reveal Error Modal */}
       {revealError && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-[min(24rem,calc(100vw-1.5rem))] shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-red-900">Reveal Token Failed</h3>

@@ -3,8 +3,12 @@
 // Persistent app chrome for authenticated pages: a collapsible left sidebar
 // (every tool one click away) and a breadcrumb strip on deep routes.
 // Marketing/auth pages and immersive workspaces render without the shell.
+//
+// Below md the sidebar has no room, so the same nav is served as a slide-over
+// drawer opened from the breadcrumb strip — otherwise phone users would have
+// no way to reach any tool.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
@@ -23,7 +27,9 @@ import {
   BarChart3,
   ShieldCheck,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  Menu,
+  X
 } from 'lucide-react'
 
 const PUBLIC_PREFIXES = [
@@ -97,39 +103,60 @@ function segmentLabel(segment: string): string {
   return segment.charAt(0).toUpperCase() + segment.slice(1)
 }
 
-function Breadcrumbs({ pathname }: { pathname: string }) {
+// The strip does double duty: breadcrumbs everywhere, plus the nav trigger on
+// phones/tablets where the sidebar is hidden. It therefore renders whenever a
+// trigger is needed, even on shallow routes with nothing to breadcrumb.
+function TopStrip({ pathname, onOpenNav }: { pathname: string; onOpenNav?: () => void }) {
   const segments = pathname.split('/').filter(Boolean)
-  if (segments.length < 2) return null
+  const crumbs = segments.length >= 2
+    ? segments.map((segment, index) => {
+        const path = '/' + segments.slice(0, index + 1).join('/')
+        return {
+          label: segmentLabel(segment),
+          path,
+          isLast: index === segments.length - 1,
+          isLink: index < segments.length - 1 && LINKABLE_PATTERNS.some(p => p.test(path))
+        }
+      })
+    : []
 
-  const crumbs = segments.map((segment, index) => {
-    const path = '/' + segments.slice(0, index + 1).join('/')
-    return {
-      label: segmentLabel(segment),
-      path,
-      isLast: index === segments.length - 1,
-      isLink: index < segments.length - 1 && LINKABLE_PATTERNS.some(p => p.test(path))
-    }
-  })
+  if (!crumbs.length && !onOpenNav) return null
 
   return (
-    <nav aria-label="Breadcrumb" className="border-b border-border bg-card/70 px-4 sm:px-6 py-2">
-      <ol className="flex items-center gap-1.5 text-xs text-muted-foreground overflow-x-auto whitespace-nowrap">
-        {crumbs.map((crumb, index) => (
-          <li key={crumb.path} className="flex items-center gap-1.5">
-            {index > 0 && <span aria-hidden="true" className="text-muted-foreground/40">/</span>}
-            {crumb.isLink ? (
-              <Link href={crumb.path} className="hover:text-primary transition-colors">
-                {crumb.label}
-              </Link>
-            ) : (
-              <span className={crumb.isLast ? 'font-semibold text-foreground' : undefined} aria-current={crumb.isLast ? 'page' : undefined}>
-                {crumb.label}
-              </span>
-            )}
-          </li>
-        ))}
-      </ol>
-    </nav>
+    <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-card/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:px-6 md:static md:bg-card/70 md:px-6 md:backdrop-blur-none">
+      {onOpenNav && (
+        <button
+          type="button"
+          onClick={onOpenNav}
+          aria-label="Open navigation menu"
+          className="-ml-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+      )}
+      {crumbs.length > 0 ? (
+        <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
+          <ol className="rail-x flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+            {crumbs.map((crumb, index) => (
+              <li key={crumb.path} className="flex items-center gap-1.5">
+                {index > 0 && <span aria-hidden="true" className="text-muted-foreground/40">/</span>}
+                {crumb.isLink ? (
+                  <Link href={crumb.path} className="hover:text-primary transition-colors">
+                    {crumb.label}
+                  </Link>
+                ) : (
+                  <span className={crumb.isLast ? 'font-semibold text-foreground' : undefined} aria-current={crumb.isLast ? 'page' : undefined}>
+                    {crumb.label}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </nav>
+      ) : (
+        <span className="text-xs font-semibold text-foreground md:hidden">Menu</span>
+      )}
+    </div>
   )
 }
 
@@ -162,6 +189,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '/'
   const { user } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   useEffect(() => {
     const saved = localStorage.getItem('app_sidebar_collapsed')
@@ -181,6 +209,28 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     })
   }
 
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), [])
+
+  // Navigating away should dismiss the drawer, and the page behind it must not
+  // scroll while it's open.
+  useEffect(() => {
+    setMobileNavOpen(false)
+  }, [pathname])
+
+  useEffect(() => {
+    if (!mobileNavOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileNavOpen(false)
+    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [mobileNavOpen])
+
   const isTenantAdmin = user?.roles?.includes('OWNER') || user?.roles?.includes('ADMIN')
   const isSuperAdmin = user?.roles?.includes('SUPER_ADMIN')
 
@@ -198,24 +248,37 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return <>{children}</>
   }
 
-  const renderItem = (item: NavItem) => {
+  // The drawer reuses the rail's items but always shows labels and never
+  // collapses — a phone menu has the room and needs the words.
+  const renderItem = (item: NavItem, variant: 'rail' | 'drawer' = 'rail') => {
+    const isRail = variant === 'rail'
+    const iconOnly = isRail && collapsed
     const active = item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(`${item.href}/`)
     return (
       <Link
         key={item.href}
         href={item.href}
-        title={collapsed ? item.label : undefined}
-        className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+        title={iconOnly ? item.label : undefined}
+        onClick={isRail ? undefined : closeMobileNav}
+        className={`flex items-center gap-3 rounded-lg px-3 text-sm transition-colors ${
+          isRail ? 'py-2' : 'py-2.5'
+        } ${
           active
             ? 'bg-accent text-accent-foreground font-semibold'
             : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-        } ${collapsed ? 'justify-center px-2' : ''}`}
+        } ${iconOnly ? 'justify-center px-2' : ''}`}
       >
         <item.icon className="h-4 w-4 shrink-0" />
-        {!collapsed && <span className="truncate">{item.label}</span>}
+        {!iconOnly && <span className="truncate">{item.label}</span>}
       </Link>
     )
   }
+
+  const sectionLabel = (label: string) => (
+    <div className="mb-1 mt-4 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {label}
+    </div>
+  )
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)]">
@@ -226,7 +289,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           }`}
         >
           <div className="sticky top-0 flex max-h-screen flex-col gap-1 overflow-y-auto p-2 pt-4">
-            {MAIN_NAV.map(renderItem)}
+            {MAIN_NAV.map(item => renderItem(item))}
 
             {isTenantAdmin && (
               <>
@@ -236,7 +299,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   </div>
                 )}
                 {collapsed && <div className="my-2 border-t border-border" />}
-                {TENANT_ADMIN_NAV.map(renderItem)}
+                {TENANT_ADMIN_NAV.map(item => renderItem(item))}
               </>
             )}
 
@@ -269,8 +332,55 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
       )}
 
+      {/* Mobile/tablet drawer — same destinations as the rail above. */}
+      {!hideSidebar && mobileNavOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div
+            className="absolute inset-0 bg-foreground/40 backdrop-blur-[2px]"
+            onClick={closeMobileNav}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation"
+            className="absolute inset-y-0 left-0 flex w-[17rem] max-w-[85vw] flex-col border-r border-border bg-card shadow-2xl animate-slide-in-left"
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <span className="text-sm font-semibold text-foreground">Navigate</span>
+              <button
+                type="button"
+                onClick={closeMobileNav}
+                aria-label="Close navigation menu"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <nav className="safe-bottom flex-1 space-y-1 overflow-y-auto p-2">
+              {MAIN_NAV.map(item => renderItem(item, 'drawer'))}
+
+              {isTenantAdmin && (
+                <>
+                  {sectionLabel('Organization')}
+                  {TENANT_ADMIN_NAV.map(item => renderItem(item, 'drawer'))}
+                </>
+              )}
+
+              {isSuperAdmin && (
+                <>
+                  {sectionLabel('Platform')}
+                  {renderItem({ label: 'Admin Console', href: '/dashboard', icon: ShieldCheck, exact: true }, 'drawer')}
+                </>
+              )}
+            </nav>
+          </div>
+        </div>
+      )}
+
       <div className="min-w-0 flex-1">
-        <Breadcrumbs pathname={pathname} />
+        <TopStrip pathname={pathname} onOpenNav={hideSidebar ? undefined : () => setMobileNavOpen(true)} />
         {children}
       </div>
     </div>

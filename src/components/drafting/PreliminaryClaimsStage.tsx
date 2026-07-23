@@ -935,7 +935,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="px-6 py-8 max-w-[1800px] mx-auto">
+    <div className="px-3 py-5 sm:px-6 sm:py-8 max-w-[1800px] mx-auto">
       {/* ---- Page Header ---- */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
@@ -1521,7 +1521,7 @@ export default function PreliminaryClaimsStage({ session, patent, onComplete, on
                                         <Info className="h-4 w-4" />
                                       </button>
                                       {showFreezeHelp && (
-                                        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-80 -translate-x-1/2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-4 text-left shadow-lg">
+                                        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-ai-blue-200 bg-ai-blue-50 p-4 text-left shadow-lg">
                                           <h4 className="mb-2 text-sm font-semibold text-ai-blue-900">Why freeze claims?</h4>
                                           <ul className="list-disc space-y-1 pl-4 text-xs text-ai-blue-800">
                                             <li>Claims define the legal scope of your patent protection</li>

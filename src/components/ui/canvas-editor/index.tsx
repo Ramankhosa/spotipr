@@ -47,9 +47,9 @@ import {
 
 const MAX_SCALE = 8
 const COLORS = ['#000000', '#dc2626', '#ffffff']
-// Hairlines vanish once a figure is scaled down into the filed document, so
-// strokes are floored rather than allowed down to 1px.
-const MIN_STROKE_WIDTH = 2
+// 1px matches the line weight PlantUML renders at; anything heavier reads as a
+// thicker stroke than the diagram it is drawn on.
+const MIN_STROKE_WIDTH = 1
 
 const TOOLS: { tool: Tool; icon: LucideIcon; label: string }[] = [
   { tool: 'select', icon: MousePointer2, label: 'Select / move' },
@@ -115,10 +115,10 @@ export default function CanvasImageEditor({
 
   const [tool, setTool] = useState<Tool>('pen')
   const [color, setColor] = useState('#000000')
-  const [strokeWidthSetting, setStrokeWidth] = useState(3)
+  const [strokeWidthSetting, setStrokeWidth] = useState(1)
   const strokeWidth = Math.max(strokeWidthSetting, MIN_STROKE_WIDTH)
   const [eraserWidth, setEraserWidth] = useState(24)
-  const [fontSize, setFontSize] = useState(18)
+  const [fontSize, setFontSize] = useState(12)
 
   // Seeded with any previously saved layer so past edits stay revisable.
   const { state: shapes, set: setShapes, undo, redo, canUndo, canRedo } = useHistory<ShapeDesc[]>(

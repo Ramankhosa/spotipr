@@ -7,9 +7,19 @@ vi.mock('./metering/gateway', () => ({
   llmGateway: { executeLLMOperation: vi.fn() },
 }))
 
+// The service now refuses a user with no tenant (an unmeterable novelty search), so this
+// suite gives the mock user a tenant and allows the access check. The subject under test
+// is the stage-0 approval gate, not entitlement.
+// Declared as a plain async function, not vi.fn().mockResolvedValue(...), because the
+// suite's afterEach calls vi.restoreAllMocks() which would strip the preset value and
+// make every test after the first read `allowed` off undefined.
+vi.mock('./org-access-service', () => ({
+  checkServiceAccess: async () => ({ allowed: true, remainingQuota: { daily: 5, monthly: 20 } }),
+}))
+
 function service() {
   const instance = new NoveltySearchService() as any
-  instance.validateUser = vi.fn().mockResolvedValue({ id: 'user-1', tenantId: null })
+  instance.validateUser = vi.fn().mockResolvedValue({ id: 'user-1', tenantId: 'tenant-1' })
   return instance
 }
 

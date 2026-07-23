@@ -16,7 +16,8 @@
  */
 
 import { prisma } from './prisma'
-import { getUtcDayWindow, getUtcMonthWindow } from './usage-periods'
+import { getUtcDayWindow } from './usage-periods'
+import { resolveBillingPeriod } from './billing-period'
 
 // Essential sections that must be drafted before a patent counts toward quota
 const ESSENTIAL_SECTIONS = ['detailedDescription', 'claims'] as const
@@ -51,96 +52,6 @@ export interface PatentDraftingQuota {
   billingPeriodEnd?: Date
   billingPeriodKey?: string
   billingPeriodSource?: 'subscription' | 'calendar'
-}
-
-// ======================================================================
-// Billing period helpers (subscription-cycle based monthly quota)
-// ======================================================================
-
-function addMonthsClampedUtc(base: Date, months: number): Date {
-  const year = base.getUTCFullYear()
-  const month = base.getUTCMonth() + months
-  const day = base.getUTCDate()
-  const hours = base.getUTCHours()
-  const minutes = base.getUTCMinutes()
-  const seconds = base.getUTCSeconds()
-  const ms = base.getUTCMilliseconds()
-
-  const firstOfTarget = new Date(Date.UTC(year, month, 1, hours, minutes, seconds, ms))
-  const daysInTarget = new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth() + 1, 0)).getUTCDate()
-  const clampedDay = Math.min(day, daysInTarget)
-  return new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth(), clampedDay, hours, minutes, seconds, ms))
-}
-
-function resolveAnchoredMonthlyWindow(now: Date, anchorStart: Date): { start: Date; endExclusive: Date } {
-  const monthsDiff =
-    (now.getUTCFullYear() - anchorStart.getUTCFullYear()) * 12 +
-    (now.getUTCMonth() - anchorStart.getUTCMonth())
-
-  let monthsFromAnchor = monthsDiff
-  let start = addMonthsClampedUtc(anchorStart, monthsFromAnchor)
-  if (start > now) {
-    monthsFromAnchor -= 1
-    start = addMonthsClampedUtc(anchorStart, monthsFromAnchor)
-  }
-  const endExclusive = addMonthsClampedUtc(anchorStart, monthsFromAnchor + 1)
-  return { start, endExclusive }
-}
-
-async function resolveBillingPeriod(
-  tenantId: string,
-  now: Date,
-  client: typeof prisma | any = prisma
-): Promise<{ start: Date; endExclusive: Date; key: string; source: 'subscription' | 'calendar' }> {
-  const subscription = await client.subscription.findFirst({
-    where: {
-      tenantId,
-      status: { in: ['ACTIVE', 'PENDING', 'AUTHENTICATED'] },
-      currentPeriodStart: { not: null },
-      currentPeriodEnd: { not: null }
-    },
-    orderBy: { currentPeriodStart: 'desc' },
-    select: {
-      billingCycle: true,
-      currentPeriodStart: true,
-      currentPeriodEnd: true
-    }
-  })
-
-  if (subscription?.currentPeriodStart && subscription?.currentPeriodEnd) {
-    const start = subscription.currentPeriodStart
-    const end = subscription.currentPeriodEnd
-    const cycle = (subscription.billingCycle || '').toLowerCase()
-
-    if (cycle === 'monthly') {
-      if (now >= start && now < end) {
-        return {
-          start,
-          endExclusive: end,
-          key: start.toISOString().substring(0, 10),
-          source: 'subscription'
-        }
-      }
-    } else if (cycle === 'yearly') {
-      if (now >= start && now < end) {
-        const window = resolveAnchoredMonthlyWindow(now, start)
-        return {
-          start: window.start,
-          endExclusive: window.endExclusive,
-          key: window.start.toISOString().substring(0, 10),
-          source: 'subscription'
-        }
-      }
-    }
-  }
-
-  const calendar = getUtcMonthWindow(now)
-  return {
-    start: calendar.start,
-    endExclusive: calendar.endExclusive,
-    key: calendar.start.toISOString().substring(0, 10),
-    source: 'calendar'
-  }
 }
 
 async function findPatentUsageRecord(
@@ -612,3 +523,44 @@ export async function syncExistingSections(
   return { counted: shouldCount, quotaExceeded: false }
 }
 
+
+/**
+ * Resolve the tenant that owns a drafting session, backfilling it when missing.
+ *
+ * Historically `DraftingSession.tenantId` was left null by some creation paths, and every
+ * quota check in the drafting route is written as `if (session.tenantId) { ...check... }`.
+ * A null therefore meant *unmetered drafting* rather than a blocked one - the single most
+ * valuable thing to game in the system.
+ *
+ * The creation paths now always set it, but sessions created before that fix still exist.
+ * This resolves the tenant from the session's owning user and persists it, so an old
+ * session becomes metered the next time it is touched. Returns null only when the user
+ * genuinely has no tenant, which callers MUST treat as "deny", never as "skip".
+ */
+export async function resolveSessionTenantId(session: {
+  id: string
+  tenantId?: string | null
+  userId?: string | null
+}): Promise<string | null> {
+  if (session.tenantId) return session.tenantId
+  if (!session.userId) return null
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { tenantId: true }
+  })
+
+  if (!user?.tenantId) return null
+
+  // Best-effort backfill. A failure here must not block drafting - the caller still has a
+  // usable tenantId and will enforce quota with it.
+  await prisma.draftingSession
+    .update({ where: { id: session.id }, data: { tenantId: user.tenantId } })
+    .catch(() => {})
+
+  console.warn(
+    `[PatentDraftingTracker] Backfilled tenantId on legacy session ${session.id} (tenant ${user.tenantId})`
+  )
+
+  return user.tenantId
+}

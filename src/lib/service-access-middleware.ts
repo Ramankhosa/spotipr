@@ -101,12 +101,15 @@ export async function enforceServiceAccess(
   } catch (error) {
     console.error('[ServiceAccessMiddleware] Error checking access:', error)
     
-    // SECURITY: Fail closed in production - deny access on errors
-    // This prevents access bypass through intentional error triggering
-    const isProduction = process.env.NODE_ENV === 'production'
-    if (isProduction) {
-      return { 
-        allowed: false, 
+    // SECURITY: Fail closed - deny access on errors, in every environment. This prevents
+    // access bypass through intentional error triggering, and keeps local behaviour
+    // honest. ALLOW_UNMETERED_DEV=true opts out locally; it is ignored in production.
+    const unmeteredDev =
+      process.env.NODE_ENV !== 'production' && process.env.ALLOW_UNMETERED_DEV === 'true'
+
+    if (!unmeteredDev) {
+      return {
+        allowed: false,
         response: NextResponse.json(
           {
             error: 'Service temporarily unavailable. Please try again later.',
@@ -116,12 +119,11 @@ export async function enforceServiceAccess(
         )
       }
     }
-    
-    // In development, allow access with warning for easier debugging
-    console.warn('[ServiceAccessMiddleware] DEV MODE: Access check failed, allowing access for debugging')
-    return { 
-      allowed: true, 
-      result: { allowed: true, reason: 'Access check failed - dev mode override' } 
+
+    console.warn('[ServiceAccessMiddleware] ALLOW_UNMETERED_DEV: Access check failed, allowing access')
+    return {
+      allowed: true,
+      result: { allowed: true, reason: 'Access check failed - unmetered dev override' }
     }
   }
 }

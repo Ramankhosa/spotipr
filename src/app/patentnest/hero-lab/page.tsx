@@ -1,10 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { SerpentineHeroFig, FourActsHeroFig, CinematicHero } from '@/components/patentnest/hero-variants'
+import { CorpusStormFig } from '@/components/patentnest/storm-hero'
+import { IdeaToGrantHeroFig } from '@/components/patentnest/idea-to-grant-hero'
 
 export const metadata: Metadata = {
   title: 'Hero lab — PatentNest.ai',
-  description: 'Compare hero-figure variants: serpentine line, four acts, and cinematic stage-by-stage.',
+  description: 'Compare hero-figure variants: serpentine line, four acts, cinematic stage-by-stage, and the corpus storm.',
 }
 
 // Comparison lab for the homepage hero figure — three answers to "the
@@ -29,6 +31,18 @@ export default function HeroLabPage() {
       note: 'One stage at a time, drawn large, with real HTML type beside it — auto-advances every ~3.5s (hover to pause, click the ticks to jump). Most readable of all; the trade-off is you never see the whole line at once.',
       body: <CinematicHero />,
     },
+    {
+      key: 'E',
+      name: 'Idea → grant (live on homepage)',
+      note: 'The complete redesign: three beats, one line. A rough scribble enters the brass engine ring — the four disciplines orbit it — and the same line exits ruler-straight, becoming the typeset rules of the finished, sealed application. The wobble-to-straight transformation is the product.',
+      body: <IdeaToGrantHeroFig />,
+    },
+    {
+      key: 'D',
+      name: 'Corpus storm',
+      note: 'The data moat as weather: 30M documents stream as points of light, the brass gate keeps only what matters, and the survivors turn lamp green and typeset your application line by line — GRANTED stamps when the page fills, then a fresh sheet begins. Live canvas, move the pointer to shift the camera.',
+      body: <CorpusStormFig />,
+    },
   ]
 
   return (
@@ -44,7 +58,7 @@ export default function HeroLabPage() {
           Hero lab · pick by eye
         </p>
         <h1 className="mt-3 font-serif text-3xl font-medium tracking-tight sm:text-4xl">
-          Three ways to draw the journey.
+          Four ways to draw the journey.
         </h1>
 
         <div className="mt-12 space-y-16">

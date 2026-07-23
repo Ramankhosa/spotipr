@@ -53,7 +53,7 @@ import {
 } from '@/lib/writing-sample-service';
 import { resolveCanonicalKey, normalizeSectionKeys } from '@/lib/section-alias-service';
 import { enforceServiceAccess } from '@/lib/service-access-middleware';
-import { trackSectionDrafted, canDraftPatent, canTrackSectionDrafts } from '@/lib/patent-drafting-tracker';
+import { trackSectionDrafted, canDraftPatent, canTrackSectionDrafts, resolveSessionTenantId } from '@/lib/patent-drafting-tracker';
 import { resolveSourceOfTruth, computeJurisdictionStateOnDelete } from '@/lib/jurisdiction-state-service';
 import { cloneInstructionsBetweenSessions } from '@/lib/user-instruction-service';
 import { getSupersetSectionKeys, isNonApplicableHeading, getSectionContextRequirements } from '@/lib/multi-jurisdiction-service';
@@ -8736,7 +8736,15 @@ async function handleRetryDiagramImageAnalysis(user: any, patentId: string, data
  * Sketches are part of the DIAGRAM_GENERATION feature for plan tier control
  */
 async function checkSketchAccess(user: any): Promise<NextResponse | null> {
-  if (user.tenantId) {
+  // Fails closed: without a tenant the operation cannot be metered.
+  if (!user.tenantId) {
+    return NextResponse.json(
+      { error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+      { status: 403 }
+    )
+  }
+
+  {
     const diagramCheck = await enforceServiceAccess(
       user.id,
       user.tenantId,
@@ -10683,6 +10691,28 @@ async function handleUploadDiagram(user: any, patentId: string, data: any) {
   });
 }
 
+/**
+ * Roll back a draft version that was persisted before the atomic quota commit rejected it.
+ *
+ * The pre-check (`canTrackSectionDrafts`) and the commit (`trackSectionDrafted`) are two
+ * separate steps, so a burst of concurrent requests can all pass the pre-check and only
+ * one can win the commit. The losers previously still received their draft with a soft
+ * "quotaWarning", which made a quota of 1 yield N drafts for anyone firing N parallel
+ * requests. Deleting the version means over-quota work is never delivered.
+ */
+async function rejectOverQuotaDraft(draftId: string) {
+  await prisma.annexureDraft.delete({ where: { id: draftId } }).catch(() => {})
+
+  return NextResponse.json(
+    {
+      error: 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+      code: 'QUOTA_EXCEEDED',
+      quotaExceeded: true
+    },
+    { status: 403 }
+  )
+}
+
 async function handleGenerateDraft(user: any, patentId: string, data: any, requestHeaders: Record<string, string>) {
   const { sessionId, jurisdiction = 'US', filingType = 'utility' } = data;
 
@@ -10793,12 +10823,22 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
     );
   }
 
-  if (session.tenantId) {
+  // Fails closed: a session with no resolvable tenant cannot be metered, so it must not be
+  // drafted. Previously `if (session.tenantId)` skipped the whole check instead.
+  const quotaTenantId = await resolveSessionTenantId(session as any)
+  if (!quotaTenantId) {
+    return NextResponse.json(
+      { error: 'This drafting session is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+      { status: 403 }
+    )
+  }
+
+  {
     const generatedSectionKeys = [
       result.draft?.detailedDescription?.trim() ? 'detailedDescription' : null,
       result.draft?.claims?.trim() ? 'claims' : null
     ].filter(Boolean) as string[]
-    const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, generatedSectionKeys)
+    const quotaCheck = await canTrackSectionDrafts(quotaTenantId, sessionId, patentId, generatedSectionKeys)
     if (!quotaCheck.allowed) {
       return NextResponse.json(
         {
@@ -10871,43 +10911,34 @@ async function handleGenerateDraft(user: any, patentId: string, data: any, reque
   // QUOTA TRACKING: Track essential sections for patent-based quota counting
   // A patent counts toward quota when both detailedDescription AND claims are drafted
   // This ensures generateDraft properly counts toward tenant quota limits
-  if (session.tenantId) {
+  {
+    // `quotaTenantId` was resolved (and fails closed) at the pre-check above.
     const hasDraftedDescription = !!(result.draft?.detailedDescription && result.draft.detailedDescription.trim())
     const hasDraftedClaims = !!(result.draft?.claims && result.draft.claims.trim())
 
     if (hasDraftedDescription) {
       const descTrackResult = await trackSectionDrafted(
-        session.tenantId,
+        quotaTenantId,
         sessionId,
         patentId,
         user.id,
         'detailedDescription'
       )
       if (descTrackResult.quotaExceeded) {
-        // Return the draft but include quota warning
-        return NextResponse.json({
-          draft,
-          quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
-          quotaExceeded: true
-        })
+        return await rejectOverQuotaDraft(draft.id)
       }
     }
 
     if (hasDraftedClaims) {
       const claimsTrackResult = await trackSectionDrafted(
-        session.tenantId,
+        quotaTenantId,
         sessionId,
         patentId,
         user.id,
         'claims'
       )
       if (claimsTrackResult.quotaExceeded) {
-        // Return the draft but include quota warning
-        return NextResponse.json({
-          draft,
-          quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
-          quotaExceeded: true
-        })
+        return await rejectOverQuotaDraft(draft.id)
       }
     }
   }
@@ -10987,8 +11018,17 @@ async function handleAutosaveSections(user: any, patentId: string, data: any) {
   }
 
   const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
-  if (session.tenantId) {
-    const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, savedSectionKeys)
+  {
+    // Fails closed: a session with no resolvable tenant cannot be metered, so it must not
+    // be drafted. Previously `if (session.tenantId)` skipped the check entirely.
+    const quotaTenantId = await resolveSessionTenantId(session as any)
+    if (!quotaTenantId) {
+      return NextResponse.json(
+        { error: 'This drafting session is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+        { status: 403 }
+      )
+    }
+    const quotaCheck = await canTrackSectionDrafts(quotaTenantId, sessionId, patentId, savedSectionKeys)
     if (!quotaCheck.allowed) {
       return NextResponse.json(
         {
@@ -11357,8 +11397,16 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
     }
 
     const generatedSectionKeys = Object.keys(normalizedGenerated).filter(k => normalizedGenerated[k] && typeof normalizedGenerated[k] === 'string' && (normalizedGenerated[k] as string).trim())
-    if (session.tenantId) {
-      const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, generatedSectionKeys)
+    {
+      // Fails closed - see note above.
+      const quotaTenantId = await resolveSessionTenantId(session as any)
+      if (!quotaTenantId) {
+        return NextResponse.json(
+          { error: 'This drafting session is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+          { status: 403 }
+        )
+      }
+      const quotaCheck = await canTrackSectionDrafts(quotaTenantId, sessionId, patentId, generatedSectionKeys)
       if (!quotaCheck.allowed) {
         return NextResponse.json(
           {
@@ -11473,18 +11521,18 @@ async function handleGenerateSections(user: any, patentId: string, data: any, re
       }
 
       if (quotaExceeded) {
-        // Return the generated content but include quota warning
-        return NextResponse.json({
-          generated: result.generated,
-          debugSteps: result.debugSteps,
-          llmMeta: result.llmMeta,
-          warnings: result.warnings,
-          personaStyleApplied: result.personaStyleApplied || false,
-          personaProvenance: result.personaProvenance || {},
-          personaWarnings: result.personaWarnings || [],
-          quotaWarning: 'Patent drafting quota exceeded. Further drafting may be limited.',
-          quotaExceeded: true
-        })
+        // Lost the race against a concurrent request for the last quota slot. Withhold the
+        // generated sections rather than returning them with a soft warning - otherwise a
+        // burst of parallel requests all pass the pre-check and every loser still gets its
+        // content, turning a quota of 1 into N.
+        return NextResponse.json(
+          {
+            error: 'Patent drafting quota exceeded. Please upgrade your plan to continue.',
+            code: 'QUOTA_EXCEEDED',
+            quotaExceeded: true
+          },
+          { status: 403 }
+        )
       }
     }
   } catch (e) {
@@ -11695,8 +11743,17 @@ async function handleSaveSections(user: any, patentId: string, data: any) {
   })
 
   const savedSectionKeys = Object.keys(normalizedPatch).filter(k => normalizedPatch[k] && typeof normalizedPatch[k] === 'string' && (normalizedPatch[k] as string).trim())
-  if (session.tenantId) {
-    const quotaCheck = await canTrackSectionDrafts(session.tenantId, sessionId, patentId, savedSectionKeys)
+  {
+    // Fails closed: a session with no resolvable tenant cannot be metered, so it must not
+    // be drafted. Previously `if (session.tenantId)` skipped the check entirely.
+    const quotaTenantId = await resolveSessionTenantId(session as any)
+    if (!quotaTenantId) {
+      return NextResponse.json(
+        { error: 'This drafting session is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+        { status: 403 }
+      )
+    }
+    const quotaCheck = await canTrackSectionDrafts(quotaTenantId, sessionId, patentId, savedSectionKeys)
     if (!quotaCheck.allowed) {
       return NextResponse.json(
         {
@@ -12770,6 +12827,7 @@ async function handleValidateDraft(user: any, patentId: string, data: any) {
 // ============================================================================
 
 import { runAIReview, buildFixPrompt, type AIReviewIssue, type FixContext } from '@/lib/ai-review-service'
+import { recordServiceCompletion } from '@/lib/service-completion'
 import { filterProtectedAIReviewIssues, isProtectedAIReviewIssue } from '@/lib/ai-review-protection'
 
 /**
@@ -12790,7 +12848,15 @@ async function handleRunAIReview(
   }
 
   // Check if user has access to PATENT_REVIEW service (Pro tier feature)
-  if (user.tenantId) {
+  // Fails closed: without a tenant the operation cannot be metered.
+  if (!user.tenantId) {
+    return NextResponse.json(
+      { error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+      { status: 403 }
+    )
+  }
+
+  {
     const serviceCheck = await enforceServiceAccess(
       user.id,
       user.tenantId,
@@ -13065,6 +13131,20 @@ async function handleRunAIReview(
     }
   })
 
+  // Count the completed review against the plan's PATENT_REVIEW quota. Keyed on the
+  // saved review row, so each review run consumes exactly one unit.
+  if (user.tenantId) {
+    await recordServiceCompletion({
+      tenantId: user.tenantId,
+      userId: user.id,
+      serviceType: 'PATENT_REVIEW',
+      operationId: savedReview.id,
+      operationType: 'AI_DRAFT_REVIEW',
+      outputTokens: reviewResult.tokensUsed ?? 0,
+      metadata: { sessionId, jurisdiction: code, issueCount: reviewResult.summary.totalIssues }
+    })
+  }
+
   return NextResponse.json({
     reviewId: savedReview.id,
     ...reviewResult
@@ -13148,7 +13228,15 @@ async function handleApplyAIFix(
   }
 
   // Check if user has access to PATENT_REVIEW service (Pro tier feature)
-  if (user.tenantId) {
+  // Fails closed: without a tenant the operation cannot be metered.
+  if (!user.tenantId) {
+    return NextResponse.json(
+      { error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.', code: 'TENANT_UNRESOLVED' },
+      { status: 403 }
+    )
+  }
+
+  {
     const serviceCheck = await enforceServiceAccess(
       user.id,
       user.tenantId,

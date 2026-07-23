@@ -223,7 +223,7 @@ export default function NoveltySearchReportPage({
       </div>
 
       {/* Report Content */}
-      <div ref={reportRef} className="report-container bg-white p-8 max-w-5xl mx-auto">
+      <div ref={reportRef} className="report-container bg-white p-4 sm:p-8 max-w-5xl mx-auto">
         {/* Print Styles */}
         <style jsx global>{`
           @media print {

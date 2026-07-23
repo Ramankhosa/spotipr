@@ -19,6 +19,7 @@ import { prisma } from './prisma'
 import type { ServiceType } from '@prisma/client'
 import { getCurrentUtcPeriods } from './usage-periods'
 import { getMetaSeparatelyBilledThoughtTokens } from './usage-log-cost'
+import { resolveBillingPeriod } from './billing-period'
 
 // ============================================================================
 // Types
@@ -239,8 +240,15 @@ export async function getServiceUsage(
   tenantId: string,
   serviceType: ServiceType
 ): Promise<ServiceQuotaStatus> {
-  const { currentDay, currentMonth } = getCurrentPeriods()
-  
+  const now = new Date()
+  const { currentDay } = getCurrentPeriods()
+
+  // The monthly window is the tenant's BILLING month, not the calendar month. Counting on
+  // calendar months would let a tenant who subscribes on the 28th burn a full month of
+  // quota and have it reset on the 1st - two months of quota for one month of payment.
+  // Patent drafting has always counted this way; this keeps every other service identical.
+  const billingPeriod = await resolveBillingPeriod(tenantId, now)
+
   // Get completions count
   const [dailyCompletions, monthlyCompletions] = await Promise.all([
     prisma.serviceCompletionUsage.count({
@@ -256,11 +264,11 @@ export async function getServiceUsage(
         tenantId,
         serviceType,
         isCompleted: true,
-        completionMonth: currentMonth
+        completedAt: { gte: billingPeriod.start, lte: billingPeriod.endInclusive }
       }
     })
   ])
-  
+
   // Get token usage aggregates
   const [dailyTokenAgg, monthlyTokenAgg] = await Promise.all([
     prisma.serviceCompletionUsage.aggregate({
@@ -278,7 +286,16 @@ export async function getServiceUsage(
       where: {
         tenantId,
         serviceType,
-        completionMonth: currentMonth
+        // Token spend is attributed to the period the work was *updated* in. Incomplete
+        // operations have no completedAt, so fall back to createdAt to make sure tokens
+        // burned on abandoned runs still count against the ceiling.
+        OR: [
+          { completedAt: { gte: billingPeriod.start, lte: billingPeriod.endInclusive } },
+          {
+            completedAt: null,
+            createdAt: { gte: billingPeriod.start, lte: billingPeriod.endInclusive }
+          }
+        ]
       },
       _sum: {
         totalTokensUsed: true,

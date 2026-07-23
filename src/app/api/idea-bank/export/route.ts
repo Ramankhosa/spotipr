@@ -81,11 +81,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    if (user.tenantId) {
-      const serviceCheck = await enforceServiceAccess(user.id, user.tenantId, 'IDEA_BANK')
-      if (!serviceCheck.allowed) {
-        return serviceCheck.response
-      }
+    // Fails closed: a user with no tenant cannot be metered, so access is refused rather
+    // than silently granted. Previously `if (user.tenantId)` skipped the check entirely.
+    if (!user.tenantId) {
+      return NextResponse.json(
+        {
+          error: 'Your account is not linked to an organisation, so usage cannot be metered. Please contact your administrator.',
+          code: 'TENANT_UNRESOLVED'
+        },
+        { status: 403 }
+      )
+    }
+
+    const serviceCheck = await enforceServiceAccess(user.id, user.tenantId, 'IDEA_BANK')
+    if (!serviceCheck.allowed) {
+      return serviceCheck.response
     }
 
     const url = new URL(request.url)

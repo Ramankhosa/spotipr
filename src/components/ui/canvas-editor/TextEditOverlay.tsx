@@ -58,7 +58,11 @@ export default function TextEditOverlay({
     return pool.slice(0, MAX_SUGGESTIONS)
   }, [suggestions, value])
 
-  const isKnownNumeral = suggestions.some(s => s.numeral === value.trim())
+  // Only flag input that matches nothing in the reference map. Comparing against
+  // numerals alone wrongly flagged partial numerals and component names, which
+  // the suggestion list was simultaneously showing as valid matches.
+  const isUnknown =
+    suggestions.length > 0 && !!value.trim() && matches.length === 0
 
   const commit = (text?: string) => {
     if (committedRef.current) return
@@ -142,7 +146,7 @@ export default function TextEditOverlay({
         </ul>
       )}
 
-      {value.trim() && !isKnownNumeral && suggestions.length > 0 && (
+      {isUnknown && (
         <p className="mt-1 w-56 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
           Not in the reference map — it will be added as free text.
         </p>

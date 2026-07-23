@@ -58,8 +58,13 @@ export default function Header() {
       }
     }
 
-    // Handle any scroll to close dropdown
-    const handleScroll = () => {
+    // Page scroll closes the dropdown — but scrolling *inside* the menu (the
+    // super-admin list is taller than a phone screen) must not.
+    const handleScroll = (event: Event) => {
+      if (userMenuRef.current?.contains(event.target as Node)) {
+        startMenuTimeout()
+        return
+      }
       closeMenu()
     }
 
@@ -67,8 +72,11 @@ export default function Header() {
       document.addEventListener('mousedown', handleClickOutside)
       document.addEventListener('keydown', handleEscapeKey)
       window.addEventListener('scroll', handleScroll, true)
-      // Start auto-close timeout when menu opens
-      startMenuTimeout()
+      // Auto-close is a mouse affordance: it relies on hover to stay open, and
+      // touch devices never fire hover, so leave the menu up for them.
+      if (!window.matchMedia('(pointer: coarse)').matches) {
+        startMenuTimeout()
+      }
     }
 
     return () => {
@@ -157,34 +165,35 @@ export default function Header() {
     <header className="bg-card shadow-sm border-b border-border">
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          <div className="flex items-center space-x-3">
+          <div className="flex min-w-0 items-center space-x-2 sm:space-x-3">
             <AnimatedLogo size="sm" autoPlayDuration={2000} className="flex-shrink-0" useKishoFallback={true} />
-            <Link href="/" className="text-xl font-bold text-gpt-gray-900">
+            <Link href="/" className="truncate text-lg sm:text-xl font-bold text-gpt-gray-900">
               PatentNest
             </Link>
           </div>
 
           {user ? (
             <div className="relative inline-block" ref={userMenuRef}>
-              {/* Quick Navigation Links */}
-              <div className="flex items-center space-x-3">
+              {/* Quick Navigation Links — hidden on phones, where the same
+                  destinations live in the sidebar drawer and the avatar menu. */}
+              <div className="flex items-center gap-2 sm:gap-3">
                 <Link
                   href="/dashboard"
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                  className="hidden md:inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
                 >
                   🏠 Dashboard
                 </Link>
 
                 <Link
                   href="/novelty-search"
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                  className="hidden md:inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
                 >
                   🔍 Search
                 </Link>
 
                 <Link
                   href="/idea-bank"
-                  className="inline-flex items-center gap-1 px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                  className="hidden md:inline-flex items-center gap-1 px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
                 >
                   <Lightbulb className="h-4 w-4" />
                   Ideation
@@ -192,10 +201,10 @@ export default function Header() {
 
                 {/* Tenant Admin Mode Toggle - Only show for OWNER/ADMIN roles */}
                 {isTenantAdmin && (
-                  <div className="flex items-center border-l border-gpt-gray-200 pl-3 ml-1">
+                  <div className="flex items-center sm:border-l sm:border-gpt-gray-200 sm:pl-3 sm:ml-1">
                     <button
                       onClick={() => setViewMode(viewMode === 'user' ? 'admin' : 'user')}
-                      className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border transition-all duration-200 ${
+                      className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-sm font-medium rounded-lg border transition-all duration-200 ${
                         viewMode === 'admin'
                           ? 'bg-lamp-600 text-white border-lamp-600 hover:bg-lamp-700'
                           : 'bg-white text-gpt-gray-700 border-gpt-gray-200 hover:bg-gpt-gray-50'
@@ -239,8 +248,10 @@ export default function Header() {
 
               {/* Compact User Dropdown Menu */}
               {showUserMenu && (
-                <div 
-                  className="absolute right-0 top-full mt-1 w-48 bg-white border border-gpt-gray-200 rounded-lg shadow-lg z-50"
+                <div
+                  // Super-admins get ~20 entries here; cap the height so the
+                  // list scrolls inside the menu instead of running off a phone.
+                  className="absolute right-0 top-full mt-1 w-56 max-h-[min(75vh,32rem)] overflow-y-auto overscroll-contain bg-white border border-gpt-gray-200 rounded-lg shadow-lg z-50"
                   onMouseEnter={handleMenuMouseEnter}
                   onMouseLeave={handleMenuMouseLeave}
                 >
@@ -439,17 +450,17 @@ export default function Header() {
               )}
             </div>
           ) : (
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               <Link
                 href="/login"
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                className="inline-flex items-center px-3 sm:px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-gpt-gray-700 bg-white hover:bg-gpt-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
               >
                 Sign In
               </Link>
 
               <Link
                 href="/register"
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gpt-blue-600 hover:bg-gpt-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
+                className="inline-flex items-center whitespace-nowrap px-3 sm:px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-gpt-blue-600 hover:bg-gpt-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gpt-blue-500 transition-all duration-200"
               >
                 Get Started
               </Link>

@@ -1,15 +1,17 @@
 'use client'
 
-// Hero — "ABSTRACT". The page opens on FIG. 1 itself: the serpentine unbroken
-// line drawing the whole journey from scribbled disclosure to GRANTED seal
-// (see hero-variants.tsx). The headline and CTAs sit BELOW the drawing — the
-// figure is the hero, the words are its caption.
+// Hero — "ABSTRACT". The page opens on FIG. 1 itself: one line, three beats —
+// a rough scribble passes through the AI engine ring and exits as the typeset
+// rules of a granted application (see idea-to-grant-hero.tsx). The headline
+// and CTAs sit BELOW the drawing — the figure is the hero, the words are its
+// caption.
 
 import Link from 'next/link'
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
-import { SerpentineHeroFig, CinematicHero } from './hero-variants'
+import { CinematicHero } from './hero-variants'
+import { IdeaToGrantHeroFig } from './idea-to-grant-hero'
 import { BRASS } from '@/lib/patentnest/palette'
 
 const EASE = [0.16, 1, 0.3, 1] as [number, number, number, number]
@@ -48,7 +50,7 @@ export default function DocumentHero() {
               captions at ~6px — unreadable. Below `sm` the hero becomes the
               stage-by-stage cinematic (real HTML type, phone-native). */}
           <div className="hidden rounded-xl border border-ai-graphite-900/10 bg-white p-5 sm:block sm:p-10">
-            <SerpentineHeroFig />
+            <IdeaToGrantHeroFig />
           </div>
           <div className="sm:hidden">
             <CinematicHero />

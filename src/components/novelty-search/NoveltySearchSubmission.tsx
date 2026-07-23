@@ -650,7 +650,7 @@ export default function NoveltySearchSubmission(props: {
   }
 
   const renderSourceSelection = (showLiterature = true) => (
-    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ai-blue-50 text-ai-blue-600">
@@ -826,7 +826,7 @@ export default function NoveltySearchSubmission(props: {
   )
 
   const renderManualSearch = () => (
-    <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
       {renderSourceSelection(false)}
       <section className="space-y-4">
         <div>
@@ -944,7 +944,7 @@ export default function NoveltySearchSubmission(props: {
   )
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+    <div className="mx-auto max-w-4xl px-3 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">New Novelty Search</h1>
@@ -1038,7 +1038,7 @@ export default function NoveltySearchSubmission(props: {
         </ol>
 
         {isPreparing && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-8 shadow-sm">
             <div className="mx-auto max-w-xl text-center">
               <div className="relative mx-auto flex h-16 w-16 items-center justify-center">
                 <span className="absolute inset-0 animate-ping rounded-full bg-ai-blue-400/30" />
@@ -1073,7 +1073,7 @@ export default function NoveltySearchSubmission(props: {
         )}
 
         {!isPreparing && view !== 'review' && (
-        <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-2 text-sm font-medium text-slate-700">
             <span className="flex items-center gap-2"><FolderOpen className="h-4 w-4" /> Project</span>
@@ -1156,7 +1156,7 @@ export default function NoveltySearchSubmission(props: {
         )}
 
         {!isPreparing && view === 'review' && review && (
-          <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
             <div className="flex items-start gap-3 border-b border-slate-100 pb-5">
               <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-ai-blue-500 to-violet-600 text-white shadow-sm"><Sparkles className="h-5 w-5" /></span>
               <div className="min-w-0">
