@@ -167,6 +167,118 @@ describe('deterministic patent diagram builders', () => {
   })
 })
 
+describe('deterministic normalization before validation', () => {
+  const componentDiagramWith = (overrides: Record<string, unknown>) => patentDiagramSchema.parse({
+    schemaVersion: 1, kind: 'COMPONENT', key: 'norm', title: 'Normalized', purpose: 'Normalization fixture',
+    detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], systemBoundaryLabel: 'System',
+    groups: [{ id: 'g1', label: 'Band', rows: [{ componentIds: ['c1', 'c2'] }] }],
+    components: [{ componentId: 'c1' }, { componentId: 'c2' }], relationships: [],
+    ...overrides,
+  })
+
+  test('repairs over-long labels instead of failing the figure', () => {
+    const diagram = componentDiagramWith({
+      components: [
+        { componentId: 'c1', displayLabel: 'One Two Three Four Five Six Seven Eight Nine' },
+        { componentId: 'c2' },
+      ],
+      relationships: [{ fromId: 'c1', toId: 'c2', label: 'one two three four five six', category: 'PRIMARY' }],
+    })
+    // The builder truncates these at render time regardless, so rejecting the
+    // figure would fail a diagram that draws correctly.
+    expect(validatePatentDiagram(diagram, components).issues.map(i => i.code))
+      .toEqual(expect.arrayContaining(['LONG_NODE_LABEL', 'LONG_CONNECTOR_LABEL']))
+
+    const built = buildPatentDiagram(diagram, components)
+    expect(built.validation.issues.filter(i => i.severity === 'error')).toEqual([])
+    expect(built.validation.filingReady).toBe(true)
+    expect(built.validation.corrections.join(' ')).toMatch(/Shortened/)
+  })
+
+  test('re-flows over-wide rows and places ungrouped components', () => {
+    const diagram = componentDiagramWith({
+      groups: [{ id: 'g1', label: 'Band', rows: [{ componentIds: ['c1', 'c2', 'c3', 'c4'] }] }],
+      components: Array.from({ length: 7 }, (_, index) => ({ componentId: `c${index + 1}` })),
+    })
+    const built = buildPatentDiagram(diagram, components)
+    expect(built.validation.issues.filter(i => i.severity === 'error')).toEqual([])
+    if (built.diagram.kind !== 'COMPONENT') throw new Error('expected component diagram')
+    expect(built.diagram.groups.flatMap(g => g.rows).every(row => row.componentIds.length <= 4)).toBe(true)
+    const placed = built.diagram.groups.flatMap(g => g.rows.flatMap(r => r.componentIds))
+    expect(new Set(placed).size).toBe(7)
+    expect(built.validation.corrections.join(' ')).toMatch(/ungrouped/i)
+  })
+
+  test('drops hallucinated components and their connectors rather than erroring', () => {
+    const diagram = componentDiagramWith({
+      groups: [{ id: 'g1', label: 'Band', rows: [{ componentIds: ['c1', 'c2', 'invented'] }] }],
+      components: [{ componentId: 'c1' }, { componentId: 'c2' }, { componentId: 'invented' }],
+      relationships: [
+        { fromId: 'c1', toId: 'c2', label: 'flow', category: 'PRIMARY' },
+        { fromId: 'c1', toId: 'invented', label: 'flow', category: 'PRIMARY' },
+      ],
+    })
+    const built = buildPatentDiagram(diagram, components)
+    expect(built.validation.issues.filter(i => i.severity === 'error')).toEqual([])
+    if (built.diagram.kind !== 'COMPONENT') throw new Error('expected component diagram')
+    expect(built.diagram.components.map(n => n.componentId)).not.toContain('invented')
+    expect(built.diagram.relationships).toHaveLength(1)
+    expect(built.plantumlCode).not.toContain('invented')
+  })
+
+  test('inserts a missing claim-critical component instead of blocking', () => {
+    const diagram = componentDiagramWith({ claimCriticalComponentIds: ['c3'] })
+    expect(validatePatentDiagram(diagram, components).issues.map(i => i.code))
+      .toContain('MISSING_CLAIM_CRITICAL_COMPONENT')
+
+    const built = buildPatentDiagram(diagram, components)
+    expect(built.validation.issues.filter(i => i.severity === 'error')).toEqual([])
+    if (built.diagram.kind !== 'COMPONENT') throw new Error('expected component diagram')
+    expect(built.diagram.components.map(n => n.componentId)).toContain('c3')
+    expect(built.validation.claimCriticalCoverage.missing).toEqual([])
+  })
+
+  test('reassigns duplicate and malformed process identifiers', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 1, kind: 'PROCESS', key: 'proc', title: 'Process', purpose: 'Identifier fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      nodes: [
+        { key: 'n1', kind: 'STEP', label: 'First step', identifier: 'S100' },
+        { key: 'n2', kind: 'STEP', label: 'Second step', identifier: 'S100' },
+        { key: 'n3', kind: 'DECISION', label: 'Check state', identifier: 'STEP-3' },
+      ],
+      transitions: [
+        { fromId: 'n1', toId: 'n2', label: '', category: 'PRIMARY' },
+        { fromId: 'n2', toId: 'ghost', label: '', category: 'PRIMARY' },
+      ],
+    })
+    const built = buildPatentDiagram(diagram, components)
+    expect(built.validation.issues.filter(i => i.severity === 'error')).toEqual([])
+    if (built.diagram.kind !== 'PROCESS') throw new Error('expected process diagram')
+    const identifiers = built.diagram.nodes.map(n => n.identifier)
+    expect(new Set(identifiers).size).toBe(identifiers.length)
+    expect(built.diagram.nodes.find(n => n.key === 'n3')?.identifier).toMatch(/^D\d+$/)
+    expect(built.diagram.transitions).toHaveLength(1)
+  })
+
+  test('treats disclosure evidence gaps as review notes, not blockers', () => {
+    const diagram = componentDiagramWith({ evidenceIds: [] })
+    const report = validatePatentDiagram(diagram, components, new Set(['SF-1']))
+    expect(report.issues.find(i => i.code === 'MISSING_DISCLOSURE_EVIDENCE')?.severity).toBe('warning')
+    expect(report.filingReady).toBe(true)
+  })
+
+  test('normalization is idempotent', () => {
+    const diagram = componentDiagramWith({
+      components: [{ componentId: 'c1', displayLabel: 'One Two Three Four Five Six Seven Eight' }, { componentId: 'c2' }],
+    })
+    const once = buildPatentDiagram(diagram, components)
+    const twice = buildPatentDiagram(once.diagram, components)
+    expect(twice.plantumlCode).toBe(once.plantumlCode)
+    expect(twice.validation.corrections).toEqual([])
+  })
+})
+
 describe('complexity and filing validation', () => {
   test('decomposes the 24-component, six-band representative case', () => {
     const groups = Array.from({ length: 6 }, (_, groupIndex) => ({

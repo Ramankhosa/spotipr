@@ -207,6 +207,11 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   const [isGenerating, setIsGenerating] = useState(false)
   const [figures, setFigures] = useState<LLMFigure[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Recoverable failures carry their own retry so the user can re-run the exact
+  // action that failed instead of reading a raw error string.
+  const [generationFailure, setGenerationFailure] = useState<
+    { message: string; details: string[]; retry: () => void } | null
+  >(null)
   const [generationWarning, setGenerationWarning] = useState<string | null>(null)
   // In AI mode, null/empty means "AI decides the count"
   // User can optionally override by entering a number
@@ -281,7 +286,43 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         return `${label}: ${failure?.reason || 'repair failed'}`
       }))
     }
+    // Automatic repairs change what gets filed, so they are always disclosed
+    // rather than applied silently.
+    if (Array.isArray(response?.figures)) {
+      const corrections = Array.from(new Set(
+        response.figures.flatMap((figure: any) =>
+          Array.isArray(figure?.validation?.corrections) ? figure.validation.corrections : []),
+      )) as string[]
+      if (corrections.length) {
+        messages.push(`Automatic corrections applied: ${corrections.slice(0, 4).join('; ')}${corrections.length > 4 ? `; and ${corrections.length - 4} more` : ''}.`)
+      }
+    }
     return messages.length > 0 ? messages.join(' ') : null
+  }
+
+  // Turns a diagram-pipeline error payload into short human-readable lines.
+  // The API returns structured validation issues; rendering the raw JSON was
+  // unreadable and made a recoverable failure look catastrophic.
+  const describeDiagramFailure = (response: any): string[] => {
+    if (!response) return []
+    const lines: string[] = []
+    const details = response.details
+    if (typeof details === 'string' && details.trim()) {
+      lines.push(details.trim())
+    } else if (Array.isArray(details)) {
+      for (const item of details.slice(0, 6)) {
+        if (typeof item === 'string') { lines.push(item); continue }
+        const figure = item?.figure ? `Figure ${item.figure}: ` : ''
+        const message = item?.message || item?.code
+        if (message) lines.push(`${figure}${message}`)
+      }
+      if (details.length > 6) lines.push(`…and ${details.length - 6} more`)
+    }
+    if (Array.isArray(response.failedFigures)) {
+      lines.push(...response.failedFigures.map((failure: any) =>
+        `${failure?.title || (failure?.index ? `Figure ${failure.index}` : 'A diagram')}: ${failure?.reason || 'could not be generated'}`))
+    }
+    return Array.from(new Set(lines))
   }
 
   const [isUploading, setIsUploading] = useState(false)
@@ -1682,6 +1723,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       setIsGenerating(true)
       setError(null)
       setGenerationWarning(null)
+      setGenerationFailure(null)
 
       // If user chose to decide and provided an override list, generate exactly those figures instead of auto list
       const overrideList = overrideInputs.filter(Boolean)
@@ -1697,12 +1739,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         })
         if (!manualResp) throw new Error('LLM did not return valid figure list')
         if (manualResp.error) {
-          const baseError = manualResp.details
-            ? `${manualResp.error}: ${typeof manualResp.details === 'string' ? manualResp.details : JSON.stringify(manualResp.details)}`
-            : manualResp.error
-          const repairDetails = formatDiagramGenerationWarnings(manualResp)
-          const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
-          throw new Error(errorMsg)
+          throw Object.assign(new Error(manualResp.error), { diagramFailure: manualResp })
         }
         setGenerationWarning(formatDiagramGenerationWarnings(manualResp))
         setOverrideCount(0)
@@ -1734,12 +1771,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         throw new Error('Figure generation failed - no response received')
       }
       if (res.error) {
-        const baseError = res.details
-          ? `${res.error}: ${typeof res.details === 'string' ? res.details : JSON.stringify(res.details)}`
-          : res.error
-        const repairDetails = formatDiagramGenerationWarnings(res)
-        const errorMsg = [baseError, repairDetails].filter(Boolean).join(' ')
-        throw new Error(errorMsg)
+        throw Object.assign(new Error(res.error), { diagramFailure: res })
       }
       if (!res.success) {
         throw new Error(res.message || 'Figure generation failed')
@@ -1767,7 +1799,13 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'Generation failed'
       console.error('[FigurePlanner] Generation error:', errorMessage, e)
-      setError(errorMessage)
+      // Generation is safely repeatable and most failures are transient, so the
+      // user gets an actionable retry rather than a red wall of raw API text.
+      setGenerationFailure({
+        message: errorMessage,
+        details: describeDiagramFailure((e as any)?.diagramFailure),
+        retry: () => { void handleGenerateFromLLM() },
+      })
     } finally {
       setIsGenerating(false)
     }
@@ -2453,6 +2491,43 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      )}
+
+      {generationFailure && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-amber-900">
+                Figure generation didn&apos;t complete
+              </p>
+              <p className="text-sm text-amber-800 mt-1">{generationFailure.message}</p>
+              {generationFailure.details.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-amber-800 list-disc list-inside">
+                  {generationFailure.details.map((detail, index) => (
+                    <li key={index}>{detail}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-amber-700 mt-2">
+                Your existing figures were not changed. You can run generation again.
+              </p>
+              <div className="flex items-center gap-2 mt-3">
+                <Button
+                  size="sm"
+                  onClick={() => { const retry = generationFailure.retry; setGenerationFailure(null); retry() }}
+                  disabled={isGenerating}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isGenerating ? 'animate-spin' : ''}`} />
+                  {isGenerating ? 'Retrying…' : 'Try again'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setGenerationFailure(null)}>
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {generationWarning && (

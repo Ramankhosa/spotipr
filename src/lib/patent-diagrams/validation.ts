@@ -131,12 +131,15 @@ export function validatePatentDiagram(
     code: 'MISSING_CLAIM_CRITICAL_COMPONENT', severity: 'error',
     message: `Claim-critical component ${id} is absent from the figure`, componentId: id,
   }))
+  // Evidence IDs are provenance metadata, not drawn content: a figure whose
+  // elements and relationships are all valid is still a correct drawing without
+  // them, so these are review notes rather than filing blockers.
   if (supportedEvidenceIds?.size) {
     if (!diagram.evidenceIds.length) {
-      issues.push({ code: 'MISSING_DISCLOSURE_EVIDENCE', severity: 'error', message: 'Managed diagram has no supporting disclosure evidence IDs' })
+      issues.push({ code: 'MISSING_DISCLOSURE_EVIDENCE', severity: 'warning', message: 'Figure has no linked disclosure evidence IDs' })
     }
     diagram.evidenceIds.filter(id => !supportedEvidenceIds.has(id)).forEach(id => {
-      issues.push({ code: 'UNKNOWN_DISCLOSURE_EVIDENCE', severity: 'error', message: `Unknown disclosure evidence ID: ${id}` })
+      issues.push({ code: 'UNKNOWN_DISCLOSURE_EVIDENCE', severity: 'warning', message: `Unrecognized disclosure evidence ID: ${id}` })
     })
   }
 

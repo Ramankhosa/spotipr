@@ -88,7 +88,10 @@ export const componentDiagramSchema = diagramBaseSchema.extend({
   groups: z.array(z.object({
     id: idText,
     label: shortText,
-    rows: z.array(z.object({ componentIds: z.array(idText).min(1).max(4) })).min(1),
+    // The four-per-row layout contract is enforced by normalization, which
+    // re-flows wider rows. Rejecting them here instead forced an LLM retry for
+    // a purely mechanical fix; the bound that remains only catches nonsense.
+    rows: z.array(z.object({ componentIds: z.array(idText).min(1).max(24) })).min(1),
   })).min(1),
   components: z.array(componentNodeSchema).min(1),
   relationships: z.array(relationshipSchema).default([]),

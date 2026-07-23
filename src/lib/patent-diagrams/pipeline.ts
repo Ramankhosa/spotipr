@@ -2,11 +2,13 @@ import crypto from 'crypto'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { buildSourceFactLedgerEntries } from '@/lib/source-fact-ledger'
+import { recordServiceCompletion } from '@/lib/service-completion'
 import { coerceSupportDataSources } from '@/lib/support-data-sources'
 import { EXTREME_ASPECT_RATIO_MAXIMUM, EXTREME_ASPECT_RATIO_MINIMUM } from '@/lib/plantuml-renderer'
 import { renderAndWriteDiagramArtifacts, resolveDiagramPagePolicy } from './artifacts'
 import { buildPatentDiagram } from './builders'
 import { decomposePatentDiagram } from './complexity'
+import { normalizePatentDiagram } from './normalize'
 import { PATENT_DIAGRAM_COMPLEXITY } from './policy'
 import { PATENT_DIAGRAM_STYLE } from './style'
 import { validatePatentDiagram } from './validation'
@@ -248,7 +250,11 @@ async function detailManagedFigure(input: {
     instructions: input.pipeline.instructions,
   })
   const constrainedDiagramSchema = patentDiagramSchema.superRefine((value, ctx) => {
-    validatePatentDiagram(value, input.context.components, input.context.supportedEvidenceIds).issues
+    // Validate what the pipeline will actually build. Re-prompting the model for
+    // a defect the normalizer repairs anyway wastes a call and can fail the
+    // figure outright when the retry reproduces it.
+    const { diagram } = normalizePatentDiagram(value, input.context.components)
+    validatePatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds).issues
       .filter(issue => issue.severity === 'error' && issue.code !== 'SPLIT_REQUIRED')
       .forEach(issue => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${issue.code}: ${issue.message}` }))
   })
@@ -406,13 +412,43 @@ async function renderManagedFigures(
   })
 }
 
+/**
+ * Count rendered figures against the tenant's DIAGRAM_GENERATION quota.
+ *
+ * One completion per figure, keyed on session + figure number so that regenerating an
+ * existing figure does not burn quota twice - only genuinely new figures count.
+ */
+async function recordFigureCompletions(
+  input: PatentDiagramPipelineInput,
+  figures: RenderedManagedFigure[],
+) {
+  if (figures.length === 0) return
+
+  const user = await prisma.user.findUnique({
+    where: { id: input.userId },
+    select: { tenantId: true },
+  })
+  if (!user?.tenantId) return
+
+  for (const figure of figures) {
+    await recordServiceCompletion({
+      tenantId: user.tenantId,
+      userId: input.userId,
+      serviceType: 'DIAGRAM_GENERATION',
+      operationId: `${input.sessionId}:fig:${figure.figureNo}`,
+      operationType: 'MANAGED_FIGURE',
+      metadata: { patentId: input.patentId, figureNo: figure.figureNo },
+    })
+  }
+}
+
 async function persistManagedFigureSet(
   input: PatentDiagramPipelineInput,
   referenceMapChecksum: string,
   figures: RenderedManagedFigure[],
   options: { replace: boolean },
 ) {
-  return prisma.$transaction(async tx => {
+  const saved = await prisma.$transaction(async tx => {
     if (options.replace) {
       await tx.diagramSource.deleteMany({ where: { sessionId: input.sessionId, figureNo: { lt: GENERATED_FIGURE_LIMIT } } })
       await tx.figurePlan.deleteMany({ where: { sessionId: input.sessionId, figureNo: { lt: GENERATED_FIGURE_LIMIT } } })
@@ -476,6 +512,11 @@ async function persistManagedFigureSet(
     })
     return saved
   })
+
+  // Outside the transaction: metering must never roll back a persisted figure set.
+  await recordFigureCompletions(input, figures)
+
+  return saved
 }
 
 function visibleElementCount(diagram: PatentDiagram): number {

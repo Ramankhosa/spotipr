@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { compilePatentDiagramStyle, escapePlantUmlLabel, PATENT_DIAGRAM_STYLE, wrapPatentLabel } from './style'
+import { normalizePatentDiagram } from './normalize'
 import { validatePatentDiagram, validatePatentPlantUmlSource } from './validation'
 import type {
   BuiltPatentDiagram,
@@ -301,17 +302,22 @@ function buildConstituent(diagram: ConstituentDiagram, components: PatentDiagram
 }
 
 export function buildPatentDiagram(diagramInput: PatentDiagram, components: PatentDiagramComponent[], supportedEvidenceIds?: Set<string>): BuiltPatentDiagram {
-  const built = diagramInput.kind === 'COMPONENT'
-    ? buildComponent(diagramInput, components)
-    : diagramInput.kind === 'SEQUENCE'
-      ? buildSequence(diagramInput, components)
-      : diagramInput.kind === 'PROCESS'
-        ? buildProcess(diagramInput, components)
-        : buildConstituent(diagramInput, components)
-  const diagram = 'diagram' in built ? built.diagram : diagramInput
+  // Repair mechanically fixable defects first so the persisted semantic model
+  // matches the drawing and validation only reports genuine blockers.
+  const normalized = normalizePatentDiagram(diagramInput, components)
+  const source = normalized.diagram
+  const built = source.kind === 'COMPONENT'
+    ? buildComponent(source, components)
+    : source.kind === 'SEQUENCE'
+      ? buildSequence(source, components)
+      : source.kind === 'PROCESS'
+        ? buildProcess(source, components)
+        : buildConstituent(source, components)
+  const diagram = 'diagram' in built ? built.diagram : source
   const validation = validatePatentDiagram(diagram, components, supportedEvidenceIds)
   const sourceIssues = validatePatentPlantUmlSource(built.code)
   validation.issues.push(...sourceIssues)
+  validation.corrections = [...validation.corrections, ...normalized.corrections]
   validation.filingReady = validation.filingReady && !sourceIssues.some(issue => issue.severity === 'error')
   return { diagram, plantumlCode: built.code, labelMap: built.labelMap, nodes: built.nodes, edges: built.edges, validation }
 }
