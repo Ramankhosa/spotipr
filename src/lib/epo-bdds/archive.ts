@@ -15,12 +15,13 @@
 // the iterator recurses, spilling inner archives to a temp file only when it
 // must.
 
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { extract as tarExtract } from 'tar-stream'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 
 export interface ArchiveEntry {
@@ -100,6 +101,33 @@ export async function listEntries(
 ): Promise<ArchiveEntry[]> {
   const recurse = options.recurse ?? true
   const prefix = options.prefix ?? ''
+
+  // TAR container (EP full-text 1978-2022). Enumerating a TAR means reading it
+  // through, since there is no central directory to consult.
+  if (isTarArchive(zipPath)) {
+    const found: ArchiveEntry[] = []
+    const extract = tarExtract()
+    createReadStream(zipPath).pipe(extract)
+    for await (const entry of extract) {
+      const header = entry.header
+      if (header.type !== 'file') { entry.resume(); continue }
+      const name = header.name.replace(/^\.\//, '')
+      found.push({
+        path: prefix + name,
+        compressedSize: header.size ?? 0,
+        uncompressedSize: header.size ?? 0,
+        extension: extensionOf(name),
+      })
+      if (recurse && isNestedArchive(name)) {
+        const buffer = await readStreamToBuffer(entry as unknown as Readable)
+        found.push(...await listEntriesFromBuffer(buffer, `${prefix}${name}!/`))
+      } else {
+        entry.resume()
+      }
+    }
+    return found
+  }
+
   const zipFile = await openZip(zipPath)
   const entries: ArchiveEntry[] = []
   const nested: Entry[] = []
@@ -144,10 +172,82 @@ export async function listEntries(
   return entries
 }
 
+/** Enumerate a ZIP already held in memory (a nested per-publication archive). */
+async function listEntriesFromBuffer(buffer: Buffer, prefix: string): Promise<ArchiveEntry[]> {
+  const zipFile = await openZipFromBuffer(buffer)
+  const entries: ArchiveEntry[] = []
+  await new Promise<void>((resolve, reject) => {
+    zipFile.on('entry', (entry: Entry) => {
+      if (!isDirectory(entry)) {
+        entries.push({
+          path: prefix + entry.fileName,
+          compressedSize: entry.compressedSize,
+          uncompressedSize: entry.uncompressedSize,
+          extension: extensionOf(entry.fileName),
+        })
+      }
+      zipFile.readEntry()
+    })
+    zipFile.on('end', () => resolve())
+    zipFile.on('error', reject)
+    zipFile.readEntry()
+  })
+  zipFile.close()
+  return entries
+}
+
 export interface StreamedEntry {
   path: string
   uncompressedSize: number
   stream: Readable
+}
+
+const isTarArchive = (path: string) => /\.tar$/i.test(path)
+
+/**
+ * Walk a TAR archive, recursing into the ZIPs inside it.
+ *
+ * EP full-text ships 1978-2022 as TAR and 2023-2026 as ZIP. The CONTENTS are
+ * identical either way — ./DOC/<kind>/<pub>.zip per publication — so only the
+ * outer container differs. Verified against EPRTBJV1987000008001001.tar: ustar
+ * format with PAX headers, entries like ./DOC/EPNWB1/EP80106924NWB1.zip.
+ *
+ * tar-stream is strictly sequential: each entry must be consumed or explicitly
+ * resumed before the next arrives, so nested archives are buffered here rather
+ * than yielded lazily.
+ */
+async function* streamTarEntries(
+  tarPath: string,
+  predicate: (entry: ArchiveEntry) => boolean,
+  prefix = ''
+): AsyncGenerator<StreamedEntry> {
+  const extract = tarExtract()
+  createReadStream(tarPath).pipe(extract)
+
+  for await (const entry of extract) {
+    const header = entry.header
+    // PAX/global headers and directories carry no payload we want.
+    if (header.type !== 'file') { entry.resume(); continue }
+
+    const name = header.name.replace(/^\.\//, '')
+    const path = prefix + name
+    const described: ArchiveEntry = {
+      path,
+      compressedSize: header.size ?? 0,
+      uncompressedSize: header.size ?? 0,
+      extension: extensionOf(name),
+    }
+
+    if (isNestedArchive(name)) {
+      // Must drain fully before the next TAR entry can be read.
+      const buffer = await readStreamToBuffer(entry as unknown as Readable)
+      yield* streamEntriesFromBuffer(buffer, predicate, `${path}!/`)
+      continue
+    }
+
+    if (!predicate(described)) { entry.resume(); continue }
+    yield { path, uncompressedSize: described.uncompressedSize, stream: entry as unknown as Readable }
+  }
 }
 
 /**
@@ -162,6 +262,14 @@ export async function* streamEntries(
   options: { prefix?: string } = {}
 ): AsyncGenerator<StreamedEntry> {
   const prefix = options.prefix ?? ''
+
+  // EP full-text is TAR for 1978-2022 and ZIP for 2023-2026, with identical
+  // contents inside. Dispatch on the container so callers never have to care.
+  if (isTarArchive(zipPath)) {
+    yield* streamTarEntries(zipPath, predicate, prefix)
+    return
+  }
+
   const zipFile = await openZip(zipPath)
 
   // Walk the directory first so we can close over a plain list; nested archives
