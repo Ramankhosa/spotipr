@@ -22,7 +22,11 @@ APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -z "${VOYAGE_API_KEY:-}" ]; then
   for f in "$APP_DIR/.env" "$APP_DIR/.env.local"; do
     [ -f "$f" ] || continue
-    v=$(grep -E '^VOYAGE_API_KEY=' "$f" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    # `|| true`: under `set -euo pipefail` a non-matching grep exits 1, pipefail
+    # propagates it to the assignment, and the script dies here SILENTLY -- even
+    # when an earlier file already supplied the key. Also strip CR: .env is CRLF,
+    # and a trailing \r in the key makes Voyage reject every request with 401.
+    v=$(grep -E '^VOYAGE_API_KEY=' "$f" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '\r' || true)
     [ -n "$v" ] && export VOYAGE_API_KEY="$v"
   done
 fi
