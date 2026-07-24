@@ -722,7 +722,15 @@ export class LLMGateway {
       IDEATION_GENERATE: 'IDEATION',
       IDEATION_NOVELTY: 'IDEATION',
       LLM7_ADVANCED_MANUAL_SEARCH: 'NOVELTY_SEARCH', // Prior-Art Studio query generator (novelty quota)
-      LLM8_OA_RESPONSE: 'OFFICE_ACTION_RESPONSE' // Office Action Studio pipeline stages
+      LLM8_OA_RESPONSE: 'OFFICE_ACTION_RESPONSE', // Office Action Studio pipeline stages
+      // Whitespace Studio. All six stages meter against one feature so a plan
+      // grants "N analyses" rather than a per-stage budget nobody can reason about.
+      WS_SCOPE: 'WHITESPACE_ANALYSIS',
+      WS_CLUSTER_LABEL: 'WHITESPACE_ANALYSIS',
+      WS_CLAIM_ELEMENTS: 'WHITESPACE_ANALYSIS',
+      WS_HYPOTHESIZE: 'WHITESPACE_ANALYSIS',
+      WS_VALIDATE: 'WHITESPACE_ANALYSIS',
+      WS_REDTEAM: 'WHITESPACE_ANALYSIS'
     }
     return taskToFeatureMap[taskCode]
   }

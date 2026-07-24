@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
-import { ingestDocument } from '@/lib/office-action/oa-case-service'
+import { ingestDocument, OaProfileUnavailableError } from '@/lib/office-action/oa-case-service'
+import { extractUploadText, UnreadableUploadError } from '@/lib/office-action/file-text-extract'
+import { ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_BYTES, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
 import { prisma } from '@/lib/prisma'
 
 // Long-running: parse + classify are LLM calls.
@@ -26,9 +28,8 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     if (!access.allowed) return access.response
   }
 
-  // Accepts either a PDF/text upload (multipart) or { rawText } JSON.
+  // Accepts a PDF / Word / text upload (multipart) or { rawText } JSON.
   const contentType = request.headers.get('content-type') || ''
-  const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
   let rawText = ''
   let fileName: string | undefined
   let body: any = {}
@@ -38,26 +39,21 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
       const form = await request.formData()
       const file = form.get('file') as File | null
       if (!file) return NextResponse.json({ error: 'file is required' }, { status: 400 })
-      if (file.size > MAX_UPLOAD_BYTES) {
-        return NextResponse.json({ error: 'File is too large (max 15 MB). Upload a smaller PDF or paste the text.' }, { status: 413 })
+      if (file.size > MAX_OA_UPLOAD_BYTES) {
+        return NextResponse.json({ error: `File is too large (max ${MAX_OA_UPLOAD_LABEL}). Upload a smaller file or paste the text.` }, { status: 413 })
       }
       fileName = file.name
       const buf = Buffer.from(await file.arrayBuffer())
-      if (file.name?.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
-        const { extractPdfText } = await import('@/lib/office-action/pdf-extract')
-        const extracted = await extractPdfText(buf)
-        if (extracted.likelyScanned) {
-          return NextResponse.json({
-            error: 'This examination report appears to be a scan with no text layer. Paste the text instead, or upload a text-based PDF.',
-            pageCount: extracted.pageCount, charsPerPage: extracted.charsPerPage
-          }, { status: 422 })
-        }
-        rawText = extracted.text
-      } else {
-        rawText = buf.toString('utf-8')
+      const extracted = await extractUploadText(buf, {
+        fileName: file.name, mimeType: file.type, label: 'examination report'
+      })
+      rawText = extracted.text
+    } catch (err) {
+      if (err instanceof UnreadableUploadError) {
+        return NextResponse.json({ error: err.message, ...(err.detail || {}) }, { status: err.status })
       }
-    } catch {
-      return NextResponse.json({ error: 'Could not read the uploaded file' }, { status: 400 })
+      console.error('[OA documents] Could not read the upload:', err instanceof Error ? err.message : err)
+      return NextResponse.json({ error: `Could not read the uploaded file. Upload it as ${ACCEPTED_UPLOAD_LABEL}, or paste the text.` }, { status: 400 })
     }
   } else {
     try {
@@ -91,6 +87,7 @@ export async function POST(request: NextRequest, { params }: { params: { caseId:
     return NextResponse.json(result, { status: 201 })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Ingest failed'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const status = err instanceof OaProfileUnavailableError ? 503 : 500
+    return NextResponse.json({ error: message }, { status })
   }
 }

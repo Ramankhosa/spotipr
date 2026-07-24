@@ -13,7 +13,9 @@ import { useAuth } from '@/lib/auth-context'
 import { useToast } from '@/components/ui/toast'
 import { PageLoadingBird } from '@/components/ui/loading-bird'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { ACCEPTED_UPLOAD_EXTENSIONS, ACCEPTED_UPLOAD_LABEL, MAX_OA_UPLOAD_LABEL } from '@/lib/office-action/upload-formats'
 import {
   AlertTriangle, ArrowLeft, BookOpen, CheckCircle2, ChevronRight, Clock,
   Download, FileText, FolderOpen, Loader2, RefreshCw, Sparkles, Upload, X
@@ -569,16 +571,17 @@ function IntakePanel(props: {
     <div className="max-w-2xl mx-auto w-full px-4 py-10">
       <h2 className="text-lg font-semibold mb-1">Upload the examination report</h2>
       <p className="text-sm text-muted-foreground mb-5">
-        Upload the FER as issued (PDF), or paste its text. The objections, cited documents and the reply
+        Upload the FER as issued, or paste its text. The objections, cited documents and the reply
         deadline are extracted automatically; cited patents are retrieved in the background.
       </p>
 
       <div className="border rounded-lg p-4 mb-4">
-        <input ref={fileRef} type="file" accept=".pdf,.txt" className="hidden"
+        <input ref={fileRef} type="file" accept={ACCEPTED_UPLOAD_EXTENSIONS} className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) props.onIngest({ file: f }) }} />
         <Button onClick={() => fileRef.current?.click()} disabled={props.busy}>
-          {props.busy ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Reading the report…</> : <><Upload className="w-4 h-4 mr-1.5" aria-hidden /> Upload FER (PDF)</>}
+          {props.busy ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Reading the report…</> : <><Upload className="w-4 h-4 mr-1.5" aria-hidden /> Upload FER</>}
         </Button>
+        <p className="text-xs text-muted-foreground mt-2">{ACCEPTED_UPLOAD_LABEL}, up to {MAX_OA_UPLOAD_LABEL}. Scanned reports need OCR first.</p>
         <div className="mt-4">
           <div className="text-xs text-muted-foreground mb-1">Or paste the report text:</div>
           <Textarea rows={6} value={pasted} onChange={e => setPasted(e.target.value)}
@@ -977,6 +980,7 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
   const [docs, setDocs] = useState<any[] | null>(null)
   const [kind, setKind] = useState('SPECIFICATION')
   const [text, setText] = useState('')
+  const [title, setTitle] = useState('')
   const [intent, setIntent] = useState('')
   const [saving, setSaving] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -1010,18 +1014,23 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
       if (file) {
         const fd = new FormData()
         fd.append('file', file); fd.append('kind', kind)
+        if (title) fd.append('title', title)
         if (intent) fd.append('intentNote', intent)
         res = await fetch(`/api/office-actions/${props.caseId}/case-documents`, { method: 'POST', headers: authHeaders(), body: fd })
       } else {
         res = await fetch(`/api/office-actions/${props.caseId}/case-documents`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ kind, text, intentNote: intent || undefined })
+          body: JSON.stringify({ kind, text, title: title || undefined, intentNote: intent || undefined })
         })
       }
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not add the document')
-      toast({ title: 'Document added to the case file', variant: 'success' })
-      setText(''); setIntent('')
+      toast({
+        title: 'Document added to the case file',
+        description: data.warning || undefined,
+        variant: data.warning ? 'warning' : 'success'
+      })
+      setText(''); setIntent(''); setTitle('')
       await load()
     } catch (err) {
       toast({ title: 'Could not add the document', description: err instanceof Error ? err.message : undefined, variant: 'error' })
@@ -1079,24 +1088,32 @@ function CaseFilePanel(props: { caseId: string; onClose: () => void }) {
           </select>
           {kind === 'SPECIFICATION' && (
             <p className="text-xs text-muted-foreground">
-              A complete specification that contains the claims is fine — the claims section is detected and used automatically.
+              Upload the full patent draft as filed — the complete specification. If it contains the claims
+              (the usual Indian filing) they are detected and used automatically, so a separate claims upload is optional.
             </p>
           )}
           {kind === 'SUPPLEMENTARY' && (
-            <Textarea rows={2} value={intent} onChange={e => setIntent(e.target.value)}
-              placeholder='How should this be used? e.g. "Comparative efficacy data — for the Section 3(d) objection."' />
+            <>
+              <Input value={title} onChange={e => setTitle(e.target.value)}
+                placeholder="Title, e.g. “Annexure A — comparative data”" />
+              <Textarea rows={2} value={intent} onChange={e => setIntent(e.target.value)}
+                placeholder='How should this be used? e.g. "Comparative efficacy data — for the Section 3(d) objection."' />
+            </>
           )}
           <Textarea rows={6} value={text} onChange={e => setText(e.target.value)} placeholder="Paste the text…" />
           <div className="flex gap-2">
             <Button size="sm" onClick={() => submit()} disabled={saving || !text.trim()}>
               {saving ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" aria-hidden /> Adding…</> : 'Add pasted text'}
             </Button>
-            <input ref={fileRef} type="file" accept=".pdf,.txt" className="hidden"
-              onChange={e => { const f = e.target.files?.[0]; if (f) void submit(f) }} />
+            <input ref={fileRef} type="file" accept={ACCEPTED_UPLOAD_EXTENSIONS} className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) void submit(f); e.target.value = '' }} />
             <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} disabled={saving}>
-              <Upload className="w-4 h-4 mr-1.5" aria-hidden /> Upload PDF
+              <Upload className="w-4 h-4 mr-1.5" aria-hidden /> Upload file
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {ACCEPTED_UPLOAD_LABEL}, up to {MAX_OA_UPLOAD_LABEL}. Add as many supplementary documents as the reply needs — upload them one at a time.
+          </p>
           {kind === 'SUPPLEMENTARY' && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
               Supplementary material supports arguments and affidavits — it is never used as claim-amendment basis.

@@ -117,7 +117,8 @@ const SERVICE_TO_FEATURE: Record<ServiceType, string> = {
   DIAGRAM_GENERATION: 'DIAGRAM_GENERATION',
   PATENT_REVIEW: 'PATENT_REVIEW',      // Pro tier feature
   IDEATION: 'IDEATION',
-  OFFICE_ACTION_RESPONSE: 'OFFICE_ACTION_RESPONSE'
+  OFFICE_ACTION_RESPONSE: 'OFFICE_ACTION_RESPONSE',
+  WHITESPACE_ANALYSIS: 'WHITESPACE_ANALYSIS'
 }
 
 // Roles that can use each service (default, can be overridden by team/user settings)
@@ -130,7 +131,8 @@ const SERVICE_DEFAULT_ROLES: Record<ServiceType, UserRole[]> = {
   DIAGRAM_GENERATION: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
   PATENT_REVIEW: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],  // Pro tier feature - role access same, quota-controlled
   IDEATION: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
-  OFFICE_ACTION_RESPONSE: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
+  OFFICE_ACTION_RESPONSE: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST'],
+  WHITESPACE_ANALYSIS: ['OWNER', 'ADMIN', 'MANAGER', 'ANALYST']
 }
 
 // ============================================================================
@@ -880,7 +882,8 @@ function getTaskCodeForService(serviceType: ServiceType): TaskCode | null {
     DIAGRAM_GENERATION: TaskCode.LLM3_DIAGRAM,
     PATENT_REVIEW: TaskCode.LLM2_DRAFT,  // Uses drafting task code for review operations
     IDEATION: null,  // IDEATION has multiple task codes
-    OFFICE_ACTION_RESPONSE: TaskCode.LLM8_OA_RESPONSE
+    OFFICE_ACTION_RESPONSE: TaskCode.LLM8_OA_RESPONSE,
+    WHITESPACE_ANALYSIS: null  // Whitespace Studio spans six task codes
   }
   return mapping[serviceType]
 }

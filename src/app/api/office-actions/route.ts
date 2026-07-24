@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateUser } from '@/lib/auth-middleware'
 import { enforceServiceAccess } from '@/lib/service-access-middleware'
-import { createCase } from '@/lib/office-action/oa-case-service'
+import { createCase, OaProfileUnavailableError } from '@/lib/office-action/oa-case-service'
 import { prisma } from '@/lib/prisma'
 
 export const maxDuration = 60
@@ -62,7 +62,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ case: created }, { status: 201 })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to create case'
-    const status = message.includes('No active office-action profile') ? 400 : 500
+    // A missing/invalid jurisdiction profile is a deployment gap, not bad input —
+    // 503 so it is not mistaken for a validation failure, with the fix in the body.
+    const status = err instanceof OaProfileUnavailableError ? 503 : 500
     return NextResponse.json({ error: message }, { status })
   }
 }

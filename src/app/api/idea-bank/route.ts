@@ -12,7 +12,7 @@ const searchSchema = z.object({
   query: z.string().optional(),
   domainTags: z.array(z.string()).optional(),
   technicalField: z.string().optional(),
-  status: z.enum(['PUBLIC', 'RESERVED', 'LICENSED', 'ARCHIVED']).optional(),
+  status: z.enum(['PRIVATE', 'PUBLIC', 'RESERVED', 'LICENSED', 'ARCHIVED']).optional(),
   noveltyScoreMin: z.number().min(0).max(1).optional(),
   noveltyScoreMax: z.number().min(0).max(1).optional(),
   createdBy: z.string().optional(),

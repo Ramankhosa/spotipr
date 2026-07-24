@@ -70,6 +70,10 @@ export interface CreateIdeaData {
   keyFeatures: string[];
   potentialApplications: string[];
   derivedFromIdeaId?: string;
+  /** Defaults to PUBLIC. Use PRIVATE for confidential pre-filing subject matter. */
+  status?: IdeaBankStatus;
+  priorArtSummary?: string;
+  noveltyScore?: number;
 }
 
 export interface ReservationLimits {
@@ -209,20 +213,29 @@ export class IdeaBankService extends BasePatentService {
     // Only check subscription for write operations
     const skip = (page - 1) * limit;
 
-    // Build where clause
-    const where: Prisma.IdeaBankIdeaWhereInput = {
-      status: { not: 'ARCHIVED' }, // Exclude archived ideas
-    };
+    // Build where clause.
+    // Every optional filter is pushed onto `and` rather than assigned to `where.OR`: two
+    // independent filters both writing `where.OR` silently overwrite each other, which is how
+    // the tenant filter used to cancel the text search.
+    const and: Prisma.IdeaBankIdeaWhereInput[] = [
+      { status: { not: 'ARCHIVED' } }, // Exclude archived ideas
+      // PRIVATE ideas are confidential pre-filing subject matter (e.g. saved from a novelty
+      // assessment). They are visible only to the user who created them.
+      { OR: [{ status: { not: 'PRIVATE' } }, { createdBy: user.id }] },
+    ];
+    const where: Prisma.IdeaBankIdeaWhereInput = { AND: and };
 
     // Apply filters
     if (filters.query) {
-      where.OR = [
-        { title: { contains: filters.query, mode: 'insensitive' } },
-        { description: { contains: filters.query, mode: 'insensitive' } },
-        { abstract: { contains: filters.query, mode: 'insensitive' } },
-        { keyFeatures: { hasSome: [filters.query] } },
-        { potentialApplications: { hasSome: [filters.query] } },
-      ];
+      and.push({
+        OR: [
+          { title: { contains: filters.query, mode: 'insensitive' } },
+          { description: { contains: filters.query, mode: 'insensitive' } },
+          { abstract: { contains: filters.query, mode: 'insensitive' } },
+          { keyFeatures: { hasSome: [filters.query] } },
+          { potentialApplications: { hasSome: [filters.query] } },
+        ],
+      });
     }
 
     if (filters.domainTags && filters.domainTags.length > 0) {
@@ -252,11 +265,12 @@ export class IdeaBankService extends BasePatentService {
     }
 
     if (filters.tenantId) {
-      where.OR = where.OR || [];
-      (where.OR as any[]).push(
-        { tenantId: filters.tenantId },
-        { tenantId: null } // Include global ideas
-      );
+      and.push({
+        OR: [
+          { tenantId: filters.tenantId },
+          { tenantId: null } // Include global ideas
+        ],
+      });
     }
 
     // Get ideas with relations
@@ -341,19 +355,24 @@ export class IdeaBankService extends BasePatentService {
   ): Promise<IdeaExportResult> {
     const cappedLimit = Math.max(1, Math.min(maxIdeas, this.MAX_EXPORT_IDEAS));
 
-    // Build where clause (mirrors searchIdeas)
-    const where: Prisma.IdeaBankIdeaWhereInput = {
-      status: { not: 'ARCHIVED' },
-    };
+    // Build where clause (mirrors searchIdeas, including the owner-only PRIVATE guard —
+    // an export must never become a way to read other users' confidential ideas).
+    const and: Prisma.IdeaBankIdeaWhereInput[] = [
+      { status: { not: 'ARCHIVED' } },
+      { OR: [{ status: { not: 'PRIVATE' } }, { createdBy: user.id }] },
+    ];
+    const where: Prisma.IdeaBankIdeaWhereInput = { AND: and };
 
     if (filters.query) {
-      where.OR = [
-        { title: { contains: filters.query, mode: 'insensitive' } },
-        { description: { contains: filters.query, mode: 'insensitive' } },
-        { abstract: { contains: filters.query, mode: 'insensitive' } },
-        { keyFeatures: { hasSome: [filters.query] } },
-        { potentialApplications: { hasSome: [filters.query] } },
-      ];
+      and.push({
+        OR: [
+          { title: { contains: filters.query, mode: 'insensitive' } },
+          { description: { contains: filters.query, mode: 'insensitive' } },
+          { abstract: { contains: filters.query, mode: 'insensitive' } },
+          { keyFeatures: { hasSome: [filters.query] } },
+          { potentialApplications: { hasSome: [filters.query] } },
+        ],
+      });
     }
 
     if (filters.domainTags && filters.domainTags.length > 0) {
@@ -383,11 +402,12 @@ export class IdeaBankService extends BasePatentService {
     }
 
     if (filters.tenantId) {
-      where.OR = where.OR || [];
-      (where.OR as any[]).push(
-        { tenantId: filters.tenantId },
-        { tenantId: null }
-      );
+      and.push({
+        OR: [
+          { tenantId: filters.tenantId },
+          { tenantId: null }
+        ],
+      });
     }
 
     const [ideas, totalCount] = await Promise.all([
@@ -491,6 +511,11 @@ export class IdeaBankService extends BasePatentService {
 
     if (!idea) return null;
 
+    // PRIVATE ideas are confidential pre-filing subject matter and are readable only by their
+    // creator. Treat someone else's private idea as non-existent rather than forbidden, so the
+    // endpoint does not confirm that an id exists.
+    if (idea.status === 'PRIVATE' && idea.createdBy !== user.id) return null;
+
     const isReservedByCurrentUser = idea.reservations.length > 0;
     const isRedacted = idea.status === 'RESERVED' && !isReservedByCurrentUser;
     let description = idea.description;
@@ -529,7 +554,10 @@ export class IdeaBankService extends BasePatentService {
       throw new Error('Title and description are required');
     }
 
-    // Create the idea
+    const status = data.status || 'PUBLIC';
+
+    // Create the idea. A PRIVATE idea is never "published": it stays owner-only, so it carries
+    // no publishedAt and cannot surface in the shared listing.
     const idea = await prisma.ideaBankIdea.create({
       data: {
         title: data.title.trim(),
@@ -540,9 +568,12 @@ export class IdeaBankService extends BasePatentService {
         keyFeatures: data.keyFeatures,
         potentialApplications: data.potentialApplications,
         derivedFromIdeaId: data.derivedFromIdeaId,
+        priorArtSummary: data.priorArtSummary?.trim(),
+        noveltyScore: data.noveltyScore,
+        status,
         createdBy: user.id,
         tenantId: user.tenantId,
-        publishedAt: new Date()
+        publishedAt: status === 'PRIVATE' ? null : new Date()
       }
     });
 

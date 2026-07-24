@@ -51,6 +51,7 @@ enum ServiceType {
   PATENT_REVIEW // AI-powered patent draft review (Pro tier)
   IDEATION // Mind-map patent ideation engine
   OFFICE_ACTION_RESPONSE // Office Action Studio: FER/OA response drafting
+  WHITESPACE_ANALYSIS // Whitespace Studio: field mapping, gap hypotheses, adversarial validation
 }
 
 // Team roles within a team
@@ -536,6 +537,7 @@ enum FeatureCode {
   PATENT_REVIEW // AI-powered patent draft review (Pro tier)
   IDEATION // Mind-map patent ideation engine
   OFFICE_ACTION_RESPONSE // Office Action Studio: FER/OA response drafting
+  WHITESPACE_ANALYSIS // Whitespace Studio: field mapping, gap hypotheses, adversarial validation
 }
 
 enum TaskCode {
@@ -560,6 +562,16 @@ enum TaskCode {
   IDEATION_NOVELTY // Novelty gate reasoning
   LLM7_ADVANCED_MANUAL_SEARCH // Prior-Art Studio: advanced manual search query generator (novelty search quota)
   LLM8_OA_RESPONSE // Office Action Studio: parse/classify/chart/argue/draft stages
+  // Whitespace Studio. Cheap tier: scope, cluster labels, field narration.
+  // Mid tier: claim-element extraction, validation mapping. Premium tier is
+  // deliberately only WS_HYPOTHESIZE and WS_REDTEAM — reasoning quality is the
+  // product at exactly those two stages and nowhere else.
+  WS_SCOPE // NL brief -> structured, editable research scope
+  WS_CLUSTER_LABEL // Name a technology cluster from its medoid documents
+  WS_CLAIM_ELEMENTS // Extract claim elements from retrieved independent claims
+  WS_HYPOTHESIZE // Synthesise whitespace hypotheses from signals + elements
+  WS_VALIDATE // Element-map disproof candidates against a hypothesis
+  WS_REDTEAM // Adversarial pass: name and run the strongest remaining attack
 }
 
 enum ModelClass {
@@ -1722,12 +1734,12 @@ model EpoBddsDelivery {
 /// One row per (product, delivery, file) — the resume ledger. A file at LOADED
 /// is never downloaded, parsed or loaded again.
 model EpoBddsFile {
-  id         String @id @default(cuid())
-  productId  Int
-  deliveryId Int
-  fileId     Int
-  lane       String
-  fileName   String
+  id              String  @id @default(cuid())
+  productId       Int
+  deliveryId      Int
+  fileId          Int
+  lane            String
+  fileName        String
   /// Parsed from the human-readable `fileSize` string ("1.5 GB"); an estimate.
   sizeBytes       BigInt?
   /// The verified truth, from Content-Length and the bytes actually written.
@@ -1737,9 +1749,9 @@ model EpoBddsFile {
   checksumAlgo    String?
   /// Slice coordinates parsed from fileName so --year/--authority can skip a
   /// file without downloading it. NULL => record-level filtering required.
-  authority   String?
-  pubYearFrom Int?
-  pubYearTo   Int?
+  authority       String?
+  pubYearFrom     Int?
+  pubYearTo       Int?
 
   status        EpoBddsFileStatus @default(QUEUED)
   attemptCount  Int               @default(0)
@@ -1769,12 +1781,12 @@ model EpoEpFulltext {
   lang                 String?
   publicationYear      Int?
 
-  claimsText           String?  @db.Text
+  claimsText           String? @db.Text
   claimsCount          Int?
-  claimsComplete       Boolean  @default(false)
-  descriptionText      String?  @db.Text
+  claimsComplete       Boolean @default(false)
+  descriptionText      String? @db.Text
   descriptionCharCount Int?
-  descriptionComplete  Boolean  @default(false)
+  descriptionComplete  Boolean @default(false)
 
   /// Capture policy that produced this row, e.g. 'claims-full+description-full'.
   /// Recorded so a later policy change knows which rows need upgrading.
@@ -2172,6 +2184,11 @@ model NoveltySearchRun {
   // Final output
   reportUrl String?
 
+  // Drafting handoff marker: { patentId, sessionId, ideaBankIdeaId, at }
+  // Set when the user pushes this assessment into the drafting pipeline, so the report
+  // and history views can link to the existing draft instead of silently duplicating it.
+  draftingHandoff Json? @map("drafting_handoff")
+
   // Metadata
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2476,6 +2493,10 @@ model DraftingSession {
   patentTypeComponentsHash  String?   @map("patent_type_components_hash")
   normalizationInProgressAt DateTime? @map("normalization_in_progress_at")
   normalizationRequestId    String?   @map("normalization_request_id")
+
+  // Provenance + carried-over intelligence when this session was created from a novelty
+  // assessment: { searchId, ideaBankIdeaId, claimGuidance, findingsDigest, citationCount, importedAt }
+  noveltyHandoff Json? @map("novelty_handoff")
 
   @@map("drafting_sessions")
 }
@@ -2993,6 +3014,7 @@ model UserCredit {
 // === IDEA BANK MODELS ===
 
 enum IdeaBankStatus {
+  PRIVATE // Owner-only: confidential pre-filing subject matter, never listed or reservable by others
   PUBLIC // Available for everyone to see and reserve
   RESERVED // Reserved by a user, content redacted
   LICENSED // Licensed/commercialized
@@ -4947,7 +4969,7 @@ model PriorArtStudioSession {
 }
 
 model PriorArtStudioRun {
-  id             String @id @default(cuid())
+  id             String    @id @default(cuid())
   sessionId      String
   planVersion    Int
   planSnapshot   Json // StudioPlan as executed
@@ -4958,13 +4980,13 @@ model PriorArtStudioRun {
   providerStats  Json?
   warnings       Json?
   results        Json // condensed family-grouped results for re-render + diffing
-  resultCount    Int    @default(0)
-  familyCount    Int    @default(0)
-  newFamilyCount Int    @default(0)
+  resultCount    Int       @default(0)
+  familyCount    Int       @default(0)
+  newFamilyCount Int       @default(0)
   durationMs     Int?
-  status         String @default("COMPLETE") // RUNNING | COMPLETE | FAILED
+  status         String    @default("COMPLETE") // RUNNING | COMPLETE | FAILED
   error          String?
-  depth          String @default("deep") // deep | fast
+  depth          String    @default("deep") // deep | fast
   completedAt    DateTime?
 
   createdAt DateTime @default(now())
@@ -5222,18 +5244,18 @@ model OaCaseDocument {
 }
 
 model OaDocumentChunk {
-  id         String                       @id @default(cuid())
+  id         String                   @id @default(cuid())
   caseId     String
   documentId String
   kind       String // mirrors the document kind (retrieval filter)
   sectionRef String? // e.g. "¶0038-¶0041"
   text       String
-  tokenCount Int                          @default(0)
+  tokenCount Int                      @default(0)
   // pgvector column, bit(512) — matches the corpus contract (voyage-3.5-lite,
   // 512-dim binary, Hamming <~>). Migration adds the column + bit_hamming_ops
   // ANN index. Keep in sync with PATENT_CORPUS_EMBEDDING_* in patent-corpus-service.ts.
   embedding  Unsupported("bit(512)")?
-  createdAt  DateTime                     @default(now())
+  createdAt  DateTime                 @default(now())
 
   document OaCaseDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
@@ -5328,4 +5350,409 @@ model PriorArtStudioTheory {
 
   @@index([sessionId, createdAt])
   @@map("prior_art_studio_theories")
+}
+
+// ============================================================================
+// Whitespace Studio
+//
+// Turns a technology field into evidence-backed invention hypotheses, then
+// attacks them. Mirrors the Prior-Art Studio cluster shape (session + run +
+// trail) because the workspace conventions are the same.
+//
+// Json vs normalised rule applied throughout: write-once/read-whole analytics
+// (census facets, matrices, score vectors) are Json; anything filtered, linked
+// or independently mutated (clusters, members, hypotheses, evidence) is a row.
+// ============================================================================
+
+model WhitespaceStudy {
+  id       String  @id @default(cuid())
+  userId   String
+  tenantId String?
+  title    String  @default("Untitled study")
+  status   String  @default("ACTIVE") // ACTIVE | ARCHIVED
+
+  /// WhitespaceScope — concepts, synonyms, cpc[], exclusions[], assumptions[],
+  /// dateRange, jurisdictions. Editable by the user before any run.
+  scope        Json
+  scopeVersion Int     @default(1)
+  seedText     String? @db.Text
+  /// UI tailoring only (attorney | rnd | tto | founder | investor). Never gates analysis.
+  role         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runs       WhitespaceRun[]
+  clusters   WhitespaceCluster[]
+  members    WhitespaceClusterMember[]
+  areas      WhitespaceAreaAnalysis[]
+  hypotheses WhitespaceHypothesis[]
+  evidence   WhitespaceEvidence[]
+  concepts   WhitespaceConcept[]
+  literature WhitespaceLiteratureItem[]
+  trail      WhitespaceTrailEntry[]
+
+  @@index([userId, updatedAt])
+  @@index([tenantId])
+  @@map("whitespace_studies")
+}
+
+/// One row per pipeline stage execution. Doubles as the durable job row —
+/// lockedBy/heartbeatAt/attemptCount follow the office-action lease pattern so a
+/// standalone worker and an inline drain can safely race for the same work.
+model WhitespaceRun {
+  id      String @id @default(cuid())
+  studyId String
+  stage   String // SCOPE | FIELD_MAP | CLUSTER | SIGNALS | DEEP_DIVE | VALIDATE
+
+  scopeVersion  Int
+  scopeSnapshot Json
+  params        Json?
+
+  status String @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | FAILED
+
+  lockedBy      String?
+  lockedUntil   DateTime?
+  heartbeatAt   DateTime?
+  attemptCount  Int       @default(0)
+  maxAttempts   Int       @default(3)
+  nextAttemptAt DateTime  @default(now())
+  lastError     String?   @db.Text
+
+  /// Stage output. FIELD_MAP holds the census facets; SIGNALS holds cell metrics.
+  results    Json?
+  /// Funnel transparency, Studio-style: corpus -> filters -> concepts -> families.
+  gateCounts Json?
+
+  durationMs  Int?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  study WhitespaceStudy @relation(fields: [studyId], references: [id], onDelete: Cascade)
+
+  @@index([studyId, createdAt])
+  @@index([studyId, stage, status])
+  @@index([status, nextAttemptAt])
+  @@map("whitespace_runs")
+}
+
+model WhitespaceCluster {
+  id              String  @id @default(cuid())
+  studyId         String
+  runId           String?
+  parentClusterId String?
+  depth           Int     @default(0)
+
+  label       String
+  description String?  @db.Text
+  keywords    String[] @default([])
+
+  /// Binarised centroid as hex, 512 bits. Re-clustering and ANN seeding read this.
+  centroidBits String?
+
+  /// Sampled membership vs stratified-weight extrapolation to field scale. The
+  /// UI must present fieldEstimate as an estimate, never as a count.
+  memberCount   Int @default(0)
+  fieldEstimate Int @default(0)
+
+  cohesion   Float?
+  separation Float?
+  silhouette Float?
+
+  /// density, velocity, hhi, jurisdictions, topAssignees, cpcMix,
+  /// termDivergence, publicationVolume, researchToPatentRatio
+  metrics Json?
+
+  createdAt DateTime @default(now())
+
+  study   WhitespaceStudy           @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  members WhitespaceClusterMember[]
+  areas   WhitespaceAreaAnalysis[]
+
+  @@index([studyId, depth])
+  @@index([parentClusterId])
+  @@map("whitespace_clusters")
+}
+
+model WhitespaceClusterMember {
+  id        String  @id @default(cuid())
+  studyId   String
+  /// Null between stage 1 sampling and stage 2 assignment.
+  clusterId String?
+
+  familyKey         String
+  publicationNumber String
+  title             String  @db.Text
+  /// Packed sample vector, retained so re-clustering needs no corpus refetch.
+  bits              String?
+
+  distance          Float?
+  isMedoid          Boolean @default(false)
+  year              Int?
+  assigneeCanonical String?
+
+  study   WhitespaceStudy    @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  cluster WhitespaceCluster? @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+
+  @@unique([studyId, familyKey])
+  @@index([clusterId])
+  @@map("whitespace_cluster_members")
+}
+
+model WhitespaceAreaAnalysis {
+  id        String @id @default(cuid())
+  studyId   String
+  clusterId String
+  status    String @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | FAILED
+
+  /// { elements[], coOccurrence, residuals } from stage 4 extraction.
+  claimElements         Json?
+  problemSolutionMatrix Json?
+  /// { familiesTotal, withClaims, bySource } — feeds gate G1 and the UI banner.
+  textCoverage          Json
+  results               Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  study      WhitespaceStudy        @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  cluster    WhitespaceCluster      @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  hypotheses WhitespaceHypothesis[]
+
+  @@index([studyId])
+  @@index([clusterId])
+  @@map("whitespace_area_analyses")
+}
+
+model WhitespaceHypothesis {
+  id             String  @id @default(cuid())
+  studyId        String
+  clusterId      String?
+  areaAnalysisId String?
+
+  /// One of the ten whitespace types, or UNDETERMINED. Only the gate ladder may
+  /// set this — the generator cannot reach GENUINE.
+  type      String @default("UNDETERMINED")
+  statement String @db.Text
+  rationale String @db.Text
+
+  elementCombination Json?
+  /// Always the full vector: density, rarity, semanticNovelty, evidenceQuality,
+  /// confidence, crowdedness, strength. Never a bare number.
+  scores             Json
+  status             String @default("DRAFT") // DRAFT | VALIDATING | VALIDATED | REFUTED | INCONCLUSIVE
+
+  /// Attacks run, gate outcomes, red-team notes, and the attacks that could NOT
+  /// be run (which lower evidence quality rather than counting as survival).
+  validation          Json?
+  /// Non-optional by design. A hypothesis that leaves the system without its
+  /// caveats is a bug.
+  coverageLimitations Json
+  humanReview         Json?
+
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  study    WhitespaceStudy         @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  area     WhitespaceAreaAnalysis? @relation(fields: [areaAnalysisId], references: [id], onDelete: SetNull)
+  evidence WhitespaceEvidence[]
+  concepts WhitespaceConcept[]
+
+  @@index([studyId, status])
+  @@index([areaAnalysisId])
+  @@map("whitespace_hypotheses")
+}
+
+model WhitespaceEvidence {
+  id           String  @id @default(cuid())
+  studyId      String
+  hypothesisId String?
+  clusterId    String?
+
+  kind      String // PATENT_PASSAGE | SCHOLAR | SEARCH_TRACE | STATISTIC | USER
+  /// Publication number, DOI, or null for statistics.
+  refId     String?
+  passage   String? @db.Text
+  queryText String? @db.Text
+  score     Float?
+  /// SUPPORTING | CONTRADICTORY | CONTEXT — rendered with equal weight in the UI.
+  stance    String  @default("CONTEXT")
+  data      Json?
+
+  createdAt DateTime @default(now())
+
+  study      WhitespaceStudy       @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  hypothesis WhitespaceHypothesis? @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+
+  @@index([hypothesisId, stance])
+  @@index([studyId, kind])
+  @@map("whitespace_evidence")
+}
+
+model WhitespaceConcept {
+  id           String  @id @default(cuid())
+  studyId      String
+  hypothesisId String?
+
+  title    String
+  summary  String @db.Text
+  /// inventionFeatures shape — handoff-ready for novelty search and drafting.
+  features Json
+  status   String @default("DRAFT")
+  /// { noveltySessionId?, draftingSessionId?, ideationSessionId? }
+  handoffs Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  study      WhitespaceStudy       @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  hypothesis WhitespaceHypothesis? @relation(fields: [hypothesisId], references: [id], onDelete: SetNull)
+
+  @@index([studyId])
+  @@map("whitespace_concepts")
+}
+
+/// Non-patent literature persisted per study so a run is self-contained and
+/// re-runnable after first fetch. Deliberately NOT PriorArtScholarContent, which
+/// is written only by unreachable code and read by nothing.
+model WhitespaceLiteratureItem {
+  id           String  @id @default(cuid())
+  studyId      String
+  clusterId    String?
+  hypothesisId String?
+
+  doi           String?
+  title         String   @db.Text
+  authors       String[] @default([])
+  year          Int?
+  venue         String?
+  abstract      String?  @db.Text
+  citationCount Int?
+  url           String?
+  isOpenAccess  Boolean  @default(false)
+  provider      String
+
+  createdAt DateTime @default(now())
+
+  study WhitespaceStudy @relation(fields: [studyId], references: [id], onDelete: Cascade)
+
+  @@index([studyId, clusterId])
+  @@index([doi])
+  @@map("whitespace_literature_items")
+}
+
+model WhitespaceTrailEntry {
+  id      String @id @default(cuid())
+  studyId String
+  kind    String // SCOPE | RUN | EDIT | HYPOTHESIS | CHALLENGE | NOTE | SYSTEM
+  actor   String // "user:<id>" or "model:<code>"
+  summary String
+  data    Json?
+
+  createdAt DateTime @default(now())
+
+  study WhitespaceStudy @relation(fields: [studyId], references: [id], onDelete: Cascade)
+
+  @@index([studyId, createdAt])
+  @@map("whitespace_trail_entries")
+}
+
+// ============================================================================
+// INBOUND ACCESS REQUESTS — "Contact us" + "Request a free trial"
+// ============================================================================
+//
+// Both public forms land in one table so the super-admin inbox is a single
+// triage surface. `kind` decides which payload columns are populated and which
+// decision actions the UI offers; everything else (status, notes, assignment,
+// event trail) is shared.
+
+enum AccessRequestKind {
+  CONTACT // "Contact us" enquiry — resolved by replying
+  TRIAL // "Request a free trial" — resolved by granting or refusing trial access
+}
+
+enum AccessRequestStatus {
+  NEW // Just submitted, nobody has looked at it
+  IN_REVIEW // A super admin has picked it up
+  APPROVED // TRIAL only — trial access granted, invite issued
+  REJECTED // TRIAL only — trial access refused
+  RESOLVED // CONTACT only — replied to / closed
+  SPAM // Junk; kept for the audit trail but hidden from the default view
+}
+
+model AccessRequest {
+  id     String              @id @default(cuid())
+  kind   AccessRequestKind
+  status AccessRequestStatus @default(NEW)
+
+  // --- Requester -----------------------------------------------------------
+  name         String
+  email        String
+  phone        String?
+  organization String?
+  jobTitle     String?
+  country      String?
+
+  // --- Contact payload -----------------------------------------------------
+  topic   String?
+  message String? @db.Text
+
+  // --- Trial payload -------------------------------------------------------
+  useCase        String?  @db.Text
+  teamSize       String?
+  expectedVolume String?
+  jurisdictions  String[] @default([])
+  requestedDays  Int? // What the requester asked for; the grant may differ
+
+  // --- Provenance ----------------------------------------------------------
+  sourcePage     String?
+  referrer       String?
+  userAgent      String?
+  ipHash         String? // Salted SHA-256; the raw IP is never stored
+  existingUserId String? // Set when a signed-in user submitted the form
+
+  // --- Triage --------------------------------------------------------------
+  assignedTo     String? // Super-admin user id
+  internalNotes  String?   @db.Text
+  reviewedBy     String? // Super-admin email captured at decision time
+  reviewedAt     DateTime?
+  decisionReason String?   @db.Text
+
+  // --- Trial grant (populated on approval) ---------------------------------
+  grantedCampaignId String?
+  grantedInviteId   String?
+  grantedTrialDays  Int?
+  inviteSentAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events AccessRequestEvent[]
+
+  @@index([kind, status, createdAt])
+  @@index([status, createdAt])
+  @@index([email])
+  @@index([createdAt])
+  @@map("access_requests")
+}
+
+/// Append-only audit trail for a request: who touched it, when, and what changed.
+model AccessRequestEvent {
+  id        String @id @default(cuid())
+  requestId String
+
+  // SUBMITTED | STATUS_CHANGED | ASSIGNED | NOTE_ADDED | APPROVED | REJECTED
+  // | INVITE_SENT | EMAIL_FAILED
+  type       String
+  note       String? @db.Text
+  actorEmail String? // Null for self-service / system events
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  request AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("access_request_events")
 }

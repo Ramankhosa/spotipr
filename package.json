@@ -49,7 +49,8 @@
     "patent-api:cleanup": "tsx scripts/cleanup-patent-api-usage.ts",
     "patent-api:smoke": "tsx scripts/smoke-patent-api.ts",
     "patent-api:smoke-mcp": "tsx scripts/smoke-patent-api-mcp.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate:check": "node scripts/check-migration-safety.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

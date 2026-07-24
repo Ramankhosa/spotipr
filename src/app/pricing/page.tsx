@@ -434,8 +434,17 @@ export default function PricingPage() {
             })}
           </div>
 
-          {/* Contact Sales */}
-          <div className="mt-12 text-center">
+          {/* Try before you buy / Contact Sales */}
+          <div className="mt-12 space-y-3 text-center">
+            <p className="text-sm text-ai-graphite-400">
+              Want to try it on your own matter first?{' '}
+              <Link
+                href="/free-trial"
+                className="text-ai-blue-300 hover:text-ai-blue-200 transition-colors"
+              >
+                Request a free trial
+              </Link>
+            </p>
             <p className="text-sm text-ai-graphite-400">
               Have something else in mind or need a customized plan?{' '}
               <Link href="/contact" className="text-ai-blue-300 hover:text-ai-blue-200 transition-colors">

@@ -4,7 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { buildNoveltyAttorneyReportModel } from '@/lib/novelty-attorney-report';
 import { useAuth } from '@/lib/auth-context';
 import { useToast } from '@/components/ui/toast';
-import { Copy, Download, Mail, MessageCircle, Share2, X } from 'lucide-react';
+import { Copy, Download, FileText, Mail, MessageCircle, Share2, X } from 'lucide-react';
 
 const printStyles = `
   @media print {
@@ -721,6 +721,15 @@ export default function ConsolidatedNoveltyReport({ searchId, searchData, readOn
               <Download className="h-4 w-4" />
               {isDownloadingPdf ? 'Preparing PDF...' : 'Download Report'}
             </button>
+            {/* Carries the assessment forward: refines the idea against these findings, then seeds
+                a new draft with the prior art already analysed here. */}
+            <a
+              href={`/novelty-search/${searchId}/to-drafting`}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 sm:shadow-lg"
+            >
+              <FileText className="h-4 w-4" />
+              Push to Drafting
+            </a>
           </div>
         )}
 

@@ -24,26 +24,101 @@ export interface CaseActor {
   requestHeaders?: Record<string, string>
 }
 
-/** Load + validate the officeActionProfile for a jurisdiction. */
-export async function loadOfficeActionProfile(jurisdictionCode: string): Promise<OfficeActionProfile | null> {
+/** The jurisdiction has no usable office-action profile — a deployment/config fault, not a user error. */
+export class OaProfileUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OaProfileUnavailableError'
+  }
+}
+
+/** Where a loaded profile came from, and — when it could not be loaded — why. */
+export interface OaProfileLoad {
+  profile: OfficeActionProfile | null
+  source: 'database' | 'repository' | null
+  /** Attorney-facing explanation, present only when profile is null. */
+  reason?: string
+}
+
+// Repository fallback is parsed once per process — the JSON never changes at runtime.
+const repoProfileCache = new Map<string, OfficeActionProfile | null>()
+
+/**
+ * Read the officeActionProfile straight out of Countries/<CODE>.json.
+ *
+ * The DB copy (CountryProfile.profileData.officeActionProfile) is authoritative,
+ * but it only gets there via `npm run oa:sync-profile <CODE>`. Any environment
+ * where that script has not been run — a fresh deploy, a restored dump, or a
+ * country re-imported through the jurisdictions hub from a JSON that predates
+ * the OA block — would otherwise refuse to open a case at all. Falling back to
+ * the shipped profile makes the module work everywhere the code is deployed.
+ */
+async function loadProfileFromRepo(code: string): Promise<OfficeActionProfile | null> {
+  if (repoProfileCache.has(code)) return repoProfileCache.get(code) || null
+
+  let parsedProfile: OfficeActionProfile | null = null
+  try {
+    const { readFile } = await import('fs/promises')
+    const { join } = await import('path')
+    const raw = await readFile(join(process.cwd(), 'Countries', `${code}.json`), 'utf-8')
+    const block = JSON.parse(raw)?.officeActionProfile
+    if (block) {
+      const parsed = officeActionProfileSchema.safeParse(block)
+      if (parsed.success) parsedProfile = parsed.data
+      else {
+        console.warn(`[OA profile] Countries/${code}.json officeActionProfile failed validation:`,
+          parsed.error.errors.slice(0, 5).map(e => `${e.path.join('.')}: ${e.message}`).join('; '))
+      }
+    }
+  } catch (err) {
+    // ENOENT for most countries is expected — only some ship an OA block.
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.warn(`[OA profile] Could not read Countries/${code}.json:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  repoProfileCache.set(code, parsedProfile)
+  return parsedProfile
+}
+
+/**
+ * Load + validate the officeActionProfile for a jurisdiction, reporting where it
+ * came from and — on failure — a reason the attorney can act on.
+ */
+export async function loadOfficeActionProfileDetailed(jurisdictionCode: string): Promise<OaProfileLoad> {
   const code = jurisdictionCode.toUpperCase()
+
   const country = await getCountryProfile(code)
-  if (!country) {
-    console.warn(`[OA profile] No ACTIVE CountryProfile row for "${code}" — activate it in the jurisdictions hub.`)
-    return null
-  }
-  const block = (country.profileData as any)?.officeActionProfile
-  if (!block) {
-    console.warn(`[OA profile] CountryProfile "${code}" has no officeActionProfile block — run: npm run oa:sync-profile ${code}`)
-    return null
-  }
-  const parsed = officeActionProfileSchema.safeParse(block)
-  if (!parsed.success) {
+  const block = (country?.profileData as any)?.officeActionProfile
+  if (block) {
+    const parsed = officeActionProfileSchema.safeParse(block)
+    if (parsed.success) return { profile: parsed.data, source: 'database' }
     console.warn(`[OA profile] officeActionProfile for "${code}" failed validation:`,
       parsed.error.errors.slice(0, 5).map(e => `${e.path.join('.')}: ${e.message}`).join('; '))
-    return null
   }
-  return parsed.data
+
+  // DB copy absent or unusable — fall back to the profile shipped with the app.
+  const repo = await loadProfileFromRepo(code)
+  if (repo) {
+    console.warn(
+      `[OA profile] Using the repository profile for "${code}" — the database copy is ${block ? 'invalid' : 'missing'}. ` +
+      `Run: npm run oa:sync-profile ${code}`
+    )
+    return { profile: repo, source: 'repository' }
+  }
+
+  const reason = !country
+    ? `"${code}" is not an active jurisdiction on this deployment — activate it in the jurisdictions hub, then run: npm run oa:sync-profile ${code}`
+    : block
+      ? `The office-action profile for "${code}" is present but invalid — re-run: npm run oa:sync-profile ${code}`
+      : `"${code}" has no office-action profile on this deployment — run: npm run oa:sync-profile ${code}`
+  console.warn(`[OA profile] ${reason}`)
+  return { profile: null, source: null, reason }
+}
+
+/** Load + validate the officeActionProfile for a jurisdiction. */
+export async function loadOfficeActionProfile(jurisdictionCode: string): Promise<OfficeActionProfile | null> {
+  return (await loadOfficeActionProfileDetailed(jurisdictionCode)).profile
 }
 
 export async function createCase(actor: CaseActor, input: {
@@ -55,9 +130,11 @@ export async function createCase(actor: CaseActor, input: {
   specificationText?: string
   claimsText?: string
 }) {
-  const profile = await loadOfficeActionProfile(input.jurisdictionCode)
-  if (!profile) {
-    throw new Error(`No active office-action profile for jurisdiction "${input.jurisdictionCode}"`)
+  const loaded = await loadOfficeActionProfileDetailed(input.jurisdictionCode)
+  if (!loaded.profile) {
+    throw new OaProfileUnavailableError(
+      loaded.reason || `No active office-action profile for jurisdiction "${input.jurisdictionCode}"`
+    )
   }
   return prisma.officeActionCase.create({
     data: {
@@ -101,8 +178,13 @@ export async function ingestDocument(
   const oaCase = await prisma.officeActionCase.findUnique({ where: { id: caseId } })
   if (!oaCase) throw new Error('Case not found')
 
-  const profile = await loadOfficeActionProfile(oaCase.jurisdictionCode)
-  if (!profile) throw new Error(`No office-action profile for "${oaCase.jurisdictionCode}"`)
+  const loaded = await loadOfficeActionProfileDetailed(oaCase.jurisdictionCode)
+  const profile = loaded.profile
+  if (!profile) {
+    throw new OaProfileUnavailableError(
+      loaded.reason || `No office-action profile for "${oaCase.jurisdictionCode}"`
+    )
+  }
 
   const today = opts.today || ISO_TODAY_FALLBACK()
 

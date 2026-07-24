@@ -58,6 +58,11 @@ export async function GET(
       search: {
         id: enrichedSearchRun.id,
         title: enrichedSearchRun.title,
+        // Needed by the drafting handoff screen to show the original disclosure alongside the
+        // AI-refined version, and to default the destination project.
+        inventionDescription: enrichedSearchRun.inventionDescription,
+        projectId: enrichedSearchRun.projectId,
+        draftingHandoff: enrichedSearchRun.draftingHandoff,
         status: isCancelled ? 'CANCELLED' : enrichedSearchRun.status,
         publicStatus,
         currentStage: enrichedSearchRun.currentStage,

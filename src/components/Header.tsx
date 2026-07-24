@@ -352,6 +352,14 @@ export default function Header() {
                           Platform Admin
                         </div>
                         <Link
+                          href="/super-admin/requests"
+                          className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
+                          onClick={closeMenu}
+                        >
+                          <span>📥</span>
+                          <span>Request Inbox</span>
+                        </Link>
+                        <Link
                           href="/super-admin/users"
                           className="w-full px-3 py-2 text-left text-sm text-gpt-gray-700 hover:bg-gpt-gray-50 flex items-center space-x-2"
                           onClick={closeMenu}

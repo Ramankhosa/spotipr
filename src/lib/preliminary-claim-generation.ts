@@ -141,6 +141,12 @@ type BuildPreliminaryClaimsPromptParams = {
   userClaimRemarks?: string
   claimScopeStyle?: PreliminaryClaimScopeStyle
   maxClaims?: number | null
+  /**
+   * Claim-positioning guidance carried over from a completed novelty assessment
+   * (DraftingSession.noveltyHandoff.claimGuidance). Empty string when the session did not
+   * originate from one.
+   */
+  noveltyGuidanceBlock?: string
 }
 
 type AnalyzePreliminaryClaimQualityParams = {
@@ -356,6 +362,7 @@ export function buildPreliminaryClaimsPrompt(params: BuildPreliminaryClaimsPromp
     userClaimRemarks,
     claimScopeStyle,
     maxClaims = DEFAULT_PRELIMINARY_MAX_CLAIMS,
+    noveltyGuidanceBlock,
   } = params
   const normalizedClaimScopeStyle = normalizePreliminaryClaimScopeStyle(claimScopeStyle)
 
@@ -426,6 +433,7 @@ ORIGINAL SOURCE EXCERPT:
 ${context.rawIdea || 'Not provided'}
 
 ${claimScopeBlock ? `${claimScopeBlock}\n` : ''}
+${noveltyGuidanceBlock ? `${noveltyGuidanceBlock}\n` : ''}
 
 NORMALIZED INVENTION CONTEXT:
 ${context.title ? `Title: ${context.title}` : ''}

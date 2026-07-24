@@ -100,6 +100,11 @@ export async function GET(request: NextRequest) {
         hasReport: status === 'COMPLETE',
         reportUrl: status === 'COMPLETE' ? `/novelty-search/${search.id}/pdf` : null,
         patentCount: getRawStage1SearchResults(search.stage1Results).length,
+        // Only the ids are exposed, so the list can link to an existing draft without
+        // shipping the whole carried-over guidance payload to a list view.
+        draftingHandoff: search.draftingHandoff?.patentId
+          ? { patentId: search.draftingHandoff.patentId, at: search.draftingHandoff.at || null }
+          : null,
         error: status === 'FAILED' ? (search.backgroundJob?.lastError || 'Processing failed. You can retry this search.') : null,
       }
     })

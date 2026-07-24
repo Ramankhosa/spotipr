@@ -79,6 +79,7 @@ import {
   resetPreliminaryClaimFields,
   shouldBlockPreliminaryClaimReset,
 } from '@/lib/preliminary-claim-generation';
+import { buildNoveltyGuidanceBlock } from '@/lib/novelty-drafting-handoff';
 import {
   generateSketch,
   detectExternalImageContent,
@@ -4882,6 +4883,9 @@ async function handleGenerateClaims(user: any, patentId: string, data: any, requ
       userClaimRemarks: existingNormalized.userClaimRemarks,
       claimScopeStyle: normalizedClaimScopeStyle,
       maxClaims,
+      // Positioning carried over when this session came from a novelty assessment. Read from
+      // the session rather than normalizedData so re-running Stage 0 cannot drop it.
+      noveltyGuidanceBlock: buildNoveltyGuidanceBlock((session as any).noveltyHandoff?.claimGuidance),
     })
 
     // Call LLM to generate claims using the proper gateway API
@@ -5538,6 +5542,7 @@ ${writingSampleBlock}
 ${autoRefBlocks ? `PATENTS SELECTED FOR CLAIM REFINEMENT (user-selected, claims must be novel over ALL of these):\n${autoRefBlocks}\n\n*** CRITICAL: Novelty must be explicitly established over EACH reference above. These are NOT general prior art - they are specifically selected references that the user wants their claims to be distinguished from. ***` : ''}
 
 ${manualBlock || ''}
+${buildNoveltyGuidanceBlock((session as any).noveltyHandoff?.claimGuidance)}
 ${criticalInstructionsBlock}
 
 Guidelines:

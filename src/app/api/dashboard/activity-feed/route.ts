@@ -191,9 +191,16 @@ export async function GET(request: NextRequest) {
     try {
       const ideas = await prisma.ideaBankIdea.findMany({
         where: {
-          OR: [
-            { createdBy: user.id },
-            { tenantId: user.tenantId || undefined }
+          AND: [
+            {
+              OR: [
+                { createdBy: user.id },
+                { tenantId: user.tenantId || undefined }
+              ]
+            },
+            // A colleague's PRIVATE idea is confidential pre-filing subject matter and must not
+            // reach another user's feed via the tenant branch above.
+            { OR: [{ status: { not: 'PRIVATE' } }, { createdBy: user.id }] }
           ]
         },
         orderBy: { createdAt: 'desc' } as any,

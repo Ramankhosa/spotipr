@@ -38,6 +38,14 @@ interface RelatedArtStageProps {
       useManualAndAISearch: boolean
     }
     aiAnalysisData?: Record<string, any>
+    noveltyHandoff?: {
+      searchId?: string
+      citationCount?: number
+      shortlistedCount?: number
+      findingsDigest?: string
+      risk?: { headline?: string; noveltyRisk?: string; assessmentConfidence?: string }
+      importedAt?: string
+    } | null
   }
   patent: any
   onComplete: (data: any) => Promise<any>
@@ -644,9 +652,12 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       console.log('Loaded stored manual prior art data')
     }
 
-    // CRITICAL: Always load AI analysis data from session if not already in state
-    // This ensures AI review results persist across stage navigation
-    if (!latestRunId && (session as any)?.aiAnalysisData && Object.keys(aiAnalysis).length === 0) {
+    // CRITICAL: Always load AI analysis data from session if not already in state.
+    // This ensures AI review results persist across stage navigation, and that analysis
+    // imported alongside a run (e.g. seeded from a novelty assessment handoff, which creates
+    // a RelatedArtRun *and* aiAnalysisData together) is not skipped. Gating this on
+    // `!latestRunId` used to drop exactly that case.
+    if ((session as any)?.aiAnalysisData && Object.keys(aiAnalysis).length === 0) {
       const storedAiAnalysis = (session as any).aiAnalysisData
       if (storedAiAnalysis && typeof storedAiAnalysis === 'object' && Object.keys(storedAiAnalysis).length > 0) {
       setAiAnalysis(storedAiAnalysis)
@@ -1827,8 +1838,50 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const canAccessAnalyze = results.length > 0
   const canAccessSelect = hasAIReview
 
+  const noveltyHandoff = session?.noveltyHandoff
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-ai-blue-50/30">
+      {/* Prior art seeded from a completed novelty assessment — explains why the list below is
+          already populated and analysed, so the user does not re-run a weaker search. */}
+      {noveltyHandoff?.searchId && (
+        <div className="max-w-[1800px] mx-auto px-3 pt-3 sm:px-6 sm:pt-4">
+          <div className="rounded-xl border border-violet-200 bg-violet-50/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-violet-900">
+                  Imported from your novelty assessment
+                </div>
+                <p className="mt-1 text-sm text-violet-800">
+                  {noveltyHandoff.citationCount ?? 0} analysed reference{(noveltyHandoff.citationCount ?? 0) === 1 ? '' : 's'} were
+                  carried over and pre-selected for drafting
+                  {(noveltyHandoff.shortlistedCount ?? 0) > 0
+                    ? `, plus ${noveltyHandoff.shortlistedCount} shortlisted reference${noveltyHandoff.shortlistedCount === 1 ? '' : 's'} listed for reference only`
+                    : ''}.
+                  {noveltyHandoff.risk?.headline ? ` Assessment outcome: ${noveltyHandoff.risk.headline}.` : ''}
+                </p>
+              </div>
+              <a
+                href={`/novelty-search/${noveltyHandoff.searchId}/consolidated`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-sm font-medium text-violet-800 hover:bg-violet-100"
+              >
+                View full report
+              </a>
+            </div>
+            {noveltyHandoff.findingsDigest && (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-sm font-medium text-violet-900">Assessment findings</summary>
+                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-violet-200 bg-white p-3 text-xs leading-5 text-slate-700">
+                  {noveltyHandoff.findingsDigest}
+                </pre>
+              </details>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ============= HEADER WITH PROGRESS STEPS ============= */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-paper-300 shadow-sm">
         <div className="max-w-[1800px] mx-auto px-3 py-3 sm:px-6 sm:py-4">
