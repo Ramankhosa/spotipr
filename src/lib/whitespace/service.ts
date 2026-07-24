@@ -110,15 +110,44 @@ export async function compileScope(input: {
   const { llmGateway } = await import('@/lib/metering/gateway')
   const prompt = buildScopeCompilePrompt({ brief: input.brief, existingTitle: input.existingTitle })
 
-  const attempt = await llmGateway.executeLLMOperation(
+  // Stage-coded resolution is fail-closed: model-resolver throws unless a super
+  // admin (or scripts/add-whitespace-stages.js) has mapped a model to this exact
+  // plan + stage. Fall back to task-only routing so the module works on a fresh
+  // install, exactly as Prior-Art Studio does for its query generator.
+  let output: string | undefined
+  let modelCode: string | undefined
+  let usedFallbackTask = false
+
+  const stageAttempt = await llmGateway.executeLLMOperation(
     { headers: input.requestHeaders },
     { taskCode: TaskCode.WS_SCOPE, stageCode: WS_SCOPE_STAGE_CODE, prompt }
   )
-  if (!attempt.success || !attempt.response?.output) {
-    throw new Error(attempt.error?.message || 'Scope compiler is unavailable. Try again.')
+  if (stageAttempt.success && stageAttempt.response?.output) {
+    output = stageAttempt.response.output
+    modelCode = stageAttempt.response.metadata?.model || stageAttempt.response.modelClass
+  } else {
+    usedFallbackTask = true
+    const taskAttempt = await llmGateway.executeLLMOperation(
+      { headers: input.requestHeaders },
+      { taskCode: TaskCode.WS_SCOPE, prompt }
+    )
+    if (!taskAttempt.success || !taskAttempt.response?.output) {
+      // Both paths failed — surface the task-level error, which is the one that
+      // reflects plan entitlement rather than missing stage configuration.
+      throw new Error(
+        taskAttempt.error?.message || stageAttempt.error?.message || 'Scope compiler is unavailable. Try again.'
+      )
+    }
+    output = taskAttempt.response.output
+    modelCode = taskAttempt.response.metadata?.model || taskAttempt.response.modelClass
+  }
+  if (usedFallbackTask) {
+    console.warn(
+      `[Whitespace] Stage ${WS_SCOPE_STAGE_CODE} is not configured for this plan — used task-only routing. Run scripts/add-whitespace-stages.js to enable per-stage model control.`
+    )
   }
 
-  const jsonText = extractBalancedJson(attempt.response.output)
+  const jsonText = extractBalancedJson(output)
   if (!jsonText) throw new Error('Scope compiler returned no JSON.')
 
   let parsed: Record<string, unknown>
@@ -216,10 +245,7 @@ export async function compileScope(input: {
 
   if (!scope.concepts.length) throw new Error('Scope compiler produced no usable concepts.')
 
-  return {
-    scope: normalizeScope(scope),
-    modelCode: attempt.response.metadata?.model || attempt.response.modelClass,
-  }
+  return { scope: normalizeScope(scope), modelCode }
 }
 
 // ---------------------------------------------------------------------------
