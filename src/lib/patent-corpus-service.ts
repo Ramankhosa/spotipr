@@ -1631,6 +1631,71 @@ export async function deletePatentImportFileStoredPdf(batchId: string, fileId: s
   }
 }
 
+const STORED_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_PDF_RETENTION_DAYS || '30') || 30)
+
+/**
+ * Deletes journal PDFs whose extraction finished more than
+ * STORED_PDF_RETENTION_DAYS ago. Only the file on disk goes away: extracted
+ * LocalPatent rows and their embeddings are never touched, and embeddings can
+ * still be requeued afterwards because they are rebuilt from embeddingText /
+ * ragText in the database rather than from the PDF. Rerunning extraction does
+ * need the PDF, so a cleaned file has to be uploaded again for that.
+ *
+ * storedPath is cleared once the file is gone. That keeps this scan moving
+ * forward -- a row it already handled stops matching -- and makes
+ * patentImportFileStoredFileExists report the PDF as deleted in the UI.
+ */
+export async function cleanupOldStoredPdfs(limit = 50) {
+  const cutoff = new Date(Date.now() - STORED_PDF_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+
+  const files = await (prisma as any).patentImportFile.findMany({
+    where: {
+      status: { in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS'] },
+      completedAt: { lt: cutoff },
+      storedPath: { not: '' },
+      // Never pull the PDF out from under embedding work that is still running.
+      extractedPatents: {
+        none: { embeddings: { some: { status: { in: ['QUEUED', 'PROCESSING'] } } } },
+      },
+    },
+    orderBy: { completedAt: 'asc' },
+    select: { id: true, storedPath: true },
+    take: limit,
+  })
+
+  let deleted = 0
+  for (const file of files) {
+    try {
+      await fs.unlink(file.storedPath)
+      deleted++
+    } catch (error) {
+      // ENOENT means it is already gone; fall through so the row still gets
+      // cleared and stops being rescanned on every idle tick.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`[PatentCorpus] Failed to delete stored PDF ${file.storedPath}:`, error)
+        continue
+      }
+    }
+
+    await (prisma as any).patentImportFile.update({
+      where: { id: file.id },
+      data: { storedPath: '' },
+    })
+    // The IP India archive row points at the same file on disk, so it must not
+    // keep advertising a path that no longer exists.
+    await (prisma as any).ipIndiaJournalFile.updateMany({
+      where: { patentImportFileId: file.id },
+      data: { storedPath: null },
+    })
+  }
+
+  if (deleted > 0) {
+    console.info(`[PatentCorpus] Cleaned up ${deleted} stored PDF(s) older than ${STORED_PDF_RETENTION_DAYS} days`)
+  }
+
+  return { checked: files.length, deleted }
+}
+
 export async function deletePatentImportFileExtractions(batchId: string, fileId: string) {
   const file = await (prisma as any).patentImportFile.findFirst({
     where: { id: fileId, batchId },

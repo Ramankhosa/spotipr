@@ -27,7 +27,11 @@ const GENERATED_FIGURE_LIMIT = 900
 // When the user leaves the figure count on Auto, the plan is capped at this
 // many base figures. The prompt asks for it too, but the model is not trusted
 // to comply — excess figures are dropped from the tail of the plan.
-const AUTO_MODE_FIGURE_LIMIT = 5
+//
+// Because automatic decomposition no longer runs in the generate/add paths
+// (one planned figure renders as exactly one sheet), this is also the hard
+// ceiling on rendered figures in auto mode.
+const AUTO_MODE_FIGURE_LIMIT = 6
 
 export class PatentDiagramPipelineError extends Error {
   status: number
@@ -256,18 +260,19 @@ async function detailManagedFigure(input: {
     existingDiagram: input.existingDiagram,
     instructions: input.pipeline.instructions,
   })
-  // UNGROUNDED_STEP is a warning in the base validator so figures persisted
-  // before the anchoring rule still translate and re-render, but a NEW
-  // generation must anchor every process step to the Component Planner — an
-  // unanchored step is the signature of an invented one, so here it blocks
-  // and re-prompts the model like any other defect.
+  // Grounding findings are warnings in the base validator so figures persisted
+  // before these rules still translate and re-render, but a NEW generation must
+  // anchor every process step to the Component Planner and cite the disclosure
+  // it paraphrases. Both are the signature of an invented step, so here they
+  // block and re-prompt the model like any other defect.
+  const GROUNDING_CODES = ['UNGROUNDED_STEP', 'UNCITED_STEP', 'UNKNOWN_STEP_EVIDENCE']
   const blocksGeneration = (issue: { severity: string; code: string }) =>
-    (issue.severity === 'error' || issue.code === 'UNGROUNDED_STEP') && issue.code !== 'SPLIT_REQUIRED'
+    (issue.severity === 'error' || GROUNDING_CODES.includes(issue.code)) && issue.code !== 'SPLIT_REQUIRED'
   // Validate what the pipeline will actually build. Re-prompting the model for
   // a defect the normalizer repairs anyway wastes a call and can fail the
   // figure outright when the retry reproduces it.
   const constrainedDiagramSchema = (enforceDensityBudget: boolean) => patentDiagramSchema.superRefine((value, ctx) => {
-    const { diagram } = normalizePatentDiagram(value, input.context.components)
+    const { diagram } = normalizePatentDiagram(value, input.context.components, input.context.supportedEvidenceIds)
     validatePatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds).issues
       .filter(issue => blocksGeneration(issue) || (enforceDensityBudget && issue.code === 'SPLIT_REQUIRED'))
       .forEach(issue => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${issue.code}: ${issue.message}` }))
@@ -570,16 +575,17 @@ function decomposeForResolvedPolicy(diagram: PatentDiagram, policy: Awaited<Retu
   return decomposePatentDiagram(diagram, !!limit && visibleElementCount(diagram) > limit)
 }
 
-// Decomposition runs before figures reach the builder, so a residual
-// SPLIT_REQUIRED means the decomposer could not reduce that dimension further
-// (e.g. process branch depth, which chunking by node count cannot change).
-// The detail stage already tolerates SPLIT_REQUIRED for the same reason;
-// failing the whole set here instead would block otherwise valid figures.
+// A residual SPLIT_REQUIRED means the detail stage's density budget could not
+// persuade the model to draw a figure that fits (e.g. process branch depth,
+// which shedding nodes cannot change). The figure ships as one dense sheet
+// with a review warning rather than being split automatically — automatic
+// splitting is what turned a 4-figure plan into 10 sheets. The user splits the
+// figures they choose via Modify, which proposes a split and asks to approve.
 function relaxResidualSplitIssues(built: BuiltPatentDiagram[]) {
   for (const figure of built) {
     figure.validation.issues = figure.validation.issues.map(issue =>
       issue.code === 'SPLIT_REQUIRED' && issue.severity === 'error'
-        ? { ...issue, severity: 'warning' as const, message: `${issue.message} (automatic decomposition could not reduce this further; review the figure manually)` }
+        ? { ...issue, severity: 'warning' as const, message: `${issue.message} — this figure is denser than the filing guideline. Use Modify on it and approve the proposed split to divide it.` }
         : issue)
     figure.validation.filingReady = !figure.validation.issues.some(issue => issue.severity === 'error')
   }
@@ -593,29 +599,25 @@ function assertBuiltFigures(built: BuiltPatentDiagram[], message: string) {
   if (invalid.length) throw new PatentDiagramPipelineError(message, 422, invalid)
 }
 
-// Keys minted by decomposePatentDiagram. A figure that already came out of a
-// split must not be split again: the policy decomposition in the caller plus an
-// adaptive re-split compounded, turning a 3-figure plan into 33 figures.
-const DECOMPOSITION_KEY_SUFFIX = /-(overview|detail|interface|phase|transition|group|association)(-\d+)?$/i
-
-function isDecompositionProduct(diagram: PatentDiagram): boolean {
-  return DECOMPOSITION_KEY_SUFFIX.test(diagram.key)
-}
-
-// Page-fit shortfalls drive one automatic decomposition attempt; if the split
-// cannot help (or already happened), the figure ships with a review warning
-// instead of hard-failing generation — ordinary 3-4 column diagrams routinely
-// scale a little below the printed minimum.
+// A page-fit shortfall ships with a review warning rather than hard-failing:
+// ordinary 3-4 column diagrams routinely scale a little below the printed
+// minimum. Automatic splitting is deliberately NOT the response — it is what
+// turned a 4-figure plan into 10 sheets. The user splits the figures they
+// choose through the approve-split flow in regenerateManagedFigure.
 function softenPageFitIssues(builtFigures: BuiltPatentDiagram[]) {
   for (const figure of builtFigures) {
     figure.validation.issues = figure.validation.issues.map(issue =>
       issue.code === 'PAGE_FIT_MINIMUM_TEXT' && issue.severity === 'error'
-        ? { ...issue, severity: 'warning' as const, message: `${issue.message}. Split the figure manually if full filing-scale text is required.` }
+        ? { ...issue, severity: 'warning' as const, message: `${issue.message}. Use Modify on this figure and approve the proposed split if full filing-scale text is required.` }
         : issue)
     figure.validation.filingReady = !figure.validation.issues.some(issue => issue.severity === 'error')
   }
 }
 
+// One diagram in, one rendered sheet out. Nothing here may change the figure
+// count: the auto-mode ceiling holds by construction rather than by discarding
+// content, and regenerateManagedFigure's allocateFigureNumbers throws a 409 if
+// the count ever shifts underneath it.
 async function buildAndRenderAdaptive(input: {
   patentId: string
   diagrams: PatentDiagram[]
@@ -624,31 +626,10 @@ async function buildAndRenderAdaptive(input: {
   pagePolicy: Awaited<ReturnType<typeof resolveDiagramPagePolicy>>
   allocateFigureNumbers?: (count: number) => number[]
 }) {
-  let diagrams = input.diagrams
-  let built = diagrams.map(diagram => buildPatentDiagram(diagram, input.components, input.supportedEvidenceIds))
+  const built = input.diagrams.map(diagram => buildPatentDiagram(diagram, input.components, input.supportedEvidenceIds))
   assertBuiltFigures(built, 'Generated figure set is not filing-ready')
-  let numbers = input.allocateFigureNumbers?.(built.length)
-  let rendered = await renderManagedFigures(input.patentId, built, numbers, input.pagePolicy)
-  // Only a genuine page-fit failure (text scaled below the filing minimum)
-  // justifies an automatic split: splitting reliably enlarges the text.
-  // Aesthetic findings (SIBLING_DIMENSION_VARIANCE, BAND_ASPECT) used to
-  // trigger this too, which routinely fanned a 4-5 figure plan out into 10-15
-  // sheets without fixing the variance — Graphviz sizes boxes by label width
-  // regardless of how few components share the figure. Those stay warnings.
-  const pageFitFailures = new Set(rendered
-    .map((figure, index) => figure.built.validation.issues.some(issue => issue.code === 'PAGE_FIT_MINIMUM_TEXT')
-      && !isDecompositionProduct(diagrams[index]) ? index : -1)
-    .filter(index => index >= 0))
-  if (pageFitFailures.size) {
-    const expanded = diagrams.flatMap((diagram, index) => pageFitFailures.has(index) ? decomposePatentDiagram(diagram, true) : [diagram])
-    if (expanded.length > diagrams.length) {
-      diagrams = expanded
-      built = diagrams.map(diagram => buildPatentDiagram(diagram, input.components, input.supportedEvidenceIds))
-      assertBuiltFigures(built, 'Page-fit decomposition is not filing-ready')
-      numbers = input.allocateFigureNumbers?.(built.length)
-      rendered = await renderManagedFigures(input.patentId, built, numbers, input.pagePolicy)
-    }
-  }
+  const numbers = input.allocateFigureNumbers?.(built.length)
+  const rendered = await renderManagedFigures(input.patentId, built, numbers, input.pagePolicy)
   softenPageFitIssues(rendered.map(figure => figure.built))
   const renderedInvalid = rendered.flatMap(figure => figure.built.validation.issues.filter(issue => issue.severity === 'error'))
   if (renderedInvalid.length) throw new PatentDiagramPipelineError('Rendered figure set is not filing-ready', 422, renderedInvalid)
@@ -668,15 +649,24 @@ export async function generateManagedFigureSet(
   const plan = input.plan
     || (parsedStoredPlan?.success ? parsedStoredPlan.data : await planManagedFigureSet(input))
   assertPlanComponentIds(plan, context.components)
+  // A stored plan predates the auto cap, so re-clamp it here too.
+  if (!input.figureCount && plan.figures.length > AUTO_MODE_FIGURE_LIMIT) {
+    plan.figures = plan.figures.slice(0, AUTO_MODE_FIGURE_LIMIT)
+  }
   const detailed = await mapWithConcurrency(plan.figures, 2, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input }))
-  const decomposed = detailed.flatMap(diagram => decomposeForResolvedPolicy(diagram, context.pagePolicy))
   const rendered = await buildAndRenderAdaptive({
     patentId: input.patentId,
-    diagrams: decomposed,
+    diagrams: detailed,
     components: context.components,
     supportedEvidenceIds: context.supportedEvidenceIds,
     pagePolicy: context.pagePolicy,
   })
+  // Tripwire: nothing between planning and rendering may multiply figures any
+  // more. If fan-out is ever reintroduced, fail loudly instead of silently
+  // shipping 10-15 sheets again.
+  if (!input.figureCount && rendered.length > AUTO_MODE_FIGURE_LIMIT) {
+    throw new PatentDiagramPipelineError(`Auto mode produced ${rendered.length} figures, above the ${AUTO_MODE_FIGURE_LIMIT}-figure ceiling`, 500)
+  }
   const saved = await persistManagedFigureSet(input, context.referenceMapChecksum, rendered, { replace: true })
   return {
     plan,
@@ -699,10 +689,24 @@ export async function addManagedFigures(
   const context = await loadPipelineContext(input.userId, input.patentId, input.sessionId)
   const plan = input.plan || await planManagedFigureSet(input)
   assertPlanComponentIds(plan, context.components)
-  const detailed = await mapWithConcurrency(plan.figures, 2, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input }))
-  const diagrams = detailed.flatMap(diagram => decomposeForResolvedPolicy(diagram, context.pagePolicy))
-
   const occupied = new Set(context.session.figurePlans.map(figure => figure.figureNo))
+  // Auto mode caps the whole session, not each call: appending twice used to
+  // stack two full sets and reach 12 figures. An explicit figureCount is a
+  // deliberate user request (add-one-figure, add-from-instructions) and is
+  // never clamped.
+  if (!input.figureCount) {
+    const existing = Array.from(occupied).filter(value => value < GENERATED_FIGURE_LIMIT).length
+    const headroom = AUTO_MODE_FIGURE_LIMIT - existing
+    if (headroom <= 0) {
+      throw new PatentDiagramPipelineError(
+        `This session already has ${existing} generated figures, the maximum for automatic generation. Replace the existing figures, or delete one before adding another.`,
+        409,
+      )
+    }
+    if (plan.figures.length > headroom) plan.figures = plan.figures.slice(0, headroom)
+  }
+  const detailed = await mapWithConcurrency(plan.figures, 2, planItem => detailManagedFigure({ plan: planItem, context, pipeline: input }))
+
   const allocateFigureNumbers = (count: number) => {
     const used = new Set(occupied)
     const figureNumbers: number[] = []
@@ -717,7 +721,7 @@ export async function addManagedFigures(
   }
   const rendered = await buildAndRenderAdaptive({
     patentId: input.patentId,
-    diagrams,
+    diagrams: detailed,
     components: context.components,
     supportedEvidenceIds: context.supportedEvidenceIds,
     pagePolicy: context.pagePolicy,

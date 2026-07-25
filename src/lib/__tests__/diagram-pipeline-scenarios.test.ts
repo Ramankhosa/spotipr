@@ -29,10 +29,23 @@ const COMPONENTS = [
   })),
 ]
 
+// The disclosed method steps. These become SF-processSteps-N evidence IDs and
+// are the only record of disclosed OPERATIONS the figure model sees - the
+// Component Planner registry is components (nouns) only.
+const DISCLOSED_PROCESS_STEPS = [
+  'Measure volumetric water content of the root zone',
+  'Receive forecast precipitation from the weather data interface',
+  'Compare measured moisture against a configured threshold',
+  'Derive a watering window from moisture and forecast',
+  'Open the supply valve for the derived window',
+  'Measure delivered water volume with the flow meter',
+]
+
 const IDEA = {
   title: 'Adaptive Soil-Moisture Irrigation Control System',
   problemStatement: 'Fixed-interval irrigation over-waters when rainfall is imminent.',
   solutionSummary: 'A controller fuses soil moisture with forecast precipitation to derive watering windows and verifies delivery with a flow meter.',
+  sourceFactLedger: { processSteps: DISCLOSED_PROCESS_STEPS },
   claimsStructuredFinal: [
     { number: 1, text: 'An irrigation control system comprising a soil moisture sensor, a weather data interface, and an irrigation controller configured to derive a watering window.' },
     { number: 2, text: 'The system of claim 1, further comprising a flow meter verifying a delivered water volume.' },
@@ -108,6 +121,8 @@ const txClient = {
 }
 
 let existingFigurePlans: any[] = []
+/** Lets a test swap the normalized idea (e.g. to drop the fact ledger). */
+let ideaOverride: any = null
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -121,7 +136,7 @@ vi.mock('@/lib/prisma', () => ({
         draftingJurisdictions: ['US'],
         aiAnalysisData: null,
         referenceMap: { isValid: true, components: COMPONENTS },
-        ideaRecord: { title: IDEA.title, normalizedData: IDEA },
+        ideaRecord: { title: IDEA.title, normalizedData: ideaOverride || IDEA },
         figurePlans: existingFigurePlans,
         diagramSources: [],
       })),
@@ -167,17 +182,17 @@ const componentDetail = (key: string) => JSON.stringify({
   ],
 })
 
-/** A flowchart whose steps are all anchored to the Component Planner. */
+/** A flowchart anchored to the Component Planner AND cited to the disclosure. */
 const groundedProcess = (key: string) => JSON.stringify({
   schemaVersion: 1, kind: 'PROCESS', key, title: 'Irrigation Control Method', purpose: 'Show the disclosed control method',
-  detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c3'], evidenceIds: [],
+  detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c3'], evidenceIds: ['SF-processSteps-1'],
   nodes: [
-    { key: 'measure', kind: 'STEP', componentId: 'c1', label: 'Measure soil moisture' },
-    { key: 'receive', kind: 'STEP', componentId: 'c2', label: 'Receive forecast precipitation' },
-    { key: 'below', kind: 'DECISION', componentId: 'c3', label: 'Moisture below threshold' },
-    { key: 'derive', kind: 'STEP', componentId: 'c7', label: 'Derive watering window' },
-    { key: 'open', kind: 'STEP', componentId: 'c4', label: 'Open supply valve' },
-    { key: 'verify', kind: 'STEP', componentId: 'c5', label: 'Verify delivered volume' },
+    { key: 'measure', kind: 'STEP', componentId: 'c1', label: 'Measure soil moisture', evidenceIds: ['SF-processSteps-1'] },
+    { key: 'receive', kind: 'STEP', componentId: 'c2', label: 'Receive forecast precipitation', evidenceIds: ['SF-processSteps-2'] },
+    { key: 'below', kind: 'DECISION', componentId: 'c3', label: 'Moisture below threshold', evidenceIds: ['SF-processSteps-3'] },
+    { key: 'derive', kind: 'STEP', componentId: 'c7', label: 'Derive watering window', evidenceIds: ['SF-processSteps-4'] },
+    { key: 'open', kind: 'STEP', componentId: 'c4', label: 'Open supply valve', evidenceIds: ['SF-processSteps-5'] },
+    { key: 'verify', kind: 'STEP', componentId: 'c5', label: 'Verify delivered volume', evidenceIds: ['SF-processSteps-6'] },
   ],
   transitions: [
     { fromId: 'measure', toId: 'below', label: '', category: 'PRIMARY' },
@@ -234,12 +249,13 @@ beforeEach(async () => {
   db.sessionUpdates = []
   db.deleteManyCalls = []
   existingFigurePlans = []
+  ideaOverride = null
   planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
   detailResponder = call => componentDetail(String(call.metadata?.figureKey || 'figure-1'))
 })
 
 describe('auto-mode figure cap', () => {
-  test('caps an over-eager 8-figure auto plan at 5 and details only those 5', async () => {
+  test('caps an over-eager 8-figure auto plan at 6 and details only those 6', async () => {
     planResponder = () => JSON.stringify({
       schemaVersion: 1,
       figures: Array.from({ length: 8 }, (_, index) => planFigure(index + 1)),
@@ -247,12 +263,12 @@ describe('auto-mode figure cap', () => {
 
     const result = await generateManagedFigureSet({ ...INPUT })
 
-    expect(result.plan.figures).toHaveLength(5)
-    expect(result.figures).toHaveLength(5)
-    expect(result.figures.map(f => f.figureNo)).toEqual([1, 2, 3, 4, 5])
+    expect(result.plan.figures).toHaveLength(6)
+    expect(result.figures).toHaveLength(6)
+    expect(result.figures.map(f => f.figureNo)).toEqual([1, 2, 3, 4, 5, 6])
     // The cap must apply BEFORE detailing, or the extra figures still cost LLM calls.
-    expect(llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(5)
-    expect(db.figurePlans).toHaveLength(5)
+    expect(llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(6)
+    expect(db.figurePlans).toHaveLength(6)
   })
 
   test('an explicit user count is respected and not capped', async () => {
@@ -264,11 +280,14 @@ describe('auto-mode figure cap', () => {
     expect(plan.figures).toHaveLength(7)
   })
 
-  test('the auto-mode prompt states the 5-figure ceiling', async () => {
+  test('the auto-mode prompt states the 6-figure ceiling', async () => {
     await planManagedFigureSet({ ...INPUT })
     const prompt = llmCalls.find(c => c.stageCode === 'DRAFT_FIGURE_PLANNER')!.prompt
-    expect(prompt).toContain('never more than 5 figures')
+    expect(prompt).toContain('never more than 6 figures')
     expect(prompt).not.toContain('2 to 6 figures')
+    // The model must know a figure is never split for it, or it keeps
+    // overloading figures on the assumption the server will tidy up.
+    expect(prompt).toContain('rendered as exactly one sheet')
   })
 })
 
@@ -308,9 +327,115 @@ describe('ungrounded flowchart steps', () => {
     detailResponder = () => groundedProcess('method')
     await generateManagedFigureSet({ ...INPUT })
     const prompt = llmCalls.find(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')!.prompt
-    expect(prompt).toContain('MUST be anchored to the Component Planner registry')
-    expect(prompt).toContain('it is not part of this invention — omit it')
+    expect(prompt).toContain('PROCESS GROUNDING CONTRACT')
+    expect(prompt).toContain('Every STEP must set componentId')
+    expect(prompt).toContain('relatedComponentIds alone is not sufficient for a STEP')
+    expect(prompt).toContain('A step you cannot cite is not disclosed by this invention')
     expect(prompt).not.toContain('optional component ID')
+  })
+})
+
+describe('step citation grounding', () => {
+  const processPlan = () => JSON.stringify({ schemaVersion: 1, figures: [{ ...planFigure(1), kind: 'PROCESS', key: 'method' }] })
+
+  /** Real component IDs, plausible verbs, no citation — the actual failure mode. */
+  const uncitedProcess = (key: string) => JSON.stringify({
+    schemaVersion: 1, kind: 'PROCESS', key, title: 'Irrigation Control Method', purpose: 'Show the disclosed control method',
+    detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: ['c3'], evidenceIds: [],
+    nodes: [
+      { key: 'measure', kind: 'STEP', componentId: 'c1', label: 'Measure soil moisture' },
+      { key: 'calibrate', kind: 'STEP', componentId: 'c5', label: 'Calibrate flow meter monthly' },
+      { key: 'below', kind: 'DECISION', componentId: 'c3', label: 'Moisture below threshold' },
+      { key: 'open', kind: 'STEP', componentId: 'c4', label: 'Open supply valve' },
+    ],
+    transitions: [
+      { fromId: 'measure', toId: 'calibrate', label: '', category: 'PRIMARY' },
+      { fromId: 'calibrate', toId: 'below', label: '', category: 'PRIMARY' },
+      { fromId: 'below', toId: 'open', label: 'yes', category: 'PRIMARY' },
+    ],
+  })
+
+  test('blocks a step that names a real component but cites no disclosure', async () => {
+    planResponder = processPlan
+    detailResponder = (call, attempt) => attempt === 1
+      ? uncitedProcess('method')
+      : groundedProcess('method')
+
+    const result = await generateManagedFigureSet({ ...INPUT })
+
+    const detailCalls = llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')
+    expect(detailCalls).toHaveLength(2)
+    // The retry must name the offending steps, not just the rule.
+    expect(detailCalls[1].prompt).toContain('UNCITED_STEP')
+    expect(detailCalls[1].prompt).toContain('Calibrate flow meter monthly')
+    expect(result.figures[0].validation.filingReady).toBe(true)
+  })
+
+  test('blocks a STEP anchored only via relatedComponentIds', async () => {
+    planResponder = processPlan
+    detailResponder = (call, attempt) => attempt === 1
+      ? JSON.stringify({
+        schemaVersion: 1, kind: 'PROCESS', key: 'method', title: 'M', purpose: 'P',
+        detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], evidenceIds: [],
+        nodes: [
+          { key: 'a', kind: 'STEP', relatedComponentIds: ['c1'], label: 'Aggregate telemetry centrally', evidenceIds: ['SF-processSteps-1'] },
+          { key: 'b', kind: 'STEP', componentId: 'c4', label: 'Open supply valve', evidenceIds: ['SF-processSteps-5'] },
+        ],
+        transitions: [{ fromId: 'a', toId: 'b', label: '', category: 'PRIMARY' }],
+      })
+      : groundedProcess('method')
+
+    await generateManagedFigureSet({ ...INPUT })
+
+    const retry = llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')[1]
+    expect(retry.prompt).toContain('UNGROUNDED_STEP')
+    expect(retry.prompt).toContain('Aggregate telemetry centrally')
+  })
+
+  test('strips an invented citation instead of laundering it, and reports it', async () => {
+    planResponder = processPlan
+    detailResponder = (call, attempt) => attempt === 1
+      ? JSON.stringify({
+        schemaVersion: 1, kind: 'PROCESS', key: 'method', title: 'M', purpose: 'P',
+        detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], evidenceIds: [],
+        nodes: [
+          { key: 'a', kind: 'STEP', componentId: 'c1', label: 'Measure soil moisture', evidenceIds: ['SF-invented-99'] },
+          { key: 'b', kind: 'STEP', componentId: 'c4', label: 'Open supply valve', evidenceIds: ['SF-processSteps-5'] },
+        ],
+        transitions: [{ fromId: 'a', toId: 'b', label: '', category: 'PRIMARY' }],
+      })
+      : groundedProcess('method')
+
+    await generateManagedFigureSet({ ...INPUT })
+
+    // Normalization removes the unknown ID, which leaves the step uncited —
+    // it must not silently pass as grounded.
+    const retry = llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')[1]
+    expect(retry.prompt).toContain('UNCITED_STEP')
+  })
+
+  test('the detail prompt leads with the disclosed method steps as the vocabulary', async () => {
+    planResponder = processPlan
+    detailResponder = () => groundedProcess('method')
+    await generateManagedFigureSet({ ...INPUT })
+    const prompt = llmCalls.find(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')!.prompt
+    expect(prompt).toContain('DISCLOSED METHOD STEPS (preferred step vocabulary)')
+    expect(prompt).toContain('SF-processSteps-1: Measure volumetric water content of the root zone')
+    // Reference signs must be visible so the builder can promote S-numbers.
+    expect(prompt).toContain('ref=100')
+  })
+
+  test('a session with no disclosure ledger still generates flowcharts', async () => {
+    ideaOverride = { ...IDEA, sourceFactLedger: undefined }
+    planResponder = processPlan
+    // No node-level evidenceIds anywhere, and nothing to cite against.
+    detailResponder = () => uncitedProcess('method').replace('Calibrate flow meter monthly', 'Receive forecast precipitation')
+
+    const result = await generateManagedFigureSet({ ...INPUT })
+
+    expect(llmCalls.filter(c => c.stageCode === 'DRAFT_DIAGRAM_GENERATION')).toHaveLength(1)
+    expect(result.figures).toHaveLength(1)
+    expect(result.figures[0].validation.filingReady).toBe(true)
   })
 })
 
@@ -329,7 +454,7 @@ describe('interrupted-run retry behaviour', () => {
     expect(db.figurePlans).toHaveLength(4)
   })
 
-  test('append path is what produced 10+ figures, and still numbers after the survivors', async () => {
+  test('append path is clamped to the session-wide ceiling instead of stacking a second set', async () => {
     existingFigurePlans = [1, 2, 3, 4, 5].map(figureNo => ({ figureNo, id: `plan-${figureNo}` }))
     planResponder = () => JSON.stringify({
       schemaVersion: 1, figures: Array.from({ length: 5 }, (_, index) => planFigure(index + 1)),
@@ -338,7 +463,27 @@ describe('interrupted-run retry behaviour', () => {
     const result = await addManagedFigures({ ...INPUT })
 
     expect(db.deleteManyCalls).toEqual([])
-    expect(result.figures.map(f => f.figureNo)).toEqual([6, 7, 8, 9, 10])
+    // 5 already exist, so only 1 slot remains — appending used to add all 5
+    // and reach 10, which is how the reported session got there.
+    expect(result.plan.figures).toHaveLength(1)
+    expect(result.figures.map(f => f.figureNo)).toEqual([6])
+  })
+
+  test('append refuses once the session is already at the ceiling', async () => {
+    existingFigurePlans = [1, 2, 3, 4, 5, 6].map(figureNo => ({ figureNo, id: `plan-${figureNo}` }))
+    planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
+
+    await expect(addManagedFigures({ ...INPUT })).rejects.toThrow(/maximum for automatic generation/i)
+    expect(db.figurePlans).toHaveLength(0)
+  })
+
+  test('an explicit figure count still appends past the auto ceiling', async () => {
+    existingFigurePlans = [1, 2, 3, 4, 5, 6].map(figureNo => ({ figureNo, id: `plan-${figureNo}` }))
+    planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
+
+    // "Add a figure" / "add from instructions" are deliberate user requests.
+    const result = await addManagedFigures({ ...INPUT, figureCount: 1 })
+    expect(result.figures.map(f => f.figureNo)).toEqual([7])
   })
 })
 
@@ -389,7 +534,7 @@ describe('figure-count inflation after the plan is capped', () => {
     expect(result.figures).toHaveLength(5)
   })
 
-  test('falls back to decomposition when the model cannot meet the budget', async () => {
+  test('ships one dense sheet with a review warning instead of fanning out', async () => {
     planResponder = () => JSON.stringify({ schemaVersion: 1, figures: [planFigure(1)] })
     detailResponder = call => denseComponent(String(call.metadata?.figureKey || 'figure-1'))
 
@@ -400,8 +545,17 @@ describe('figure-count inflation after the plan is capped', () => {
     // Strict pass burns both attempts, then the tolerant pass accepts the
     // dense figure so no disclosed content is lost.
     expect(detailCalls.map(c => c.metadata.densityBudget)).toEqual(['enforced', 'enforced', 'relaxed'])
-    expect(result.figures.length).toBeGreaterThan(1)
-    result.figures.forEach(figure => expect(figure.validation.filingReady).toBe(true))
+    // One planned figure is one sheet, always. This used to decompose into an
+    // overview plus detail and interface sheets.
+    expect(result.figures).toHaveLength(1)
+    expect(result.figures[0].title).not.toMatch(/Overview|Detail|Interface/)
+    // The user has to be able to see that it shipped dense, or the ceiling is
+    // just silent degradation.
+    const codes = result.figures[0].validation.issues.map(i => `${i.severity}:${i.code}`)
+    expect(codes).toContain('warning:SPLIT_REQUIRED')
+    expect(result.figures[0].validation.filingReady).toBe(true)
+    expect(result.figures[0].validation.issues.find(i => i.code === 'SPLIT_REQUIRED')?.message)
+      .toMatch(/approve the proposed split/i)
   })
 
   test('aesthetic layout warnings no longer trigger an extra decomposition pass', async () => {

@@ -97,9 +97,16 @@ describe('deterministic patent diagram builders', () => {
     expect(built.plantumlCode).toContain(`${alias('c1')} -right[hidden]-> ${alias('c2')}`)
     expect(built.plantumlCode).toContain(`${alias('c5')} -down[hidden]-> ${alias('c7')}`)
     expect(visiblePlantUml).toContain('Technical Component\\n1\\n(100)')
-    expect(built.plantumlCode).toContain(`${alias('c1')} -down-> ${alias('c5')} : technical features`)
-    expect(built.plantumlCode).toContain(`${alias('c8')} -[norank,dashed]-> ${alias('c2')} : review feedback`)
+    // Block-diagram connectors render unlabelled: Graphviz drops edge labels at
+    // edge midpoints with no collision avoidance, so they landed on top of the
+    // component boxes.
+    expect(built.plantumlCode).toMatch(new RegExp(`^${alias('c1')} -down-> ${alias('c5')}$`, 'm'))
+    expect(built.plantumlCode).toMatch(new RegExp(`^${alias('c8')} -\\[norank,dashed\\]-> ${alias('c2')}$`, 'm'))
+    expect(built.plantumlCode).not.toContain('technical features')
+    expect(built.plantumlCode).not.toContain('review feedback')
+    // Suppression is render-only — the written description still needs the text.
     expect(built.edges).toHaveLength(2)
+    expect(built.edges.map((edge: any) => edge.label)).toEqual(['technical features', 'review feedback'])
   })
 
   test('builds sequence diagrams without actors or implementation decoration', () => {
@@ -163,7 +170,9 @@ describe('deterministic patent diagram builders', () => {
     const aliases = Object.entries(builtConstituent.labelMap)
     const c1Alias = aliases.find(([, id]) => id === 'c1')?.[0]
     const c2Alias = aliases.find(([, id]) => id === 'c2')?.[0]
-    expect(builtConstituent.plantumlCode).toContain(`${c1Alias} -- ${c2Alias} : combined with`)
+    expect(builtConstituent.plantumlCode).toMatch(new RegExp(`^${c1Alias} -- ${c2Alias}$`, 'm'))
+    expect(builtConstituent.plantumlCode).not.toContain('combined with')
+    expect(builtConstituent.edges.map((edge: any) => edge.label)).toEqual(['combined with'])
   })
 })
 
@@ -276,10 +285,44 @@ describe('deterministic normalization before validation', () => {
     // removal and validation flags the now-unanchored step for the generation
     // path to block.
     expect(built.validation.corrections).toContain('Removed unknown component reference invented-component from step ghost')
+    // Backward compatibility: a figure persisted before per-step citation
+    // existed has no evidenceIds and must still build and render.
+    expect(built.validation.issues.some(issue => issue.code === 'UNCITED_STEP')).toBe(false)
     const ungrounded = built.validation.issues.filter(issue => issue.code === 'UNGROUNDED_STEP')
     expect(ungrounded).toHaveLength(1)
     expect(ungrounded[0].severity).toBe('warning')
     expect(built.validation.issues.some(issue => issue.code === 'UNKNOWN_COMPONENT')).toBe(false)
+  })
+
+  test('citation checks stay warnings and only run when a catalog exists', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 1, kind: 'PROCESS', key: 'cite', title: 'Process', purpose: 'Citation fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [], evidenceIds: ['SF-processSteps-1'],
+      nodes: [
+        { key: 'cited', kind: 'STEP', componentId: 'c1', label: 'Perform disclosed operation', evidenceIds: ['SF-processSteps-1'] },
+        { key: 'uncited', kind: 'STEP', componentId: 'c2', label: 'Perform undisclosed operation' },
+        { key: 'bogus', kind: 'STEP', componentId: 'c3', label: 'Perform third operation', evidenceIds: ['SF-made-up-7'] },
+      ],
+      transitions: [
+        { fromId: 'cited', toId: 'uncited', label: '', category: 'PRIMARY' },
+        { fromId: 'uncited', toId: 'bogus', label: '', category: 'PRIMARY' },
+      ],
+    })
+    const catalog = new Set(['SF-processSteps-1'])
+    const built = buildPatentDiagram(diagram, components, catalog)
+
+    const codes = built.validation.issues.map(issue => `${issue.severity}:${issue.code}`)
+    expect(codes).toContain('warning:UNCITED_STEP')
+    // The invented ID is stripped by normalization, which leaves that step
+    // uncited rather than silently accepted.
+    expect(built.validation.corrections).toContain('Removed unrecognized disclosure evidence SF-made-up-7 from step bogus')
+    expect(built.validation.issues.filter(issue => issue.code === 'UNCITED_STEP')).toHaveLength(2)
+    // Warnings only: persisted figures must keep rendering, translating and exporting.
+    expect(built.validation.filingReady).toBe(true)
+
+    // With no catalog the gate is inert.
+    const withoutCatalog = buildPatentDiagram(diagram, components)
+    expect(withoutCatalog.validation.issues.some(issue => issue.code === 'UNCITED_STEP')).toBe(false)
   })
 
   test('treats disclosure evidence gaps as review notes, not blockers', () => {

@@ -10,7 +10,7 @@ skinparam ArrowColor #000000
 skinparam ArrowThickness 1.1
 skinparam linetype ortho
 skinparam nodesep 34
-skinparam ranksep 38
+skinparam ranksep 62
 skinparam rectangle {
   BackgroundColor #FFFFFF
   BorderColor #000000
@@ -89,6 +89,6 @@ rectangle "Golden System" as SYSTEM <<SYSTEM>> {
 }
 C1 -down[hidden]-> C3
 
-C1 -down-> C3 : technical flow
-C4 -[norank,dashed]-> C2 : review feedback
+C1 -down-> C3
+C4 -[norank,dashed]-> C2
 @enduml

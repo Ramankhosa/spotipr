@@ -38,6 +38,7 @@ function chunk<T>(items: T[], size: number): T[][] {
 export function normalizePatentDiagram(
   input: PatentDiagram,
   components: PatentDiagramComponent[],
+  supportedEvidenceIds?: Set<string>,
 ): NormalizedPatentDiagram {
   const corrections: string[] = []
   const known = new Set(components.map(component => component.id))
@@ -212,12 +213,21 @@ export function normalizePatentDiagram(
       }
       const unknownRelated = (node.relatedComponentIds || []).filter(id => !known.has(id))
       unknownRelated.forEach(id => corrections.push(`Removed unknown component reference ${id} from step ${node.key}`))
+      // Same rule for cited evidence: stripping an invented citation silently
+      // would launder an ungrounded step into a clean-looking one. Recording
+      // the strip leaves the node uncited, which validation then reports and
+      // the generation path blocks on.
+      const citedEvidence = node.evidenceIds || []
+      const keptEvidence = supportedEvidenceIds?.size ? citedEvidence.filter(id => supportedEvidenceIds.has(id)) : citedEvidence
+      citedEvidence.filter(id => !keptEvidence.includes(id))
+        .forEach(id => corrections.push(`Removed unrecognized disclosure evidence ${id} from step ${node.key}`))
       return {
         ...node,
         identifier,
         label: trimNodeLabel(node.label, 'step') || node.label,
         componentId: node.componentId && known.has(node.componentId) ? node.componentId : undefined,
         relatedComponentIds: (node.relatedComponentIds || []).filter(id => known.has(id)),
+        evidenceIds: keptEvidence,
       }
     })
 

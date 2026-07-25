@@ -9,6 +9,7 @@ import {
   filterComponentsByScopeForFigures,
   filterComponentsByScopeForNumbering,
   getEffectiveScopeUse,
+  remapScopeSourceRefsForComponents,
 } from '@/lib/scope-recommendations'
 
 const rawScope = {
@@ -138,7 +139,32 @@ describe('scope recommendations helpers', () => {
   test('builds component planner seeds from number-selected recommendations only', () => {
     const scope = coerceScopeRecommendations(rawScope)!
 
-    expect(componentsFromScopeRecommendations(scope).map(component => component.name)).toEqual(['moisture sensor'])
+    expect(componentsFromScopeRecommendations(scope, [{ name: 'moisture sensor' }])
+      .map(component => component.name)).toEqual(['moisture sensor'])
+  })
+
+  test('never seeds a component that is absent from the Stage 0 component list', () => {
+    const scope = coerceScopeRecommendations(rawScope)!
+
+    // No Stage 0 components to enrich: scope alone must not mint any.
+    expect(componentsFromScopeRecommendations(scope, [])).toEqual([])
+  })
+
+  test('ignores number-selected scope elements sourced outside the component list', () => {
+    const scope = coerceScopeRecommendations({
+      ...rawScope,
+      elements: [
+        {
+          ...rawScope.elements[0],
+          id: 'claimable_feature',
+          label: 'Irrigation scheduled from a rolling moisture average',
+          sourceType: 'other',
+          sourceRefs: ['claimableFeatures[0]'],
+        },
+      ],
+    })!
+
+    expect(componentsFromScopeRecommendations(scope, [{ name: 'moisture sensor' }])).toEqual([])
   })
 
   test('builds component planner seeds from frozen claims using Stage 0 components only', () => {
@@ -253,7 +279,7 @@ describe('scope recommendations helpers', () => {
     expect(seeds[0].scopeLabel).toBe('Moisture sensor configured to detect soil moisture and trigger irrigation control')
   })
 
-  test('uses concise scope titles for composite labels that cite multiple subparts', () => {
+  test('does not invent a composite component for labels citing multiple subparts', () => {
     const scope = coerceScopeRecommendations({
       ...rawScope,
       elements: [
@@ -266,13 +292,50 @@ describe('scope recommendations helpers', () => {
         },
       ],
     })!
-
-    const seeds = componentsFromScopeRecommendations(scope, [
+    const components = [
       { name: 'Inner barrier layer', description: 'Inner coating.' },
       { name: 'Outer enteric layer', description: 'Outer coating.' },
-    ])
+    ]
 
-    expect(seeds[0].name).toBe('Two layer coating')
+    // A composite label spanning two Stage 0 components is ambiguous, so it must
+    // not become a third component named after the scope element. The planner
+    // shows the two real subparts and nothing else.
+    expect(componentsFromScopeRecommendations(scope, components)).toEqual([])
+    expect(componentPlannerSeedsFromStage0({
+      normalizedComponents: components,
+      scopeRecommendations: scope,
+    }).map(component => component.name)).toEqual([
+      'Inner barrier layer',
+      'Outer enteric layer',
+    ])
+  })
+
+  test('remaps positional component source refs when Stage 0 components are reordered', () => {
+    const scope = coerceScopeRecommendations(rawScope)!
+    const previous = [{ name: 'moisture sensor' }, { name: 'valve driver' }]
+    const next = [{ name: 'valve driver' }, { name: 'moisture sensor' }]
+
+    const remapped = remapScopeSourceRefsForComponents(scope, previous, next)!
+
+    expect(remapped.elements[0].sourceRefs).toEqual(['components[1]'])
+    // Non-component refs are left untouched.
+    expect(remapped.elements[1].sourceRefs).toEqual(['sourceFactLedger.conditionsAndRules[0]'])
+
+    // The planner still resolves the element to the same real component.
+    expect(componentsFromScopeRecommendations(remapped, next).map(c => c.name)).toEqual(['moisture sensor'])
+  })
+
+  test('drops component source refs whose component was deleted', () => {
+    const scope = coerceScopeRecommendations(rawScope)!
+    const remapped = remapScopeSourceRefsForComponents(
+      scope,
+      [{ name: 'moisture sensor' }],
+      [{ name: 'valve driver' }]
+    )!
+
+    expect(remapped.elements[0].sourceRefs).toEqual([])
+    // A dangling element must not resurface as an invented component.
+    expect(componentsFromScopeRecommendations(remapped, [{ name: 'valve driver' }])).toEqual([])
   })
 
   test('builds claim and figure scope prompt blocks', () => {

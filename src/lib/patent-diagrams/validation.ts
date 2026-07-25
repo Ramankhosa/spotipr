@@ -195,8 +195,32 @@ export function validatePatentDiagram(
       // a warning here so figures persisted before the anchoring rule still
       // translate and re-render; the generation path (detailManagedFigure)
       // escalates it to a blocker for newly generated figures.
-      if (!node.componentId && !node.relatedComponentIds.length) {
-        issues.push({ code: 'UNGROUNDED_STEP', severity: 'warning', message: `Step "${node.label}" is not linked to any Component Planner entry; confirm it is disclosed by the invention` })
+      //
+      // A STEP must name the component that performs it. relatedComponentIds
+      // was too weak a gate on its own: stapling any one plausible component
+      // onto an entirely fabricated operation satisfied it. A DECISION keeps
+      // the lenient rule because a decision can legitimately test state that
+      // spans components.
+      const anchored = node.kind === 'STEP' ? !!node.componentId : !!node.componentId || node.relatedComponentIds.length > 0
+      if (!anchored) {
+        issues.push({
+          code: 'UNGROUNDED_STEP', severity: 'warning',
+          message: node.kind === 'STEP'
+            ? `Step "${node.label}" does not name the Component Planner entry that performs it; set componentId or remove the step`
+            : `Decision "${node.label}" is not linked to any Component Planner entry; confirm it is disclosed by the invention`,
+        })
+      }
+      // Citation is checked only when the session actually has a disclosure
+      // catalog. Many normalized ideas carry no source facts, and requiring a
+      // citation against an empty catalog would make PROCESS figures
+      // impossible to generate at all.
+      if (supportedEvidenceIds?.size) {
+        if (!node.evidenceIds.length) {
+          issues.push({ code: 'UNCITED_STEP', severity: 'warning', message: `Step "${node.label}" cites no disclosure evidence; if no catalog entry supports it, the step is not disclosed by this invention` })
+        }
+        node.evidenceIds.filter(id => !supportedEvidenceIds.has(id)).forEach(id => {
+          issues.push({ code: 'UNKNOWN_STEP_EVIDENCE', severity: 'warning', message: `Step "${node.label}" cites unrecognized disclosure evidence ID: ${id}` })
+        })
       }
     })
     diagram.transitions.forEach(link => {

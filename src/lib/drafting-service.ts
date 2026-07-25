@@ -33,7 +33,6 @@ import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
 import {
   buildIdeaNormalizationCorePrompt,
   buildIdeaNormalizationPrompt,
-  buildIdeaNormalizationSearchPrompt,
   buildIdeaNormalizationSupportPrompt,
 } from '@/lib/idea-normalization-prompt';
 import { parseLlmJsonObject } from '@/lib/llm-json-parser';
@@ -96,7 +95,7 @@ export interface IdeaNormalizationResult {
 }
 
 // Split idea normalization: one LLM call per slice of the normalized-data schema.
-const NORMALIZATION_SUB_CALL_KEYS = ['core', 'search', 'support'] as const;
+const NORMALIZATION_SUB_CALL_KEYS = ['core', 'support'] as const;
 type NormalizationSubCallKey = (typeof NORMALIZATION_SUB_CALL_KEYS)[number];
 type NormalizationSubCallResult = {
   success: boolean;
@@ -704,11 +703,10 @@ export class DraftingService {
       const promptParams = { rawIdea, title, areaOfInvention, allowRefine };
       const prompts: Record<NormalizationSubCallKey, string> = {
         core: buildIdeaNormalizationCorePrompt(promptParams),
-        search: buildIdeaNormalizationSearchPrompt(promptParams),
         support: buildIdeaNormalizationSupportPrompt(promptParams),
       };
 
-      console.log('Calling LLM gateway with taskCode: LLM2_DRAFT, stageCode: DRAFT_IDEA_ENTRY (split: core/search/support)');
+      console.log('Calling LLM gateway with taskCode: LLM2_DRAFT, stageCode: DRAFT_IDEA_ENTRY (split: core/support)');
       const startedAt = Date.now();
       const results = await this.runNormalizationSubCalls({
         prompts,
@@ -720,17 +718,15 @@ export class DraftingService {
       console.log(`Split idea normalization sub-calls finished in ${Date.now() - startedAt}ms`);
 
       const llmResponse = {
-        splitVersion: 1,
+        splitVersion: 2,
         calls: {
           core: results.core.response,
-          search: results.search.response,
           support: results.support.response,
         },
       };
       const llmPrompt = [
         ['CALL A: CORE', prompts.core],
-        ['CALL B: SEARCH', prompts.search],
-        ['CALL C: SUPPORT', prompts.support],
+        ['CALL B: SUPPORT', prompts.support],
       ].map(([label, text]) => `=== ${label} ===\n${text}`).join('\n\n');
 
       // Fail closed: a partially normalized idea must never be persisted.
@@ -767,7 +763,6 @@ export class DraftingService {
 
       const normalizedData = assembleNormalizedData({
         core: parts.core,
-        search: parts.search,
         support: parts.support,
       });
 

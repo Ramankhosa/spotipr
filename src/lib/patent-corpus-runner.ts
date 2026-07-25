@@ -1,4 +1,5 @@
 import {
+  cleanupOldStoredPdfs,
   getNextPatentCorpusQueueAttemptAt,
   hasCorpusEmbeddingApiKey,
   processPendingPatentEmbeddings,
@@ -126,6 +127,12 @@ async function runPatentCorpusQueue(state: PatentCorpusRunnerState) {
       state.lastError = null
 
       if (journalCount === 0 && fileCount === 0 && embeddingCount === 0) {
+        await cleanupOldStoredPdfs().catch(err =>
+          logRunnerEvent('warn', 'pdf_cleanup_failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        )
+
         const [nextPatentAttemptAt, nextJournalAttemptAt] = await Promise.all([
           getNextPatentCorpusQueueAttemptAt(),
           getNextIpIndiaJournalQueueAttemptAt(),

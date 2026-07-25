@@ -72,14 +72,7 @@ Rules (must follow strictly):
   - Do NOT classify a device as SYSTEM merely because it has multiple internal parts.
   - Do NOT classify software or general patent wording as COMPOSITION because the word "solution" appears.
   - Choose based on where the source-stated inventive contribution appears to reside.
-- Additionally, provide a single meaningful "searchQuery" sentence (<= 25 words) optimized for PQAI AI-based prior-art search. It MUST be a coherent plain-English sentence, not a bag of keywords; plain ASCII, no quotes, no brackets, no CPC/IPC codes, no labels.
-- Additionally, provide keyword phrases for non-AI patent search providers:
-  - "googlePatentKeywords": 1-10 concise keyword phrases for Google Patents. Use source-supported terms only. Do not include Boolean operators, wildcards, parentheses, punctuation-heavy syntax, or full sentences.
-  - "epoTitleKeywords": 1-6 short noun phrases likely to appear in European patent titles.
-  - "epoAbstractKeywords": 1-8 mechanism/function phrases likely to appear in European patent abstracts.
-  - "epoCombinedKeywords": fallback phrases useful in either European patent title or abstract when the field is uncertain.
-  - "patentSearchConceptGroups": 2-5 Boolean-ready groups. Each group has a label, kind, terms array, and required/excluded flags. Use OR-ready synonyms within a group; downstream search may AND required groups together. Include excluded terms only if the source clearly identifies misleading or non-invention subject matter.
-- Keep each keyword phrase concise, normally 2-8 words. Do not duplicate phrases unless essential. Do not add unsupported technical facts.
+- Additionally, provide a single meaningful "searchQuery" sentence (<= 25 words). It is embedded for meaning-based prior-art retrieval against the patent corpus, so it MUST be a coherent plain-English sentence, not a bag of keywords; plain ASCII, no quotes, no brackets, no CPC/IPC codes, no labels.
 - Include "coreInventiveConcept" as the minimum source-supported technical combination that could anchor Claim 1. If the source is thin, state that it is thin instead of inventing missing detail.
 - Include "claimableFeatures" as source-stated features that can support dependent claims. Use concise phrases and keep source-specific details.
 - Include "fallbackLimitations" for source-stated fallback rules, safety rules, thresholds, optional narrowing features, and conditions that may be useful if broad claims need review.
@@ -109,19 +102,7 @@ ${safeRawIdea}
 Respond in this exact JSON shape:
 {
   "schemaVersion": 2,
-  "searchQuery": "meaningful plain-English search sentence (<= 25 words, ASCII, no quotes/brackets), suitable for PQAI AI-based patent search",
-  "googlePatentKeywords": ["concise Google Patents keyword phrase"],
-  "epoTitleKeywords": ["short object/system phrase likely to appear in a European patent title"],
-  "epoAbstractKeywords": ["mechanism/function phrase likely to appear in a European patent abstract"],
-  "epoCombinedKeywords": ["fallback phrase suitable for either European patent title or abstract"],
-  "patentSearchConceptGroups": [{
-    "id": "core_object",
-    "label": "Core object",
-    "kind": "core",
-    "terms": ["source-supported synonym phrase"],
-    "required": true,
-    "excluded": false
-  }],
+  "searchQuery": "meaningful plain-English search sentence (<= 25 words, ASCII, no quotes/brackets) for meaning-based corpus retrieval",
   "problem": "source-stated technical problem, or Not stated by source",
   "objectives": "source-stated objectives, or Not stated by source",
   "components": [{
@@ -310,6 +291,8 @@ ${sharedRules}
 - Include "claimableFeatures" as source-stated features that can support dependent claims. Use concise phrases and keep source-specific details.
 - Include "fallbackLimitations" for source-stated fallback rules, safety rules, thresholds, optional narrowing features, and conditions that may be useful if broad claims need review.
 - Include "doNotClaim" for important missing, unsupported, expressly optional, or expressly excluded facts that claims should not present as required.
+- Include a single meaningful "searchQuery" sentence (<= 25 words). It is embedded for meaning-based prior-art retrieval against the patent corpus, so it MUST be a coherent plain-English sentence, not a bag of keywords; plain ASCII, no quotes, no brackets, no CPC/IPC codes, no labels.
+- Include "cpcCodes" and "ipcCodes" with the most relevant classification codes for the source-stated subject matter.
 - Inline scope enums: on each component (and optionally each claimable feature) include a compact "scope" object recommending downstream use. Apply patent-drafting judgment for the detected patentTypePrimary and inventionType:
   - "claim": use "claim_1" only for source-supported core elements needed for the broad independent claim. Use "dependent_claim" for optional features, fallback limits, subcomponents, or narrowing details. Use "none" for environment, use-case context, unsupported facts, or items that should not be promoted into claims.
   - "numbering": use "number" for elements that should be eligible for patent reference labels. Use "do_not_number" for ranges, conditions, pure data fields, environments, use cases, and non-visual abstractions.
@@ -369,55 +352,15 @@ Respond in this exact JSON shape (minified, one line):
   "doNotClaim": ["important missing or unsupported facts that must not be claimed as required; empty array if none"],
   "riskFlags": "source-stated uncertainties or missing enablement details to watch, or Not stated by source",
   "abstract": "<= 150-word abstract that begins exactly with the title; neutral tone; no unsupported advantages",
+  "searchQuery": "meaningful plain-English search sentence (<= 25 words, ASCII, no quotes/brackets) for meaning-based corpus retrieval",
+  "cpcCodes": ["primary CPC code like H04L 29/08", "optional secondary"],
+  "ipcCodes": ["primary IPC code like G06F 17/30", "optional secondary"],
   "normalizationReviewWarnings": []
 }`
 }
 
 /**
- * Call B: prior-art search artifacts. Depends only on the raw source text.
- */
-export function buildIdeaNormalizationSearchPrompt(params: IdeaNormalizationPromptParams): string {
-  const { persona, sharedRules, sourceBlock } = buildSharedSections(params)
-
-  return `${persona}
-
-Read the invention description and return ONLY one JSON object with the prior-art search artifacts defined below.
-
-${sharedRules}
-- Provide a single meaningful "searchQuery" sentence (<= 25 words) optimized for PQAI AI-based prior-art search. It MUST be a coherent plain-English sentence, not a bag of keywords; plain ASCII, no quotes, no brackets, no CPC/IPC codes, no labels.
-- Provide keyword phrases for non-AI patent search providers:
-  - "googlePatentKeywords": 1-10 concise keyword phrases for Google Patents. Use source-supported terms only. Do not include Boolean operators, wildcards, parentheses, punctuation-heavy syntax, or full sentences.
-  - "epoTitleKeywords": 1-6 short noun phrases likely to appear in European patent titles.
-  - "epoAbstractKeywords": 1-8 mechanism/function phrases likely to appear in European patent abstracts.
-  - "epoCombinedKeywords": fallback phrases useful in either European patent title or abstract when the field is uncertain.
-  - "patentSearchConceptGroups": 2-5 Boolean-ready groups. Each group has a label, kind, terms array, and required/excluded flags. Use OR-ready synonyms within a group; downstream search may AND required groups together. Include excluded terms only if the source clearly identifies misleading or non-invention subject matter.
-- Keep each keyword phrase concise, normally 2-8 words. Do not duplicate phrases unless essential. Do not add unsupported technical facts.
-- Include "cpcCodes" and "ipcCodes" with the most relevant classification codes for the source-stated subject matter.
-
-${sourceBlock}
-
-Respond in this exact JSON shape (minified, one line):
-{
-  "searchQuery": "meaningful plain-English search sentence (<= 25 words, ASCII, no quotes/brackets), suitable for PQAI AI-based patent search",
-  "googlePatentKeywords": ["concise Google Patents keyword phrase"],
-  "epoTitleKeywords": ["short object/system phrase likely to appear in a European patent title"],
-  "epoAbstractKeywords": ["mechanism/function phrase likely to appear in a European patent abstract"],
-  "epoCombinedKeywords": ["fallback phrase suitable for either European patent title or abstract"],
-  "patentSearchConceptGroups": [{
-    "id": "core_object",
-    "label": "Core object",
-    "kind": "core",
-    "terms": ["source-supported synonym phrase"],
-    "required": true,
-    "excluded": false
-  }],
-  "cpcCodes": ["primary CPC code like H04L 29/08", "optional secondary"],
-  "ipcCodes": ["primary IPC code like G06F 17/30", "optional secondary"]
-}`
-}
-
-/**
- * Call C: support data sources + source fact ledger. Depends only on the raw
+ * Call B: support data sources + source fact ledger. Depends only on the raw
  * source text; entries quote the source, not the core call's output.
  */
 export function buildIdeaNormalizationSupportPrompt(params: IdeaNormalizationPromptParams): string {

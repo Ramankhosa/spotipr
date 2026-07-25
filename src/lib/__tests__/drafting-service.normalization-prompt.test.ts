@@ -2,7 +2,6 @@ import { describe, expect, test } from 'vitest'
 import {
   buildIdeaNormalizationCorePrompt,
   buildIdeaNormalizationPrompt,
-  buildIdeaNormalizationSearchPrompt,
   buildIdeaNormalizationSupportPrompt,
 } from '@/lib/idea-normalization-prompt'
 
@@ -74,7 +73,6 @@ describe('idea normalization prompt', () => {
 describe('split idea normalization prompts', () => {
   const SPLIT_BUILDERS = [
     ['core', buildIdeaNormalizationCorePrompt],
-    ['search', buildIdeaNormalizationSearchPrompt],
     ['support', buildIdeaNormalizationSupportPrompt],
   ] as const
 
@@ -143,29 +141,41 @@ describe('split idea normalization prompts', () => {
     expect(prompt).toContain('include|optional|do_not_show')
     expect(prompt).toContain('include|optional|exclude')
     expect(prompt).not.toContain('"scopeRecommendations"')
-    // Search and support fields belong to the other calls
-    expect(prompt).not.toContain('"searchQuery"')
+    // Support fields belong to the other call
     expect(prompt).not.toContain('"sourceFactLedger"')
     expect(prompt).not.toContain('"supportDataSources"')
   })
 
-  test('search prompt owns the prior-art search artifacts', () => {
-    const prompt = buildIdeaNormalizationSearchPrompt({
+  test('core prompt owns the live search artifacts and omits the retired keyword fields', () => {
+    const prompt = buildIdeaNormalizationCorePrompt({
+      rawIdea: 'A smart irrigation controller uses soil moisture valve control.',
+      title: 'Smart Irrigation Controller',
+    })
+
+    // Live: embedded for meaning-based corpus retrieval + classification ranking
+    expect(prompt).toContain('"searchQuery"')
+    expect(prompt).toContain('"cpcCodes"')
+    expect(prompt).toContain('"ipcCodes"')
+
+    // Retired: only ever consumed by the decommissioned live SerpAPI/EPO/BigQuery providers
+    expect(prompt).not.toContain('googlePatentKeywords')
+    expect(prompt).not.toContain('epoTitleKeywords')
+    expect(prompt).not.toContain('epoAbstractKeywords')
+    expect(prompt).not.toContain('epoCombinedKeywords')
+    expect(prompt).not.toContain('patentSearchConceptGroups')
+  })
+
+  test('legacy single-call prompt also drops the retired keyword fields', () => {
+    const prompt = buildIdeaNormalizationPrompt({
       rawIdea: 'A smart irrigation controller uses soil moisture valve control.',
       title: 'Smart Irrigation Controller',
     })
 
     expect(prompt).toContain('"searchQuery"')
-    expect(prompt).toContain('PQAI')
-    expect(prompt).toContain('"googlePatentKeywords"')
-    expect(prompt).toContain('"epoTitleKeywords"')
-    expect(prompt).toContain('"epoAbstractKeywords"')
-    expect(prompt).toContain('"epoCombinedKeywords"')
-    expect(prompt).toContain('"patentSearchConceptGroups"')
     expect(prompt).toContain('"cpcCodes"')
-    expect(prompt).toContain('"ipcCodes"')
-    expect(prompt).not.toContain('"components"')
-    expect(prompt).not.toContain('"sourceFactLedger"')
+    expect(prompt).not.toContain('googlePatentKeywords')
+    expect(prompt).not.toContain('epoTitleKeywords')
+    expect(prompt).not.toContain('patentSearchConceptGroups')
   })
 
   test('support prompt owns the fact ledger and support data sources', () => {

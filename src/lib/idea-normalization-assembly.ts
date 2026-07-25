@@ -4,9 +4,8 @@ import { synthesizeScopeRecommendations } from '@/lib/scope-recommendation-synth
 /**
  * Assembly for the split-call Stage 0 normalization flow.
  *
- * Three parallel LLM calls each return a slice of the normalized-data object:
- *   core    — components, narrative fields, claim/scope seeds
- *   search  — prior-art search artifacts
+ * Two parallel LLM calls each return a slice of the normalized-data object:
+ *   core    — components, narrative fields, claim/scope seeds, search artifacts
  *   support — supportDataSources + sourceFactLedger
  *
  * assembleNormalizedData merges them with explicit field allowlists (a stray
@@ -16,25 +15,12 @@ import { synthesizeScopeRecommendations } from '@/lib/scope-recommendation-synth
  * legacy single-call path.
  */
 
-// Fields owned by the search call — copied only from the search payload.
-const SEARCH_FIELDS = [
-  'searchQuery',
-  'googlePatentKeywords',
-  'epoTitleKeywords',
-  'epoAbstractKeywords',
-  'epoCombinedKeywords',
-  'patentSearchConceptGroups',
-  'cpcCodes',
-  'ipcCodes',
-] as const
-
 // Fields owned by the support call.
 const SUPPORT_FIELDS = ['supportDataSources', 'sourceFactLedger'] as const
 
-// Fields the core call owns. Search/support fields are excluded so a core-call
-// hallucination cannot shadow the dedicated calls' output.
+// Fields the core call owns. Support fields are excluded so a core-call
+// hallucination cannot shadow the dedicated call's output.
 const CORE_EXCLUDED_FIELDS = new Set<string>([
-  ...SEARCH_FIELDS,
   ...SUPPORT_FIELDS,
   'scopeRecommendations', // always synthesized in code in the split flow
 ])
@@ -75,11 +61,9 @@ function warningsFrom(value: unknown): string[] {
 
 export function assembleNormalizedData(parts: {
   core: Record<string, any>
-  search: Record<string, any>
   support: Record<string, any>
 }): Record<string, any> {
   const core = parts.core && typeof parts.core === 'object' ? parts.core : {}
-  const search = parts.search && typeof parts.search === 'object' ? parts.search : {}
   const support = parts.support && typeof parts.support === 'object' ? parts.support : {}
 
   const merged: Record<string, any> = {}
@@ -87,10 +71,6 @@ export function assembleNormalizedData(parts: {
   for (const [key, value] of Object.entries(core)) {
     if (CORE_EXCLUDED_FIELDS.has(key)) continue
     merged[key] = value
-  }
-
-  for (const field of SEARCH_FIELDS) {
-    if (search[field] !== undefined) merged[field] = search[field]
   }
 
   for (const field of SUPPORT_FIELDS) {

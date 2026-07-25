@@ -12,8 +12,19 @@ export interface PatentDiagramStyle {
   componentBorderThickness: 1.0
   subsystemBorderThickness: 1.3
   systemBorderThickness: 1.8
+  // Measured against a live render, not estimated. The two knobs are not
+  // interchangeable:
+  //   nodesep only widens COMPONENT figures (a worst-case 4-wide/4-band figure
+  //     goes 926 -> 944 px for 34 -> 40, costing page-fit) and does nothing for
+  //     PROCESS, whose width is pinned by the widest step box.
+  //   ranksep is free for COMPONENT (band heights are label-driven: 687 px at
+  //     38, 62 and 80 alike) and is the only lever on PROCESS, where it is the
+  //     gap between steps: 810 -> 978 px at 38 -> 62, still at the 9.75 pt
+  //     page-fit ceiling. 80 would reach 1104 px and drop to 8.75 pt, too close
+  //     to the 8 pt filing floor.
+  // So vertical spacing is bought and horizontal is left alone.
   horizontalNodeSpacing: 34
-  verticalRankSpacing: 38
+  verticalRankSpacing: 62
   maximumComponentsPerRow: 4
   maximumLabelWords: 7
   maximumLabelLines: 3
@@ -34,7 +45,7 @@ export const PATENT_DIAGRAM_STYLE: Readonly<PatentDiagramStyle> = Object.freeze(
   subsystemBorderThickness: 1.3,
   systemBorderThickness: 1.8,
   horizontalNodeSpacing: 34,
-  verticalRankSpacing: 38,
+  verticalRankSpacing: 62,
   maximumComponentsPerRow: 4,
   maximumLabelWords: 7,
   maximumLabelLines: 3,

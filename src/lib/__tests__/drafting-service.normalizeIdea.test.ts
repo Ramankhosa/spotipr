@@ -42,8 +42,15 @@ afterEach(() => {
 // Fixtures
 // ---------------------------------------------------------------------------
 
+const SEARCH_ARTIFACTS = {
+  searchQuery: 'smart irrigation controller using soil moisture valve control',
+  cpcCodes: ['A01G 25/16'],
+  ipcCodes: ['A01G 25/16'],
+}
+
 const CORE_PAYLOAD = {
   schemaVersion: 2,
+  ...SEARCH_ARTIFACTS,
   problem: 'Water use',
   objectives: 'Control irrigation',
   components: [{ name: 'Controller', description: 'controls irrigation' }],
@@ -67,20 +74,6 @@ const CORE_PAYLOAD = {
   normalizationReviewWarnings: [],
 }
 
-const SEARCH_PAYLOAD = {
-  searchQuery: 'smart irrigation controller using soil moisture valve control',
-  googlePatentKeywords: [' smart irrigation controller ', 'soil moisture valve control'],
-  epoTitleKeywords: ['irrigation controller'],
-  epoAbstractKeywords: ['soil moisture valve control'],
-  epoCombinedKeywords: ['water scheduling'],
-  patentSearchConceptGroups: [
-    { id: 'core', label: 'Core', kind: 'core', terms: ['irrigation controller', 'water scheduling device'], required: true },
-    { id: 'mechanism', label: 'Mechanism', kind: 'mechanism', terms: ['soil moisture valve control'], required: true },
-  ],
-  cpcCodes: [],
-  ipcCodes: [],
-}
-
 const SUPPORT_PAYLOAD = {
   sourceFactLedger: {},
   supportDataSources: [],
@@ -101,21 +94,16 @@ function llmResponse(payload: unknown, outputTokens: number) {
 /** Routes each mocked gateway call to a fixture using the sub-call purpose. */
 function mockSplitCalls(overrides: {
   core?: unknown
-  search?: unknown
   support?: unknown
   coreTokens?: number
-  searchTokens?: number
   supportTokens?: number
 } = {}) {
   executeLLMOperation.mockImplementation(async (_request: any, llmRequest: any) => {
     const purpose = String(llmRequest?.metadata?.purpose || '')
-    if (purpose.endsWith('_search')) {
-      return llmResponse(overrides.search ?? SEARCH_PAYLOAD, overrides.searchTokens ?? 20)
-    }
     if (purpose.endsWith('_support')) {
       return llmResponse(overrides.support ?? SUPPORT_PAYLOAD, overrides.supportTokens ?? 30)
     }
-    return llmResponse(overrides.core ?? CORE_PAYLOAD, overrides.coreTokens ?? 50)
+    return llmResponse(overrides.core ?? CORE_PAYLOAD, overrides.coreTokens ?? 70)
   })
 }
 
@@ -124,16 +112,16 @@ function mockSplitCalls(overrides: {
 // ---------------------------------------------------------------------------
 
 describe('DraftingService.normalizeIdea (split calls)', () => {
-  test('runs three sub-calls with distinct purposes against the same stage code', async () => {
+  test('runs two sub-calls with distinct purposes against the same stage code', async () => {
     mockSplitCalls()
 
     const result = await DraftingService.normalizeIdea('A smart irrigation controller uses soil moisture valve control.', 'Smart Irrigation Controller')
 
     expect(result.success).toBe(true)
-    expect(executeLLMOperation).toHaveBeenCalledTimes(3)
+    expect(executeLLMOperation).toHaveBeenCalledTimes(2)
 
     const purposes = executeLLMOperation.mock.calls.map((call: any[]) => call[1]?.metadata?.purpose).sort()
-    expect(purposes).toEqual(['idea_normalization_core', 'idea_normalization_search', 'idea_normalization_support'])
+    expect(purposes).toEqual(['idea_normalization_core', 'idea_normalization_support'])
 
     executeLLMOperation.mock.calls.forEach((call: any[]) => {
       expect(call[1]).toMatchObject({ taskCode: 'LLM2_DRAFT', stageCode: 'DRAFT_IDEA_ENTRY' })
@@ -141,31 +129,27 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
     })
   })
 
-  test('merges fields from all three sub-calls', async () => {
+  test('merges fields from both sub-calls', async () => {
     mockSplitCalls()
 
     const result = await DraftingService.normalizeIdea('A smart irrigation controller uses soil moisture valve control.', 'Smart Irrigation Controller')
 
     expect(result.success).toBe(true)
     expect(result.extractedFields?.problem).toBe('Water use') // core
-    expect(result.extractedFields?.searchQuery).toBe('smart irrigation controller using soil moisture valve control') // search
     expect(result.normalizedData?.supportDataSources).toBeDefined() // support
     expect(result.normalizedData?.sourceFactLedger).toBeDefined()
   })
 
-  test('preserves patent search keywords and concept groups from Stage 0', async () => {
+  test('carries the live search artifacts through from the core call', async () => {
     mockSplitCalls()
 
     const result = await DraftingService.normalizeIdea('A smart irrigation controller uses soil moisture valve control.', 'Smart Irrigation Controller')
 
     expect(result.success).toBe(true)
-    expect(result.extractedFields?.googlePatentKeywords).toEqual(['smart irrigation controller', 'soil moisture valve control'])
-    expect(result.extractedFields?.epoTitleKeywords).toEqual(['irrigation controller'])
-    expect(result.extractedFields?.patentSearchConceptGroups?.[0]).toMatchObject({
-      label: 'Core',
-      terms: ['irrigation controller', 'water scheduling device'],
-      required: true,
-    })
+    // searchQuery is the text embedded for corpus retrieval; cpc/ipc feed classification ranking
+    expect(result.extractedFields?.searchQuery).toBe('smart irrigation controller using soil moisture valve control')
+    expect(result.extractedFields?.cpcCodes).toEqual(['A01G 25/16'])
+    expect(result.extractedFields?.ipcCodes).toEqual(['A01G 25/16'])
   })
 
   test('synthesizes scopeRecommendations from inline component scope and strips the inline copy', async () => {
@@ -207,29 +191,25 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
   })
 
   test('sums output tokens and records a split telemetry envelope', async () => {
-    mockSplitCalls({ coreTokens: 50, searchTokens: 20, supportTokens: 30 })
+    mockSplitCalls({ coreTokens: 70, supportTokens: 30 })
 
     const result = await DraftingService.normalizeIdea('A smart irrigation controller uses soil moisture valve control.', 'Smart Irrigation Controller')
 
     expect(result.tokensUsed).toBe(100)
-    expect(result.llmResponse?.splitVersion).toBe(1)
-    expect(Object.keys(result.llmResponse?.calls || {}).sort()).toEqual(['core', 'search', 'support'])
+    expect(result.llmResponse?.splitVersion).toBe(2)
+    expect(Object.keys(result.llmResponse?.calls || {}).sort()).toEqual(['core', 'support'])
     expect(result.llmPrompt).toContain('=== CALL A: CORE ===')
-    expect(result.llmPrompt).toContain('=== CALL B: SEARCH ===')
-    expect(result.llmPrompt).toContain('=== CALL C: SUPPORT ===')
+    expect(result.llmPrompt).toContain('=== CALL B: SUPPORT ===')
   })
 
   test('a stray field in one sub-call cannot clobber another call output', async () => {
     mockSplitCalls({
-      search: {
-        ...SEARCH_PAYLOAD,
-        // Hallucinated fields owned by other calls must be ignored
-        components: [{ name: 'Bogus Component From Search Call' }],
-        problem: 'hallucinated problem',
-      },
       support: {
         ...SUPPORT_PAYLOAD,
+        // Hallucinated fields owned by the core call must be ignored
         components: [{ name: 'Bogus Component From Support Call' }],
+        problem: 'hallucinated problem',
+        searchQuery: 'hallucinated search query',
       },
     })
 
@@ -237,6 +217,7 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
 
     expect(result.success).toBe(true)
     expect(result.extractedFields?.problem).toBe('Water use')
+    expect(result.extractedFields?.searchQuery).toBe('smart irrigation controller using soil moisture valve control')
     expect(result.normalizedData?.components?.map((c: any) => c.name)).toEqual(['Controller'])
   })
 
@@ -264,17 +245,16 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
   test('fails closed when a sub-call returns a gateway error', async () => {
     executeLLMOperation.mockImplementation(async (_request: any, llmRequest: any) => {
       const purpose = String(llmRequest?.metadata?.purpose || '')
-      if (purpose.endsWith('_search')) {
+      if (purpose.endsWith('_support')) {
         return { success: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'provider down' } }
       }
-      if (purpose.endsWith('_support')) return llmResponse(SUPPORT_PAYLOAD, 30)
-      return llmResponse(CORE_PAYLOAD, 50)
+      return llmResponse(CORE_PAYLOAD, 70)
     })
 
     const result = await DraftingService.normalizeIdea('A pump controller.', 'Pump Controller')
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('search')
+    expect(result.error).toContain('support')
     expect(result.error).toContain('provider down')
   })
 
@@ -282,7 +262,6 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
     let supportAttempts = 0
     executeLLMOperation.mockImplementation(async (_request: any, llmRequest: any) => {
       const purpose = String(llmRequest?.metadata?.purpose || '')
-      if (purpose.endsWith('_search')) return llmResponse(SEARCH_PAYLOAD, 20)
       if (purpose.endsWith('_support')) {
         supportAttempts += 1
         if (supportAttempts === 1) {
@@ -290,14 +269,14 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
         }
         return llmResponse(SUPPORT_PAYLOAD, 30)
       }
-      return llmResponse(CORE_PAYLOAD, 50)
+      return llmResponse(CORE_PAYLOAD, 70)
     })
 
     const result = await DraftingService.normalizeIdea('A smart irrigation controller uses soil moisture valve control.', 'Smart Irrigation Controller')
 
     expect(result.success).toBe(true)
     expect(supportAttempts).toBe(2)
-    expect(executeLLMOperation).toHaveBeenCalledTimes(4)
+    expect(executeLLMOperation).toHaveBeenCalledTimes(3)
   })
 
   test('legacy executeDrafting persists normalized patent type on the session', async () => {
@@ -321,8 +300,8 @@ describe('DraftingService.normalizeIdea (split calls)', () => {
         claimStrategy: 'Process claim',
         coreInventiveConcept: 'Pump control method',
         abstract: 'Pump Controller. A method controls pump operation.',
+        searchQuery: 'pump controller method',
       },
-      search: { ...SEARCH_PAYLOAD, searchQuery: 'pump controller method' },
     })
 
     const result = await DraftingService.executeDrafting({
@@ -361,7 +340,6 @@ describe('DraftingService.normalizeIdea (IDEA_NORMALIZATION_SPLIT=false)', () =>
   test('uses a single LLM call and returns the same contract', async () => {
     executeLLMOperation.mockResolvedValueOnce(llmResponse({
       ...CORE_PAYLOAD,
-      ...SEARCH_PAYLOAD,
       ...SUPPORT_PAYLOAD,
     }, 100))
 
@@ -378,7 +356,7 @@ describe('DraftingService.normalizeIdea (IDEA_NORMALIZATION_SPLIT=false)', () =>
     expect(result.tokensUsed).toBe(100)
     expect(result.extractedFields?.problem).toBe('Water use')
     expect(result.extractedFields?.searchQuery).toBe('smart irrigation controller using soil moisture valve control')
-    expect(result.extractedFields?.googlePatentKeywords).toEqual(['smart irrigation controller', 'soil moisture valve control'])
+    expect(result.extractedFields?.cpcCodes).toEqual(['A01G 25/16'])
     expect(result.normalizedData?.patentTypePrimary).toBe('SYSTEM')
   })
 

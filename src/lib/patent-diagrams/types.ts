@@ -127,6 +127,11 @@ export const processDiagramSchema = diagramBaseSchema.extend({
     label: shortText,
     identifier: z.string().trim().max(30).optional(),
     phase: shortText.optional(),
+    // Disclosure evidence this step paraphrases. The Component Planner is a
+    // registry of components (nouns), so a step's verb has no other anchor —
+    // citation is what distinguishes a disclosed operation from an invented
+    // one. Defaulted so figures persisted before this rule still parse.
+    evidenceIds: z.array(idText).default([]),
   })).min(2),
   transitions: z.array(z.object({
     fromId: idText,

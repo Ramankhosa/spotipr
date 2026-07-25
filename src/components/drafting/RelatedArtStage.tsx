@@ -166,11 +166,6 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
   const [filingDateFrom, setFilingDateFrom] = useState('')
   const [filingDateTo, setFilingDateTo] = useState('')
   const [searchPrecision, setSearchPrecision] = useState<PatentSearchPrecision>('broad')
-  const [googlePatentKeywords, setGooglePatentKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.googlePatentKeywords))
-  const [epoTitleKeywords, setEpoTitleKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.epoTitleKeywords))
-  const [epoAbstractKeywords, setEpoAbstractKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.epoAbstractKeywords))
-  const [epoCombinedKeywords, setEpoCombinedKeywords] = useState<string[]>(() => normalizeKeywordListForUi(normalizedIdea.epoCombinedKeywords))
-  const [patentSearchConceptGroups, setPatentSearchConceptGroups] = useState<PatentSearchConceptGroup[]>(() => normalizeConceptGroupsForUi(normalizedIdea.patentSearchConceptGroups, searchQuery))
   const [resultSourceFilter, setResultSourceFilter] = useState<ResultSourceFilter>('all')
 
   // AI review states
@@ -592,11 +587,6 @@ const RelatedArtStage = React.memo(function RelatedArtStage({ session, patent, o
       setPublicationDateTo('')
       setFilingDateFrom('')
       setFilingDateTo('')
-      setGooglePatentKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.googlePatentKeywords))
-      setEpoTitleKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.epoTitleKeywords))
-      setEpoAbstractKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.epoAbstractKeywords))
-      setEpoCombinedKeywords(normalizeKeywordListForUi((session?.ideaRecord as any)?.normalizedData?.epoCombinedKeywords))
-      setPatentSearchConceptGroups(normalizeConceptGroupsForUi((session?.ideaRecord as any)?.normalizedData?.patentSearchConceptGroups, (session?.ideaRecord as any)?.searchQuery || ''))
       setCurrentPage(1)
       setAutoSelectWarning(null)
       setStatusMessage(null)

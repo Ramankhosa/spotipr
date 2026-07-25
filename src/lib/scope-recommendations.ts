@@ -487,6 +487,17 @@ function matchScopeElement(component: any, scopeRecommendations: ScopeRecommenda
   return scopeRecommendations.elements.find((element) => labels.includes(scopeElementKey(element.label)))
 }
 
+/**
+ * Projects scope metadata onto the Stage 0 components each element resolves to.
+ *
+ * This is an enricher, never a source of components. An element that does not
+ * resolve back to a Stage 0 component is skipped: elements synthesized from
+ * claimableFeatures / fallbackLimitations / doNotClaim, and elements whose
+ * positional `components[N]` refs have gone stale, used to be minted here as
+ * brand-new components (named after the scope label, or after a slug of the
+ * element id) and surfaced in the Component Planner as parts the user never
+ * entered.
+ */
 export function componentsFromScopeRecommendations(
   scopeRecommendations: unknown,
   normalizedComponents: any[] = []
@@ -494,28 +505,26 @@ export function componentsFromScopeRecommendations(
   if (!isScopeRecommendations(scopeRecommendations)) return []
   const componentByLabel = buildComponentLookup(normalizedComponents)
 
-  return scopeRecommendations.elements
-    .filter((element) => {
-      const effective = getEffectiveScopeUse(element)
-      return effective.numbering === 'number' && effective.description !== 'exclude'
-    })
-    .map((element, index) => {
-      const existing = sourceComponentForScopeElement(element, normalizedComponents, componentByLabel) || {}
-      return {
-        ...existing,
-        id: existing.id || element.id,
-        name: existing.name || existing.title || existing.label || (
-          element.sourceRefs.length > 1 ? scopeTitleFromElement(element) : element.label
-        ),
-        type: existing.type || 'OTHER',
-        description: existing.description || element.reason,
-        sequence: existing.sequence || index + 1,
-        sourceType: element.sourceType,
-        sourceScopeId: element.id,
-        sourceRefs: element.sourceRefs,
-        scopeLabel: element.label,
-      }
-    })
+  return scopeRecommendations.elements.flatMap((element, index) => {
+    if (isScopeExcludedFromComponentPlanning(element)) return []
+    if (getEffectiveScopeUse(element).numbering !== 'number') return []
+
+    const existing = sourceComponentForScopeElement(element, normalizedComponents, componentByLabel)
+    if (!existing) return []
+
+    return [{
+      ...existing,
+      id: existing.id || element.id,
+      name: existing.name || existing.title || existing.label || element.label,
+      type: existing.type || 'OTHER',
+      description: existing.description || element.reason,
+      sequence: existing.sequence || index + 1,
+      sourceType: element.sourceType,
+      sourceScopeId: element.id,
+      sourceRefs: element.sourceRefs,
+      scopeLabel: element.label,
+    }]
+  })
 }
 
 export function componentsFromFrozenClaimsAndStage0({
@@ -655,7 +664,73 @@ function stage0IndexFromSourceRefs(sourceRefs: unknown): number | undefined {
   return undefined
 }
 
-function componentPlannerSeedKey(component: any, fallbackIndex: number, fallbackIsStage0 = false): string {
+/**
+ * Rewrites the positional `components[N]` refs on scope elements after the
+ * Stage 0 component list is edited or reordered.
+ *
+ * Scope elements cite components by index, so an edit silently repoints them at
+ * the wrong component — or at nothing. Regenerating scope instead is not an
+ * option: the inline `scope` enums the synthesizer reads are stripped off the
+ * components once normalization has run (see idea-normalization-assembly), so a
+ * regenerate would flatten every element back to defaults and discard user
+ * selections. Remapping by name keeps all of that intact. Refs whose component
+ * no longer exists are dropped rather than left dangling.
+ */
+export function remapScopeSourceRefsForComponents(
+  scopeRecommendations: unknown,
+  previousComponents: unknown,
+  nextComponents: unknown
+): ScopeRecommendations | undefined {
+  if (!isScopeRecommendations(scopeRecommendations)) return undefined
+  const previous = Array.isArray(previousComponents) ? previousComponents : []
+  const next = Array.isArray(nextComponents) ? nextComponents : []
+  if (!previous.length) return scopeRecommendations
+
+  const nextIndexByName = new Map<string, number>()
+  next.forEach((component: any, index: number) => {
+    const key = scopeElementKey(component?.name || component?.title || component?.label)
+    if (key && !nextIndexByName.has(key)) nextIndexByName.set(key, index)
+  })
+
+  let changed = false
+  const elements = scopeRecommendations.elements.map((element) => {
+    let elementChanged = false
+    const sourceRefs: string[] = []
+
+    element.sourceRefs.forEach((sourceRef) => {
+      const match = typeof sourceRef === 'string' ? sourceRef.match(/^components\[(\d+)\]$/i) : null
+      if (!match) {
+        sourceRefs.push(sourceRef)
+        return
+      }
+      const previousComponent: any = previous[Number(match[1])]
+      const key = scopeElementKey(
+        previousComponent?.name || previousComponent?.title || previousComponent?.label
+      )
+      const nextIndex = key ? nextIndexByName.get(key) : undefined
+      if (nextIndex === undefined) {
+        elementChanged = true
+        return
+      }
+      const remapped = `components[${nextIndex}]`
+      if (remapped !== sourceRef) elementChanged = true
+      sourceRefs.push(remapped)
+    })
+
+    if (!elementChanged) return element
+    changed = true
+    return { ...element, sourceRefs }
+  })
+
+  return changed ? { ...scopeRecommendations, elements } : scopeRecommendations
+}
+
+function componentPlannerSeedKey(
+  component: any,
+  fallbackIndex: number,
+  fallbackIsStage0 = false,
+  stage0IndexByName?: Map<string, number>
+): string {
   if (fallbackIsStage0 && fallbackIndex >= 0) return `stage0:${fallbackIndex}`
 
   const claimIndex = component?.claimSupport?.stage0ComponentIndex
@@ -663,6 +738,15 @@ function componentPlannerSeedKey(component: any, fallbackIndex: number, fallback
 
   const sourceRefIndex = stage0IndexFromSourceRefs(component?.sourceRefs)
   if (sourceRefIndex !== undefined) return `stage0:${sourceRefIndex}`
+
+  // Scope-derived seeds always resolve to a real Stage 0 component, but legacy
+  // scope elements cite `sourceFactLedger…` rather than `components[N]`, so the
+  // positional lookup above misses. Fall back to the resolved name, otherwise
+  // the same component is added twice under two different keys.
+  const nameIndex = stage0IndexByName?.get(
+    scopeElementKey(component?.name || component?.title || component?.label)
+  )
+  if (nameIndex !== undefined) return `stage0:${nameIndex}`
 
   const scopeId = clean(component?.sourceScopeId || component?.scopeRecommendationId)
   if (scopeId) return `scope:${scopeId}`
@@ -683,10 +767,16 @@ export function componentPlannerSeedsFromStage0(options: ComponentPlannerSeedOpt
     stage0Components
   )
 
+  const stage0IndexByName = new Map<string, number>()
+  stage0Components.forEach((component, index) => {
+    const key = scopeElementKey(component?.name || component?.title || component?.label)
+    if (key && !stage0IndexByName.has(key)) stage0IndexByName.set(key, index)
+  })
+
   const merged: any[] = []
   const seen = new Set<string>()
   const add = (component: any, fallbackIndex: number, fallbackIsStage0 = false) => {
-    const key = componentPlannerSeedKey(component, fallbackIndex, fallbackIsStage0)
+    const key = componentPlannerSeedKey(component, fallbackIndex, fallbackIsStage0, stage0IndexByName)
     if (seen.has(key)) return
     seen.add(key)
     merged.push(component)

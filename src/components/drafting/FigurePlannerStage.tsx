@@ -75,10 +75,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/toast'
 import Hint from '@/components/ui/hint'
 import dynamic from 'next/dynamic'
-import {
-  buildFigureScopePromptBlock,
-  filterComponentsByScopeForFigures
-} from '@/lib/scope-recommendations'
 
 // Dynamic import for the in-browser canvas image editor (Konva-based; ssr:false is required)
 const ImageEditor = dynamic(() => import('@/components/ui/canvas-editor'), {
@@ -296,6 +292,17 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
       )) as string[]
       if (corrections.length) {
         messages.push(`Automatic corrections applied: ${corrections.slice(0, 4).join('; ')}${corrections.length > 4 ? `; and ${corrections.length - 4} more` : ''}.`)
+      }
+      // Figures are never split automatically, so a figure that came back
+      // denser than the filing guideline would otherwise ship with no visible
+      // sign. Name them so the user can Modify and approve a split.
+      const dense = response.figures.filter((figure: any) =>
+        Array.isArray(figure?.validation?.issues)
+        && figure.validation.issues.some((issue: any) =>
+          issue?.severity === 'warning' && ['SPLIT_REQUIRED', 'PAGE_FIT_MINIMUM_TEXT'].includes(issue?.code)))
+      if (dense.length) {
+        const labels = dense.map((figure: any) => figure?.figureNo ? `FIG. ${figure.figureNo}` : 'A figure')
+        messages.push(`${labels.join(', ')} ${dense.length === 1 ? 'is' : 'are'} denser than the filing guideline. Use Modify on ${dense.length === 1 ? 'it' : 'them'} and approve the proposed split if you want ${dense.length === 1 ? 'it' : 'them'} divided.`)
       }
     }
     return messages.length > 0 ? messages.join(' ') : null

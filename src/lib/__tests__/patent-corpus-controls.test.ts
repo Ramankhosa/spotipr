@@ -4,6 +4,7 @@ import { authenticateUser } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/prisma'
 import {
   cancelPatentImportBatch,
+  cleanupOldStoredPdfs,
   deletePatentImportFileExtractions,
   deletePatentImportFileStoredPdf,
   patentWhereForImportFile,
@@ -46,6 +47,9 @@ vi.mock('@/lib/prisma', () => ({
       updateMany: vi.fn(),
       deleteMany: vi.fn(),
       groupBy: vi.fn(),
+    },
+    ipIndiaJournalFile: {
+      updateMany: vi.fn(),
     },
     $executeRaw: vi.fn(),
     $queryRaw: vi.fn(),
@@ -333,5 +337,85 @@ describe('patent corpus PDF-level controls', () => {
 
     expect(response.status).toBe(403)
     expect(mockPrisma.patentImportBatch.findUnique).not.toHaveBeenCalled()
+  })
+
+  describe('stored PDF retention cleanup', () => {
+    beforeEach(() => {
+      mockPrisma.patentImportFile.update.mockResolvedValue({ id: 'file-1' })
+      mockPrisma.ipIndiaJournalFile.updateMany.mockResolvedValue({ count: 0 })
+    })
+
+    it('only considers finished imports past the cutoff with no embedding work in flight', async () => {
+      await cleanupOldStoredPdfs()
+
+      const where = mockPrisma.patentImportFile.findMany.mock.calls[0][0].where
+      expect(where.status).toEqual({ in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS'] })
+      expect(where.completedAt.lt).toBeInstanceOf(Date)
+      expect(where.completedAt.lt.getTime()).toBeLessThan(Date.now())
+      expect(where.extractedPatents).toEqual({
+        none: { embeddings: { some: { status: { in: ['QUEUED', 'PROCESSING'] } } } },
+      })
+    })
+
+    it('deletes the PDF and clears both pointers to the shared file on disk', async () => {
+      mockPrisma.patentImportFile.findMany.mockResolvedValueOnce([
+        { id: 'file-1', storedPath: '/uploads/patent-corpus/old.pdf' },
+      ])
+
+      const result = await cleanupOldStoredPdfs()
+
+      expect(mockFs.unlink).toHaveBeenCalledWith('/uploads/patent-corpus/old.pdf')
+      expect(mockPrisma.patentImportFile.update).toHaveBeenCalledWith({
+        where: { id: 'file-1' },
+        data: { storedPath: '' },
+      })
+      // The IP India archive row points at the same file, so it must stop
+      // advertising a path that no longer exists.
+      expect(mockPrisma.ipIndiaJournalFile.updateMany).toHaveBeenCalledWith({
+        where: { patentImportFileId: 'file-1' },
+        data: { storedPath: null },
+      })
+      expect(result).toEqual({ checked: 1, deleted: 1 })
+    })
+
+    it('never deletes extracted patents or embeddings', async () => {
+      mockPrisma.patentImportFile.findMany.mockResolvedValueOnce([
+        { id: 'file-1', storedPath: '/uploads/patent-corpus/old.pdf' },
+      ])
+
+      await cleanupOldStoredPdfs()
+
+      expect(mockPrisma.localPatent.deleteMany).not.toHaveBeenCalled()
+      expect(mockPrisma.localPatentEmbedding.deleteMany).not.toHaveBeenCalled()
+      expect(mockPrisma.localPatentEmbedding.updateMany).not.toHaveBeenCalled()
+    })
+
+    it('still clears rows whose file is already gone so the scan keeps moving', async () => {
+      mockPrisma.patentImportFile.findMany.mockResolvedValueOnce([
+        { id: 'file-1', storedPath: '/uploads/patent-corpus/missing.pdf' },
+      ])
+      mockFs.unlink.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+
+      const result = await cleanupOldStoredPdfs()
+
+      expect(mockPrisma.patentImportFile.update).toHaveBeenCalledWith({
+        where: { id: 'file-1' },
+        data: { storedPath: '' },
+      })
+      expect(result).toEqual({ checked: 1, deleted: 0 })
+    })
+
+    it('leaves the row untouched when deletion fails for any other reason', async () => {
+      mockPrisma.patentImportFile.findMany.mockResolvedValueOnce([
+        { id: 'file-1', storedPath: '/uploads/patent-corpus/locked.pdf' },
+      ])
+      mockFs.unlink.mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }))
+
+      const result = await cleanupOldStoredPdfs()
+
+      expect(mockPrisma.patentImportFile.update).not.toHaveBeenCalled()
+      expect(mockPrisma.ipIndiaJournalFile.updateMany).not.toHaveBeenCalled()
+      expect(result).toEqual({ checked: 1, deleted: 0 })
+    })
   })
 })

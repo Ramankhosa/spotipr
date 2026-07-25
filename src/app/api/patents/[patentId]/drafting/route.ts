@@ -124,6 +124,7 @@ import {
   coerceScopeRecommendations,
   componentsFromFrozenClaimsAndStage0,
   filterComponentsByScopeForFigures,
+  remapScopeSourceRefsForComponents,
   scopeElementKey
 } from '@/lib/scope-recommendations'
 import {
@@ -4340,6 +4341,21 @@ async function handleUpdateIdeaRecord(user: any, patentId: string, data: any) {
   if ('schemaVersion' in normalizedPatch) {
     normalizedPatch.schemaVersion = 2
   }
+  // Scope elements cite Stage 0 components positionally, so editing or
+  // reordering the component list repoints them at the wrong component. Remap
+  // by name before persisting; unresolved elements would otherwise be dropped
+  // from the Component Planner's scope enrichment.
+  if ('components' in normalizedPatch && !('scopeRecommendations' in normalizedPatch)) {
+    const remappedScope = remapScopeSourceRefsForComponents(
+      baseNormalized.scopeRecommendations,
+      baseNormalized.components,
+      normalizedPatch.components
+    )
+    if (remappedScope && remappedScope !== baseNormalized.scopeRecommendations) {
+      normalizedPatch.scopeRecommendations = remappedScope
+    }
+  }
+
   const mergedNormalized = { ...baseNormalized, ...normalizedPatch }
 
   const ideaRecord = await prisma.ideaRecord.upsert({
