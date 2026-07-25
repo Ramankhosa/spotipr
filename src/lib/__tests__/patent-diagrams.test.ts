@@ -261,6 +261,27 @@ describe('deterministic normalization before validation', () => {
     expect(built.diagram.transitions).toHaveLength(1)
   })
 
+  test('records stripped invented component references and flags the step as ungrounded', () => {
+    const diagram = patentDiagramSchema.parse({
+      schemaVersion: 1, kind: 'PROCESS', key: 'ghost-proc', title: 'Process', purpose: 'Hallucinated step fixture',
+      detailLevel: 'DETAIL', direction: 'TB', claimCriticalComponentIds: [],
+      nodes: [
+        { key: 'real', kind: 'STEP', componentId: 'c1', label: 'Perform disclosed operation' },
+        { key: 'ghost', kind: 'STEP', componentId: 'invented-component', label: 'Deploy to cloud' },
+      ],
+      transitions: [{ fromId: 'real', toId: 'ghost', label: '', category: 'PRIMARY' }],
+    })
+    const built = buildPatentDiagram(diagram, components)
+    // The invented reference must not vanish silently: normalization records the
+    // removal and validation flags the now-unanchored step for the generation
+    // path to block.
+    expect(built.validation.corrections).toContain('Removed unknown component reference invented-component from step ghost')
+    const ungrounded = built.validation.issues.filter(issue => issue.code === 'UNGROUNDED_STEP')
+    expect(ungrounded).toHaveLength(1)
+    expect(ungrounded[0].severity).toBe('warning')
+    expect(built.validation.issues.some(issue => issue.code === 'UNKNOWN_COMPONENT')).toBe(false)
+  })
+
   test('treats disclosure evidence gaps as review notes, not blockers', () => {
     const diagram = componentDiagramWith({ evidenceIds: [] })
     const report = validatePatentDiagram(diagram, components, new Set(['SF-1']))

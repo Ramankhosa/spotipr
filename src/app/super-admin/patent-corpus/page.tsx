@@ -403,9 +403,25 @@ export default function PatentCorpusPage() {
     }
     const body = await response.json()
     setBatches(body.batches || [])
-    setCoverage(body.coverage || null)
     if (body.runner) setRunner(body.runner)
     if (body.limits?.maxPdfsPerBatch) setMaxPdfsPerBatch(body.limits.maxPdfsPerBatch)
+  }, [authHeaders, canAccess, user])
+
+  const [loadingCoverage, setLoadingCoverage] = useState(false)
+
+  const fetchCoverage = useCallback(async () => {
+    if (!user || !canAccess) return
+    setLoadingCoverage(true)
+    try {
+      const response = await fetch('/api/super-admin/patent-corpus/imports?includeCoverage=1&take=0', {
+        headers: authHeaders(),
+      })
+      if (!response.ok) return
+      const body = await response.json()
+      if (body.coverage) setCoverage(body.coverage)
+    } finally {
+      setLoadingCoverage(false)
+    }
   }, [authHeaders, canAccess, user])
 
   const fetchJournalJobs = useCallback(async (_jobId?: string | null): Promise<IpIndiaJournalImportJob[]> => {
@@ -1146,16 +1162,25 @@ export default function PatentCorpusPage() {
           </div>
         )}
 
-        {coverage && (
+        {coverage ? (
           <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3 text-sm">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="font-medium">Corpus coverage</div>
                 <div className="text-xs text-slate-500">{coverage.embeddingModel}</div>
               </div>
-              <div className="text-right">
-                <div className="text-lg font-semibold">{coverage.coveragePercent}%</div>
-                <div className="text-xs text-slate-500">vector searchable</div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => fetchCoverage()}
+                  disabled={loadingCoverage}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+                <div className="text-right">
+                  <div className="text-lg font-semibold">{coverage.coveragePercent}%</div>
+                  <div className="text-xs text-slate-500">vector searchable</div>
+                </div>
               </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-4 lg:grid-cols-7">
@@ -1166,6 +1191,20 @@ export default function PatentCorpusPage() {
               <div><span className="text-slate-500">Failed</span><div className="font-medium">{coverage.patentsWithFailedEmbedding}</div></div>
               <div><span className="text-slate-500">Title-only</span><div className="font-medium">{coverage.titleOnlyPatents}</div></div>
               <div><span className="text-slate-500">IP India enriched</span><div className="font-medium">{coverage.enrichedPatents}</div></div>
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+            <div className="flex items-center justify-between">
+              <div className="font-medium text-slate-700">Corpus coverage</div>
+              <button
+                onClick={() => fetchCoverage()}
+                disabled={loadingCoverage}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <Database className="h-3.5 w-3.5" />
+                {loadingCoverage ? 'Loading...' : 'Load Stats'}
+              </button>
             </div>
           </div>
         )}

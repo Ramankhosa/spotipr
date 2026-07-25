@@ -346,7 +346,12 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
   // UI Mode state
   const [mode, setMode] = useState<'ai' | 'manual'>('ai')
   const [includeExistingFigures, setIncludeExistingFigures] = useState(true)
-  const [replaceExistingDiagrams, setReplaceExistingDiagrams] = useState(false)
+  // Default to replacing: the primary Generate button plans a complete figure
+  // set, so appending would duplicate coverage. This especially matters after
+  // an interrupted run — the server may have persisted the first set even
+  // though the client never saw the response, and a retry that appended used
+  // to double the set to 10-15 figures. Append stays available by unchecking.
+  const [replaceExistingDiagrams, setReplaceExistingDiagrams] = useState(true)
 
   // Tick elapsed time while figure generation runs
   useEffect(() => {
@@ -2671,7 +2676,7 @@ export default function FigurePlannerStage({ session, patent, onComplete, onRefr
                 </span>
                 <Hint
                   title="How many figures?"
-                  text="Leave on Auto and the AI picks the count that covers your claims — usually 3 to 7. Or set an exact number between 1 and 10."
+                  text="Leave on Auto and the AI picks the count that covers your claims — at most 5. Or set an exact number between 1 and 10."
                 />
               </div>
             </div>

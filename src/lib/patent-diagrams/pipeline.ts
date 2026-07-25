@@ -24,6 +24,10 @@ import {
 } from './types'
 
 const GENERATED_FIGURE_LIMIT = 900
+// When the user leaves the figure count on Auto, the plan is capped at this
+// many base figures. The prompt asks for it too, but the model is not trusted
+// to comply — excess figures are dropped from the tail of the plan.
+const AUTO_MODE_FIGURE_LIMIT = 5
 
 export class PatentDiagramPipelineError extends Error {
   status: number
@@ -223,6 +227,9 @@ export async function planManagedFigureSet(input: PatentDiagramPipelineInput): P
     schema: constrainedPlanSchema,
     metadata: { patentId: input.patentId, sessionId: input.sessionId, purpose: 'plan_figures_structured' },
   })
+  if (!input.figureCount && plan.figures.length > AUTO_MODE_FIGURE_LIMIT) {
+    plan.figures = plan.figures.slice(0, AUTO_MODE_FIGURE_LIMIT)
+  }
   assertPlanComponentIds(plan, context.components)
   const previousAnalysis = context.session.aiAnalysisData && typeof context.session.aiAnalysisData === 'object'
     ? context.session.aiAnalysisData as Record<string, unknown>
@@ -249,24 +256,49 @@ async function detailManagedFigure(input: {
     existingDiagram: input.existingDiagram,
     instructions: input.pipeline.instructions,
   })
-  const constrainedDiagramSchema = patentDiagramSchema.superRefine((value, ctx) => {
-    // Validate what the pipeline will actually build. Re-prompting the model for
-    // a defect the normalizer repairs anyway wastes a call and can fail the
-    // figure outright when the retry reproduces it.
+  // UNGROUNDED_STEP is a warning in the base validator so figures persisted
+  // before the anchoring rule still translate and re-render, but a NEW
+  // generation must anchor every process step to the Component Planner — an
+  // unanchored step is the signature of an invented one, so here it blocks
+  // and re-prompts the model like any other defect.
+  const blocksGeneration = (issue: { severity: string; code: string }) =>
+    (issue.severity === 'error' || issue.code === 'UNGROUNDED_STEP') && issue.code !== 'SPLIT_REQUIRED'
+  // Validate what the pipeline will actually build. Re-prompting the model for
+  // a defect the normalizer repairs anyway wastes a call and can fail the
+  // figure outright when the retry reproduces it.
+  const constrainedDiagramSchema = (enforceDensityBudget: boolean) => patentDiagramSchema.superRefine((value, ctx) => {
     const { diagram } = normalizePatentDiagram(value, input.context.components)
     validatePatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds).issues
-      .filter(issue => issue.severity === 'error' && issue.code !== 'SPLIT_REQUIRED')
+      .filter(issue => blocksGeneration(issue) || (enforceDensityBudget && issue.code === 'SPLIT_REQUIRED'))
       .forEach(issue => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${issue.code}: ${issue.message}` }))
   })
-  const diagram = await executeStructured({
+  const executeDetail = (enforceDensityBudget: boolean) => executeStructured({
     userHeaders: input.pipeline.requestHeaders,
     stageCode: 'DRAFT_DIAGRAM_GENERATION',
     prompt,
-    schema: constrainedDiagramSchema,
-    metadata: { patentId: input.pipeline.patentId, sessionId: input.pipeline.sessionId, figureKey: input.plan.key, purpose: 'detail_figure_structured' },
+    schema: constrainedDiagramSchema(enforceDensityBudget),
+    metadata: {
+      patentId: input.pipeline.patentId, sessionId: input.pipeline.sessionId,
+      figureKey: input.plan.key, purpose: 'detail_figure_structured',
+      densityBudget: enforceDensityBudget ? 'enforced' : 'relaxed',
+    },
   })
+  // An over-dense figure is not a defect the builder can repair - the
+  // decomposer splits it into an overview plus detail sheets, which is how a
+  // 5-figure plan turned into 15 rendered sheets. So the first pass makes the
+  // published complexity budget binding and re-prompts the model to draw a
+  // figure that fits. Only when it cannot (process branch depth, say, which
+  // chunking genuinely cannot reduce) does the tolerant pass run and hand the
+  // figure to the decomposer. Content is never dropped to hit a figure count.
+  let diagram: PatentDiagram
+  try {
+    diagram = await executeDetail(true)
+  } catch (error) {
+    if (!(error instanceof PatentDiagramPipelineError) || error.status !== 422) throw error
+    diagram = await executeDetail(false)
+  }
   const built = buildPatentDiagram(diagram, input.context.components, input.context.supportedEvidenceIds)
-  const deterministicDefects = built.validation.issues.filter(issue => issue.severity === 'error' && issue.code !== 'SPLIT_REQUIRED')
+  const deterministicDefects = built.validation.issues.filter(blocksGeneration)
   if (deterministicDefects.length) {
     throw new PatentDiagramPipelineError(`Deterministic builder failed for ${input.plan.title}`, 500, deterministicDefects)
   }
@@ -330,9 +362,9 @@ function applyRenderedLayoutValidation(built: BuiltPatentDiagram, svg: Awaited<R
       const widthVariance = (Math.max(...widths) - Math.min(...widths)) / Math.min(...widths)
       const heightVariance = (Math.max(...heights) - Math.min(...heights)) / Math.min(...heights)
       // Layout findings below are aesthetic preferences that Graphviz does not
-      // guarantee and the builder cannot force. They still drive one
-      // decomposition attempt, but a drawing that is merely less tidy is not an
-      // unfileable drawing, so they are reported rather than fatal.
+      // guarantee and the builder cannot force. A drawing that is merely less
+      // tidy is not an unfileable drawing, so they are reported for manual
+      // review rather than treated as fatal or used to trigger decomposition.
       if (widthVariance > PATENT_DIAGRAM_COMPLEXITY.siblingDimensionVariance || heightVariance > PATENT_DIAGRAM_COMPLEXITY.siblingDimensionVariance) {
         built.validation.issues.push({
           code: 'SIBLING_DIMENSION_VARIANCE', severity: 'warning',
@@ -597,8 +629,14 @@ async function buildAndRenderAdaptive(input: {
   assertBuiltFigures(built, 'Generated figure set is not filing-ready')
   let numbers = input.allocateFigureNumbers?.(built.length)
   let rendered = await renderManagedFigures(input.patentId, built, numbers, input.pagePolicy)
+  // Only a genuine page-fit failure (text scaled below the filing minimum)
+  // justifies an automatic split: splitting reliably enlarges the text.
+  // Aesthetic findings (SIBLING_DIMENSION_VARIANCE, BAND_ASPECT) used to
+  // trigger this too, which routinely fanned a 4-5 figure plan out into 10-15
+  // sheets without fixing the variance — Graphviz sizes boxes by label width
+  // regardless of how few components share the figure. Those stay warnings.
   const pageFitFailures = new Set(rendered
-    .map((figure, index) => figure.built.validation.issues.some(issue => ['PAGE_FIT_MINIMUM_TEXT', 'SIBLING_DIMENSION_VARIANCE', 'BAND_ASPECT'].includes(issue.code))
+    .map((figure, index) => figure.built.validation.issues.some(issue => issue.code === 'PAGE_FIT_MINIMUM_TEXT')
       && !isDecompositionProduct(diagrams[index]) ? index : -1)
     .filter(index => index >= 0))
   if (pageFitFailures.size) {

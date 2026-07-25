@@ -297,20 +297,30 @@ async function seedProductionPlans() {
 
     // 7. Plan-specific concurrency limits for production
     console.log('\n7. Setting plan-specific concurrency limits...')
+    // LLM2_DRAFT must stay at or above STAGE0_NORMALIZATION_FANOUT (3): Stage 0 idea
+    // normalization issues three concurrent LLM2_DRAFT calls (core/search/support).
+    // A lower limit forces those calls to retry serially and Stage 0 slows to ~3x.
+    const STAGE0_NORMALIZATION_FANOUT = 3
     const concurrencyRules = [
-      // FREE_PLAN - Very limited concurrency for basic users
-      { planCode: 'FREE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: 1 },
+      // FREE_PLAN - Lowest tier, but still needs the full Stage 0 fan-out
+      { planCode: 'FREE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT },
       { planCode: 'FREE_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 1 },
       { planCode: 'FREE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 1 },
 
+      // TRIAL - same Stage 0 requirement as FREE
+      { planCode: 'TRIAL', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT },
+
+      // BASIC_PLAN - Stage 0 fan-out plus a little headroom
+      { planCode: 'BASIC_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT + 1 },
+
       // PRO_PLAN - Moderate concurrency for professional users
-      { planCode: 'PRO_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: 3 },
+      { planCode: 'PRO_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT + 3 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 2 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 2 },
       { planCode: 'PRO_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 3 },
 
       // ENTERPRISE_PLAN - High concurrency for enterprise users
-      { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: 5 },
+      { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM2_DRAFT', concurrencyLimit: STAGE0_NORMALIZATION_FANOUT + 5 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM1_PRIOR_ART', concurrencyLimit: 3 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM3_DIAGRAM', concurrencyLimit: 3 },
       { planCode: 'ENTERPRISE_PLAN', taskCode: 'LLM5_NOVELTY_ASSESS', concurrencyLimit: 4 },

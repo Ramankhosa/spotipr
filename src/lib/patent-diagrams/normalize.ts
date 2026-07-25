@@ -203,6 +203,15 @@ export function normalizePatentDiagram(
         identifier = undefined
       }
       if (identifier) usedIdentifiers.add(identifier.toUpperCase())
+      // Stripping an invented component reference must be recorded: it leaves
+      // the step unanchored, which validation flags as UNGROUNDED_STEP and the
+      // generation path treats as a blocker. Silently dropping the reference
+      // used to let hallucinated steps ship looking like legitimate ones.
+      if (node.componentId && !known.has(node.componentId)) {
+        corrections.push(`Removed unknown component reference ${node.componentId} from step ${node.key}`)
+      }
+      const unknownRelated = (node.relatedComponentIds || []).filter(id => !known.has(id))
+      unknownRelated.forEach(id => corrections.push(`Removed unknown component reference ${id} from step ${node.key}`))
       return {
         ...node,
         identifier,

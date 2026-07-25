@@ -69,7 +69,7 @@ export function buildFigureSetPlanningPrompt(input: {
 }): string {
   const countRule = input.figureCount
     ? `Plan exactly ${input.figureCount} base figure(s), before any density-driven detail figures.`
-    : 'Choose the smallest useful figure set, normally 2 to 6 figures.'
+    : 'Choose the smallest figure set that covers the claims — never more than 5 figures. The server discards any figure past the fifth.'
   return `You are the PatentNest patent figure-set planner.
 
 Return JSON only. Do not return PlantUML, styling, reference numerals, prose outside JSON, or markdown fences.
@@ -78,7 +78,9 @@ Use only these diagram kinds: COMPONENT, SEQUENCE, PROCESS, CONSTITUENT.
 Use only Component Planner IDs listed below. Component names, types, and hierarchy are immutable; server code resolves reference signs.
 Choose COMPONENT for system/product architecture, PROCESS for method or flow figures, SEQUENCE only for meaningful interactions, and CONSTITUENT for composition/formulation figures.
 Preserve claim-critical coverage. Prefer functional patent terminology over APIs, SDKs, vendors, or implementation details.
+Depict only subject matter disclosed in the invention context, claims, or component registry. Never plan figures, phases, or steps for generic product-lifecycle activity (installation, deployment, login, registration, onboarding, testing, monitoring, maintenance, error handling) unless the disclosure claims it as part of the invention.
 Plan subsystem and phase order explicitly. Recommend overview/detail figures instead of overloading one figure.
+Stay within per-figure complexity budgets — the server splits oversize figures into extra sheets, inflating the final figure count. Budgets: COMPONENT at most ${PATENT_DIAGRAM_COMPLEXITY.component.warningComponents} components, PROCESS at most ${PATENT_DIAGRAM_COMPLEXITY.process.warningNodes} steps, SEQUENCE at most ${PATENT_DIAGRAM_COMPLEXITY.sequence.warningInteractions} interactions, CONSTITUENT at most ${PATENT_DIAGRAM_COMPLEXITY.constituent.warningConstituents} constituents.
 ${countRule}
 
 Required JSON shape:
@@ -136,7 +138,7 @@ export function buildDiagramDetailPrompt(input: {
       : input.plan.kind === 'PROCESS'
         ? `{
   "kind":"PROCESS",
-  "nodes":[{"key":"stable-step-key","kind":"STEP|DECISION","componentId":"optional component ID","relatedComponentIds":[],"label":"verb-led maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","identifier":"optional stable S100 or D100","phase":"short phase"}],
+  "nodes":[{"key":"stable-step-key","kind":"STEP|DECISION","componentId":"registry ID performing this step","relatedComponentIds":["participating registry IDs — required when componentId is absent"],"label":"verb-led maximum ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words","identifier":"optional stable S100 or D100","phase":"short phase"}],
   "transitions":[{"fromId":"step-key","toId":"step-key","label":"maximum ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words","category":"PRIMARY|CONTROL|OPTIONAL"}]
 }`
         : `{
@@ -149,6 +151,8 @@ export function buildDiagramDetailPrompt(input: {
 
 Return JSON only. Never return PlantUML, reference numerals, styles, colours, layout-only links, markdown, or commentary.
 Use only Component Planner IDs supplied below. Do not invent technical components or unsupported quantities.
+Depict only what the invention context, claims, or component registry disclose. Every PROCESS step or decision must restate a disclosed operation of the claimed method — never add boilerplate or lifecycle steps (start/end terminals, initialization, login, deployment, testing, monitoring, generic error handling) that the disclosure does not describe. The same applies to SEQUENCE interactions and relationships.
+Every PROCESS step and decision MUST be anchored to the Component Planner registry: set componentId to the registry ID performing the operation, or list the participating registry IDs in relatedComponentIds. A node with no registry linkage is rejected and the figure fails. If an operation cannot be attributed to any planned component, it is not part of this invention — omit it.
 Preserve the supplied component, group, participant, step, and phase order.
 Names must be functional and no more than ${PATENT_DIAGRAM_STYLE.maximumLabelWords} words. Relationship and interaction labels must be no more than ${PATENT_DIAGRAM_COMPLEXITY.connectorLabelWords} words.
 The code will assign canonical names/reference signs, wrapping, rows, arrows, and all visual styling.

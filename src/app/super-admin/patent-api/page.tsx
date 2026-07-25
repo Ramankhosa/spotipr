@@ -37,17 +37,16 @@ export default function PatentApiAdminPage() {
   const readOnly = !roles.includes('SUPER_ADMIN')
   const authHeaders = useCallback(() => ({ Authorization: `Bearer ${localStorage.getItem('auth_token') || ''}` }), [])
 
+  const [loadingReadiness, setLoadingReadiness] = useState(false)
+
   const load = useCallback(async (selectedId?: string) => {
     setLoading(true); setError(null)
     try {
-      const [clientsResponse, readinessResponse] = await Promise.all([
-        fetch('/api/super-admin/patent-api/clients', { headers: authHeaders() }),
-        fetch('/api/super-admin/patent-api/readiness', { headers: authHeaders() }),
-      ])
-      if (!clientsResponse.ok || !readinessResponse.ok) throw new Error('Could not load patent API administration data.')
-      const clientsBody = await clientsResponse.json(); const readinessBody = await readinessResponse.json()
+      const clientsResponse = await fetch('/api/super-admin/patent-api/clients', { headers: authHeaders() })
+      if (!clientsResponse.ok) throw new Error('Could not load patent API administration data.')
+      const clientsBody = await clientsResponse.json()
       const nextClients = clientsBody.clients || []
-      setClients(nextClients); setReadiness(readinessBody.readiness)
+      setClients(nextClients)
       const id = selectedId || selected?.id || nextClients[0]?.id
       if (id) {
         const detailResponse = await fetch(`/api/super-admin/patent-api/clients/${id}`, { headers: authHeaders() })
@@ -56,6 +55,17 @@ export default function PatentApiAdminPage() {
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not load patent API data.') }
     finally { setLoading(false) }
   }, [authHeaders, selected?.id])
+
+  const loadReadiness = useCallback(async () => {
+    setLoadingReadiness(true)
+    try {
+      const response = await fetch('/api/super-admin/patent-api/readiness', { headers: authHeaders() })
+      if (!response.ok) throw new Error('Could not load readiness data.')
+      const body = await response.json()
+      setReadiness(body.readiness)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not load readiness data.') }
+    finally { setLoadingReadiness(false) }
+  }, [authHeaders])
 
   useEffect(() => {
     if (!user) return
@@ -117,7 +127,7 @@ export default function PatentApiAdminPage() {
   return <main className="min-h-screen bg-slate-50 text-slate-900"><div className="mx-auto max-w-7xl px-6 py-8">
     <header className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><div className="mb-2 flex items-center gap-2 text-sm text-slate-500"><Shield className="h-4 w-4" /> Super Admin</div><h1 className="text-2xl font-semibold">Indian Patent API</h1><p className="mt-1 text-sm text-slate-600">Issue server credentials, control quotas, and inspect API usage.</p></div><div className="flex gap-2"><Link href="/developers/patent-api" target="_blank" className={`${buttonClass} border border-slate-300 bg-white`}>Developer docs</Link><Link href="/super-admin/patent-corpus" className={`${buttonClass} border border-slate-300 bg-white`}><ArrowLeft className="h-4 w-4" /> Corpus</Link><button onClick={() => load()} className={`${buttonClass} border border-slate-300 bg-white`}><RefreshCw className="h-4 w-4" /> Refresh</button></div></header>
     {error && <div className="mb-5 flex gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="h-4 w-4" />{error}</div>}
-    {readiness && <section className={`mb-6 rounded-lg border p-5 ${readiness.ready ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}><div className="flex flex-wrap items-center justify-between gap-4"><div><div className="flex items-center gap-2 font-semibold">{readiness.ready ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <AlertTriangle className="h-5 w-5 text-amber-600" />} Public search {readiness.ready ? 'ready' : 'not ready'}</div><p className="mt-1 text-sm text-slate-600">{readiness.indianCorpus.patentsWithCompletedEmbedding.toLocaleString()} / {readiness.indianCorpus.totalPatents.toLocaleString()} Indian patents embedded ({readiness.indianCorpus.coveragePercent}%) with {readiness.embeddingModel}.</p></div><div className="flex flex-wrap gap-2">{readinessItems.map(([label, ok]) => <span key={label} className={`rounded-full px-3 py-1 text-xs font-medium ${ok ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{label}</span>)}</div></div></section>}
+    {readiness ? <section className={`mb-6 rounded-lg border p-5 ${readiness.ready ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}><div className="flex flex-wrap items-center justify-between gap-4"><div><div className="flex items-center gap-2 font-semibold">{readiness.ready ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <AlertTriangle className="h-5 w-5 text-amber-600" />} Public search {readiness.ready ? 'ready' : 'not ready'}</div><p className="mt-1 text-sm text-slate-600">{readiness.indianCorpus.patentsWithCompletedEmbedding.toLocaleString()} / {readiness.indianCorpus.totalPatents.toLocaleString()} Indian patents embedded ({readiness.indianCorpus.coveragePercent}%) with {readiness.embeddingModel}.</p></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => loadReadiness()} disabled={loadingReadiness} className={`${buttonClass} border border-slate-300 bg-white`}><RefreshCw className="h-4 w-4" /></button>{readinessItems.map(([label, ok]) => <span key={label} className={`rounded-full px-3 py-1 text-xs font-medium ${ok ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{label}</span>)}</div></div></section> : <section className="mb-6 rounded-lg border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><span className="font-semibold text-slate-700">Public search readiness</span><button onClick={() => loadReadiness()} disabled={loadingReadiness} className={`${buttonClass} border border-slate-300 bg-white`}><Shield className="h-4 w-4" />{loadingReadiness ? 'Checking...' : 'Check Readiness'}</button></div></section>}
     <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
       <aside className="rounded-lg border border-slate-200 bg-white p-4"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">API clients</h2>{!readOnly && <button onClick={() => setShowCreate(value => !value)} className={`${buttonClass} bg-slate-900 text-white`}><Plus className="h-4 w-4" /> New</button>}</div>
         {showCreate && <form onSubmit={createClient} className="mb-4 space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3"><input name="name" required minLength={2} placeholder="Client name" className={inputClass} /><textarea name="description" placeholder="Description" className={inputClass} /><div className="grid grid-cols-2 gap-2"><input name="rateLimitPerMinute" type="number" min="1" defaultValue="30" title="Requests/minute" className={inputClass} /><input name="dailyRequestLimit" type="number" min="1" defaultValue="2000" title="Daily requests" className={inputClass} /><input name="monthlyRequestLimit" type="number" min="1" defaultValue="50000" title="Monthly requests" className={inputClass} /><input name="dailyAnalysisLimit" type="number" min="0" defaultValue="200" title="Daily AI analysis calls (0 disables analysis)" className={inputClass} /></div><button disabled={working} className={`${buttonClass} w-full bg-slate-900 text-white`}>Create client</button></form>}

@@ -44,10 +44,13 @@ export async function GET(request: NextRequest) {
     },
   })
 
-  const coverage = await getPatentCorpusCoverageStats().catch(error => {
-    console.warn('[PatentCorpus] Coverage stats skipped:', error instanceof Error ? error.message : String(error))
-    return null
-  })
+  const includeCoverage = searchParams.get('includeCoverage') === '1'
+  const coverage = includeCoverage
+    ? await getPatentCorpusCoverageStats().catch(error => {
+        console.warn('[PatentCorpus] Coverage stats skipped:', error instanceof Error ? error.message : String(error))
+        return null
+      })
+    : null
 
   return NextResponse.json({
     batches,

@@ -190,6 +190,14 @@ export function validatePatentDiagram(
       if (node.identifier && !new RegExp(node.kind === 'DECISION' ? '^D\\d+$' : '^S\\d+$', 'i').test(node.identifier)) {
         issues.push({ code: 'INVALID_PROCESS_IDENTIFIER', severity: 'error', message: `${node.kind} ${node.key} has invalid identifier ${node.identifier}` })
       }
+      // A step with no component linkage cannot be traced to the Component
+      // Plan, which is the pattern hallucinated lifecycle steps follow. It is
+      // a warning here so figures persisted before the anchoring rule still
+      // translate and re-render; the generation path (detailManagedFigure)
+      // escalates it to a blocker for newly generated figures.
+      if (!node.componentId && !node.relatedComponentIds.length) {
+        issues.push({ code: 'UNGROUNDED_STEP', severity: 'warning', message: `Step "${node.label}" is not linked to any Component Planner entry; confirm it is disclosed by the invention` })
+      }
     })
     diagram.transitions.forEach(link => {
       if (!keys.has(link.fromId)) issues.push({ code: 'UNKNOWN_PROCESS_ENDPOINT', severity: 'error', message: `Transition source ${link.fromId} is unknown` })

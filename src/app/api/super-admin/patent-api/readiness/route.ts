@@ -7,6 +7,7 @@ export const runtime = 'nodejs'
 export async function GET(request: NextRequest) {
   const auth = await authenticatePatentApiAdmin(request)
   if ('error' in auth) return auth.error
-  return NextResponse.json({ readiness: await getPatentApiReadiness({ forceRefresh: true }) })
+  const forceRefresh = request.nextUrl.searchParams.get('forceRefresh') === '1'
+  return NextResponse.json({ readiness: await getPatentApiReadiness({ forceRefresh }) })
 }
 

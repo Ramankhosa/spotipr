@@ -6594,7 +6594,9 @@ async function handleNormalizeIdea(user: any, patentId: string, data: any, reque
   }
 
   const normalizationRequestId = crypto.randomUUID()
-  const staleLockCutoff = new Date(Date.now() - 60_000)
+  // Generous enough that a slow normalization (e.g. sub-calls serialized behind a
+  // low per-tenant concurrency limit) cannot have its lock stolen mid-flight.
+  const staleLockCutoff = new Date(Date.now() - 120_000)
   const lockResult = await prisma.draftingSession.updateMany({
     where: ({
       id: session.id,

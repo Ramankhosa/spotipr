@@ -30,7 +30,17 @@ import {
   determineDraftingArchetype
 } from '@/lib/section-injection-config';
 import { MAX_DRAFTING_INPUT_CHARS } from '@/lib/drafting-constants';
-import { buildIdeaNormalizationPrompt } from '@/lib/idea-normalization-prompt';
+import {
+  buildIdeaNormalizationCorePrompt,
+  buildIdeaNormalizationPrompt,
+  buildIdeaNormalizationSearchPrompt,
+  buildIdeaNormalizationSupportPrompt,
+} from '@/lib/idea-normalization-prompt';
+import { parseLlmJsonObject } from '@/lib/llm-json-parser';
+import {
+  assembleNormalizedData,
+  normalizeCoreComponents,
+} from '@/lib/idea-normalization-assembly';
 import {
   completeSourceFactLedger,
   sourceMentionsBestMethod,
@@ -43,7 +53,6 @@ import {
   completeSupportDataSources,
 } from '@/lib/support-data-sources';
 import { ensureDetailedDescriptionSourceSelection } from '@/lib/dd-source-selection-service';
-import { normalizeComponentDisplayName } from '@/lib/component-naming';
 import { DD_USER_DATA_LLM_WRAPPER } from '@/lib/dd-user-data-wrapper';
 import {
   buildIdeaNormalizationExtractedFields,
@@ -85,6 +94,16 @@ export interface IdeaNormalizationResult {
   tokensUsed?: number;
   error?: string;
 }
+
+// Split idea normalization: one LLM call per slice of the normalized-data schema.
+const NORMALIZATION_SUB_CALL_KEYS = ['core', 'search', 'support'] as const;
+type NormalizationSubCallKey = (typeof NORMALIZATION_SUB_CALL_KEYS)[number];
+type NormalizationSubCallResult = {
+  success: boolean;
+  response?: any;
+  error?: { code?: string; message?: string } & Record<string, any>;
+};
+const NORMALIZATION_CONCURRENCY_RETRY_DELAY_MS = 500;
 
 // ============================================================================
 // NUMBERING STYLE DEFINITIONS (Patent-Type-Based)
@@ -451,7 +470,10 @@ export class DraftingService {
   }
 
   /**
-   * Normalize raw invention idea using LLM
+   * Normalize raw invention idea using LLM.
+   *
+   * Runs the split flow (three parallel calls assembled in code) by default.
+   * Set IDEA_NORMALIZATION_SPLIT=false to fall back to the original single call.
    */
   static async normalizeIdea(
     rawIdea: string,
@@ -462,22 +484,41 @@ export class DraftingService {
     allowRefine: boolean = true,
     usageMetadata?: Record<string, any>
   ): Promise<IdeaNormalizationResult> {
-    try {
-      // Debug logging
-      console.log('DraftingService.normalizeIdea called with:', {
-        rawIdeaLength: rawIdea.length,
-        title,
-        tenantId
-      });
+    // Debug logging
+    console.log('DraftingService.normalizeIdea called with:', {
+      rawIdeaLength: rawIdea.length,
+      title,
+      tenantId
+    });
 
-      // Validate input length - limit to prevent token overflow
-      if (rawIdea.length > MAX_DRAFTING_INPUT_CHARS) {
-        return {
-          success: false,
-          error: `Idea text exceeds maximum length of ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters. Please shorten your description.`
-        };
-      }
-      
+    // Validate input length - limit to prevent token overflow
+    if (rawIdea.length > MAX_DRAFTING_INPUT_CHARS) {
+      return {
+        success: false,
+        error: `Idea text exceeds maximum length of ${MAX_DRAFTING_INPUT_CHARS.toLocaleString()} characters. Please shorten your description.`
+      };
+    }
+
+    const useSplit = process.env.IDEA_NORMALIZATION_SPLIT !== 'false';
+    return useSplit
+      ? this.normalizeIdeaSplitCalls(rawIdea, title, tenantId, requestHeaders, areaOfInvention, allowRefine, usageMetadata)
+      : this.normalizeIdeaSingleCall(rawIdea, title, tenantId, requestHeaders, areaOfInvention, allowRefine, usageMetadata);
+  }
+
+  /**
+   * Original single-call normalization, retained as the rollback path behind
+   * IDEA_NORMALIZATION_SPLIT=false. Produces the same result shape as the split flow.
+   */
+  private static async normalizeIdeaSingleCall(
+    rawIdea: string,
+    title: string,
+    tenantId?: string,
+    requestHeaders?: Record<string, string>,
+    areaOfInvention?: string,
+    allowRefine: boolean = true,
+    usageMetadata?: Record<string, any>
+  ): Promise<IdeaNormalizationResult> {
+    try {
       const prompt = buildIdeaNormalizationPrompt({
         rawIdea,
         title,
@@ -518,203 +559,35 @@ export class DraftingService {
       }
 
       // Parse LLM response (robust JSON extraction)
-      let normalizedData;
-      try {
-        const output = (llmResult.response.output || '').trim();
-        console.log('Raw LLM output (first 500 chars):', output.substring(0, 500));
-        console.log('Raw LLM output length:', output.length);
-
-        let jsonText = output;
-
-        // If fenced with backticks, strip the outer fence even if closing fence is missing
-        const fenceStart = jsonText.indexOf('```');
-        if (fenceStart !== -1) {
-          jsonText = jsonText.slice(fenceStart + 3); // drop opening ```
-          // drop optional language tag like 'json'
-          jsonText = jsonText.replace(/^json\s*/i, '');
-          const fenceEnd = jsonText.indexOf('```');
-          if (fenceEnd !== -1) {
-            jsonText = jsonText.slice(0, fenceEnd);
-          }
-        }
-
-        // Trim to the JSON object boundaries
-        const startBrace = jsonText.indexOf('{');
-        const lastBrace = jsonText.lastIndexOf('}');
-        if (startBrace !== -1) {
-          jsonText = lastBrace !== -1 && lastBrace > startBrace
-            ? jsonText.slice(startBrace, lastBrace + 1)
-            : jsonText.slice(startBrace);
-        }
-
-        // Cleanup common JSON issues
-        jsonText = jsonText
-          .replace(/`+/g, '') // remove stray backticks
-          .replace(/,(\s*[}\]])/g, '$1') // remove trailing commas
-          .replace(/([\x00-\x08\x0B\x0C\x0E-\x1F])/g, ''); // remove control chars
-
-        console.log('Extracted JSON string (first 500 chars):', jsonText.substring(0, 500));
-
-        // First parse attempt
-        try {
-          normalizedData = JSON.parse(jsonText);
-        } catch (firstErr) {
-          console.error('First JSON parse failed:', firstErr);
-          console.error('JSON text that failed:', jsonText.substring(0, 1000));
-
-          try {
-            // Fallback: attempt to quote unquoted keys
-            const quotedKeys = jsonText.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":');
-            normalizedData = JSON.parse(quotedKeys);
-            console.log('Fallback parsing succeeded');
-          } catch (secondErr) {
-            console.error('Fallback JSON parse also failed:', secondErr);
-
-            // Try one more fallback with syntax-only cleanup. Do not fabricate values.
-            try {
-              let cleanJson = jsonText
-                .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Remove all control characters
-                .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
-                .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":') // Quote keys
-                .replace(/:\s*'([^']*)'/g, ':"$1"') // Convert single quotes to double quotes for values
-
-              normalizedData = JSON.parse(cleanJson);
-              console.log('Syntax cleanup parsing succeeded');
-            } catch (thirdErr) {
-              console.error('All JSON parsing attempts failed; normalization will fail closed:', thirdErr);
-              throw thirdErr;
-            }
-          }
-        }
-
-        // Normalize component hierarchy and display names if provided
-        if (Array.isArray(normalizedData?.components)) {
-          const rawComponents = normalizedData.components
-          const componentNameMap = new Map<string, string>()
-          normalizedData.components = rawComponents.map((c: any, idx: number) => {
-            const originalName = typeof c?.name === 'string' ? c.name.trim() : ''
-            const displayName = normalizeComponentDisplayName(originalName, c?.type) || originalName
-            if (originalName && displayName) {
-              componentNameMap.set(originalName.toLowerCase(), displayName)
-            }
-            return {
-              ...c,
-              name: displayName,
-              level: typeof c?.level === 'number' && c.level >= 0 ? c.level : 0,
-              sequence: typeof c?.sequence === 'number' && c.sequence > 0 ? c.sequence : (idx + 1),
-            }
-          }).map((c: any) => {
-            const parent = typeof c?.parent === 'string' ? c.parent.trim() : ''
-            if (!parent) return c
-            return {
-              ...c,
-              parent: componentNameMap.get(parent.toLowerCase()) || normalizeComponentDisplayName(parent),
-            }
-          })
-        }
-
-        if (!normalizedData || typeof normalizedData !== 'object') {
-          throw new Error('LLM did not return a valid object');
-        }
-
-      } catch (parseError) {
-        console.error('LLM response parsing error:', parseError);
-        console.error('Full LLM output:', llmResult.response.output);
+      const parsed = parseLlmJsonObject(llmResult.response);
+      if (!parsed.ok) {
+        console.error('LLM response parsing error:', parsed.error);
         console.error('LLM output length:', llmResult.response.output?.length);
-        console.error('LLM output type:', typeof llmResult.response.output);
-
-        // Log first and last 500 chars for debugging
-        const output = llmResult.response.output || '';
-        console.error('First 500 chars:', output.substring(0, 500));
-        console.error('Last 500 chars:', output.substring(Math.max(0, output.length - 500)));
-
-        // Check if it looks like JSON at all
-        const startsWithBrace = output.trim().startsWith('{');
-        const endsWithBrace = output.trim().endsWith('}');
-        console.error('Starts with {:', startsWithBrace, 'Ends with }:', endsWithBrace);
-
-        // Provide clearer error when response was truncated. Providers report this
-        // differently: Gemini finishReason 'MAX_TOKENS', OpenAI/Groq/DeepSeek
-        // finishReason 'length', Anthropic stopReason 'max_tokens'.
-        const truncMeta = llmResult.response.metadata as any;
-        const truncated =
-          truncMeta?.finishReason === 'MAX_TOKENS' ||
-          truncMeta?.finishReason === 'length' ||
-          truncMeta?.stopReason === 'max_tokens';
         return {
           success: false,
-          error: truncated
+          error: parsed.truncated
             ? 'LLM response was truncated and could not be parsed as JSON. Please try again with a shorter idea.'
-            : `Failed to parse LLM response: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+            : `Failed to parse LLM response: ${parsed.error}`,
           llmResponse: llmResult.response,
         };
       }
 
-      // Extract fields for easy database querying
-      // Auto-detect archetype/invention type so downstream drafting/diagramming can use it without user input
-      const detectedArchetype = this.normalizeArchetypeList(
-        normalizedData?.inventionType,
-        normalizedData?.fieldOfRelevance || areaOfInvention || ''
-      )
-      const detectedPatentType = this.normalizePatentTypePrimary(normalizedData?.patentTypePrimary)
-        || this.patentTypeFallbackFromText(rawIdea, title).primary
-      normalizedData.inventionType = detectedArchetype
-      normalizedData.patentTypePrimary = detectedPatentType
-      normalizedData.sourceHandlingMode = allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE'
-      normalizedData.schemaVersion = 2
+      const normalizedData: any = parsed.data;
 
-      if (!sourceMentionsBestMethod(rawIdea)) {
-        normalizedData.bestMethod = 'Not stated by source'
+      // Normalize component hierarchy and display names if provided
+      if (Array.isArray(normalizedData.components)) {
+        normalizedData.components = normalizeCoreComponents(normalizedData.components);
       }
 
-      const normalizeStringArray = (value: unknown): string[] => Array.isArray(value)
-        ? value.map((item: any) => String(item).trim()).filter(Boolean)
-        : typeof value === 'string' && value.trim() && !/^not stated by source$/i.test(value.trim())
-          ? [value.trim()]
-          : []
-      normalizedData.coreInventiveConcept = typeof normalizedData.coreInventiveConcept === 'string' && normalizedData.coreInventiveConcept.trim()
-        ? normalizedData.coreInventiveConcept.trim()
-        : 'Not stated by source'
-      normalizedData.claimableFeatures = normalizeStringArray(normalizedData.claimableFeatures)
-      normalizedData.fallbackLimitations = normalizeStringArray(normalizedData.fallbackLimitations)
-      normalizedData.doNotClaim = normalizeStringArray(normalizedData.doNotClaim)
-
-      const sourceFactReview = completeSourceFactLedger(rawIdea, normalizedData)
-      normalizedData.sourceFactLedger = sourceFactReview.sourceFactLedger
-      normalizedData.normalizationReviewWarnings = Array.from(new Set([
-        ...sourceFactReview.normalizationReviewWarnings,
-        ...(Array.isArray(normalizedData.normalizationReviewWarnings)
-          ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
-          : [])
-      ]))
-      normalizedData.scopeRecommendations = coerceScopeRecommendations(
-        normalizedData.scopeRecommendations,
-        normalizedData
-      )
-      const supportDataReview = completeSupportDataSources(rawIdea, normalizedData)
-      normalizedData.supportDataSources = supportDataReview.supportDataSources
-      normalizedData.normalizationReviewWarnings = Array.from(new Set([
-        ...(Array.isArray(normalizedData.normalizationReviewWarnings)
-          ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
-          : []),
-        ...supportDataReview.normalizationReviewWarnings,
-      ]))
-
-      const finalNormalizedData = migrateNormalizedData(normalizedData, {
-        inventionType: detectedArchetype as any,
-        patentTypePrimary: detectedPatentType as any,
-        sourceHandlingMode: allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE',
-      })
-      const extractedFields = buildIdeaNormalizationExtractedFields(finalNormalizedData)
-
-      return {
-        success: true,
-        normalizedData: finalNormalizedData,
-        extractedFields,
+      return this.finalizeNormalizedIdea(normalizedData, {
+        rawIdea,
+        title,
+        areaOfInvention,
+        allowRefine,
         llmPrompt: prompt,
         llmResponse: llmResult.response,
-        tokensUsed: llmResult.response.outputTokens
-      };
+        tokensUsed: llmResult.response.outputTokens,
+      });
 
     } catch (error) {
       console.error('Idea normalization error:', error);
@@ -723,6 +596,264 @@ export class DraftingService {
         error: error instanceof Error ? error.message : 'Idea normalization failed'
       };
     }
+  }
+
+  /**
+   * Shared post-processing for both normalization paths.
+   *
+   * Everything here is field-driven, so it behaves identically whether the
+   * normalized object came from one LLM call or from three merged calls.
+   */
+  private static finalizeNormalizedIdea(
+    normalizedData: any,
+    context: {
+      rawIdea: string;
+      title: string;
+      areaOfInvention?: string;
+      allowRefine: boolean;
+      llmPrompt?: string;
+      llmResponse?: any;
+      tokensUsed?: number;
+    }
+  ): IdeaNormalizationResult {
+    const { rawIdea, title, areaOfInvention, allowRefine } = context;
+
+    // Extract fields for easy database querying
+    // Auto-detect archetype/invention type so downstream drafting/diagramming can use it without user input
+    const detectedArchetype = this.normalizeArchetypeList(
+      normalizedData?.inventionType,
+      normalizedData?.fieldOfRelevance || areaOfInvention || ''
+    )
+    const detectedPatentType = this.normalizePatentTypePrimary(normalizedData?.patentTypePrimary)
+      || this.patentTypeFallbackFromText(rawIdea, title).primary
+    normalizedData.inventionType = detectedArchetype
+    normalizedData.patentTypePrimary = detectedPatentType
+    normalizedData.sourceHandlingMode = allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE'
+    normalizedData.schemaVersion = 2
+
+    if (!sourceMentionsBestMethod(rawIdea)) {
+      normalizedData.bestMethod = 'Not stated by source'
+    }
+
+    const normalizeStringArray = (value: unknown): string[] => Array.isArray(value)
+      ? value.map((item: any) => String(item).trim()).filter(Boolean)
+      : typeof value === 'string' && value.trim() && !/^not stated by source$/i.test(value.trim())
+        ? [value.trim()]
+        : []
+    normalizedData.coreInventiveConcept = typeof normalizedData.coreInventiveConcept === 'string' && normalizedData.coreInventiveConcept.trim()
+      ? normalizedData.coreInventiveConcept.trim()
+      : 'Not stated by source'
+    normalizedData.claimableFeatures = normalizeStringArray(normalizedData.claimableFeatures)
+    normalizedData.fallbackLimitations = normalizeStringArray(normalizedData.fallbackLimitations)
+    normalizedData.doNotClaim = normalizeStringArray(normalizedData.doNotClaim)
+
+    const sourceFactReview = completeSourceFactLedger(rawIdea, normalizedData)
+    normalizedData.sourceFactLedger = sourceFactReview.sourceFactLedger
+    normalizedData.normalizationReviewWarnings = Array.from(new Set([
+      ...sourceFactReview.normalizationReviewWarnings,
+      ...(Array.isArray(normalizedData.normalizationReviewWarnings)
+        ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
+        : [])
+    ]))
+    normalizedData.scopeRecommendations = coerceScopeRecommendations(
+      normalizedData.scopeRecommendations,
+      normalizedData
+    )
+    const supportDataReview = completeSupportDataSources(rawIdea, normalizedData)
+    normalizedData.supportDataSources = supportDataReview.supportDataSources
+    normalizedData.normalizationReviewWarnings = Array.from(new Set([
+      ...(Array.isArray(normalizedData.normalizationReviewWarnings)
+        ? normalizedData.normalizationReviewWarnings.map((w: any) => String(w)).filter(Boolean)
+        : []),
+      ...supportDataReview.normalizationReviewWarnings,
+    ]))
+
+    const finalNormalizedData = migrateNormalizedData(normalizedData, {
+      inventionType: detectedArchetype as any,
+      patentTypePrimary: detectedPatentType as any,
+      sourceHandlingMode: allowRefine ? 'STRUCTURE_ONLY' : 'PRESERVE',
+    })
+    const extractedFields = buildIdeaNormalizationExtractedFields(finalNormalizedData)
+
+    return {
+      success: true,
+      normalizedData: finalNormalizedData,
+      extractedFields,
+      llmPrompt: context.llmPrompt,
+      llmResponse: context.llmResponse,
+      tokensUsed: context.tokensUsed,
+    };
+  }
+
+  /**
+   * Split normalization: three focused LLM calls run in parallel and are merged
+   * in code. Output tokens dominate normalization latency, so splitting the
+   * schema across concurrent calls cuts wall-clock time roughly threefold while
+   * the assembled result keeps the single-call contract.
+   */
+  private static async normalizeIdeaSplitCalls(
+    rawIdea: string,
+    title: string,
+    tenantId?: string,
+    requestHeaders?: Record<string, string>,
+    areaOfInvention?: string,
+    allowRefine: boolean = true,
+    usageMetadata?: Record<string, any>
+  ): Promise<IdeaNormalizationResult> {
+    try {
+      const promptParams = { rawIdea, title, areaOfInvention, allowRefine };
+      const prompts: Record<NormalizationSubCallKey, string> = {
+        core: buildIdeaNormalizationCorePrompt(promptParams),
+        search: buildIdeaNormalizationSearchPrompt(promptParams),
+        support: buildIdeaNormalizationSupportPrompt(promptParams),
+      };
+
+      console.log('Calling LLM gateway with taskCode: LLM2_DRAFT, stageCode: DRAFT_IDEA_ENTRY (split: core/search/support)');
+      const startedAt = Date.now();
+      const results = await this.runNormalizationSubCalls({
+        prompts,
+        requestHeaders,
+        tenantId,
+        allowRefine,
+        usageMetadata,
+      });
+      console.log(`Split idea normalization sub-calls finished in ${Date.now() - startedAt}ms`);
+
+      const llmResponse = {
+        splitVersion: 1,
+        calls: {
+          core: results.core.response,
+          search: results.search.response,
+          support: results.support.response,
+        },
+      };
+      const llmPrompt = [
+        ['CALL A: CORE', prompts.core],
+        ['CALL B: SEARCH', prompts.search],
+        ['CALL C: SUPPORT', prompts.support],
+      ].map(([label, text]) => `=== ${label} ===\n${text}`).join('\n\n');
+
+      // Fail closed: a partially normalized idea must never be persisted.
+      for (const key of NORMALIZATION_SUB_CALL_KEYS) {
+        const result = results[key];
+        if (!result.success || !result.response) {
+          const message = result.error?.message || 'LLM processing failed';
+          console.error(`Idea normalization sub-call "${key}" failed:`, message);
+          return {
+            success: false,
+            error: `Idea normalization failed during ${key} extraction: ${message}`,
+            llmResponse,
+          };
+        }
+      }
+
+      const parts = {} as Record<NormalizationSubCallKey, Record<string, any>>;
+      for (const key of NORMALIZATION_SUB_CALL_KEYS) {
+        const parsed = parseLlmJsonObject(results[key].response);
+        if (!parsed.ok) {
+          console.error(`Idea normalization sub-call "${key}" returned unparseable JSON:`, parsed.error);
+          return {
+            success: false,
+            error: parsed.truncated
+              ? `LLM response was truncated during ${key} extraction and could not be parsed as JSON. Please try again with a shorter idea.`
+              : `Failed to parse LLM response during ${key} extraction: ${parsed.error}`,
+            llmResponse,
+          };
+        }
+        parts[key] = parsed.data;
+      }
+
+      parts.core.components = normalizeCoreComponents(parts.core.components);
+
+      const normalizedData = assembleNormalizedData({
+        core: parts.core,
+        search: parts.search,
+        support: parts.support,
+      });
+
+      const tokensUsed = NORMALIZATION_SUB_CALL_KEYS.reduce(
+        (sum, key) => sum + (Number(results[key].response?.outputTokens) || 0),
+        0
+      );
+
+      return this.finalizeNormalizedIdea(normalizedData, {
+        rawIdea,
+        title,
+        areaOfInvention,
+        allowRefine,
+        llmPrompt,
+        llmResponse,
+        tokensUsed,
+      });
+
+    } catch (error) {
+      console.error('Idea normalization error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Idea normalization failed'
+      };
+    }
+  }
+
+  /**
+   * Runs the three normalization prompts concurrently.
+   *
+   * Each sub-call is self-contained and never throws. The per-tenant reservation
+   * gate limits concurrent operations per task code (as low as 1 on the free
+   * plan), so calls rejected with CONCURRENCY_LIMIT are retried one at a time
+   * once the siblings have settled and released their reservations.
+   */
+  private static async runNormalizationSubCalls(args: {
+    prompts: Record<NormalizationSubCallKey, string>;
+    requestHeaders?: Record<string, string>;
+    tenantId?: string;
+    allowRefine: boolean;
+    usageMetadata?: Record<string, any>;
+  }): Promise<Record<NormalizationSubCallKey, NormalizationSubCallResult>> {
+    const request = { headers: args.requestHeaders || {} };
+    const basePurpose = args.usageMetadata?.purpose || 'idea_normalization';
+    const temperature = args.allowRefine ? 0.2 : 0.0;
+
+    const execute = async (key: NormalizationSubCallKey): Promise<NormalizationSubCallResult> => {
+      try {
+        const result = await llmGateway.executeLLMOperation(request, {
+          taskCode: 'LLM2_DRAFT',
+          stageCode: 'DRAFT_IDEA_ENTRY',
+          prompt: args.prompts[key],
+          parameters: { tenantId: args.tenantId, temperature },
+          idempotencyKey: crypto.randomUUID(),
+          metadata: {
+            ...(args.usageMetadata || {}),
+            purpose: `${basePurpose}_${key}`,
+          },
+        });
+        return { success: !!result?.success, response: result?.response, error: result?.error };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error : new Error(String(error)),
+        };
+      }
+    };
+
+    const settled = await Promise.all(
+      NORMALIZATION_SUB_CALL_KEYS.map(async (key) => [key, await execute(key)] as const)
+    );
+    const results = Object.fromEntries(settled) as Record<NormalizationSubCallKey, NormalizationSubCallResult>;
+
+    // Serial retry for concurrency rejections: the siblings have released their
+    // reservations by now, so one-at-a-time retries fit even a limit of 1.
+    for (const key of NORMALIZATION_SUB_CALL_KEYS) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const current = results[key];
+        if (current.success || current.error?.code !== 'CONCURRENCY_LIMIT') break;
+        console.warn(`Idea normalization sub-call "${key}" hit the concurrency limit; retrying serially.`);
+        await new Promise((resolve) => setTimeout(resolve, NORMALIZATION_CONCURRENCY_RETRY_DELAY_MS));
+        results[key] = await execute(key);
+      }
+    }
+
+    return results;
   }
 
   /**
