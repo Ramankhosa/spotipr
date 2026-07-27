@@ -53,7 +53,7 @@ const OLE_MAGIC = [0xd0, 0xcf, 0x11, 0xe0]              // legacy .doc / .xls
 const LEGACY_DOC_MESSAGE =
   'This is a legacy Word (.doc) file. Open it in Word and save it as .docx or PDF, then upload again.'
 
-function detectFormat(buf: Buffer, fileName?: string, mimeType?: string): UploadFormat {
+function detectFormat(buf: Buffer, fileName?: string, mimeType?: string, label = 'document'): UploadFormat {
   if (startsWith(buf, PDF_MAGIC)) return 'pdf'
   if (startsWith(buf, OLE_MAGIC)) throw new UnreadableUploadError(LEGACY_DOC_MESSAGE)
   if (startsWith(buf, ZIP_MAGIC)) {
@@ -62,9 +62,9 @@ function detectFormat(buf: Buffer, fileName?: string, mimeType?: string): Upload
       return 'docx'
     }
     // A zip that is not a Word document (xlsx/pptx/plain archive) has no text we
-    // can trust as a specification.
+    // can trust as the document the attorney meant to file.
     throw new UnreadableUploadError(
-      'This file is a zipped archive, not a document. Upload the specification as PDF, Word (.docx) or plain text.'
+      `This file is a zipped archive, not a document. Upload the ${label} as ${ACCEPTED_UPLOAD_LABEL}.`
     )
   }
 
@@ -159,7 +159,7 @@ export async function extractUploadText(
   opts: { fileName?: string; mimeType?: string; label?: string } = {}
 ): Promise<ExtractedUpload> {
   const label = opts.label || 'document'
-  const format = detectFormat(buf, opts.fileName, opts.mimeType)
+  const format = detectFormat(buf, opts.fileName, opts.mimeType, label)
 
   if (format === 'pdf') {
     const extracted = await extractPdfText(buf)

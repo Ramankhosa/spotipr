@@ -345,16 +345,34 @@ describe('patent corpus PDF-level controls', () => {
       mockPrisma.ipIndiaJournalFile.updateMany.mockResolvedValue({ count: 0 })
     })
 
-    it('only considers finished imports past the cutoff with no embedding work in flight', async () => {
+    it('only considers finished imports with no embedding work in flight', async () => {
       await cleanupOldStoredPdfs()
 
       const where = mockPrisma.patentImportFile.findMany.mock.calls[0][0].where
       expect(where.status).toEqual({ in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS'] })
-      expect(where.completedAt.lt).toBeInstanceOf(Date)
-      expect(where.completedAt.lt.getTime()).toBeLessThan(Date.now())
       expect(where.extractedPatents).toEqual({
         none: { embeddings: { some: { status: { in: ['QUEUED', 'PROCESSING'] } } } },
       })
+    })
+
+    it('retires zero-patent PDFs on a shorter window than productive ones', async () => {
+      await cleanupOldStoredPdfs()
+
+      const where = mockPrisma.patentImportFile.findMany.mock.calls[0][0].where
+      const [standard, empty] = where.OR
+
+      expect(standard).toEqual({ completedAt: { lt: expect.any(Date) } })
+      expect(empty).toEqual({
+        completedAt: { lt: expect.any(Date) },
+        patentPages: 0,
+        patentsCreated: 0,
+        patentsUpdated: 0,
+      })
+
+      // Both windows are in the past, and the empty one retires sooner.
+      expect(standard.completedAt.lt.getTime()).toBeLessThan(Date.now())
+      expect(empty.completedAt.lt.getTime()).toBeLessThan(Date.now())
+      expect(empty.completedAt.lt.getTime()).toBeGreaterThan(standard.completedAt.lt.getTime())
     })
 
     it('deletes the PDF and clears both pointers to the shared file on disk', async () => {

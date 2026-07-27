@@ -7,6 +7,7 @@ import { Compass, Plus, Loader2, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
+import { useAuth } from '@/lib/auth-context'
 
 interface StudySummary {
   id: string
@@ -26,9 +27,17 @@ function formatWhen(iso: string) {
   return date.toLocaleDateString()
 }
 
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+  return token
+    ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' }
+}
+
 export function WhitespaceStudiesApp() {
   const router = useRouter()
   const { toast } = useToast()
+  const { user, isLoading: authLoading } = useAuth()
   const [studies, setStudies] = useState<StudySummary[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -39,7 +48,7 @@ export function WhitespaceStudiesApp() {
     setLoading(true)
     setLoadError(null)
     try {
-      const response = await fetch('/api/whitespace/studies')
+      const response = await fetch('/api/whitespace/studies', { headers: authHeaders() })
       if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.error || 'Could not load studies.')
       const data = await response.json()
       setStudies(Array.isArray(data.studies) ? data.studies : [])
@@ -50,11 +59,23 @@ export function WhitespaceStudiesApp() {
     }
   }, [])
 
+  // Wait for the session to hydrate from localStorage before fetching — firing
+  // early sends no Authorization header and the API answers 401.
   useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      setLoading(false)
+      setLoadError(null)
+      return
+    }
     void load()
-  }, [load])
+  }, [authLoading, user, load])
 
   const createStudy = useCallback(async () => {
+    if (!user) {
+      router.push('/login?next=/whitespace')
+      return
+    }
     if (brief.trim().length < 20) {
       toast({
         variant: 'warning',
@@ -67,7 +88,7 @@ export function WhitespaceStudiesApp() {
     try {
       const response = await fetch('/api/whitespace/studies', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ seedText: brief.trim() }),
       })
       const data = await response.json().catch(() => ({}))
@@ -81,7 +102,7 @@ export function WhitespaceStudiesApp() {
       })
       setCreating(false)
     }
-  }, [brief, router, toast])
+  }, [brief, router, toast, user])
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-12">
@@ -138,7 +159,7 @@ export function WhitespaceStudiesApp() {
           Your studies
         </h2>
 
-        {loading ? (
+        {authLoading || loading ? (
           <div className="flex items-center gap-2 py-10 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="text-sm">Loading studies…</span>
@@ -152,6 +173,15 @@ export function WhitespaceStudiesApp() {
                 Retry
               </Button>
             </div>
+          </div>
+        ) : !user ? (
+          <div className="rounded-lg border border-dashed border-border p-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              Sign in to see your studies and start a new one.
+            </p>
+            <Button variant="outline" size="sm" className="mt-4" onClick={() => router.push('/login')}>
+              Sign in
+            </Button>
           </div>
         ) : studies.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-8 text-center">

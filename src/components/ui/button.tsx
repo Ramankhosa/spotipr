@@ -8,12 +8,12 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants = {
-  default: 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500',
-  destructive: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',
-  outline: 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:ring-blue-500',
-  secondary: 'bg-gray-100 text-gray-900 hover:bg-gray-200 focus:ring-gray-500',
-  ghost: 'text-gray-700 hover:bg-gray-100 focus:ring-gray-500',
-  link: 'text-blue-600 hover:text-blue-700 underline-offset-4 hover:underline focus:ring-blue-500',
+  default: 'bg-primary text-primary-foreground hover:bg-primary/90 focus:ring-ring',
+  destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 focus:ring-destructive',
+  outline: 'border border-input bg-card text-foreground hover:bg-muted focus:ring-ring',
+  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 focus:ring-ring',
+  ghost: 'text-muted-foreground hover:bg-muted hover:text-foreground focus:ring-ring',
+  link: 'text-primary hover:text-primary/80 underline-offset-4 hover:underline focus:ring-ring',
 };
 
 const sizes = {
@@ -35,7 +35,7 @@ export function Button({
 
   return (
     <button
-      className={`inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 ${variantClasses} ${sizeClasses} ${className}`}
+      className={`inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 ${variantClasses} ${sizeClasses} ${className}`}
       {...props}
     >
       {children}

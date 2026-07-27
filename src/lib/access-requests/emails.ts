@@ -13,8 +13,8 @@ const BRAND = {
   ink: '#0f172a',
   muted: '#64748b',
   line: '#e2e8f0',
-  green: '#2e5d47',
-  greenSoft: '#f2f6f1',
+  green: '#1d4ed8',
+  greenSoft: '#eef2fe',
 }
 
 export function escapeHtml(input: string): string {

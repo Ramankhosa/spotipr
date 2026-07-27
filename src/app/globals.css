@@ -19,33 +19,34 @@
     font-synthesis-weight: none;
   }
 
-  /* "Banker's green" system: warm greige desk, page-white cards, warm ink,
-     lamp-green primary (the AI's color), sage tints, brass ceremony (see
-     tailwind brass ramp), verdict colors deliberately independent of brand. */
+  /* "Cobalt & Oxford" system: white ground, three cool grays, oxford-ink text,
+     one cobalt for actions + AI presence (links, badges, focus), verdict
+     colors deliberately independent of brand. Borders structure the page;
+     shadows are reserved for layers that actually float. */
   :root {
-    --background: 48 25% 92%;        /* greige desk  #f0eee6 */
-    --foreground: 90 6% 12%;         /* warm ink     #1e201c */
-    --card: 40 43% 99%;              /* page white   #fdfcfa */
-    --card-foreground: 90 6% 12%;
-    --popover: 40 43% 99%;
-    --popover-foreground: 90 6% 12%;
-    --primary: 152 34% 27%;          /* lamp green   #2e5d47 */
-    --primary-foreground: 40 43% 99%;
-    --secondary: 96 28% 90%;         /* sage tint    #e3ecdd */
-    --secondary-foreground: 152 35% 17%;
-    --muted: 47 24% 89%;             /* parchment    #e9e6db */
-    --muted-foreground: 75 5% 35%;
-    --accent: 96 28% 90%;            /* sage — selection/hover wash */
-    --accent-foreground: 152 35% 17%;
-    --destructive: 9 68% 38%;        /* brick        #a5321f */
-    --destructive-foreground: 40 43% 99%;
-    --success: 142 72% 29%;          /* verdict green — cooler + lighter than brand */
+    --background: 0 0% 100%;         /* white ground     */
+    --foreground: 221 43% 11%;       /* oxford ink #101828 */
+    --card: 0 0% 100%;
+    --card-foreground: 221 43% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 221 43% 11%;
+    --primary: 224 76% 48%;          /* cobalt #1d4ed8   */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 225 89% 96%;        /* cobalt wash #eef2fe */
+    --secondary-foreground: 224 64% 33%;
+    --muted: 220 23% 97%;            /* inset gray #f7f8fa */
+    --muted-foreground: 221 13% 46%; /* #667085          */
+    --accent: 225 89% 96%;           /* wash — selection/hover */
+    --accent-foreground: 224 64% 33%;
+    --destructive: 0 74% 42%;        /* #b91c1c          */
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 72% 29%;          /* verdict green — never the brand color */
     --success-foreground: 0 0% 100%;
     --warning: 26 90% 37%;           /* amber        #b45309 */
     --warning-foreground: 0 0% 100%;
-    --border: 46 20% 83%;            /* warm hairline #ddd9cc */
-    --input: 46 20% 83%;
-    --ring: 152 34% 27%;
+    --border: 218 17% 91%;           /* hairline #e4e7ec */
+    --input: 218 17% 91%;
+    --ring: 224 76% 48%;
     --radius: 0.5rem;
   }
 }
@@ -70,7 +71,7 @@
   }
 
   .bg-ai-subtle {
-    background: linear-gradient(135deg, #fdfcfa 0%, #f0eee6 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #f7f8fa 100%);
   }
 
   .bg-glass {
@@ -128,12 +129,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d8d4c2;
+  background: #d0d5dd;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #c2bda6;
+  background: #98a2b3;
 }
 
 /* Dark theme scrollbar for stage navigation */
@@ -247,13 +248,13 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Replace Safari's grey tap flash with a faint lamp-green one rather than
+  /* Replace Safari's grey tap flash with a faint cobalt one rather than
      killing it outright — with no highlight and no :active style, taps read
      as unresponsive. */
   button,
   [role='button'],
   a {
-    -webkit-tap-highlight-color: rgb(46 93 71 / 0.12);
+    -webkit-tap-highlight-color: rgb(29 78 216 / 0.12);
   }
 
   /* Long unbroken strings (patent numbers, URLs, CPC codes) are a common
@@ -274,10 +275,10 @@
 /* Stage navigation pulse animation */
 @keyframes stagePulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.4);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 6px rgba(20, 184, 166, 0);
+    box-shadow: 0 0 0 6px rgba(37, 99, 235, 0);
   }
 }
 
@@ -289,11 +290,11 @@
 @keyframes pulseSubtle {
   0%, 100% {
     transform: scale(1);
-    box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
   }
   50% {
     transform: scale(1.02);
-    box-shadow: 0 6px 25px rgba(139, 92, 246, 0.5);
+    box-shadow: 0 6px 25px rgba(37, 99, 235, 0.5);
   }
 }
 
@@ -305,11 +306,11 @@
 @keyframes edgeGlow {
   0%, 100% {
     stroke-opacity: 1;
-    filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.5));
+    filter: drop-shadow(0 0 3px rgba(37, 99, 235, 0.5));
   }
   50% {
     stroke-opacity: 0.8;
-    filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.8));
+    filter: drop-shadow(0 0 8px rgba(37, 99, 235, 0.8));
   }
 }
 
@@ -380,20 +381,21 @@
   }
 }
 
+/* Formerly an animated indigo→pink gradient; under Cobalt & Oxford the AI
+   speaks in one blue, so this is now static cobalt ink. Class kept so call
+   sites don't break. */
 .novelty-gradient-text {
-  background: linear-gradient(135deg, #6366f1, #a855f7, #ec4899, #6366f1);
-  background-size: 300% 300%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: gradientShift 4s ease infinite;
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: currentColor;
+  color: #1d4ed8;
 }
 
-/* Glow effect for active stages */
+/* Active stages: a hairline-style cobalt ring instead of a triple glow stack. */
 .novelty-stage-glow {
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.15),
-              0 0 40px rgba(168, 85, 247, 0.1),
-              0 0 60px rgba(236, 72, 153, 0.05);
+  box-shadow: 0 0 0 1px rgba(29, 78, 216, 0.25),
+              0 1px 3px rgba(16, 24, 40, 0.07);
 }
 
 /* Smooth stage transition */
@@ -429,7 +431,7 @@
 
 .novelty-float-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 10px 30px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 10px 30px rgba(29, 78, 216, 0.2);
 }
 
 /* Progress ring animation */

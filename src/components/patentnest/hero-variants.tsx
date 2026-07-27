@@ -70,7 +70,7 @@ export function SerpentineHeroFig({ speed = 0.62 }: { speed?: number }) {
         fill="none" stroke={BLUE} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" {...f.draw(2.2, 2.4)} />
       {/* the prior-art stack the line reads through */}
       {([[404, 78], [412, 72], [420, 66]] as const).map(([x, y], i) => (
-        <motion.rect key={i} x={x} y={y} width={40} height={56} rx={3} fill="#fdfcfa" stroke={SOFT} strokeWidth="1" {...f.fade(3.2 + i * 0.1)} />
+        <motion.rect key={i} x={x} y={y} width={40} height={56} rx={3} fill="#ffffff" stroke={SOFT} strokeWidth="1" {...f.fade(3.2 + i * 0.1)} />
       ))}
       {[80, 90, 100].map((y, i) => (
         <motion.line key={y} x1={427} y1={y} x2={i === 2 ? 444 : 453} y2={y} stroke="#cbd5e1" strokeWidth="1.4" {...f.fade(3.5)} />
@@ -504,7 +504,7 @@ export function CinematicHero() {
               className="h-2.5 rounded-full transition-all duration-300"
               style={{
                 width: k === i ? 26 : 10,
-                backgroundColor: k === i ? s.color : '#d8d4c2',
+                backgroundColor: k === i ? s.color : '#d0d5dd',
               }}
             />
           ))}

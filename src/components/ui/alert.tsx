@@ -17,7 +17,7 @@ interface AlertDescriptionProps {
 }
 
 const variants = {
-  default: 'bg-blue-50 text-blue-800 border-blue-200',
+  default: 'bg-lamp-50 text-lamp-800 border-lamp-200',
   destructive: 'bg-red-50 text-red-800 border-red-200',
 };
 

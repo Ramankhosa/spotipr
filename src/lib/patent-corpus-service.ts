@@ -1632,6 +1632,11 @@ export async function deletePatentImportFileStoredPdf(batchId: string, fileId: s
 }
 
 const STORED_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_PDF_RETENTION_DAYS || '30') || 30)
+// Journal parts that yield no patents at all (Part III design/corrigenda issues)
+// are dead weight, so they go sooner. Not immediately, though: clearing a file's
+// records by hand zeroes these same counters and promises the PDF stays around
+// for a rerun, so this window has to be wide enough to honour that.
+const EMPTY_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_EMPTY_PDF_RETENTION_DAYS || '7') || 7)
 
 /**
  * Deletes journal PDFs whose extraction finished more than
@@ -1641,22 +1646,34 @@ const STORED_PDF_RETENTION_DAYS = Math.max(1, Number(process.env.PATENT_CORPUS_P
  * ragText in the database rather than from the PDF. Rerunning extraction does
  * need the PDF, so a cleaned file has to be uploaded again for that.
  *
+ * Files that extracted no patents at all are dropped on the shorter
+ * EMPTY_PDF_RETENTION_DAYS window, since nothing in the corpus came out of them.
+ *
  * storedPath is cleared once the file is gone. That keeps this scan moving
  * forward -- a row it already handled stops matching -- and makes
  * patentImportFileStoredFileExists report the PDF as deleted in the UI.
  */
 export async function cleanupOldStoredPdfs(limit = 50) {
   const cutoff = new Date(Date.now() - STORED_PDF_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+  const emptyCutoff = new Date(Date.now() - EMPTY_PDF_RETENTION_DAYS * 24 * 60 * 60 * 1000)
 
   const files = await (prisma as any).patentImportFile.findMany({
     where: {
       status: { in: ['COMPLETED', 'COMPLETED_WITH_WARNINGS'] },
-      completedAt: { lt: cutoff },
       storedPath: { not: '' },
       // Never pull the PDF out from under embedding work that is still running.
       extractedPatents: {
         none: { embeddings: { some: { status: { in: ['QUEUED', 'PROCESSING'] } } } },
       },
+      OR: [
+        { completedAt: { lt: cutoff } },
+        {
+          completedAt: { lt: emptyCutoff },
+          patentPages: 0,
+          patentsCreated: 0,
+          patentsUpdated: 0,
+        },
+      ],
     },
     orderBy: { completedAt: 'asc' },
     select: { id: true, storedPath: true },

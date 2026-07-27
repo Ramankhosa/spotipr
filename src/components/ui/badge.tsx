@@ -8,10 +8,10 @@ interface BadgeProps {
 }
 
 const variants = {
-  default: 'bg-blue-100 text-blue-800 border-blue-200',
-  secondary: 'bg-gray-100 text-gray-800 border-gray-200',
+  default: 'bg-lamp-50 text-lamp-800 border-lamp-200',
+  secondary: 'bg-muted text-muted-foreground border-border',
   destructive: 'bg-red-100 text-red-800 border-red-200',
-  outline: 'border border-gray-300 text-gray-700 bg-white',
+  outline: 'border border-border text-muted-foreground bg-card',
 };
 
 export function Badge({ children, variant = 'default', className = '', onClick }: BadgeProps) {
